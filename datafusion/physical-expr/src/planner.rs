@@ -27,7 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{Cast, InList, ScalarFunction, ScalarUDF};
+use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -57,7 +57,7 @@ pub fn create_physical_expr(
         )));
     }
     match e {
-        Expr::Alias(expr, ..) => Ok(create_physical_expr(
+        Expr::Alias(Alias { expr, .. }) => Ok(create_physical_expr(
             expr,
             input_dfschema,
             input_schema,

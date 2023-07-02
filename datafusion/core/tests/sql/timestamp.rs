@@ -579,8 +579,8 @@ async fn timestamp_add_interval_months() -> Result<()> {
     let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
     let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
 
-    let year = t1_naive.year() + (t1_naive.month() as i32 + 17) / 12;
-    let month = (t1_naive.month() + 17) % 12;
+    let year = t1_naive.year() + (t1_naive.month0() as i32 + 17) / 12;
+    let month = (t1_naive.month0() + 17) % 12 + 1;
 
     assert_eq!(
         t1_naive.with_year(year).unwrap().with_month(month).unwrap(),
@@ -712,7 +712,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+--------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"minute\"),to_timestamp_seconds(Int64(61)))) |",
         "+--------------------------------------------------------------------------+",
-        "| Timestamp(Nanosecond, None)                                              |",
+        "| Timestamp(Second, None)                                                  |",
         "+--------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -723,7 +723,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+-------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"second\"),to_timestamp_millis(Int64(61)))) |",
         "+-------------------------------------------------------------------------+",
-        "| Timestamp(Nanosecond, None)                                             |",
+        "| Timestamp(Millisecond, None)                                            |",
         "+-------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -734,7 +734,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+------------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"millisecond\"),to_timestamp_micros(Int64(61)))) |",
         "+------------------------------------------------------------------------------+",
-        "| Timestamp(Nanosecond, None)                                                  |",
+        "| Timestamp(Microsecond, None)                                                 |",
         "+------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
