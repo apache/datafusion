@@ -61,7 +61,7 @@ impl Decimal128Averager {
     ///
     /// * sum_scale: the scale of `sum` values passed to [`Self::avg`]
     /// * target_precision: the output precision
-    /// * target_precision: the output scale
+    /// * target_scale: the output scale
     ///
     /// Errors if the resulting data can not be stored
     pub fn try_new(
