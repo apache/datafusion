@@ -84,6 +84,9 @@ macro_rules! hash_float_value {
 }
 hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
 
+/// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`
+/// If `rehash==true` this combines the previous hash value in the buffer
+/// with the new hash using `combine_hashes`
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
     random_state: &RandomState,
@@ -120,6 +123,9 @@ fn hash_array_primitive<T>(
     }
 }
 
+/// Hashes one array into the `hashes_buffer`
+/// If `rehash==true` this combines the previous hash value in the buffer
+/// with the new hash using `combine_hashes`
 fn hash_array<T>(
     array: T,
     random_state: &RandomState,
@@ -129,6 +135,8 @@ fn hash_array<T>(
     T: ArrayAccessor,
     T::Item: HashValue,
 {
+    assert_eq!(hashes_buffer.len(), array.len(), "hashes_buffer and array should be of equal length");
+
     if array.null_count() == 0 {
         if rehash {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
