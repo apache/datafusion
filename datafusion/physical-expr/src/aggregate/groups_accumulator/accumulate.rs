@@ -66,7 +66,7 @@ use arrow_array::{Array, ArrowNumericType, BooleanArray, PrimitiveArray};
 /// every row.
 ///
 pub fn accumulate_all<T, F>(
-    group_indicies: &[usize],
+    group_indices: &[usize],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
     mut value_fn: F,
@@ -83,9 +83,9 @@ pub fn accumulate_all<T, F>(
     // AAL TODO handle filter values
 
     let data: &[T::Native] = values.values();
-    assert_eq!(data.len(), group_indicies.len());
+    assert_eq!(data.len(), group_indices.len());
 
-    let iter = group_indicies.iter().zip(data.iter());
+    let iter = group_indices.iter().zip(data.iter());
     for (&group_index, &new_value) in iter {
         value_fn(group_index, new_value)
     }
@@ -100,7 +100,7 @@ pub fn accumulate_all<T, F>(
 /// NOTE the parameter is true when the value is VALID (not when it is
 /// NULL).
 pub fn accumulate_all_nullable<T, F>(
-    group_indicies: &[usize],
+    group_indices: &[usize],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
     mut value_fn: F,
@@ -117,9 +117,9 @@ pub fn accumulate_all_nullable<T, F>(
 
     // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
     let data: &[T::Native] = values.values();
-    assert_eq!(data.len(), group_indicies.len());
+    assert_eq!(data.len(), group_indices.len());
 
-    let group_indices_chunks = group_indicies.chunks_exact(64);
+    let group_indices_chunks = group_indices.chunks_exact(64);
     let data_chunks = data.chunks_exact(64);
     let bit_chunks = valids.inner().bit_chunks();
 

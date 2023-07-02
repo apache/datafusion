@@ -349,7 +349,7 @@ impl GroupedHashAggregateStream2 {
     /// `group_values`.
     ///
     /// At the return of this function,
-    /// [`Self::current_group_indicies`] has the same number of
+    /// [`Self::current_group_indices`] has the same number of
     /// entries as each array in `group_values` and holds the correct
     /// group_index for that row.
     fn update_group_state(

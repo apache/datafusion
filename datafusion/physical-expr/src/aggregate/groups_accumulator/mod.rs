@@ -41,7 +41,7 @@ pub trait GroupsAccumulator: Send {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
-        group_indicies: &[usize],
+        group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()>;
@@ -99,7 +99,7 @@ pub trait GroupsAccumulator: Send {
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
-        group_indicies: &[usize],
+        group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()>;

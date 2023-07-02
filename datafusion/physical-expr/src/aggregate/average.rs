@@ -467,7 +467,7 @@ where
     /// Adds one to each group's counter
     fn increment_counts(
         &mut self,
-        group_indicies: &[usize],
+        group_indices: &[usize],
         values: &PrimitiveArray<T>,
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
@@ -476,7 +476,7 @@ where
 
         if values.null_count() == 0 {
             accumulate_all(
-                group_indicies,
+                group_indices,
                 values,
                 opt_filter,
                 |group_index, _new_value| {
@@ -485,7 +485,7 @@ where
             )
         } else {
             accumulate_all_nullable(
-                group_indicies,
+                group_indices,
                 values,
                 opt_filter,
                 |group_index, _new_value, is_valid| {
@@ -500,7 +500,7 @@ where
     /// Adds the counts with the partial counts
     fn update_counts_with_partial_counts(
         &mut self,
-        group_indicies: &[usize],
+        group_indices: &[usize],
         partial_counts: &UInt64Array,
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
@@ -509,7 +509,7 @@ where
 
         if partial_counts.null_count() == 0 {
             accumulate_all(
-                group_indicies,
+                group_indices,
                 partial_counts,
                 opt_filter,
                 |group_index, partial_count| {
@@ -518,7 +518,7 @@ where
             )
         } else {
             accumulate_all_nullable(
-                group_indicies,
+                group_indices,
                 partial_counts,
                 opt_filter,
                 |group_index, partial_count, is_valid| {
@@ -533,7 +533,7 @@ where
     /// Adds the values in `values` to self.sums
     fn update_sums(
         &mut self,
-        group_indicies: &[usize],
+        group_indices: &[usize],
         values: &PrimitiveArray<T>,
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
@@ -543,7 +543,7 @@ where
 
         if values.null_count() == 0 {
             accumulate_all(
-                group_indicies,
+                group_indices,
                 values,
                 opt_filter,
                 |group_index, new_value| {
@@ -553,7 +553,7 @@ where
             )
         } else {
             accumulate_all_nullable(
-                group_indicies,
+                group_indices,
                 values,
                 opt_filter,
                 |group_index, new_value, is_valid| {
@@ -575,15 +575,15 @@ where
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
-        group_indicies: &[usize],
+        group_indices: &[usize],
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values.get(0).unwrap().as_primitive::<T>();
 
-        self.increment_counts(group_indicies, values, opt_filter, total_num_groups);
-        self.update_sums(group_indicies, values, opt_filter, total_num_groups);
+        self.increment_counts(group_indices, values, opt_filter, total_num_groups);
+        self.update_sums(group_indices, values, opt_filter, total_num_groups);
 
         Ok(())
     }
@@ -591,7 +591,7 @@ where
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
-        group_indicies: &[usize],
+        group_indices: &[usize],
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
@@ -600,12 +600,12 @@ where
         let partial_counts = values.get(0).unwrap().as_primitive::<UInt64Type>();
         let partial_sums = values.get(1).unwrap().as_primitive::<T>();
         self.update_counts_with_partial_counts(
-            group_indicies,
+            group_indices,
             partial_counts,
             opt_filter,
             total_num_groups,
         );
-        self.update_sums(group_indicies, partial_sums, opt_filter, total_num_groups);
+        self.update_sums(group_indices, partial_sums, opt_filter, total_num_groups);
 
         Ok(())
     }
