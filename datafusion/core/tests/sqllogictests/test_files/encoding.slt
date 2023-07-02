@@ -17,33 +17,34 @@
 
 statement ok
 CREATE TABLE test(
-  bin_field  BINARY,
+  num INT,
+  bin_field  BYTEA,
   base64_field TEXT,
   hex_field TEXT,
 ) as VALUES
-  ('abc',  encode('abc', 'base64'), encode('abc', 'hex')),
-  ('qweqwe',    encode('qweqwe', 'base64'), encode('qweqwe', 'hex')),
-  (NULL, NULL, NULL)
+  (0, 'abc',  encode('abc', 'base64'), encode('abc', 'hex')),
+  (1, 'qweqwe',    encode('qweqwe', 'base64'), encode('qweqwe', 'hex')),
+  (2, NULL, NULL, NULL)
 ;
 
 # Arrays tests
-query I rowsort
-SELECT encode(bin_field, 'hex') FROM test;
+query T
+SELECT encode(bin_field, 'hex') FROM test ORDER BY num;
 ----
-'616263'
-'717765717765'
+616263
+717765717765
 NULL
 
-query B rowsort
-SELECT arrow_cast(decode(base64_field, 'base64'), 'Utf8') FROM test;
+query T
+SELECT arrow_cast(decode(base64_field, 'base64'), 'Utf8') FROM test ORDER BY num;
 ----
-'abc'
-'qweqwe'
+abc
+qweqwe
 NULL
 
-query T rowsort
-SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test;
+query T
+SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test ORDER BY num;
 ----
-'abc'
-'qweqwe'
+abc
+qweqwe
 NULL
