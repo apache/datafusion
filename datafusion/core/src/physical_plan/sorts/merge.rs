@@ -241,11 +241,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
                 self.in_progress.push_row(stream_idx);
 
                 // stop sorting if fetch has been reached
-                if self
-                    .fetch
-                    .map(|fetch| self.produced + self.in_progress.len() >= fetch)
-                    .unwrap_or(false)
-                {
+                if self.fetch_reached() {
                     self.aborted = true;
                 } else if self.in_progress.len() < self.batch_size {
                     continue;
@@ -256,6 +252,12 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
 
             return Poll::Ready(self.in_progress.build_record_batch().transpose());
         }
+    }
+
+    fn fetch_reached(&mut self) -> bool {
+        self.fetch
+            .map(|fetch| self.produced + self.in_progress.len() >= fetch)
+            .unwrap_or(false)
     }
 
     fn advance(&mut self, stream_idx: usize) -> bool {
