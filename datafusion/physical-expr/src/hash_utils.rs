@@ -135,7 +135,11 @@ fn hash_array<T>(
     T: ArrayAccessor,
     T::Item: HashValue,
 {
-    assert_eq!(hashes_buffer.len(), array.len(), "hashes_buffer and array should be of equal length");
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
 
     if array.null_count() == 0 {
         if rehash {
