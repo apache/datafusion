@@ -381,6 +381,20 @@ SELECT * FROM new_table
 statement ok
 DROP TABLE new_table;
 
+# Create table as without alias names of window aggregates
+statement ok
+CREATE TABLE new_table AS SELECT SUM(c1) OVER(ORDER BY c2), c2, c3 FROM test_table
+
+query IRT
+SELECT * FROM new_table
+----
+3 0 !
+5 1 there
+6 2 hello
+
+statement ok
+DROP TABLE new_table;
+
 # TODO enable information schema
 
 statement ok
