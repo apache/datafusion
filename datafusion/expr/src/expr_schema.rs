@@ -251,9 +251,11 @@ impl ExprSchemable for Expr {
                 ref right,
                 ..
             }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
-            Expr::Like(Like { expr, .. }) => expr.nullable(input_schema),
-            Expr::ILike(Like { expr, .. }) => expr.nullable(input_schema),
-            Expr::SimilarTo(Like { expr, .. }) => expr.nullable(input_schema),
+            Expr::Like(Like { expr, pattern, .. })
+            | Expr::ILike(Like { expr, pattern, .. })
+            | Expr::SimilarTo(Like { expr, pattern, .. }) => {
+                Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
+            }
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
@@ -434,6 +436,22 @@ mod tests {
 
         // Testing on long list
         let expr = col("foo").in_list(vec![lit(1); 6], false);
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+    }
+
+    #[test]
+    fn test_like_nullability() {
+        let get_schema = |nullable| {
+            MockExprSchema::new()
+                .with_data_type(DataType::Utf8)
+                .with_nullable(nullable)
+        };
+
+        let expr = col("foo").like(lit("bar"));
+        assert!(!expr.nullable(&get_schema(false)).unwrap());
+        assert!(expr.nullable(&get_schema(true)).unwrap());
+
+        let expr = col("foo").like(lit(ScalarValue::Utf8(None)));
         assert!(expr.nullable(&get_schema(false)).unwrap());
     }
 
