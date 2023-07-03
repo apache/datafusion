@@ -497,6 +497,7 @@ impl ExecutionPlan for RepartitionExec {
                 sort_exprs,
                 BaselineMetrics::new(&self.metrics, partition),
                 context.session_config().batch_size(),
+                None,
             )
         } else {
             Ok(Box::pin(RepartitionStream {
