@@ -43,9 +43,13 @@ SELECT '2023-05-01 12:30:00'::timestamp - interval '1 month';
 2023-04-01T12:30:00
 
 # interval - date
-query error DataFusion error: type_coercion
+query D
 select interval '1 month' - '2023-05-01'::date;
+----
+2023-04-01
 
 # interval - timestamp
-query error DataFusion error: type_coercion
+query P
 SELECT interval '1 month' - '2023-05-01 12:30:00'::timestamp;
+----
+2023-04-01T12:30:00

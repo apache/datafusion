@@ -29,11 +29,11 @@ use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
 };
-use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 
+use datafusion_expr::expr::Alias;
 use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
@@ -348,7 +348,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Alias(Box::new(col), self.normalizer.normalize(alias));
+                let expr = Expr::Alias(Alias::new(col, self.normalizer.normalize(alias)));
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
@@ -446,14 +446,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let group_by_contains_primary = group_by_exprs.iter().any(|expr| {
             input_primary_key_fields.iter().any(|item| {
-                let expr_name = format!("{:?}", expr);
+                let expr_name = format!("{}", expr);
                 item.qualified_name() == expr_name
             })
         });
         if group_by_contains_primary {
             for expr in select_exprs {
                 if !group_by_exprs.contains(expr)
-                    && field_names.contains(&format!("{:?}", expr))
+                    && field_names.contains(&format!("{}", expr))
                 {
                     group_by_exprs.push(expr.clone());
                 }

@@ -214,39 +214,56 @@ fn quarter_month(date: &NaiveDateTime) -> u32 {
     1 + 3 * ((date.month() - 1) / 3)
 }
 
-fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
-    let value = timestamp_ns_to_datetime(value)
-        .ok_or_else(|| {
-            DataFusionError::Execution(format!("Timestamp {value} out of range"))
-        })?
-        .with_nanosecond(0);
+/// Tuncates the single `value`, expressed in nanoseconds since the
+/// epoch, for granularities greater than 1 second, in taking into
+/// account that some granularities are not uniform durations of time
+/// (e.g. months are not always the same lengths, leap seconds, etc)
+fn date_trunc_coarse(granularity: &str, value: i64) -> Result<i64> {
+    // Use chrono NaiveDateTime to clear the various fields
+    // correctly accounting for non uniform granularities
+    let value = timestamp_ns_to_datetime(value).ok_or_else(|| {
+        DataFusionError::Execution(format!("Timestamp {value} out of range"))
+    })?;
+
+    let value = Some(value);
+
     let value = match granularity {
-        "second" | "millisecond" | "microsecond" => value,
-        "minute" => value.and_then(|d| d.with_second(0)),
+        "millisecond" => value,
+        "microsecond" => value,
+        "second" => value.and_then(|d| d.with_nanosecond(0)),
+        "minute" => value
+            .and_then(|d| d.with_nanosecond(0))
+            .and_then(|d| d.with_second(0)),
         "hour" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0)),
         "day" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0)),
         "week" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .map(|d| d - Duration::seconds(60 * 60 * 24 * d.weekday() as i64)),
         "month" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0)),
         "quarter" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0))
             .and_then(|d| d.with_month(quarter_month(&d))),
         "year" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
@@ -258,8 +275,55 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             )));
         }
     };
-    // `with_x(0)` are infalible because `0` are always a valid
+    // `with_x(0)` are infallible because `0` are always a valid
     Ok(value.unwrap().timestamp_nanos())
+}
+
+// truncates a single value with the given timeunit to the specified granularity
+fn _date_trunc(
+    tu: TimeUnit,
+    value: &Option<i64>,
+    granularity: &str,
+) -> Result<Option<i64>, DataFusionError> {
+    let scale = match tu {
+        TimeUnit::Second => 1_000_000_000,
+        TimeUnit::Millisecond => 1_000_000,
+        TimeUnit::Microsecond => 1_000,
+        TimeUnit::Nanosecond => 1,
+    };
+
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    // convert to nanoseconds
+    let nano = date_trunc_coarse(granularity, scale * value)?;
+
+    let result = match tu {
+        TimeUnit::Second => match granularity {
+            "minute" => Some(nano / 1_000_000_000 / 60 * 60),
+            _ => Some(nano / 1_000_000_000),
+        },
+        TimeUnit::Millisecond => match granularity {
+            "minute" => Some(nano / 1_000_000 / 1_000 / 60 * 1_000 * 60),
+            "second" => Some(nano / 1_000_000 / 1_000 * 1_000),
+            _ => Some(nano / 1_000_000),
+        },
+        TimeUnit::Microsecond => match granularity {
+            "minute" => Some(nano / 1_000 / 1_000_000 / 60 * 60 * 1_000_000),
+            "second" => Some(nano / 1_000 / 1_000_000 * 1_000_000),
+            "millisecond" => Some(nano / 1_000 / 1_000 * 1_000),
+            _ => Some(nano / 1_000),
+        },
+        _ => match granularity {
+            "minute" => Some(nano / 1_000_000_000 / 60 * 1_000_000_000 * 60),
+            "second" => Some(nano / 1_000_000_000 * 1_000_000_000),
+            "millisecond" => Some(nano / 1_000_000 * 1_000_000),
+            "microsecond" => Some(nano / 1_000 * 1_000),
+            _ => Some(nano),
+        },
+    };
+    Ok(result)
 }
 
 /// date_trunc SQL function
@@ -275,57 +339,70 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ));
         };
 
-    let f = |x: Option<i64>| {
-        x.map(|x| date_trunc_single(granularity.as_str(), x))
-            .transpose()
-    };
-
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            let nano = (f)(*v)?;
-            match granularity.as_str() {
-                "minute" => {
-                    // trunc to minute
-                    let second = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap() / 1_000_000_000 * 1_000_000_000),
-                        tz_opt.clone(),
-                    );
-                    ColumnarValue::Scalar(second)
-                }
-                "second" => {
-                    // trunc to second
-                    let mill = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap() / 1_000_000 * 1_000_000),
-                        tz_opt.clone(),
-                    );
-                    ColumnarValue::Scalar(mill)
-                }
-                "millisecond" => {
-                    // trunc to microsecond
-                    let micro = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap() / 1_000 * 1_000),
-                        tz_opt.clone(),
-                    );
-                    ColumnarValue::Scalar(micro)
-                }
-                _ => {
-                    // trunc to nanosecond
-                    let nano = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap()),
-                        tz_opt.clone(),
-                    );
-                    ColumnarValue::Scalar(nano)
-                }
-            }
+            let value = _date_trunc(TimeUnit::Nanosecond, v, granularity.as_str())?;
+            let value = ScalarValue::TimestampNanosecond(value, tz_opt.clone());
+            ColumnarValue::Scalar(value)
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
+            let value = _date_trunc(TimeUnit::Microsecond, v, granularity.as_str())?;
+            let value = ScalarValue::TimestampMicrosecond(value, tz_opt.clone());
+            ColumnarValue::Scalar(value)
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
+            let value = _date_trunc(TimeUnit::Millisecond, v, granularity.as_str())?;
+            let value = ScalarValue::TimestampMillisecond(value, tz_opt.clone());
+            ColumnarValue::Scalar(value)
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
+            let value = _date_trunc(TimeUnit::Second, v, granularity.as_str())?;
+            let value = ScalarValue::TimestampSecond(value, tz_opt.clone());
+            ColumnarValue::Scalar(value)
         }
         ColumnarValue::Array(array) => {
-            let array = as_timestamp_nanosecond_array(array)?;
-            let array = array
-                .iter()
-                .map(f)
-                .collect::<Result<TimestampNanosecondArray>>()?;
+            let array_type = array.data_type();
+            match array_type {
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    let array = as_timestamp_second_array(array)?;
+                    let array = array
+                        .iter()
+                        .map(|x| _date_trunc(TimeUnit::Second, &x, granularity.as_str()))
+                        .collect::<Result<TimestampSecondArray>>()?;
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    let array = as_timestamp_millisecond_array(array)?;
+                    let array = array
+                        .iter()
+                        .map(|x| {
+                            _date_trunc(TimeUnit::Millisecond, &x, granularity.as_str())
+                        })
+                        .collect::<Result<TimestampMillisecondArray>>()?;
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    let array = as_timestamp_microsecond_array(array)?;
+                    let array = array
+                        .iter()
+                        .map(|x| {
+                            _date_trunc(TimeUnit::Microsecond, &x, granularity.as_str())
+                        })
+                        .collect::<Result<TimestampMicrosecondArray>>()?;
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                _ => {
+                    let array = as_timestamp_nanosecond_array(array)?;
+                    let array = array
+                        .iter()
+                        .map(|x| {
+                            _date_trunc(TimeUnit::Nanosecond, &x, granularity.as_str())
+                        })
+                        .collect::<Result<TimestampNanosecondArray>>()?;
 
-            ColumnarValue::Array(Arc::new(array))
+                    ColumnarValue::Array(Arc::new(array))
+                }
+            }
         }
         _ => {
             return Err(DataFusionError::Execution(
@@ -913,7 +990,7 @@ mod tests {
         cases.iter().for_each(|(original, granularity, expected)| {
             let left = string_to_timestamp_nanos(original).unwrap();
             let right = string_to_timestamp_nanos(expected).unwrap();
-            let result = date_trunc_single(granularity, left).unwrap();
+            let result = date_trunc_coarse(granularity, left).unwrap();
             assert_eq!(result, right, "{original} = {expected}");
         });
     }

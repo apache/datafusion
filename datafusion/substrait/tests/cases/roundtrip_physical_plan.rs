@@ -66,8 +66,11 @@ async fn parquet_exec() -> Result<()> {
         consumer::from_substrait_rel(&mut ctx, substrait_rel.as_ref(), &HashMap::new())
             .await?;
 
-    let expected = format!("{}", displayable(parquet_exec.as_ref()).indent());
-    let actual = format!("{}", displayable(parquet_exec_roundtrip.as_ref()).indent());
+    let expected = format!("{}", displayable(parquet_exec.as_ref()).indent(true));
+    let actual = format!(
+        "{}",
+        displayable(parquet_exec_roundtrip.as_ref()).indent(true)
+    );
     assert_eq!(expected, actual);
 
     Ok(())

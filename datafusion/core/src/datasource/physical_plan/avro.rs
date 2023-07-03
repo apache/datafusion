@@ -20,7 +20,7 @@ use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+    ordering_equivalence_properties_helper, DisplayAs, DisplayFormatType, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_execution::TaskContext;
@@ -146,11 +146,8 @@ impl ExecutionPlan for AvroExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "AvroExec: {}", self.base_config)
-            }
-        }
+        write!(f, "AvroExec: ")?;
+        self.base_config.fmt_as(t, f)
     }
 
     fn statistics(&self) -> Statistics {

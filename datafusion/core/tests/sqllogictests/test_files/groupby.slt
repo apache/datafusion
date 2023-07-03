@@ -2076,7 +2076,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, FIRST_VALUE(
 ----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as first_c]
---AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 query III
@@ -2084,10 +2084,10 @@ SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
   FROM annotated_data_infinite2
   GROUP BY a, b
 ----
-0 0 0
-0 1 25
-1 2 50
-1 3 75
+0 0 24
+0 1 49
+1 2 74
+1 3 99
 
 # test_source_sorted_groupby4
 
@@ -2102,7 +2102,7 @@ Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, LAST_VALUE(a
 ----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, LAST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as last_c]
---AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[FIRST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 query III
@@ -2110,10 +2110,10 @@ SELECT a, b, LAST_VALUE(c ORDER BY a DESC) as last_c
   FROM annotated_data_infinite2
   GROUP BY a, b
 ----
-0 0 24
-0 1 49
-1 2 74
-1 3 99
+0 0 0
+0 1 25
+1 2 50
+1 3 75
 
 # when LAST_VALUE, or FIRST_VALUE value do not contain ordering requirement
 # queries should still work, However, result depends on the scanning order and
@@ -2580,15 +2580,283 @@ FRA 200 50 250
 
 # Run order-sensitive aggregators in multiple partitions
 statement ok
-set datafusion.execution.target_partitions = 2;
+set datafusion.execution.target_partitions = 8;
 
-# Currently, we do not support running order-sensitive aggregators in multiple partitions.
-statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
+# order-sensitive FIRST_VALUE and LAST_VALUE aggregators should work in
+# multi-partitions without group by also.
+query TT
+EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts ASC) AS fv2
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+logical_plan
+Sort: sales_global.country ASC NULLS LAST
+--Projection: sales_global.country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv2
+----Aggregate: groupBy=[[sales_global.country]], aggr=[[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]]
+------TableScan: sales_global projection=[country, ts, amount]
+physical_plan
+SortPreservingMergeExec: [country@0 ASC NULLS LAST]
+--SortExec: expr=[country@0 ASC NULLS LAST]
+----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@2 as fv2]
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+--------SortExec: expr=[ts@1 ASC NULLS LAST]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
+--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=None
+----------------SortExec: expr=[ts@1 ASC NULLS LAST]
+------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TRR
+SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts ASC) AS fv2
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+FRA 50 200
+GRC 30 80
+TUR 75 100
+
+# Conversion in between FIRST_VALUE and LAST_VALUE to resolve
+# contradictory requirements should work in multi partitions.
+query TT
+EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts DESC) AS fv2
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+logical_plan
+Sort: sales_global.country ASC NULLS LAST
+--Projection: sales_global.country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv2
+----Aggregate: groupBy=[[sales_global.country]], aggr=[[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
+------TableScan: sales_global projection=[country, ts, amount]
+physical_plan
+SortPreservingMergeExec: [country@0 ASC NULLS LAST]
+--SortExec: expr=[country@0 ASC NULLS LAST]
+----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2]
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
+--------SortExec: expr=[ts@1 ASC NULLS LAST]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
+--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)], ordering_mode=None
+----------------SortExec: expr=[ts@1 ASC NULLS LAST]
+------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TRR
+SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts DESC) AS fv2
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+FRA 50 50
+GRC 30 30
+TUR 75 75
+
+# order-sensitive FIRST_VALUE and LAST_VALUE aggregators should work in
+# multi-partitions without group by also.
+query TT
+EXPLAIN SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts ASC) AS fv2
+  FROM sales_global
+----
+logical_plan
+Projection: FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv2
+--Aggregate: groupBy=[[]], aggr=[[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]]
+----TableScan: sales_global projection=[ts, amount]
+physical_plan
+ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv2]
+--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+----SortPreservingMergeExec: [ts@0 ASC NULLS LAST]
+------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=None
+--------SortExec: expr=[ts@0 ASC NULLS LAST]
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query RR
+SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts ASC) AS fv2
+  FROM sales_global
+----
+30 80
+
+# Conversion in between FIRST_VALUE and LAST_VALUE to resolve
+# contradictory requirements should work in multi partitions.
+query TT
+EXPLAIN SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts DESC) AS fv2
+  FROM sales_global
+----
+logical_plan
+Projection: FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv2
+--Aggregate: groupBy=[[]], aggr=[[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
+----TableScan: sales_global projection=[ts, amount]
+physical_plan
+ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv2]
+--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
+----SortPreservingMergeExec: [ts@0 ASC NULLS LAST]
+------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)], ordering_mode=None
+--------SortExec: expr=[ts@0 ASC NULLS LAST]
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query RR
+SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts DESC) AS fv2
+  FROM sales_global
+----
+30 30
+
+# ARRAY_AGG should work in multiple partitions
+query TT
+EXPLAIN SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
+  FROM sales_global
+----
+logical_plan
+Projection: ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS array_agg1
+--Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]]
+----TableScan: sales_global projection=[ts, amount]
+physical_plan
+ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as array_agg1]
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
+----SortPreservingMergeExec: [ts@0 ASC NULLS LAST]
+------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=None
+--------SortExec: expr=[ts@0 ASC NULLS LAST]
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ?
+SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
+  FROM sales_global
+----
+[30.0, 50.0, 75.0, 200.0, 100.0, 80.0]
+
+# ARRAY_AGG should work in multiple partitions
+query TT
+EXPLAIN SELECT ARRAY_AGG(amount ORDER BY ts DESC) AS array_agg1
+  FROM sales_global
+----
+logical_plan
+Projection: ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS array_agg1
+--Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
+----TableScan: sales_global projection=[ts, amount]
+physical_plan
+ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@0 as array_agg1]
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
+----SortPreservingMergeExec: [ts@0 DESC]
+------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=None
+--------SortExec: expr=[ts@0 DESC]
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ?
+SELECT ARRAY_AGG(amount ORDER BY ts DESC) AS array_agg1
+  FROM sales_global
+----
+[100.0, 80.0, 200.0, 75.0, 50.0, 30.0]
+
+# ARRAY_AGG should work in multiple partitions
+query TT
+EXPLAIN SELECT ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
+  FROM sales_global
+----
+logical_plan
+Projection: ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS array_agg1
+--Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
+----TableScan: sales_global projection=[amount]
+physical_plan
+ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@0 as array_agg1]
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
+----SortPreservingMergeExec: [amount@0 ASC NULLS LAST]
+------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=None
+--------SortExec: expr=[amount@0 ASC NULLS LAST]
+----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ?
+SELECT ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
+  FROM sales_global
+----
+[30.0, 50.0, 75.0, 80.0, 100.0, 200.0]
+
+# ARRAY_AGG should work in multiple partitions
+query TT
+EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+logical_plan
+Sort: sales_global.country ASC NULLS LAST
+--Projection: sales_global.country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS array_agg1
+----Aggregate: groupBy=[[sales_global.country]], aggr=[[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
+------TableScan: sales_global projection=[country, amount]
+physical_plan
+SortPreservingMergeExec: [country@0 ASC NULLS LAST]
+--SortExec: expr=[country@0 ASC NULLS LAST]
+----ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as array_agg1]
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)]
+--------SortExec: expr=[amount@1 ASC NULLS LAST]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
+--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=None
+----------------SortExec: expr=[amount@1 ASC NULLS LAST]
+------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query T?
+SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+FRA [50.0, 200.0]
+GRC [30.0, 80.0]
+TUR [75.0, 100.0]
+
+# ARRAY_AGG, FIRST_VALUE, LAST_VALUE should work in multiple partitions
+query TT
+EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
+  FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY amount DESC) AS fv2
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+logical_plan
+Sort: sales_global.country ASC NULLS LAST
+--Projection: sales_global.country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2
+----Aggregate: groupBy=[[sales_global.country]], aggr=[[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]]
+------TableScan: sales_global projection=[country, amount]
+physical_plan
+SortPreservingMergeExec: [country@0 ASC NULLS LAST]
+--SortExec: expr=[country@0 ASC NULLS LAST]
+----ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
+--------SortExec: expr=[amount@1 DESC]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
+--------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=None
+----------------SortExec: expr=[amount@1 DESC]
+------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+--------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query T?RR
 SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   LAST_VALUE(amount ORDER BY amount DESC) AS fv2
   FROM sales_global
   GROUP BY country
+  ORDER BY country
+----
+FRA [200.0, 50.0] 50 50
+GRC [80.0, 30.0] 30 30
+TUR [100.0, 75.0] 75 75
 
 # create a table for testing
 statement ok
@@ -2627,9 +2895,9 @@ SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[sn@0 as sn, amount@1 as amount, 2 * CAST(sn@0 AS Int64) as Int64(2) * s.sn]
 ------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "sn", index: 0 }, Column { name: "amount", index: 1 }], 2), input_partitions=2
+----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 ------------AggregateExec: mode=Partial, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
---------------MemoryExec: partitions=2, partition_sizes=[1, 0]
+--------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
 
 query IRI
 SELECT s.sn, s.amount, 2*s.sn

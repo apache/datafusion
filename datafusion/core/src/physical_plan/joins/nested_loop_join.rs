@@ -251,10 +251,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
-                    |f| format!(", filter={:?}", f.expression()),
+                    |f| format!(", filter={}", f.expression()),
                 );
                 write!(
                     f,
@@ -482,8 +482,8 @@ impl NestedLoopJoinStream {
                             &self.schema,
                             left_data,
                             &empty_right_batch,
-                            left_side,
-                            right_side,
+                            &left_side,
+                            &right_side,
                             &self.column_indices,
                             JoinSide::Left,
                         );
@@ -611,8 +611,8 @@ fn join_left_and_right_batch(
                 schema,
                 left_batch,
                 right_batch,
-                left_side,
-                right_side,
+                &left_side,
+                &right_side,
                 column_indices,
                 JoinSide::Left,
             )

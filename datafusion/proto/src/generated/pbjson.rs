@@ -13080,6 +13080,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         if !self.expr.is_empty() {
             len += 1;
         }
+        if !self.ordering_req.is_empty() {
+            len += 1;
+        }
         if self.distinct {
             len += 1;
         }
@@ -13089,6 +13092,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalAggregateExprNode", len)?;
         if !self.expr.is_empty() {
             struct_ser.serialize_field("expr", &self.expr)?;
+        }
+        if !self.ordering_req.is_empty() {
+            struct_ser.serialize_field("orderingReq", &self.ordering_req)?;
         }
         if self.distinct {
             struct_ser.serialize_field("distinct", &self.distinct)?;
@@ -13116,6 +13122,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
     {
         const FIELDS: &[&str] = &[
             "expr",
+            "ordering_req",
+            "orderingReq",
             "distinct",
             "aggr_function",
             "aggrFunction",
@@ -13126,6 +13134,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Expr,
+            OrderingReq,
             Distinct,
             AggrFunction,
             UserDefinedAggrFunction,
@@ -13151,6 +13160,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
+                            "orderingReq" | "ordering_req" => Ok(GeneratedField::OrderingReq),
                             "distinct" => Ok(GeneratedField::Distinct),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
@@ -13174,6 +13184,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut expr__ = None;
+                let mut ordering_req__ = None;
                 let mut distinct__ = None;
                 let mut aggregate_function__ = None;
                 while let Some(k) = map.next_key()? {
@@ -13183,6 +13194,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
                             expr__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::OrderingReq => {
+                            if ordering_req__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orderingReq"));
+                            }
+                            ordering_req__ = Some(map.next_value()?);
                         }
                         GeneratedField::Distinct => {
                             if distinct__.is_some() {
@@ -13206,6 +13223,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 }
                 Ok(PhysicalAggregateExprNode {
                     expr: expr__.unwrap_or_default(),
+                    ordering_req: ordering_req__.unwrap_or_default(),
                     distinct: distinct__.unwrap_or_default(),
                     aggregate_function: aggregate_function__,
                 })
@@ -17865,6 +17883,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayToString => "ArrayToString",
             Self::Cardinality => "Cardinality",
             Self::TrimArray => "TrimArray",
+            Self::ArrayContains => "ArrayContains",
         };
         serializer.serialize_str(variant)
     }
@@ -17976,6 +17995,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayToString",
             "Cardinality",
             "TrimArray",
+            "ArrayContains",
         ];
 
         struct GeneratedVisitor;
@@ -18118,6 +18138,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayToString" => Ok(ScalarFunction::ArrayToString),
                     "Cardinality" => Ok(ScalarFunction::Cardinality),
                     "TrimArray" => Ok(ScalarFunction::TrimArray),
+                    "ArrayContains" => Ok(ScalarFunction::ArrayContains),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -22172,6 +22193,12 @@ impl serde::Serialize for WindowExprNode {
                         .ok_or_else(|| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
                     struct_ser.serialize_field("builtInFunction", &v)?;
                 }
+                window_expr_node::WindowFunction::Udaf(v) => {
+                    struct_ser.serialize_field("udaf", v)?;
+                }
+                window_expr_node::WindowFunction::Udwf(v) => {
+                    struct_ser.serialize_field("udwf", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -22195,6 +22222,8 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             "aggrFunction",
             "built_in_function",
             "builtInFunction",
+            "udaf",
+            "udwf",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22205,6 +22234,8 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             WindowFrame,
             AggrFunction,
             BuiltInFunction,
+            Udaf,
+            Udwf,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22232,6 +22263,8 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "builtInFunction" | "built_in_function" => Ok(GeneratedField::BuiltInFunction),
+                            "udaf" => Ok(GeneratedField::Udaf),
+                            "udwf" => Ok(GeneratedField::Udwf),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22293,6 +22326,18 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                                 return Err(serde::de::Error::duplicate_field("builtInFunction"));
                             }
                             window_function__ = map.next_value::<::std::option::Option<BuiltInWindowFunction>>()?.map(|x| window_expr_node::WindowFunction::BuiltInFunction(x as i32));
+                        }
+                        GeneratedField::Udaf => {
+                            if window_function__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("udaf"));
+                            }
+                            window_function__ = map.next_value::<::std::option::Option<_>>()?.map(window_expr_node::WindowFunction::Udaf);
+                        }
+                        GeneratedField::Udwf => {
+                            if window_function__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("udwf"));
+                            }
+                            window_function__ = map.next_value::<::std::option::Option<_>>()?.map(window_expr_node::WindowFunction::Udwf);
                         }
                     }
                 }

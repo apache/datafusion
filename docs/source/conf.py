@@ -34,7 +34,7 @@
 # -- Project information -----------------------------------------------------
 
 project = 'Arrow DataFusion'
-copyright = '2022, Apache Software Foundation'
+copyright = '2023, Apache Software Foundation'
 author = 'Arrow DataFusion Authors'
 
 

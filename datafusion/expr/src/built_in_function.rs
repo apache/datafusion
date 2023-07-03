@@ -113,6 +113,8 @@ pub enum BuiltinScalarFunction {
     ArrayAppend,
     /// array_concat
     ArrayConcat,
+    /// array_contains
+    ArrayContains,
     /// array_dims
     ArrayDims,
     /// array_fill
@@ -319,6 +321,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayContains => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
@@ -441,45 +444,53 @@ impl BuiltinScalarFunction {
         // Some built-in functions' return type depends on the incoming type.
         match self {
             BuiltinScalarFunction::ArrayAppend => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
+                List(_) => Ok(List(Arc::new(Field::new(
                     "item",
-                    field.data_type().clone(),
+                    input_expr_types[1].clone(),
                     true,
                 )))),
                 _ => Err(DataFusionError::Internal(format!(
                     "The {self} function can only accept list as the first argument"
                 ))),
             },
-            BuiltinScalarFunction::ArrayConcat => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept fixed size list as the args."
-                ))),
-            },
+            BuiltinScalarFunction::ArrayConcat => {
+                let mut expr_type = Null;
+                for input_expr_type in input_expr_types {
+                    match input_expr_type {
+                        List(field) => {
+                            if !field.data_type().equals_datatype(&Null) {
+                                expr_type = field.data_type().clone();
+                                break;
+                            }
+                        }
+                        _ => {
+                            return Err(DataFusionError::Internal(format!(
+                                "The {self} function can only accept list as the args."
+                            )))
+                        }
+                    }
+                }
+
+                Ok(List(Arc::new(Field::new("item", expr_type, true))))
+            }
+            BuiltinScalarFunction::ArrayContains => Ok(Boolean),
             BuiltinScalarFunction::ArrayDims => Ok(UInt8),
             BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
                 "item",
-                input_expr_types[0].clone(),
+                input_expr_types[1].clone(),
                 true,
             )))),
             BuiltinScalarFunction::ArrayLength => Ok(UInt8),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt8),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt8),
-            BuiltinScalarFunction::ArrayPositions => Ok(UInt8),
-            BuiltinScalarFunction::ArrayPrepend => match &input_expr_types[1] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
-            },
+            BuiltinScalarFunction::ArrayPositions => {
+                Ok(List(Arc::new(Field::new("item", UInt8, true))))
+            }
+            BuiltinScalarFunction::ArrayPrepend => Ok(List(Arc::new(Field::new(
+                "item",
+                input_expr_types[0].clone(),
+                true,
+            )))),
             BuiltinScalarFunction::ArrayRemove => match &input_expr_types[0] {
                 List(field) => Ok(List(Arc::new(Field::new(
                     "item",
@@ -500,24 +511,21 @@ impl BuiltinScalarFunction {
                     "The {self} function can only accept list as the first argument"
                 ))),
             },
-            BuiltinScalarFunction::ArrayToString => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
-            },
+            BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
-                _ => Ok(List(Arc::new(Field::new(
-                    "item",
-                    input_expr_types[0].clone(),
-                    true,
-                )))),
+                _ => {
+                    let mut expr_type = Null;
+                    for input_expr_type in input_expr_types {
+                        if !input_expr_type.equals_datatype(&Null) {
+                            expr_type = input_expr_type.clone();
+                            break;
+                        }
+                    }
+
+                    Ok(List(Arc::new(Field::new("item", expr_type, true))))
+                }
             },
             BuiltinScalarFunction::TrimArray => match &input_expr_types[0] {
                 List(field) => Ok(List(Arc::new(Field::new(
@@ -548,17 +556,19 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Concat => Ok(Utf8),
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
             BuiltinScalarFunction::DatePart => Ok(Float64),
-            // DateTrunc always makes nanosecond timestamps
-            BuiltinScalarFunction::DateTrunc => Ok(Timestamp(Nanosecond, None)),
-            BuiltinScalarFunction::DateBin => match input_expr_types[1] {
-                Timestamp(Nanosecond, _) | Utf8 => Ok(Timestamp(Nanosecond, None)),
-                Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
-                Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
-                Timestamp(Second, _) => Ok(Timestamp(Second, None)),
-                _ => Err(DataFusionError::Internal(format!(
+            BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
+                match input_expr_types[1] {
+                    Timestamp(Nanosecond, _) | Utf8 | Null => {
+                        Ok(Timestamp(Nanosecond, None))
+                    }
+                    Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
+                    Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
+                    Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+                    _ => Err(DataFusionError::Internal(format!(
                     "The {self} function can only accept timestamp as the second arg."
                 ))),
-            },
+                }
+            }
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
@@ -741,6 +751,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
+            BuiltinScalarFunction::ArrayContains => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayFill => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayLength => {
@@ -884,8 +895,13 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::DateTrunc => Signature::exact(
-                vec![Utf8, Timestamp(Nanosecond, None)],
+            BuiltinScalarFunction::DateTrunc => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                ],
                 self.volatility(),
             ),
             BuiltinScalarFunction::DateBin => {
@@ -1166,6 +1182,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         // array functions
         BuiltinScalarFunction::ArrayAppend => &["array_append"],
         BuiltinScalarFunction::ArrayConcat => &["array_concat"],
+        BuiltinScalarFunction::ArrayContains => &["array_contains"],
         BuiltinScalarFunction::ArrayDims => &["array_dims"],
         BuiltinScalarFunction::ArrayFill => &["array_fill"],
         BuiltinScalarFunction::ArrayLength => &["array_length"],
