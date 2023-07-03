@@ -500,43 +500,18 @@ impl DFSchema {
     }
 }
 
-fn encode_primary_key_to_metadata(
-    metadata: &mut HashMap<String, String>,
-    primary_keys: &[usize],
-) {
-    let mut pks = String::new();
-    // Store primary key information in the metadata during conversion
-    for (idx, pk) in primary_keys.iter().enumerate() {
-        pks = format!("{pks}{pk}");
-        if idx < primary_keys.len() - 1 {
-            pks = format!("{pks}, ");
-        }
-    }
-    if !pks.is_empty() {
-        metadata.insert("primary_keys".to_string(), pks);
-    }
-    println!("DFSchema to Schema conversion");
-}
-
 impl From<DFSchema> for Schema {
     /// Convert DFSchema into a Schema
     fn from(df_schema: DFSchema) -> Self {
-        let mut metadata = df_schema.metadata;
-        if !df_schema.primary_keys.is_empty() {
-            encode_primary_key_to_metadata(&mut metadata, &df_schema.primary_keys);
-        }
         let fields: Fields = df_schema.fields.into_iter().map(|f| f.field).collect();
-        Schema::new_with_metadata(fields, metadata)
+        Schema::new_with_metadata(fields, df_schema.metadata)
     }
 }
 
 impl From<&DFSchema> for Schema {
     /// Convert DFSchema reference into a Schema
     fn from(df_schema: &DFSchema) -> Self {
-        let mut metadata = df_schema.metadata.clone();
-        if !df_schema.primary_keys.is_empty() {
-            encode_primary_key_to_metadata(&mut metadata, &df_schema.primary_keys);
-        }
+        let metadata = df_schema.metadata.clone();
         let fields: Fields = df_schema.fields.iter().map(|f| f.field.clone()).collect();
         Schema::new_with_metadata(fields, metadata)
     }
