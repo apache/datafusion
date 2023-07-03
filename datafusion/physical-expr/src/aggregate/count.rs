@@ -181,6 +181,7 @@ impl<T> GroupsAccumulator for CountGroupsAccumulator<T>
 where
     T: ArrowNumericType + Send,
 {
+
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -292,6 +293,10 @@ impl AggregateExpr for Count {
     }
 
     fn row_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
         true
     }
 
