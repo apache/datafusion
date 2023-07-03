@@ -42,7 +42,10 @@ use datafusion_row::accessor::RowAccessor;
 
 use crate::expressions::format_state_name;
 
-use super::groups_accumulator::accumulate::{accumulate_all, accumulate_all_nullable};
+use super::groups_accumulator::accumulate::{
+    accumulate_all, accumulate_indices_nullable, accumulate_indices,
+};
+use super::groups_accumulator::accumulate_all_nullable;
 
 /// COUNT aggregate expression
 /// Returns the amount of non-null values of the given expression.
@@ -118,30 +121,23 @@ where
     fn increment_counts(
         &mut self,
         group_indices: &[usize],
-        values: &PrimitiveArray<T>,
+        values: &dyn Array,
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
     ) {
         self.counts.resize(total_num_groups, 0);
 
         if values.null_count() == 0 {
-            accumulate_all(
-                group_indices,
-                values,
-                opt_filter,
-                |group_index, _new_value| {
-                    self.counts[group_index] += 1;
-                },
-            )
+            accumulate_indices(group_indices, opt_filter, |group_index| {
+                self.counts[group_index] += 1;
+            })
         } else {
-            accumulate_all_nullable(
+            accumulate_indices_nullable(
                 group_indices,
                 values,
                 opt_filter,
-                |group_index, _new_value, is_valid| {
-                    if is_valid {
-                        self.counts[group_index] += 1;
-                    }
+                |group_index| {
+                    self.counts[group_index] += 1;
                 },
             )
         }
@@ -193,7 +189,7 @@ where
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values.get(0).unwrap().as_primitive::<T>();
+        let values = values.get(0).unwrap();
 
         self.increment_counts(group_indices, values, opt_filter, total_num_groups);
 

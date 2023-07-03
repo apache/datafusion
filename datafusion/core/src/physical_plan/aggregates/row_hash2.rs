@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use arrow::row::{RowConverter, SortField, Rows};
+use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};

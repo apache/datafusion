@@ -120,7 +120,7 @@ impl GroupsAccumulatorAdapter {
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
-        mut f: F,
+        f: F,
     ) -> Result<()>
     where
         F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,

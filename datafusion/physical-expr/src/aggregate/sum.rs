@@ -32,7 +32,7 @@ use arrow::{
     datatypes::Field,
 };
 use arrow_array::cast::AsArray;
-use arrow_array::types::{UInt64Type, Int64Type, UInt32Type, Int32Type, Decimal128Type};
+use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
 use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
@@ -152,20 +152,25 @@ impl AggregateExpr for Sum {
         // instantiate specialized accumulator
         match self.data_type {
             DataType::UInt64 => Ok(Box::new(SumGroupsAccumulator::<UInt64Type>::new(
-                &self.data_type, &self.data_type
+                &self.data_type,
+                &self.data_type,
             ))),
             DataType::Int64 => Ok(Box::new(SumGroupsAccumulator::<Int64Type>::new(
-                &self.data_type, &self.data_type
+                &self.data_type,
+                &self.data_type,
             ))),
             DataType::UInt32 => Ok(Box::new(SumGroupsAccumulator::<UInt32Type>::new(
-                &self.data_type, &self.data_type
+                &self.data_type,
+                &self.data_type,
             ))),
             DataType::Int32 => Ok(Box::new(SumGroupsAccumulator::<Int32Type>::new(
-                &self.data_type, &self.data_type
+                &self.data_type,
+                &self.data_type,
             ))),
             DataType::Decimal128(_target_precision, _target_scale) => {
                 Ok(Box::new(SumGroupsAccumulator::<Decimal128Type>::new(
-                    &self.data_type, &self.data_type
+                    &self.data_type,
+                    &self.data_type,
                 )))
             }
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -174,7 +179,6 @@ impl AggregateExpr for Sum {
             ))),
         }
     }
-
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))

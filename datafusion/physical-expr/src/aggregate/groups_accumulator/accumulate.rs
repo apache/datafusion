@@ -104,6 +104,33 @@ pub fn accumulate_all<T, F>(
     }
 }
 
+pub fn accumulate_indices<F>(
+    group_indices: &[usize],
+    opt_filter: Option<&BooleanArray>,
+    mut index_fn: F,
+) where
+    F: FnMut(usize) + Send,
+{
+    let iter = group_indices.iter();
+    // handle filter values with a specialized loop
+    if let Some(filter) = opt_filter {
+        assert_eq!(filter.len(), group_indices.len());
+        // The performance with a filter could be improved by
+        // iterating over the filter in chunks, rather than a single
+        // iterator. TODO file a ticket
+        let iter = iter.zip(filter.iter());
+        for (&group_index, filter_value) in iter {
+            if let Some(true) = filter_value {
+                index_fn(group_index)
+            }
+        }
+    } else {
+        for &group_index in iter {
+            index_fn(group_index)
+        }
+    }
+}
+
 /// This function is called to update the accumulator state per row,
 /// for a `PrimitiveArray<T>` that can have nulls. See
 /// [`accumulate_all`] for more detail and example
@@ -183,6 +210,70 @@ pub fn accumulate_all_nullable<T, F>(
             .for_each(|(i, (&group_index, &new_value))| {
                 let is_valid = remainder_bits & (1 << i) != 0;
                 value_fn(group_index, new_value, is_valid)
+            });
+    }
+}
+
+pub fn accumulate_indices_nullable<F>(
+    group_indices: &[usize],
+    array: &dyn Array,
+    opt_filter: Option<&BooleanArray>,
+    mut index_fn: F,
+) where
+    F: FnMut(usize) + Send,
+{
+    // Given performance is critical, assert if the wrong flavor is called
+    let valids = array
+        .nulls()
+        .expect("Called accumulate_all_nullable with non-nullable array (call accumulate_all instead)");
+
+    if let Some(filter) = opt_filter {
+        assert_eq!(filter.len(), group_indices.len());
+        // The performance with a filter could be improved by
+        // iterating over the filter in chunks, rather than using
+        // iterators. TODO file a ticket
+        filter.iter().zip(group_indices.iter()).for_each(
+            |(filter_value, &group_index)| {
+                // did value[i] pass the filter?
+                if let Some(true) = filter_value {
+                    // Is value[i] valid?
+                    index_fn(group_index)
+                }
+            },
+        )
+    } else {
+        // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
+        // iterate over in chunks of 64 bits for more efficient null checking
+        let group_indices_chunks = group_indices.chunks_exact(64);
+        let bit_chunks = valids.inner().bit_chunks();
+
+        let group_indices_remainder = group_indices_chunks.remainder();
+
+        group_indices_chunks.zip(bit_chunks.iter()).for_each(
+            |(group_index_chunk, mask)| {
+                // index_mask has value 1 << i in the loop
+                let mut index_mask = 1;
+                group_index_chunk.iter().for_each(|&group_index| {
+                    // valid bit was set, real vale
+                    let is_valid = (mask & index_mask) != 0;
+                    if is_valid {
+                        index_fn(group_index);
+                    }
+                    index_mask <<= 1;
+                })
+            },
+        );
+
+        // handle any remaining bits (after the intial 64)
+        let remainder_bits = bit_chunks.remainder_bits();
+        group_indices_remainder
+            .iter()
+            .enumerate()
+            .for_each(|(i, &group_index)| {
+                let is_valid = remainder_bits & (1 << i) != 0;
+                if is_valid {
+                    index_fn(group_index)
+                }
             });
     }
 }
