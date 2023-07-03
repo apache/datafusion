@@ -226,7 +226,7 @@ impl GroupedHashAggregateStream2 {
         // Instantiate the accumulators
         let accumulators: Vec<_> = aggregate_exprs
             .iter()
-            .map(|agg_expr| create_group_accumulator(agg_expr.as_ref()))
+            .map(create_group_accumulator)
             .collect::<Result<_>>()?;
 
         let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
@@ -273,14 +273,14 @@ impl GroupedHashAggregateStream2 {
 /// that is supported by the aggrgate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
 fn create_group_accumulator(
-    agg_expr: &dyn AggregateExpr,
+    agg_expr: &Arc<dyn AggregateExpr>,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {
         agg_expr.create_groups_accumulator()
     } else {
-        // Adapt the basic accumulator
-        let accumulator = agg_expr.create_accumulator()?;
-        Ok(Box::new(GroupsAccumulatorAdapter::new(accumulator)))
+        let agg_expr_captured = agg_expr.clone();
+        let factory = move || agg_expr_captured.create_accumulator();
+        Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
 }
 
