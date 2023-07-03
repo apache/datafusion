@@ -39,7 +39,7 @@ use log::trace;
 
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
@@ -156,6 +156,33 @@ impl ProjectionExec {
     }
 }
 
+impl DisplayAs for ProjectionExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let expr: Vec<String> = self
+                    .expr
+                    .iter()
+                    .map(|(e, alias)| {
+                        let e = e.to_string();
+                        if &e != alias {
+                            format!("{e} as {alias}")
+                        } else {
+                            e
+                        }
+                    })
+                    .collect();
+
+                write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for ProjectionExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -258,31 +285,6 @@ impl ExecutionPlan for ProjectionExec {
             input: self.input.execute(partition, context)?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self
-                    .expr
-                    .iter()
-                    .map(|(e, alias)| {
-                        let e = e.to_string();
-                        if &e != alias {
-                            format!("{e} as {alias}")
-                        } else {
-                            e
-                        }
-                    })
-                    .collect();
-
-                write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

@@ -85,6 +85,17 @@ impl NdJsonExec {
     }
 }
 
+impl DisplayAs for NdJsonExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "JsonExec: ")?;
+        self.base_config.fmt_as(t, f)
+    }
+}
+
 impl ExecutionPlan for NdJsonExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -148,15 +159,6 @@ impl ExecutionPlan for NdJsonExec {
             FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
 
         Ok(Box::pin(stream) as SendableRecordBatchStream)
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "JsonExec: ")?;
-        self.base_config.fmt_as(t, f)
     }
 
     fn statistics(&self) -> Statistics {

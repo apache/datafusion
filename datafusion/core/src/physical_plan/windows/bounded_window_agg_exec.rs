@@ -28,8 +28,8 @@ use crate::physical_plan::windows::{
     calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
 use crate::physical_plan::{
-    ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
@@ -201,6 +201,35 @@ impl BoundedWindowAggExec {
     }
 }
 
+impl DisplayAs for BoundedWindowAggExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "BoundedWindowAggExec: ")?;
+                let g: Vec<String> = self
+                    .window_expr
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{}: {:?}, frame: {:?}",
+                            e.name().to_owned(),
+                            e.field(),
+                            e.get_window_frame()
+                        )
+                    })
+                    .collect();
+                let mode = &self.partition_search_mode;
+                write!(f, "wdw=[{}], mode=[{:?}]", g.join(", "), mode)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl ExecutionPlan for BoundedWindowAggExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -297,33 +326,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             search_mode,
         )?);
         Ok(stream)
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "BoundedWindowAggExec: ")?;
-                let g: Vec<String> = self
-                    .window_expr
-                    .iter()
-                    .map(|e| {
-                        format!(
-                            "{}: {:?}, frame: {:?}",
-                            e.name().to_owned(),
-                            e.field(),
-                            e.get_window_frame()
-                        )
-                    })
-                    .collect();
-                let mode = &self.partition_search_mode;
-                write!(f, "wdw=[{}], mode=[{:?}]", g.join(", "), mode)?;
-            }
-        }
-        Ok(())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
