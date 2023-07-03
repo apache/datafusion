@@ -511,9 +511,8 @@ impl From<DFSchema> for Schema {
 impl From<&DFSchema> for Schema {
     /// Convert DFSchema reference into a Schema
     fn from(df_schema: &DFSchema) -> Self {
-        let metadata = df_schema.metadata.clone();
         let fields: Fields = df_schema.fields.iter().map(|f| f.field.clone()).collect();
-        Schema::new_with_metadata(fields, metadata)
+        Schema::new_with_metadata(fields, df_schema.metadata.clone())
     }
 }
 
@@ -670,14 +669,6 @@ impl DFField {
     ) -> Self {
         Self {
             qualifier: Some(qualifier.into().to_owned_reference()),
-            field: field.into(),
-        }
-    }
-
-    /// Create a qualified field from an existing Arrow field
-    pub fn from_field(field: impl Into<FieldRef>) -> Self {
-        Self {
-            qualifier: None,
             field: field.into(),
         }
     }

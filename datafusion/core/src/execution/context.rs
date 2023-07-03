@@ -495,12 +495,12 @@ impl SessionContext {
             )),
             (_, _, Err(_)) => {
                 let df_schema = input.schema();
-                let new_fields = df_schema.fields().to_vec();
 
                 let primary_keys = primary_key
                     .iter()
                     .map(|pk| {
-                        if let Some(idx) = new_fields
+                        if let Some(idx) = df_schema
+                            .fields()
                             .iter()
                             .position(|item| item.qualified_name() == pk.flat_name())
                         {
@@ -519,7 +519,8 @@ impl SessionContext {
                     // after DFSchema is converted to arrow::Schema
                     encode_primary_key_to_metadata(&mut metadata, &primary_keys)
                 }
-                let updated_schema = DFSchema::new_with_metadata(new_fields, metadata)?
+                let fields = df_schema.fields().to_vec();
+                let updated_schema = DFSchema::new_with_metadata(fields, metadata)?
                     .with_primary_keys(primary_keys);
 
                 let schema = Arc::new(updated_schema.into());
