@@ -446,11 +446,9 @@ pub fn expand_qualified_wildcard(
             "Invalid qualifier {qualifier}"
         )));
     }
-    let qualified_schema = DFSchema::new_with_metadata(
-        qualified_fields,
-        schema.metadata().clone(),
-        schema.primary_keys().to_vec(),
-    )?;
+    let qualified_schema =
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
+            .with_primary_keys(schema.primary_keys().to_vec());
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,
@@ -1014,11 +1012,10 @@ pub fn from_plan(
                 })
                 .collect::<Vec<_>>();
 
-            let schema = Arc::new(DFSchema::new_with_metadata(
-                fields,
-                input.schema().metadata().clone(),
-                input.schema().primary_keys().to_vec(),
-            )?);
+            let schema = Arc::new(
+                DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?
+                    .with_primary_keys(input.schema().primary_keys().to_vec()),
+            );
 
             Ok(LogicalPlan::Unnest(Unnest {
                 input,

@@ -56,19 +56,14 @@ impl DFSchema {
     #[deprecated(since = "7.0.0", note = "please use `new_with_metadata` instead")]
     /// Create a new `DFSchema`
     pub fn new(fields: Vec<DFField>) -> Result<Self> {
-        Self::new_with_metadata(fields, HashMap::new(), vec![])
+        Self::new_with_metadata(fields, HashMap::new())
     }
 
     /// Create a new `DFSchema`
     pub fn new_with_metadata(
         fields: Vec<DFField>,
         metadata: HashMap<String, String>,
-        primary_keys: Vec<usize>,
     ) -> Result<Self> {
-        println!(
-            "new_with_metadata is called, primary_keys: {:?}",
-            primary_keys
-        );
         let mut qualified_names = HashSet::new();
         let mut unqualified_names = HashSet::new();
 
@@ -107,7 +102,7 @@ impl DFSchema {
         Ok(Self {
             fields,
             metadata,
-            primary_keys,
+            primary_keys: vec![],
         })
     }
 
@@ -115,7 +110,6 @@ impl DFSchema {
     pub fn try_from_qualified_schema<'a>(
         qualifier: impl Into<TableReference<'a>>,
         schema: &Schema,
-        primary_keys: Vec<usize>,
     ) -> Result<Self> {
         let qualifier = qualifier.into();
         Self::new_with_metadata(
@@ -125,8 +119,12 @@ impl DFSchema {
                 .map(|f| DFField::from_qualified(qualifier.clone(), f.clone()))
                 .collect(),
             schema.metadata().clone(),
-            primary_keys,
         )
+    }
+
+    pub fn with_primary_keys(mut self, primary_keys: Vec<usize>) -> Self {
+        self.primary_keys = primary_keys;
+        self
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields
@@ -143,7 +141,7 @@ impl DFSchema {
             .map(|idx| idx + self.fields.len())
             .collect::<Vec<_>>();
         primary_keys.extend(other_primary_keys);
-        Self::new_with_metadata(fields, metadata, primary_keys)
+        Ok(Self::new_with_metadata(fields, metadata)?.with_primary_keys(primary_keys))
     }
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
@@ -555,7 +553,6 @@ impl TryFrom<Schema> for DFSchema {
                 .map(|f| DFField::from(f.clone()))
                 .collect(),
             schema.metadata().clone(),
-            vec![],
         )
     }
 }
@@ -607,7 +604,7 @@ impl ToDFSchema for SchemaRef {
 
 impl ToDFSchema for Vec<DFField> {
     fn to_dfschema(self) -> Result<DFSchema> {
-        DFSchema::new_with_metadata(self, HashMap::new(), vec![])
+        DFSchema::new_with_metadata(self, HashMap::new())
     }
 }
 

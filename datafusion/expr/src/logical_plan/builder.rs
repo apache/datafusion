@@ -186,11 +186,8 @@ impl LogicalPlanBuilder {
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
-        let schema = DFSchemaRef::new(DFSchema::new_with_metadata(
-            fields,
-            HashMap::new(),
-            vec![],
-        )?);
+        let schema =
+            DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
@@ -280,24 +277,25 @@ impl LogicalPlanBuilder {
         let projected_schema = projection
             .as_ref()
             .map(|p| {
-                DFSchema::new_with_metadata(
-                    p.iter()
-                        .map(|i| {
-                            DFField::from_qualified(
-                                table_name.clone(),
-                                schema.field(*i).clone(),
-                            )
-                        })
-                        .collect(),
-                    schema.metadata().clone(),
-                    primary_keys.clone(),
+                Ok::<DFSchema, DataFusionError>(
+                    DFSchema::new_with_metadata(
+                        p.iter()
+                            .map(|i| {
+                                DFField::from_qualified(
+                                    table_name.clone(),
+                                    schema.field(*i).clone(),
+                                )
+                            })
+                            .collect(),
+                        schema.metadata().clone(),
+                    )?
+                    .with_primary_keys(primary_keys.clone()),
                 )
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(
-                    table_name.clone(),
-                    &schema,
-                    primary_keys,
+                Ok(
+                    DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?
+                        .with_primary_keys(primary_keys),
                 )
             })?;
 
@@ -853,11 +851,10 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Window(Window {
             input: Arc::new(self.plan),
             window_expr,
-            schema: Arc::new(DFSchema::new_with_metadata(
-                window_fields,
-                metadata,
-                primary_keys,
-            )?),
+            schema: Arc::new(
+                DFSchema::new_with_metadata(window_fields, metadata)?
+                    .with_primary_keys(primary_keys),
+            ),
         })))
     }
 
@@ -1154,7 +1151,7 @@ pub fn build_join_schema(
 
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata, primary_keys)
+    Ok(DFSchema::new_with_metadata(fields, metadata)?.with_primary_keys(primary_keys))
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1306,8 +1303,8 @@ pub fn project(
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
-        plan.schema().primary_keys().to_vec(),
-    )?;
+    )?
+    .with_primary_keys(plan.schema().primary_keys().to_vec());
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,
@@ -1470,11 +1467,10 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         })
         .collect::<Vec<_>>();
 
-    let schema = Arc::new(DFSchema::new_with_metadata(
-        fields,
-        input_schema.metadata().clone(),
-        input_schema.primary_keys().to_vec(),
-    )?);
+    let schema = Arc::new(
+        DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
+            .with_primary_keys(input_schema.primary_keys().to_vec()),
+    );
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),

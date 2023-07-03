@@ -86,7 +86,7 @@ use crate::physical_planner::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::{DFField, DFSchema, OwnedTableReference, SchemaReference};
+use datafusion_common::{DFSchema, OwnedTableReference, SchemaReference};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -495,21 +495,15 @@ impl SessionContext {
             )),
             (_, _, Err(_)) => {
                 let df_schema = input.schema();
-                let mut new_fields = df_schema.fields().to_vec();
-                println!("ctx, new_fields:{:?}", new_fields);
-                println!("ctx, primary_key:{:?}", primary_key);
+                let new_fields = df_schema.fields().to_vec();
+
                 let primary_keys = primary_key
                     .iter()
                     .map(|pk| {
-                        if let Some(idx) = new_fields.iter().position(|item| {
-                            println!(
-                                "item.qualified_name():{:?}, pk.flat_name():{:?}",
-                                item.qualified_name(),
-                                pk.flat_name()
-                            );
-                            item.qualified_name() == pk.flat_name()
-                        }) {
-                            println!("match found");
+                        if let Some(idx) = new_fields
+                            .iter()
+                            .position(|item| item.qualified_name() == pk.flat_name())
+                        {
                             Ok(idx)
                         } else {
                             Err(DataFusionError::Execution(
@@ -518,32 +512,11 @@ impl SessionContext {
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
-                println!("ctx, primary_keys: {:?}", primary_keys);
-                // // Update metadata of PRIMARY_KEY fields.
-                // for dffield in new_fields.iter_mut() {
-                //     if primary_key
-                //         .iter()
-                //         .any(|item| item.flat_name() == dffield.qualified_name())
-                //     {
-                //         let field = dffield.field();
-                //         let mut metadata = field.metadata().clone();
-                //         metadata.insert("primary_key".to_string(), "true".to_string());
-                //         let updated_field =
-                //             field.as_ref().clone().with_metadata(metadata);
-                //         let qualifier = dffield.qualifier().cloned();
-                //         *dffield = if let Some(qualifier) = qualifier {
-                //             DFField::from_qualified(qualifier, updated_field)
-                //         } else {
-                //             DFField::from_field(updated_field)
-                //         };
-                //     }
-                // }
+
                 let metadata = df_schema.metadata().clone();
-                let updated_schema =
-                    DFSchema::new_with_metadata(new_fields, metadata, primary_keys)?;
-                println!("updated_schema:{:?}", updated_schema);
+                let updated_schema = DFSchema::new_with_metadata(new_fields, metadata)?
+                    .with_primary_keys(primary_keys);
                 let schema = Arc::new(updated_schema.into());
-                println!("schema:{:?}", schema);
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;

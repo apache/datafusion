@@ -1035,7 +1035,7 @@ impl DefaultPhysicalPlanner {
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
-                            let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new(), primary_keys)?;
+                            let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new())?.with_primary_keys(primary_keys);
                             let filter_schema = Schema::new_with_metadata(filter_fields, HashMap::new());
                             let filter_expr = create_physical_expr(
                                 expr,
@@ -2218,7 +2218,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {} }, \
+        ], metadata: {}, primary_keys: [] }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
@@ -2471,7 +2471,6 @@ mod tests {
                     DFSchema::new_with_metadata(
                         vec![DFField::new_unqualified("a", DataType::Int32, false)],
                         HashMap::new(),
-                        vec![],
                     )
                     .unwrap(),
                 ),

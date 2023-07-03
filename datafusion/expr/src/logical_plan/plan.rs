@@ -1243,11 +1243,13 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let schema = Arc::new(DFSchema::new_with_metadata(
-            exprlist_to_fields(&expr, &input)?,
-            input.schema().metadata().clone(),
-            input.schema().primary_keys().to_vec(),
-        )?);
+        let schema = Arc::new(
+            DFSchema::new_with_metadata(
+                exprlist_to_fields(&expr, &input)?,
+                input.schema().metadata().clone(),
+            )?
+            .with_primary_keys(input.schema().primary_keys().to_vec()),
+        );
         Self::try_new_with_schema(expr, input, schema)
     }
 
@@ -1311,11 +1313,10 @@ impl SubqueryAlias {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
         let primary_keys = plan.schema().primary_keys().to_vec();
-        let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(
-            &alias,
-            &schema,
-            primary_keys,
-        )?);
+        let schema = DFSchemaRef::new(
+            DFSchema::try_from_qualified_schema(&alias, &schema)?
+                .with_primary_keys(primary_keys),
+        );
         Ok(SubqueryAlias {
             input: Arc::new(plan),
             alias,
@@ -1575,8 +1576,8 @@ impl Aggregate {
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
-            input.schema().primary_keys().to_vec(),
-        )?;
+        )?
+        .with_primary_keys(input.schema().primary_keys().to_vec());
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 

@@ -164,8 +164,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     let inner_schema = DFSchema::new_with_metadata(
                         inner_fields,
                         input.schema().metadata().clone(),
-                        primary_keys,
-                    )?;
+                    )?
+                    .with_primary_keys(primary_keys);
                     let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                         input.clone(),
                         inner_group_exprs,
@@ -180,11 +180,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 
                     let primary_keys =
                         get_updated_primary_keys(&inner_schema, &outer_fields);
-                    let outer_aggr_schema = Arc::new(DFSchema::new_with_metadata(
-                        outer_fields,
-                        input.schema().metadata().clone(),
-                        primary_keys,
-                    )?);
+                    let outer_aggr_schema = Arc::new(
+                        DFSchema::new_with_metadata(
+                            outer_fields,
+                            input.schema().metadata().clone(),
+                        )?
+                        .with_primary_keys(primary_keys),
+                    );
 
                     // so the aggregates are displayed in the same way even after the rewrite
                     // this optimizer has two kinds of alias:
