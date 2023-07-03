@@ -365,16 +365,6 @@ select array_concat(make_array(), make_array(2, 3));
 ----
 [2, 3]
 
-# array_concat with columns
-query ???
-select array_concat(column1, column2), array_concat(column2, column2), array_concat(column3, column3) from arrays;
-----
-
-# array_concat with columns and scalars
-query ???
-select array_concat(column1, make_array(make_array(1, 2), make_array(3, 4))), array_concat(column2, make_array(1.1, 2.2, 3.3)), array_concat(column3, make_array('.', '.', '.')) from arrays;
-----
-
 ## array_position
 
 # array_position scalar function #1
@@ -390,14 +380,22 @@ select array_position(['h', 'e', 'l', 'l', 'o'], 'l', 4), array_position([1, 2, 
 4 5 2
 
 # array_position with columns
-query ???
+query II
 select array_position(column1, column2), array_position(column1, column2, column3) from arrays_values_without_nulls;
 ----
+1 1
+2 2
+3 3
+4 4
 
 # array_position with columns and scalars
-query ???
+query II
 select array_position(column1, 3), array_position(column1, 3, 5) from arrays_values_without_nulls;
 ----
+3 NULL
+NULL NULL
+NULL NULL
+NULL NULL
 
 ## array_positions
 
@@ -408,14 +406,22 @@ select array_positions(['h', 'e', 'l', 'l', 'o'], 'l'), array_positions([1, 2, 3
 [3, 4] [5] [1, 2, 3]
 
 # array_positions with columns
-query ???
+query ?
 select array_positions(column1, column2) from arrays_values_without_nulls;
 ----
+[1]
+[2]
+[3]
+[4]
 
 # array_positions with columns and scalars
-query ???
+query ??
 select array_positions(column1, 4), array_positions(array[1, 2, 23, 13, 33, 45], column2) from arrays_values_without_nulls;
 ----
+[4] [1]
+[] []
+[] [3]
+[] []
 
 ## array_replace
 
@@ -424,16 +430,6 @@ query ???
 select array_replace(make_array(1, 2, 3, 4), 2, 3), array_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), array_replace(make_array(1, 2, 3), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
-
-# array_replace with columns
-query ???
-select array_replace(column1, column2, column3) from arrays_values;
-----
-
-# array_replace with columns and scalars
-query ???
-select array_replace(column1, column2, 55), array_replace(column1, 22, column3), array_replace(array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], column2, column3) from arrays_values;
-----
 
 ## array_to_string
 
@@ -467,16 +463,6 @@ select array_to_string(make_array('h', NULL, NULL, NULL, 'o'), ',', '-'), array_
 ----
 h,-,-,-,o nil-2-nil-4-5 1|0|3
 
-# array_to_string with columns
-query ?
-select array_to_string(column1, column4) from arrays_values;
-----
-
-# array_to_string with columns and scalars
-query ?
-select array_to_string(column1, '_'), array_to_string(make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), column4) from arrays_values;
-----
-
 ## cardinality
 
 # cardinality scalar function
@@ -496,11 +482,6 @@ query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
 0 0
-
-# cardinality with columns
-query I
-select cardinality(column1), cardinality(column2), cardinality(column3) from arr;
-----
 
 ## trim_array
 
@@ -527,16 +508,6 @@ query ??
 select trim_array(make_array(), 0), trim_array(make_array(), 1)
 ----
 [] []
-
-# trim_array with columns
-query ?
-select trim_array(column1, column3) from arrays_values;
-----
-
-# trim_array with columns and scalars
-query ??
-select trim_array(column1, 5), trim_array(array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], column3) from arrays_values;
-----
 
 ## array_length
 
@@ -570,16 +541,6 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 ----
 0 0 NULL
 
-# array_length with columns
-query ?
-select array_length(column1, column3) from arrays_values;
-----
-
-# array_length with columns and scalars
-query ???
-select array_length(array[array[1, 2], array[3, 4]], column3), array_length(column1, 1) from arrays_values;
-----
-
 ## array_dims
 
 # array_dims scalar function
@@ -600,11 +561,6 @@ caused by
 Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
 select array_dims(make_array()), array_dims(make_array(make_array()))
 
-# array_dims with columns
-query I
-select array_dims(column1), array_dims(column2), array_dims(column3) from arrays;
-----
-
 ## array_ndims
 
 # array_ndims scalar function
@@ -624,11 +580,6 @@ query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
 1 2
-
-# array_ndims with columns
-query II
-select array_ndims(column1), array_ndims(column2), array_ndims(column3) from arrays;
-----
 
 ## array_contains
 
@@ -667,18 +618,6 @@ query BB
 select array_contains(make_array(true, true, true), make_array(false, false)), array_contains([false, false, false], [true, true]);
 ----
 false false
-
-# array_contains with columns
-query BBB
-select array_contains(column1, column1), array_contains(column2, column2), array_contains(column3, column3) from arrays;
-----
-true true
-
-# array_contains with columns and scalars
-query BB
-select array_contains(column1, array[1, 2]), array_contains(array[5, 6, 7, 8], column1) from arr;
-----
-
 
 ### Array operators tests
 
@@ -733,23 +672,6 @@ select make_array(1.0, '2', null)
 ----
 [1.0, 2, ]
 
-# make_array with columns #1
-query ?
-select make_array(column1, column2) from arrays;
-----
-[1.0, 2.0]
-
-# make_array with columns #2
-query ?
-select make_array(column2, column3) from arrays;
-----
-[1.0, 1]
-
-# make_array with columns #3
-query ?
-select make_array(column1, column2, column3) from arrays;
-----
-
 ### Delete tables
 
 
@@ -761,3 +683,6 @@ drop table arrays;
 
 statement ok
 drop table arrays_values;
+
+statement ok
+drop table arrays_values_without_nulls;

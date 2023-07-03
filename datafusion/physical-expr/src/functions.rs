@@ -403,11 +403,11 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
         }
         BuiltinScalarFunction::ArrayPosition => {
-            Arc::new(array_expressions::array_position)
+            Arc::new(|args| make_scalar_function(array_expressions::array_position)(args))
         }
-        BuiltinScalarFunction::ArrayPositions => {
-            Arc::new(array_expressions::array_positions)
-        }
+        BuiltinScalarFunction::ArrayPositions => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_positions)(args)
+        }),
         BuiltinScalarFunction::ArrayPrepend => {
             Arc::new(|args| make_scalar_function(array_expressions::array_prepend)(args))
         }
