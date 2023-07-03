@@ -264,12 +264,7 @@ impl LogicalPlanBuilder {
         let schema = table_source.schema();
 
         let primary_keys = if let Some(pks) = schema.metadata().get("primary_keys") {
-            println!("pks: {:?}", pks);
-            let pks: Vec<usize> =
-                pks.split(',').map(|s| s.trim().parse().unwrap()).collect();
-
-            println!("pks:{:?}", pks);
-            pks
+            pks.split(',').map(|s| s.trim().parse().unwrap()).collect()
         } else {
             vec![]
         };

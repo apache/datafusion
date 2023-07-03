@@ -74,7 +74,6 @@ fn analyze_internal(
     external_schema: &DFSchema,
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
-    println!("external_schema: {:?}", external_schema);
     // optimize child plans first
     let new_inputs = plan
         .inputs()

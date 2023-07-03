@@ -431,37 +431,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         mut group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
-        println!("group_by_exprs:{:?}", group_by_exprs);
-        println!("select_exprs:{:?}", select_exprs);
-        println!("input_schema:{:?}", input.schema());
-        println!("aggregate primary keys:{:?}", input.schema().primary_keys());
-        if let Some(pks) = input.schema().metadata().get("primary_keys") {
-            println!("pks: {:?}", pks);
-            let pks: Vec<usize> =
-                pks.split(',').map(|s| s.trim().parse().unwrap()).collect();
-
-            println!("pks:{:?}", pks);
-        }
-        let primary_keys = input.schema().primary_keys();
-        let input_fields = input.schema().fields();
+        let schema = input.schema();
+        let primary_keys = schema.primary_keys();
+        let input_fields = schema.fields();
         let input_primary_key_fields = primary_keys
             .iter()
             .map(|idx| &input_fields[*idx])
             .collect::<Vec<_>>();
-        let field_names = input
-            .schema()
+        let field_names = schema
             .fields()
             .iter()
             .map(|elem| elem.qualified_name())
             .collect::<Vec<_>>();
-        println!("field_names:{:?}", field_names);
-        // TODO: Add primary key check
+
         let group_by_contains_primary = group_by_exprs.iter().any(|expr| {
             input_primary_key_fields.iter().any(|item| {
                 let expr_name = format!("{:?}", expr);
-                println!("expr name:{:?}", expr_name);
-                println!("item.qualified_name():{:?}", item.qualified_name());
-                println!("item.field().metadata(){:?}", item.field().metadata());
                 item.qualified_name() == expr_name
             })
         });
@@ -474,7 +459,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
         }
-        println!("group_by_exprs:{:?}", group_by_exprs);
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
