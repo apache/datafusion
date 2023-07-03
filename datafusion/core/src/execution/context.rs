@@ -513,21 +513,31 @@ impl SessionContext {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let mut metadata = df_schema.metadata().clone();
-                if !primary_keys.is_empty() {
-                    // Store primary key information in schema also. By this way we can keep track of primary key
-                    // after DFSchema is converted to arrow::Schema
-                    encode_primary_key_to_metadata(&mut metadata, &primary_keys)
-                }
                 let fields = df_schema.fields().to_vec();
-                let updated_schema = DFSchema::new_with_metadata(fields, metadata)?
-                    .with_primary_keys(primary_keys);
+                let primary_keys_with_associations = primary_keys
+                    .iter()
+                    .map(|idx| (*idx, (0..fields.len()).collect::<Vec<_>>()))
+                    .collect();
+                let updated_schema =
+                    DFSchema::new_with_metadata(fields, df_schema.metadata().clone())?
+                        .with_primary_keys(primary_keys_with_associations);
 
+                // let mut schema: Schema = updated_schema.into();
+                // if !primary_keys.is_empty() {
+                //     // Store primary key information in schema also. By this way we can keep track of primary key
+                //     // after DFSchema is converted to arrow::Schema
+                //     let mut metadata = schema.metadata().clone();
+                //     encode_primary_key_to_metadata(&mut metadata, &primary_keys);
+                //     schema = Schema::new_with_metadata(schema.fields, metadata);
+                // }
                 let schema = Arc::new(updated_schema.into());
+
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(schema, batches)?);
+                let table = Arc::new(
+                    MemTable::try_new(schema, batches)?.with_primary_keys(primary_keys),
+                );
 
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
@@ -2104,26 +2114,6 @@ impl SerializerRegistry for EmptySerializerRegistry {
         Err(DataFusionError::NotImplemented(format!(
             "Deserializing user defined logical plan node `{name}` is not supported"
         )))
-    }
-}
-
-/// writes primary key indices as comma seperated integers to the
-/// metadata. If columns a 0 and 2 are primary keys,
-/// "primary_keys" -> "0, 2" will be added to metadata.
-fn encode_primary_key_to_metadata(
-    metadata: &mut HashMap<String, String>,
-    primary_keys: &[usize],
-) {
-    let mut pks = String::new();
-    // Store primary key information in the metadata during conversion
-    for (idx, pk) in primary_keys.iter().enumerate() {
-        pks = format!("{pks}{pk}");
-        if idx < primary_keys.len() - 1 {
-            pks = format!("{pks}, ");
-        }
-    }
-    if !pks.is_empty() {
-        metadata.insert("primary_keys".to_string(), pks);
     }
 }
 

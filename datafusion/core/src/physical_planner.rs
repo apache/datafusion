@@ -1026,11 +1026,10 @@ impl DefaultPhysicalPlanner {
                                 )
                                 .unzip();
                             // Update indices of the fields according to filter schema (the index seen in the filter schema).
-                            let left_primary_keys = get_updated_primary_keys(left_df_schema, &left_field_indices);
-                            let right_primary_keys = get_updated_primary_keys(right_df_schema, &right_field_indices);
-                            // offset indices of right
-                            let right_primary_keys = right_primary_keys.iter().map(|item| item + left_field_indices.len());
-                            let mut primary_keys = vec![];
+                            let left_primary_keys = get_updated_primary_keys(left_df_schema, &left_field_indices, 0);
+                            let right_primary_keys = get_updated_primary_keys(right_df_schema, &right_field_indices, left_field_indices.len());
+
+                            let mut primary_keys = HashMap::new();
                             primary_keys.extend(left_primary_keys);
                             primary_keys.extend(right_primary_keys);
 
@@ -1312,12 +1311,22 @@ impl DefaultPhysicalPlanner {
 /// return value will be `1`. This means that 1st index of the `field_indices`(5) is primary key
 /// e.g inside primary_keys vector ([4, 5, 7]). In the updated schema, fields at the indices [2, 5, 8] will
 /// be at [0, 1, 2].
-fn get_updated_primary_keys(df_schema: &DFSchema, field_indices: &[usize]) -> Vec<usize> {
-    let mut primary_keys = vec![];
+fn get_updated_primary_keys(
+    df_schema: &DFSchema,
+    field_indices: &[usize],
+    offset: usize,
+) -> HashMap<usize, Vec<usize>> {
+    let mut primary_keys = HashMap::new();
     let existing_primary_keys = df_schema.primary_keys();
     for (idx, field_idx) in field_indices.iter().enumerate() {
-        if existing_primary_keys.contains(field_idx) {
-            primary_keys.push(idx);
+        if let Some(associated_indices) = existing_primary_keys.get(field_idx) {
+            let mut new_associated_indices = vec![];
+            for (idx, field_idx) in field_indices.iter().enumerate() {
+                if associated_indices.contains(field_idx) {
+                    new_associated_indices.push(idx + offset);
+                }
+            }
+            primary_keys.insert(idx + offset, new_associated_indices);
         }
     }
     primary_keys
@@ -2227,7 +2236,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {}, primary_keys: [] }, \
+        ], metadata: {}, primary_keys: {} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \

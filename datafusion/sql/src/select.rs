@@ -428,37 +428,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input: LogicalPlan,
         select_exprs: &[Expr],
         having_expr_opt: Option<&Expr>,
-        mut group_by_exprs: Vec<Expr>,
+        group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         let schema = input.schema();
         let primary_keys = schema.primary_keys();
-        let input_fields = schema.fields();
-        let input_primary_key_fields = primary_keys
-            .iter()
-            .map(|idx| &input_fields[*idx])
-            .collect::<Vec<_>>();
+
         let field_names = schema
             .fields()
             .iter()
             .map(|elem| elem.qualified_name())
             .collect::<Vec<_>>();
-
-        let group_by_contains_primary = group_by_exprs.iter().any(|expr| {
-            input_primary_key_fields.iter().any(|item| {
-                let expr_name = format!("{}", expr);
-                item.qualified_name() == expr_name
-            })
-        });
-        if group_by_contains_primary {
-            for expr in select_exprs {
-                if !group_by_exprs.contains(expr)
-                    && field_names.contains(&format!("{}", expr))
-                {
-                    group_by_exprs.push(expr.clone());
+        let mut new_group_by_exprs = group_by_exprs.clone();
+        for (pk, associations) in primary_keys {
+            for group_by_expr in &group_by_exprs {
+                let expr_name = format!("{}", group_by_expr);
+                if field_names[*pk] == expr_name {
+                    let associated_field_names = associations
+                        .iter()
+                        .map(|idx| field_names[*idx].clone())
+                        .collect::<Vec<_>>();
+                    for expr in select_exprs {
+                        let expr_name = format!("{}", expr);
+                        if !new_group_by_exprs.contains(expr)
+                            && associated_field_names.contains(&expr_name)
+                        {
+                            new_group_by_exprs.push(expr.clone());
+                        }
+                    }
                 }
             }
         }
+        let group_by_exprs = new_group_by_exprs;
+
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?

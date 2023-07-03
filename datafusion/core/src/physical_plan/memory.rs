@@ -220,7 +220,6 @@ impl Stream for MemoryStream {
                 Some(columns) => batch.project(columns)?,
                 None => batch.clone(),
             };
-
             Some(Ok(batch))
         } else {
             None

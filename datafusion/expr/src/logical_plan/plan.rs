@@ -1263,7 +1263,7 @@ impl Projection {
                 exprlist_to_fields(&expr, &input)?,
                 input.schema().metadata().clone(),
             )?
-            .with_primary_keys(input.schema().primary_keys().to_vec()),
+            .with_primary_keys(input.schema().primary_keys().clone()),
         );
         Self::try_new_with_schema(expr, input, schema)
     }
@@ -1327,7 +1327,7 @@ impl SubqueryAlias {
     ) -> Result<Self> {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
-        let primary_keys = plan.schema().primary_keys().to_vec();
+        let primary_keys = plan.schema().primary_keys().clone();
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(&alias, &schema)?
                 .with_primary_keys(primary_keys),
@@ -1413,7 +1413,7 @@ impl Window {
         window_fields
             .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
         let metadata = input.schema().metadata().clone();
-        let primary_keys = input.schema().primary_keys().to_vec();
+        let primary_keys = input.schema().primary_keys().clone();
         Ok(Window {
             input,
             window_expr,
@@ -1611,7 +1611,7 @@ impl Aggregate {
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
         )?
-        .with_primary_keys(input.schema().primary_keys().to_vec());
+        .with_primary_keys(input.schema().primary_keys().clone());
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 

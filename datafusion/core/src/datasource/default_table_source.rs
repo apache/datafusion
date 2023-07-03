@@ -52,6 +52,10 @@ impl TableSource for DefaultTableSource {
         self.table_provider.schema()
     }
 
+    fn primary_keys(&self) -> &[usize] {
+        self.table_provider.primary_keys()
+    }
+
     /// Tests whether the table provider can make use of any or all filter expressions
     /// to optimise data retrieval.
     fn supports_filters_pushdown(

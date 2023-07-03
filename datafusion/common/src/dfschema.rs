@@ -40,7 +40,8 @@ pub struct DFSchema {
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
-    primary_keys: Vec<usize>,
+    /// primary key index and its associated fields indices
+    primary_keys: HashMap<usize, Vec<usize>>,
 }
 
 impl DFSchema {
@@ -49,7 +50,7 @@ impl DFSchema {
         Self {
             fields: vec![],
             metadata: HashMap::new(),
-            primary_keys: vec![],
+            primary_keys: HashMap::new(),
         }
     }
 
@@ -102,7 +103,7 @@ impl DFSchema {
         Ok(Self {
             fields,
             metadata,
-            primary_keys: vec![],
+            primary_keys: HashMap::new(),
         })
     }
 
@@ -122,7 +123,7 @@ impl DFSchema {
         )
     }
 
-    pub fn with_primary_keys(mut self, primary_keys: Vec<usize>) -> Self {
+    pub fn with_primary_keys(mut self, primary_keys: HashMap<usize, Vec<usize>>) -> Self {
         self.primary_keys = primary_keys;
         self
     }
@@ -138,8 +139,16 @@ impl DFSchema {
         let other_primary_keys = schema
             .primary_keys
             .iter()
-            .map(|idx| idx + self.fields.len())
-            .collect::<Vec<_>>();
+            .map(|(idx, associations)| {
+                (
+                    idx + self.fields.len(),
+                    associations
+                        .iter()
+                        .map(|item| item + self.fields.len())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<HashMap<usize, Vec<usize>>>();
         primary_keys.extend(other_primary_keys);
         Ok(Self::new_with_metadata(fields, metadata)?.with_primary_keys(primary_keys))
     }
@@ -495,7 +504,7 @@ impl DFSchema {
     }
 
     /// Get primary keys
-    pub fn primary_keys(&self) -> &[usize] {
+    pub fn primary_keys(&self) -> &HashMap<usize, Vec<usize>> {
         &self.primary_keys
     }
 }

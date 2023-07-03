@@ -237,13 +237,26 @@ impl OptimizerRule for SingleDistinctToGroupBy {
     }
 }
 
-fn get_updated_primary_keys(old_schema: &DFSchema, new_fields: &[DFField]) -> Vec<usize> {
+fn get_updated_primary_keys(
+    old_schema: &DFSchema,
+    new_fields: &[DFField],
+) -> std::collections::HashMap<usize, Vec<usize>> {
     let old_primary_keys = old_schema.primary_keys();
     let fields = old_schema.fields();
-    let mut primary_keys = vec![];
-    for pk in old_primary_keys {
-        if let Some(idx) = new_fields.iter().position(|item| item == &fields[*pk]) {
-            primary_keys.push(idx);
+    let mut primary_keys = std::collections::HashMap::new();
+    for (pk, associated_indices) in old_primary_keys {
+        if let Some(new_pk_idx) = new_fields.iter().position(|item| item == &fields[*pk])
+        {
+            let mut new_associated_indices = vec![];
+            for associated_idx in associated_indices {
+                if let Some(match_idx) = new_fields
+                    .iter()
+                    .position(|item| item == &fields[*associated_idx])
+                {
+                    new_associated_indices.push(match_idx);
+                }
+            }
+            primary_keys.insert(new_pk_idx, new_associated_indices);
         }
     }
     primary_keys

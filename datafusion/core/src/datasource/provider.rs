@@ -41,6 +41,12 @@ pub trait TableProvider: Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
+    /// Get a reference to the primary_key indices
+    fn primary_keys(&self) -> &[usize] {
+        // By default return None
+        &[]
+    }
+
     /// Get the type of this table for metadata/catalog purposes.
     fn table_type(&self) -> TableType;
 

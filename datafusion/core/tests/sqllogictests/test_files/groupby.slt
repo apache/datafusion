@@ -2910,3 +2910,59 @@ SELECT s.sn, s.amount, 2*s.sn
 2 75 4
 3 200 6
 4 100 8
+
+# Join should propagate primary key successfully
+query TT
+EXPLAIN SELECT r.sn, SUM(l.amount), r.amount
+  FROM sales_global_with_pk AS l
+  JOIN sales_global_with_pk AS r
+  ON l.sn >= r.sn
+  GROUP BY r.sn
+  ORDER BY r.sn
+----
+logical_plan
+Sort: r.sn ASC NULLS LAST
+--Projection: r.sn, SUM(l.amount), r.amount
+----Aggregate: groupBy=[[r.sn, r.amount]], aggr=[[SUM(l.amount)]]
+------Projection: l.amount, r.sn, r.amount
+--------Inner Join:  Filter: l.sn >= r.sn
+----------SubqueryAlias: l
+------------TableScan: sales_global_with_pk projection=[sn, amount]
+----------SubqueryAlias: r
+------------TableScan: sales_global_with_pk projection=[sn, amount]
+physical_plan
+SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
+--SortExec: expr=[sn@0 ASC NULLS LAST]
+----ProjectionExec: expr=[sn@0 as sn, SUM(l.amount)@2 as SUM(l.amount), amount@1 as amount]
+------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, amount@1 as amount], aggr=[SUM(l.amount)]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
+------------AggregateExec: mode=Partial, gby=[sn@1 as sn, amount@2 as amount], aggr=[SUM(l.amount)]
+--------------ProjectionExec: expr=[amount@1 as amount, sn@2 as sn, amount@3 as amount]
+----------------NestedLoopJoinExec: join_type=Inner, filter=sn@0 >= sn@1
+------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+------------------CoalescePartitionsExec
+--------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+
+query IRR
+SELECT r.sn, SUM(l.amount), r.amount
+  FROM sales_global_with_pk AS l
+  JOIN sales_global_with_pk AS r
+  ON l.sn >= r.sn
+  GROUP BY r.sn
+  ORDER BY r.sn
+----
+0 455 30
+1 425 50
+2 375 75
+3 300 200
+4 100 100
+
+# primary key should be aware from which columns it is associated
+statement error DataFusion error: Error during planning: Projection references non-aggregate values: Expression r.sn could not be resolved from available columns: l.sn, SUM\(l.amount\)
+SELECT l.sn, r.sn, SUM(l.amount), r.amount
+  FROM sales_global_with_pk AS l
+  JOIN sales_global_with_pk AS r
+  ON l.sn >= r.sn
+  GROUP BY l.sn
+  ORDER BY l.sn

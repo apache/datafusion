@@ -263,19 +263,13 @@ impl LogicalPlanBuilder {
         }
 
         let schema = table_source.schema();
-
-        let primary_keys = if let Some(pks) = schema.metadata().get("primary_keys") {
-            pks.split(',')
-                .map(|s| {
-                    s.trim()
-                        .parse()
-                        // Convert parsing error to Datafusion Error
-                        .map_err(|e| DataFusionError::External(Box::new(e)))
-                })
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            vec![]
-        };
+        let mut primary_keys = HashMap::new();
+        let n_field = schema.fields.len();
+        for pk in table_source.primary_keys() {
+            // At source primary key is associated with all the fields
+            let associations = (0..n_field).collect();
+            primary_keys.insert(*pk, associations);
+        }
 
         let projected_schema = projection
             .as_ref()
@@ -1105,39 +1099,44 @@ pub fn build_join_schema(
     let right_primary_keys = right
         .primary_keys()
         .iter()
-        .map(|idx| idx + left_fields.len())
-        .collect::<Vec<_>>();
-    let left_primary_keys = left.primary_keys();
-    let primary_keys: Vec<usize> = match join_type {
+        .map(|(idx, associated_indices)| {
+            (
+                idx + left_fields.len(),
+                associated_indices
+                    .iter()
+                    .map(|item| item + left_fields.len())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<HashMap<usize, Vec<usize>>>();
+    let left_primary_keys = left.primary_keys().clone();
+    let mut primary_keys = HashMap::new();
+    match join_type {
         JoinType::Inner => {
             // left then right
-            left_primary_keys
-                .iter()
-                .chain(right_primary_keys.iter())
-                .cloned()
-                .collect()
+            primary_keys.extend(left_primary_keys);
+            primary_keys.extend(right_primary_keys);
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
-            left_primary_keys.to_vec()
+            primary_keys.extend(left_primary_keys);
         }
         JoinType::Right => {
             // left then right, left set to nullable in case of not matched scenario
-            right_primary_keys.to_vec()
+            primary_keys.extend(right_primary_keys);
         }
         JoinType::Full => {
-            // left then right, all set to nullable in case of not matched scenario
-            vec![]
+            // do nothing
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            left_primary_keys.to_vec()
+            primary_keys.extend(left_primary_keys);
         }
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            right_primary_keys.to_vec()
+            primary_keys.extend(right_primary_keys);
         }
-    };
+    }
 
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
@@ -1295,7 +1294,7 @@ pub fn project(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?
-    .with_primary_keys(plan.schema().primary_keys().to_vec());
+    .with_primary_keys(plan.schema().primary_keys().clone());
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,
@@ -1460,7 +1459,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
     let schema = Arc::new(
         DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
-            .with_primary_keys(input_schema.primary_keys().to_vec()),
+            .with_primary_keys(input_schema.primary_keys().clone()),
     );
 
     Ok(LogicalPlan::Unnest(Unnest {

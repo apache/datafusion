@@ -64,6 +64,12 @@ pub trait TableSource: Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
+    /// Get primary key index if any
+    fn primary_keys(&self) -> &[usize] {
+        // By default, return empty reference
+        &[]
+    }
+
     /// Get the type of this table for metadata/catalog purposes.
     fn table_type(&self) -> TableType {
         TableType::Base

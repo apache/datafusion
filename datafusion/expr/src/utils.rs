@@ -448,7 +448,7 @@ pub fn expand_qualified_wildcard(
     }
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
-            .with_primary_keys(schema.primary_keys().to_vec());
+            .with_primary_keys(schema.primary_keys().clone());
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,
@@ -1010,7 +1010,7 @@ pub fn from_plan(
 
             let schema = Arc::new(
                 DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?
-                    .with_primary_keys(input.schema().primary_keys().to_vec()),
+                    .with_primary_keys(input.schema().primary_keys().clone()),
             );
 
             Ok(LogicalPlan::Unnest(Unnest {
