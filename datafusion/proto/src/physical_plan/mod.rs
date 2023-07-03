@@ -692,7 +692,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let fetch = if sort.fetch == -1 {
+                let fetch = if sort.fetch < 0 {
                     None
                 } else {
                     Some(sort.fetch as usize)
