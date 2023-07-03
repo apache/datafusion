@@ -23,7 +23,7 @@
 # create.sql came from
 # https://github.com/ClickHouse/ClickBench/blob/8b9e3aa05ea18afa427f14909ddc678b8ef0d5e6/datafusion/create.sql
 # Data file made with DuckDB:
-# COPY (SELECT * FROM 'hits.parquet' LIMIT 10) TO 'clickbench_hits_10.parqet' (FORMAT PARQUET);
+# COPY (SELECT * FROM 'hits.parquet' LIMIT 10) TO 'clickbench_hits_10.parquet' (FORMAT PARQUET);
 
 statement ok
 CREATE EXTERNAL TABLE hits
