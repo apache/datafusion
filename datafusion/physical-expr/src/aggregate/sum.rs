@@ -590,7 +590,7 @@ where
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "two arguments to merge_batch");
         // first batch is partial sums
-        let partial_sums: &PrimitiveArray<T> = values.get(1).unwrap().as_primitive::<T>();
+        let partial_sums: &PrimitiveArray<T> = values.get(0).unwrap().as_primitive::<T>();
         self.update_sums(group_indices, partial_sums, opt_filter, total_num_groups);
 
         Ok(())
