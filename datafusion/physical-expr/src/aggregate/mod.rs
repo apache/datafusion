@@ -121,10 +121,17 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         )))
     }
 
+    /// If the aggregate expression has a specialized
+    /// [`GroupsAccumulator`] implementation. If this returns true,
+    /// `[Self::create_groups_accumulator`] will be called.
+    fn groups_accumulator_supported(&self) -> bool {
+        false
+    }
+
     /// Return a specialized [`GroupsAccumulator`] that manages state for all groups
     ///
     /// For maximum performance, [`GroupsAccumulator`] should be
-    /// implemented rather than [`Accumulator`].
+    /// implemented in addition to [`Accumulator`].
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         // TODO: The default should implement a wrapper over
         // sef.create_accumulator

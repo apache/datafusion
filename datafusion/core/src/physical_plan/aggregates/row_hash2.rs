@@ -19,7 +19,9 @@
 //!
 //! POC demonstration of GroupByHashApproach
 
-use datafusion_physical_expr::GroupsAccumulator;
+use datafusion_physical_expr::{
+    AggregateExpr, GroupsAccumulator, GroupsAccumulatorAdapter,
+};
 use log::debug;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -224,7 +226,7 @@ impl GroupedHashAggregateStream2 {
         // Instantiate the accumulators
         let accumulators: Vec<_> = aggregate_exprs
             .iter()
-            .map(|agg_expr| agg_expr.create_groups_accumulator())
+            .map(|agg_expr| create_group_accumulator(agg_expr.as_ref()))
             .collect::<Result<_>>()?;
 
         let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
@@ -264,6 +266,21 @@ impl GroupedHashAggregateStream2 {
             random_state: Default::default(),
             batch_size,
         })
+    }
+}
+
+/// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
+/// that is supported by the aggrgate, or a
+/// [`GroupsAccumulatorAdapter`] if not.
+fn create_group_accumulator(
+    agg_expr: &dyn AggregateExpr,
+) -> Result<Box<dyn GroupsAccumulator>> {
+    if agg_expr.groups_accumulator_supported() {
+        agg_expr.create_groups_accumulator()
+    } else {
+        // Adapt the basic accumulator
+        let accumulator = agg_expr.create_accumulator()?;
+        Ok(Box::new(GroupsAccumulatorAdapter::new(accumulator)))
     }
 }
 

@@ -46,7 +46,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 
-use super::groups_accumulator::accumulate::{accumulate_all, accumulate_all_nullable};
+use super::groups_accumulator::{accumulate_all, accumulate_all_nullable};
 use super::utils::Decimal128Averager;
 
 /// AVG aggregate expression
@@ -161,6 +161,10 @@ impl AggregateExpr for Avg {
             &self.sum_data_type,
             &self.rt_data_type,
         )?))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {

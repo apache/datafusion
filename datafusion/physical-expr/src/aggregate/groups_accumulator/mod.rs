@@ -17,16 +17,20 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
-pub mod accumulate;
+pub(crate) mod accumulate;
+mod adapter;
+
+pub(crate) use accumulate::{accumulate_all, accumulate_all_nullable};
+pub use adapter::GroupsAccumulatorAdapter;
 
 use arrow_array::{ArrayRef, BooleanArray};
 use datafusion_common::Result;
 
-/// An implementation of GroupAccumulator is for a single aggregate
-/// (e.g. AVG) and stores the state for *all* groups internally
+/// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
+/// stores the state for *all* groups internally.
 ///
-/// The logical model is that each group is given a `group_index`
-/// assigned and maintained by the hash table.
+/// Each group is assigned a `group_index` by the hash table and each
+/// accumulator manages the specific state, one per group_index.
 ///
 /// group_indexes are contiguous (there aren't gaps), and thus it is
 /// expected that each GroupAccumulator will use something like `Vec<..>`
