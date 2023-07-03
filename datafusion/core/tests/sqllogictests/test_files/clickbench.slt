@@ -77,13 +77,13 @@ SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvE
 query error DataFusion error: Optimizer rule 'simplify_expressions' failed
 SELECT "RegionID", COUNT(DISTINCT "UserID") AS u FROM hits GROUP BY "RegionID" ORDER BY u DESC LIMIT 10;
 
-query IIIRI
+query IIIRI rowsort
 SELECT "RegionID", SUM("AdvEngineID"), COUNT(*) AS c, AVG("ResolutionWidth"), COUNT(DISTINCT "UserID") FROM hits GROUP BY "RegionID" ORDER BY c DESC LIMIT 10;
 ----
-839 0 6 0 2
 197 0 2 0 1
-39 0 1 0 1
 229 0 1 0 1
+39 0 1 0 1
+839 0 6 0 2
 
 # https://github.com/apache/arrow-datafusion/issues/6790
 query error DataFusion error: Optimizer rule 'simplify_expressions' failed
@@ -104,46 +104,46 @@ query ITI
 SELECT "SearchEngineID", "SearchPhrase", COUNT(*) AS c FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchEngineID", "SearchPhrase" ORDER BY c DESC LIMIT 10;
 ----
 
-query II
+query II rowsort
 SELECT "UserID", COUNT(*) FROM hits GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 -2461439046089301801 5
-519640690937130534 2
-7418527520126366595 1
 376160620089546609 1
 427738049800818189 1
+519640690937130534 2
+7418527520126366595 1
 
-query ITI
+query ITI rowsort
 SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 -2461439046089301801 (empty) 5
-519640690937130534 (empty) 2
 376160620089546609 (empty) 1
 427738049800818189 (empty) 1
+519640690937130534 (empty) 2
 7418527520126366595 (empty) 1
 
-query ITI
+query ITI rowsort
 SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPhrase" LIMIT 10;
 ----
-519640690937130534 (empty) 2
 -2461439046089301801 (empty) 5
 376160620089546609 (empty) 1
 427738049800818189 (empty) 1
+519640690937130534 (empty) 2
 7418527520126366595 (empty) 1
 
-query IRTI
+query IRTI rowsort
 SELECT "UserID", extract(minute FROM to_timestamp_seconds("EventTime")) AS m, "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", m, "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
+-2461439046089301801 18 (empty) 1
+-2461439046089301801 33 (empty) 1
+-2461439046089301801 38 (empty) 1
+-2461439046089301801 56 (empty) 1
 -2461439046089301801 58 (empty) 1
 376160620089546609 30 (empty) 1
 427738049800818189 40 (empty) 1
--2461439046089301801 18 (empty) 1
--2461439046089301801 33 (empty) 1
--2461439046089301801 56 (empty) 1
 519640690937130534 26 (empty) 1
 519640690937130534 36 (empty) 1
 7418527520126366595 18 (empty) 1
--2461439046089301801 38 (empty) 1
 
 query I
 SELECT "UserID" FROM hits WHERE "UserID" = 435090932899640449;
@@ -199,46 +199,46 @@ query IIIIR
 SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits WHERE "SearchPhrase" <> '' GROUP BY "WatchID", "ClientIP" ORDER BY c DESC LIMIT 10;
 ----
 
-query IIIIR
+query IIIIR rowsort
 SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits GROUP BY "WatchID", "ClientIP" ORDER BY c DESC LIMIT 10;
 ----
-8740403056911509777 1615432634 1 0 0
-9110818468285196899 -1216690514 1 0 0
+4894690465724379622 1568366281 1 0 0
 5206346422301499756 -1216690514 1 0 0
 6308646140879811077 -1216690514 1 0 0
-4894690465724379622 1568366281 1 0 0
-6864353419233967042 1568366281 1 0 0
 6635790769678439148 1427531677 1 0 0
-8156744413230856864 -1216690514 1 0 0
-8924809397503602651 -1216690514 1 0 0
+6864353419233967042 1568366281 1 0 0
 8120543446287442873 -1216690514 1 0 0
+8156744413230856864 -1216690514 1 0 0
+8740403056911509777 1615432634 1 0 0
+8924809397503602651 -1216690514 1 0 0
+9110818468285196899 -1216690514 1 0 0
 
-query TI
+query TI rowsort
 SELECT "URL", COUNT(*) AS c FROM hits GROUP BY "URL" ORDER BY c DESC LIMIT 10;
 ----
 (empty) 5
-http://holodilnik.ru/russia/05jul2013&model=0 1
-http://bonprix.ru/index.ru/cinema/art/A00387,3797); ru)&bL 1
 http://afisha.mail.ru/catalog/314/women.ru/ency=1&page3/?errovat-pinniki 1
 http://bonprix.ru/index.ru/cinema/art/0 986 424 233 сезон 1
+http://bonprix.ru/index.ru/cinema/art/A00387,3797); ru)&bL 1
+http://holodilnik.ru/russia/05jul2013&model=0 1
 http://tours/Ekategoriya%2F&sr=http://slovareniye 1
 
-query ITI
+query ITI rowsort
 SELECT 1, "URL", COUNT(*) AS c FROM hits GROUP BY 1, "URL" ORDER BY c DESC LIMIT 10;
 ----
 1 (empty) 5
-1 http://holodilnik.ru/russia/05jul2013&model=0 1
-1 http://bonprix.ru/index.ru/cinema/art/A00387,3797); ru)&bL 1
 1 http://afisha.mail.ru/catalog/314/women.ru/ency=1&page3/?errovat-pinniki 1
 1 http://bonprix.ru/index.ru/cinema/art/0 986 424 233 сезон 1
+1 http://bonprix.ru/index.ru/cinema/art/A00387,3797); ru)&bL 1
+1 http://holodilnik.ru/russia/05jul2013&model=0 1
 1 http://tours/Ekategoriya%2F&sr=http://slovareniye 1
 
-query IIIII
+query IIIII rowsort
 SELECT "ClientIP", "ClientIP" - 1, "ClientIP" - 2, "ClientIP" - 3, COUNT(*) AS c FROM hits GROUP BY "ClientIP", "ClientIP" - 1, "ClientIP" - 2, "ClientIP" - 3 ORDER BY c DESC LIMIT 10;
 ----
 -1216690514 -1216690515 -1216690516 -1216690517 6
-1568366281 1568366280 1568366279 1568366278 2
 1427531677 1427531676 1427531675 1427531674 1
+1568366281 1568366280 1568366279 1568366278 2
 1615432634 1615432633 1615432632 1615432631 1
 
 query TI
