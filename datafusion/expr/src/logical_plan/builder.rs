@@ -186,8 +186,11 @@ impl LogicalPlanBuilder {
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
-        let schema =
-            DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new(), vec![])?);
+        let schema = DFSchemaRef::new(DFSchema::new_with_metadata(
+            fields,
+            HashMap::new(),
+            vec![],
+        )?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
@@ -263,6 +266,17 @@ impl LogicalPlanBuilder {
 
         let schema = table_source.schema();
 
+        let primary_keys = if let Some(pks) = schema.metadata().get("primary_keys") {
+            println!("pks: {:?}", pks);
+            let pks: Vec<usize> =
+                pks.split(',').map(|s| s.trim().parse().unwrap()).collect();
+
+            println!("pks:{:?}", pks);
+            pks
+        } else {
+            vec![]
+        };
+
         let projected_schema = projection
             .as_ref()
             .map(|p| {
@@ -276,11 +290,15 @@ impl LogicalPlanBuilder {
                         })
                         .collect(),
                     schema.metadata().clone(),
-                    vec![],
+                    primary_keys.clone(),
                 )
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema, vec![])
+                DFSchema::try_from_qualified_schema(
+                    table_name.clone(),
+                    &schema,
+                    primary_keys,
+                )
             })?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
@@ -835,7 +853,11 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Window(Window {
             input: Arc::new(self.plan),
             window_expr,
-            schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata, primary_keys)?),
+            schema: Arc::new(DFSchema::new_with_metadata(
+                window_fields,
+                metadata,
+                primary_keys,
+            )?),
         })))
     }
 
@@ -1093,7 +1115,11 @@ pub fn build_join_schema(
         }
     };
 
-    let right_primary_keys = right.primary_keys().iter().map(|idx| idx+left_fields.len()).collect::<Vec<_>>();
+    let right_primary_keys = right
+        .primary_keys()
+        .iter()
+        .map(|idx| idx + left_fields.len())
+        .collect::<Vec<_>>();
     let left_primary_keys = left.primary_keys();
     let primary_keys: Vec<usize> = match join_type {
         JoinType::Inner => {
@@ -1447,7 +1473,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
     let schema = Arc::new(DFSchema::new_with_metadata(
         fields,
         input_schema.metadata().clone(),
-        input_schema.primary_keys().to_vec()
+        input_schema.primary_keys().to_vec(),
     )?);
 
     Ok(LogicalPlan::Unnest(Unnest {

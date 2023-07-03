@@ -1311,8 +1311,11 @@ impl SubqueryAlias {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
         let primary_keys = plan.schema().primary_keys().to_vec();
-        let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema, primary_keys)?);
+        let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(
+            &alias,
+            &schema,
+            primary_keys,
+        )?);
         Ok(SubqueryAlias {
             input: Arc::new(plan),
             alias,

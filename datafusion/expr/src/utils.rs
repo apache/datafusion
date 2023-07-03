@@ -446,8 +446,11 @@ pub fn expand_qualified_wildcard(
             "Invalid qualifier {qualifier}"
         )));
     }
-    let qualified_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone(), schema.primary_keys().to_vec())?;
+    let qualified_schema = DFSchema::new_with_metadata(
+        qualified_fields,
+        schema.metadata().clone(),
+        schema.primary_keys().to_vec(),
+    )?;
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,

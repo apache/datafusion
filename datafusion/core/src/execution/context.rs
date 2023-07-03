@@ -498,17 +498,26 @@ impl SessionContext {
                 let mut new_fields = df_schema.fields().to_vec();
                 println!("ctx, new_fields:{:?}", new_fields);
                 println!("ctx, primary_key:{:?}", primary_key);
-                let primary_keys = primary_key.iter().map(|pk|{
-                    if let Some(idx) = new_fields.iter().position(|item| {
-                        println!("item.qualified_name():{:?}, pk.flat_name():{:?}", item.qualified_name(), pk.flat_name());
-                        item.qualified_name() == pk.flat_name()
-                    }){
-                        println!("match found");
-                        Ok(idx)
-                    } else {
-                        Err(DataFusionError::Execution("Primary Key doesn't exist".to_string()))
-                    }
-                }).collect::<Result<Vec<_>>>()?;
+                let primary_keys = primary_key
+                    .iter()
+                    .map(|pk| {
+                        if let Some(idx) = new_fields.iter().position(|item| {
+                            println!(
+                                "item.qualified_name():{:?}, pk.flat_name():{:?}",
+                                item.qualified_name(),
+                                pk.flat_name()
+                            );
+                            item.qualified_name() == pk.flat_name()
+                        }) {
+                            println!("match found");
+                            Ok(idx)
+                        } else {
+                            Err(DataFusionError::Execution(
+                                "Primary Key doesn't exist".to_string(),
+                            ))
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 println!("ctx, primary_keys: {:?}", primary_keys);
                 // // Update metadata of PRIMARY_KEY fields.
                 // for dffield in new_fields.iter_mut() {
@@ -530,9 +539,11 @@ impl SessionContext {
                 //     }
                 // }
                 let metadata = df_schema.metadata().clone();
-                let updated_schema = DFSchema::new_with_metadata(new_fields, metadata, primary_keys)?;
+                let updated_schema =
+                    DFSchema::new_with_metadata(new_fields, metadata, primary_keys)?;
                 println!("updated_schema:{:?}", updated_schema);
                 let schema = Arc::new(updated_schema.into());
+                println!("schema:{:?}", schema);
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;

@@ -65,7 +65,10 @@ impl DFSchema {
         metadata: HashMap<String, String>,
         primary_keys: Vec<usize>,
     ) -> Result<Self> {
-        println!("new_with_metadata is called, primary_keys: {:?}", primary_keys);
+        println!(
+            "new_with_metadata is called, primary_keys: {:?}",
+            primary_keys
+        );
         let mut qualified_names = HashSet::new();
         let mut unqualified_names = HashSet::new();
 
@@ -101,7 +104,11 @@ impl DFSchema {
                 ));
             }
         }
-        Ok(Self { fields, metadata, primary_keys })
+        Ok(Self {
+            fields,
+            metadata,
+            primary_keys,
+        })
     }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
@@ -130,7 +137,11 @@ impl DFSchema {
         fields.extend_from_slice(schema.fields().as_slice());
         metadata.extend(schema.metadata.clone());
         let mut primary_keys = self.primary_keys.clone();
-        let other_primary_keys = schema.primary_keys.iter().map(|idx| idx + self.fields.len()).collect::<Vec<_>>();
+        let other_primary_keys = schema
+            .primary_keys
+            .iter()
+            .map(|idx| idx + self.fields.len())
+            .collect::<Vec<_>>();
         primary_keys.extend(other_primary_keys);
         Self::new_with_metadata(fields, metadata, primary_keys)
     }
@@ -491,19 +502,45 @@ impl DFSchema {
     }
 }
 
+fn encode_primary_key_to_metadata(
+    metadata: &mut HashMap<String, String>,
+    primary_keys: &[usize],
+) {
+    let mut pks = String::new();
+    // Store primary key information in the metadata during conversion
+    for (idx, pk) in primary_keys.iter().enumerate() {
+        pks = format!("{pks}{pk}");
+        if idx < primary_keys.len() - 1 {
+            pks = format!("{pks}, ");
+        }
+    }
+    if !pks.is_empty() {
+        metadata.insert("primary_keys".to_string(), pks);
+    }
+    println!("DFSchema to Schema conversion");
+}
+
 impl From<DFSchema> for Schema {
     /// Convert DFSchema into a Schema
     fn from(df_schema: DFSchema) -> Self {
+        let mut metadata = df_schema.metadata;
+        if !df_schema.primary_keys.is_empty() {
+            encode_primary_key_to_metadata(&mut metadata, &df_schema.primary_keys);
+        }
         let fields: Fields = df_schema.fields.into_iter().map(|f| f.field).collect();
-        Schema::new_with_metadata(fields, df_schema.metadata)
+        Schema::new_with_metadata(fields, metadata)
     }
 }
 
 impl From<&DFSchema> for Schema {
     /// Convert DFSchema reference into a Schema
     fn from(df_schema: &DFSchema) -> Self {
+        let mut metadata = df_schema.metadata.clone();
+        if !df_schema.primary_keys.is_empty() {
+            encode_primary_key_to_metadata(&mut metadata, &df_schema.primary_keys);
+        }
         let fields: Fields = df_schema.fields.iter().map(|f| f.field.clone()).collect();
-        Schema::new_with_metadata(fields, df_schema.metadata.clone())
+        Schema::new_with_metadata(fields, metadata)
     }
 }
 

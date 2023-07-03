@@ -87,8 +87,11 @@ fn analyze_internal(
 
     if let LogicalPlan::TableScan(ts) = plan {
         // arrow schema doesn't support primary_key. We do not know primary_key of ts.source if any.
-        let source_schema =
-            DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema(), vec![])?;
+        let source_schema = DFSchema::try_from_qualified_schema(
+            &ts.table_name,
+            &ts.source.schema(),
+            vec![],
+        )?;
         schema.merge(&source_schema);
     }
 

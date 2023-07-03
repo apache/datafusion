@@ -1306,11 +1306,11 @@ impl DefaultPhysicalPlanner {
     }
 }
 
-fn get_updated_primary_keys(df_schema: &DFSchema, field_indices: &[usize]) -> Vec<usize>{
+fn get_updated_primary_keys(df_schema: &DFSchema, field_indices: &[usize]) -> Vec<usize> {
     let mut primary_keys = vec![];
     let existing_primary_keys = df_schema.primary_keys();
-    for (idx, field_idx) in field_indices.iter().enumerate(){
-        if existing_primary_keys.contains(field_idx){
+    for (idx, field_idx) in field_indices.iter().enumerate() {
+        if existing_primary_keys.contains(field_idx) {
             primary_keys.push(idx);
         }
     }

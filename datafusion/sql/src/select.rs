@@ -435,9 +435,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         println!("select_exprs:{:?}", select_exprs);
         println!("input_schema:{:?}", input.schema());
         println!("aggregate primary keys:{:?}", input.schema().primary_keys());
+        if let Some(pks) = input.schema().metadata().get("primary_keys") {
+            println!("pks: {:?}", pks);
+            let pks: Vec<usize> =
+                pks.split(',').map(|s| s.trim().parse().unwrap()).collect();
+
+            println!("pks:{:?}", pks);
+        }
         let primary_keys = input.schema().primary_keys();
         let input_fields = input.schema().fields();
-        let input_primary_key_fields = primary_keys.iter().map(|idx| &input_fields[*idx]).collect::<Vec<_>>();
+        let input_primary_key_fields = primary_keys
+            .iter()
+            .map(|idx| &input_fields[*idx])
+            .collect::<Vec<_>>();
         let field_names = input
             .schema()
             .fields()
