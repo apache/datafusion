@@ -265,7 +265,14 @@ impl LogicalPlanBuilder {
         let schema = table_source.schema();
 
         let primary_keys = if let Some(pks) = schema.metadata().get("primary_keys") {
-            pks.split(',').map(|s| s.trim().parse().unwrap()).collect()
+            pks.split(',')
+                .map(|s| {
+                    s.trim()
+                        .parse()
+                        // Convert parsing error to Datafusion Error
+                        .map_err(|e| DataFusionError::External(Box::new(e)))
+                })
+                .collect::<Result<Vec<_>>>()?
         } else {
             vec![]
         };
@@ -273,26 +280,22 @@ impl LogicalPlanBuilder {
         let projected_schema = projection
             .as_ref()
             .map(|p| {
-                Ok::<DFSchema, DataFusionError>(
-                    DFSchema::new_with_metadata(
-                        p.iter()
-                            .map(|i| {
-                                DFField::from_qualified(
-                                    table_name.clone(),
-                                    schema.field(*i).clone(),
-                                )
-                            })
-                            .collect(),
-                        schema.metadata().clone(),
-                    )?
-                    .with_primary_keys(primary_keys.clone()),
+                DFSchema::new_with_metadata(
+                    p.iter()
+                        .map(|i| {
+                            DFField::from_qualified(
+                                table_name.clone(),
+                                schema.field(*i).clone(),
+                            )
+                        })
+                        .collect(),
+                    schema.metadata().clone(),
                 )
+                .map(|df_schema| df_schema.with_primary_keys(primary_keys.clone()))
             })
             .unwrap_or_else(|| {
-                Ok(
-                    DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?
-                        .with_primary_keys(primary_keys),
-                )
+                DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
+                    .map(|df_schema| df_schema.with_primary_keys(primary_keys))
             })?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
@@ -1055,6 +1058,7 @@ pub fn build_join_schema(
 
     let right_fields = right.fields();
     let left_fields = left.fields();
+
     let fields: Vec<DFField> = match join_type {
         JoinType::Inner => {
             // left then right

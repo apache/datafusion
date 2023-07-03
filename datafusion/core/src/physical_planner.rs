@@ -1025,6 +1025,7 @@ impl DefaultPhysicalPlanner {
                                         ))
                                 )
                                 .unzip();
+                            // Update indices of the fields according to filter schema (the index seen in the filter schema).
                             let left_primary_keys = get_updated_primary_keys(left_df_schema, &left_field_indices);
                             let right_primary_keys = get_updated_primary_keys(right_df_schema, &right_field_indices);
                             // offset indices of right
@@ -1306,6 +1307,11 @@ impl DefaultPhysicalPlanner {
     }
 }
 
+/// Update primary key indices, with index of the number in `field_indices`
+/// If `field_indices` is [2, 5, 8], primary keys are [4, 5, 7] in the `df_schema`.
+/// return value will be `1`. This means that 1st index of the `field_indices`(5) is primary key
+/// e.g inside primary_keys vector ([4, 5, 7]). In the updated schema, fields at the indices [2, 5, 8] will
+/// be at [0, 1, 2].
 fn get_updated_primary_keys(df_schema: &DFSchema, field_indices: &[usize]) -> Vec<usize> {
     let mut primary_keys = vec![];
     let existing_primary_keys = df_schema.primary_keys();
