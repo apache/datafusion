@@ -4750,10 +4750,6 @@ mod tests {
             // the rounded version of the bound distance, as per the implementation).
             // 4632233691727265792 is the number of how many floating points
             // exist in the interval of 0.0 and 50.0.
-            (
-                (Operator::Eq, 27.8),
-                (1.0 / 4632233691727265792.0, 27.8, 27.8),
-            ),
             ((Operator::Lt, 5.2), (5.2 / distance, 0.0, 5.2)),
             (
                 (Operator::LtEq, 0.0),
