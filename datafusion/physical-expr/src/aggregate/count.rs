@@ -33,7 +33,7 @@ use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type, UInt32Type, UInt64Type};
-use arrow_array::{ArrowNumericType, PrimitiveArray, UInt64Array};
+use arrow_array::{ArrowNumericType, PrimitiveArray};
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
@@ -43,7 +43,7 @@ use datafusion_row::accessor::RowAccessor;
 use crate::expressions::format_state_name;
 
 use super::groups_accumulator::accumulate::{
-    accumulate_all, accumulate_indices_nullable, accumulate_indices,
+    accumulate_all, accumulate_indices, accumulate_indices_nullable,
 };
 use super::groups_accumulator::accumulate_all_nullable;
 
@@ -99,8 +99,8 @@ where
     /// The type of the returned count
     return_data_type: DataType,
 
-    /// Count per group (use u64 to make UInt64Array)
-    counts: Vec<u64>,
+    /// Count per group (use u64 to make Int64Array)
+    counts: Vec<i64>,
     // Bind it to struct
     phantom: PhantomData<T>,
 }
@@ -147,7 +147,7 @@ where
     fn update_counts_with_partial_counts(
         &mut self,
         group_indices: &[usize],
-        partial_counts: &UInt64Array,
+        partial_counts: &Int64Array,
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
     ) {
@@ -181,7 +181,6 @@ impl<T> GroupsAccumulator for CountGroupsAccumulator<T>
 where
     T: ArrowNumericType + Send,
 {
-
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -206,7 +205,7 @@ where
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
         // first batch is counts, second is partial sums
-        let partial_counts = values.get(0).unwrap().as_primitive::<UInt64Type>();
+        let partial_counts = values.get(0).unwrap().as_primitive::<Int64Type>();
         self.update_counts_with_partial_counts(
             group_indices,
             partial_counts,
@@ -220,7 +219,7 @@ where
     fn evaluate(&mut self) -> Result<ArrayRef> {
         let counts = std::mem::take(&mut self.counts);
 
-        let array = PrimitiveArray::<UInt64Type>::new(counts.into(), None);
+        let array = PrimitiveArray::<Int64Type>::new(counts.into(), None);
         // TODO remove cast
         let array = cast(&array, &self.return_data_type)?;
 
@@ -230,7 +229,7 @@ where
     // return arrays for sums and counts
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
         let counts = std::mem::take(&mut self.counts);
-        let counts = UInt64Array::from(counts); // zero copy
+        let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
