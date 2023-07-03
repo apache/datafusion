@@ -19,7 +19,6 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::ops::BitAnd;
 use std::sync::Arc;
 
@@ -28,12 +27,11 @@ use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
 use arrow::compute;
-use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Int32Type, Int64Type, UInt32Type, UInt64Type};
-use arrow_array::{ArrowNumericType, PrimitiveArray};
+use arrow_array::types::Int64Type;
+use arrow_array::PrimitiveArray;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
@@ -92,28 +90,17 @@ impl Count {
 /// F: Function that calcuates the average value from a sum of
 /// T::Native and a total count
 #[derive(Debug)]
-struct CountGroupsAccumulator<T>
-where
-    T: ArrowNumericType + Send,
+struct CountGroupsAccumulator
 {
-    /// The type of the returned count
-    return_data_type: DataType,
-
     /// Count per group (use u64 to make Int64Array)
     counts: Vec<i64>,
-    // Bind it to struct
-    phantom: PhantomData<T>,
 }
 
-impl<T> CountGroupsAccumulator<T>
-where
-    T: ArrowNumericType + Send,
+impl CountGroupsAccumulator
 {
-    pub fn new(return_data_type: &DataType) -> Self {
+    pub fn new() -> Self {
         Self {
-            return_data_type: return_data_type.clone(),
             counts: vec![],
-            phantom: PhantomData {},
         }
     }
 
@@ -177,9 +164,7 @@ where
     }
 }
 
-impl<T> GroupsAccumulator for CountGroupsAccumulator<T>
-where
-    T: ArrowNumericType + Send,
+impl GroupsAccumulator for CountGroupsAccumulator
 {
     fn update_batch(
         &mut self,
@@ -220,10 +205,8 @@ where
         let counts = std::mem::take(&mut self.counts);
 
         let array = PrimitiveArray::<Int64Type>::new(counts.into(), None);
-        // TODO remove cast
-        let array = cast(&array, &self.return_data_type)?;
 
-        Ok(array)
+        Ok(Arc::new(array))
     }
 
     // return arrays for sums and counts
@@ -316,25 +299,7 @@ impl AggregateExpr for Count {
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator
-        match &self.data_type {
-            DataType::UInt64 => Ok(Box::new(CountGroupsAccumulator::<UInt64Type>::new(
-                &self.data_type,
-            ))),
-            DataType::Int64 => Ok(Box::new(CountGroupsAccumulator::<Int64Type>::new(
-                &self.data_type,
-            ))),
-            DataType::UInt32 => Ok(Box::new(CountGroupsAccumulator::<UInt32Type>::new(
-                &self.data_type,
-            ))),
-            DataType::Int32 => Ok(Box::new(CountGroupsAccumulator::<Int32Type>::new(
-                &self.data_type,
-            ))),
-
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "CountGroupsAccumulator not supported for {}",
-                self.data_type
-            ))),
-        }
+        Ok(Box::new(CountGroupsAccumulator::new()))
     }
 }
 
