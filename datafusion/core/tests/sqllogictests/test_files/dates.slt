@@ -91,17 +91,17 @@ where d3_date > now() + '5 days';
 
 # DATE minus DATE
 # https://github.com/apache/arrow-rs/issues/4383
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Cast error: Cannot perform arithmetic operation between array of type Date32 and array of type Date32
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Date32 \- Date32 to valid types
 SELECT DATE '2023-04-09' - DATE '2023-04-02';
 
 # DATE minus Timestamp
 query ?
 SELECT DATE '2023-04-09' - '2000-01-01T00:00:00'::timestamp;
 ----
-0 years 0 mons 8499 days 0 hours 0 mins 0.000000000 secs
+P8499D
 
 # Timestamp minus DATE
 query ?
 SELECT '2023-01-01T00:00:00'::timestamp - DATE '2021-01-01';
 ----
-0 years 0 mons 730 days 0 hours 0 mins 0.000000000 secs
+P730D

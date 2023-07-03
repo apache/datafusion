@@ -46,7 +46,7 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::timezone::Tz;
+use arrow_array::{timezone::Tz, ArrowNativeTypeOp};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
@@ -743,55 +743,21 @@ macro_rules! impl_op {
     ($LHS:expr, $RHS:expr, -) => {
         match ($LHS, $RHS) {
             (
-                ScalarValue::TimestampSecond(Some(ts_lhs), tz_lhs),
-                ScalarValue::TimestampSecond(Some(ts_rhs), tz_rhs),
-            ) => {
-                let err = || {
-                    DataFusionError::Execution(
-                        "Overflow while converting seconds to milliseconds".to_string(),
-                    )
-                };
-                ts_sub_to_interval::<MILLISECOND_MODE>(
-                    ts_lhs.checked_mul(1_000).ok_or_else(err)?,
-                    ts_rhs.checked_mul(1_000).ok_or_else(err)?,
-                    tz_lhs.as_deref(),
-                    tz_rhs.as_deref(),
-                )
-            },
+                ScalarValue::TimestampSecond(Some(ts_lhs), _),
+                ScalarValue::TimestampSecond(Some(ts_rhs), _),
+            ) => Ok(ScalarValue::DurationSecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
             (
-                ScalarValue::TimestampMillisecond(Some(ts_lhs), tz_lhs),
-                ScalarValue::TimestampMillisecond(Some(ts_rhs), tz_rhs),
-            ) => ts_sub_to_interval::<MILLISECOND_MODE>(
-                *ts_lhs,
-                *ts_rhs,
-                tz_lhs.as_deref(),
-                tz_rhs.as_deref(),
-            ),
+                ScalarValue::TimestampMillisecond(Some(ts_lhs), _),
+                ScalarValue::TimestampMillisecond(Some(ts_rhs), _),
+            ) => Ok(ScalarValue::DurationMillisecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
             (
-                ScalarValue::TimestampMicrosecond(Some(ts_lhs), tz_lhs),
-                ScalarValue::TimestampMicrosecond(Some(ts_rhs), tz_rhs),
-            ) => {
-                let err = || {
-                    DataFusionError::Execution(
-                        "Overflow while converting microseconds to nanoseconds".to_string(),
-                    )
-                };
-                ts_sub_to_interval::<NANOSECOND_MODE>(
-                    ts_lhs.checked_mul(1_000).ok_or_else(err)?,
-                    ts_rhs.checked_mul(1_000).ok_or_else(err)?,
-                    tz_lhs.as_deref(),
-                    tz_rhs.as_deref(),
-                )
-            },
+                ScalarValue::TimestampMicrosecond(Some(ts_lhs), _),
+                ScalarValue::TimestampMicrosecond(Some(ts_rhs), _),
+            ) => Ok(ScalarValue::DurationMicrosecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
             (
-                ScalarValue::TimestampNanosecond(Some(ts_lhs), tz_lhs),
-                ScalarValue::TimestampNanosecond(Some(ts_rhs), tz_rhs),
-            ) => ts_sub_to_interval::<NANOSECOND_MODE>(
-                *ts_lhs,
-                *ts_rhs,
-                tz_lhs.as_deref(),
-                tz_rhs.as_deref(),
-            ),
+                ScalarValue::TimestampNanosecond(Some(ts_lhs), _),
+                ScalarValue::TimestampNanosecond(Some(ts_rhs), _),
+            ) => Ok(ScalarValue::DurationNanosecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
         }
     };
@@ -1147,49 +1113,6 @@ pub const MDN_MODE: i8 = 2;
 
 pub const MILLISECOND_MODE: bool = false;
 pub const NANOSECOND_MODE: bool = true;
-/// This function computes subtracts `rhs_ts` from `lhs_ts`, taking timezones
-/// into account when given. Units of the resulting interval is specified by
-/// the constant `TIME_MODE`.
-/// The default behavior of Datafusion is the following:
-/// - When subtracting timestamps at seconds/milliseconds precision, the output
-///   interval will have the type [`IntervalDayTimeType`].
-/// - When subtracting timestamps at microseconds/nanoseconds precision, the
-///   output interval will have the type [`IntervalMonthDayNanoType`].
-fn ts_sub_to_interval<const TIME_MODE: bool>(
-    lhs_ts: i64,
-    rhs_ts: i64,
-    lhs_tz: Option<&str>,
-    rhs_tz: Option<&str>,
-) -> Result<ScalarValue> {
-    let parsed_lhs_tz = parse_timezones(lhs_tz)?;
-    let parsed_rhs_tz = parse_timezones(rhs_tz)?;
-
-    let (naive_lhs, naive_rhs) =
-        calculate_naives::<TIME_MODE>(lhs_ts, parsed_lhs_tz, rhs_ts, parsed_rhs_tz)?;
-    let delta_secs = naive_lhs.signed_duration_since(naive_rhs);
-
-    match TIME_MODE {
-        MILLISECOND_MODE => {
-            let as_millisecs = delta_secs.num_milliseconds();
-            Ok(ScalarValue::new_interval_dt(
-                (as_millisecs / MILLISECS_IN_ONE_DAY) as i32,
-                (as_millisecs % MILLISECS_IN_ONE_DAY) as i32,
-            ))
-        }
-        NANOSECOND_MODE => {
-            let as_nanosecs = delta_secs.num_nanoseconds().ok_or_else(|| {
-                DataFusionError::Execution(String::from(
-                    "Can not compute timestamp differences with nanosecond precision",
-                ))
-            })?;
-            Ok(ScalarValue::new_interval_mdn(
-                0,
-                (as_nanosecs / NANOSECS_IN_ONE_DAY) as i32,
-                as_nanosecs % NANOSECS_IN_ONE_DAY,
-            ))
-        }
-    }
-}
 
 /// This function parses the timezone from string to Tz.
 /// If it cannot parse or timezone field is [`None`], it returns [`None`].
@@ -1424,6 +1347,14 @@ where
         ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
         ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i, sign),
         ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
+        ScalarValue::DurationSecond(Some(v)) => prior.add(Duration::seconds(*v)),
+        ScalarValue::DurationMillisecond(Some(v)) => {
+            prior.add(Duration::milliseconds(*v))
+        }
+        ScalarValue::DurationMicrosecond(Some(v)) => {
+            prior.add(Duration::microseconds(*v))
+        }
+        ScalarValue::DurationNanosecond(Some(v)) => prior.add(Duration::nanoseconds(*v)),
         other => Err(DataFusionError::Execution(format!(
             "DateIntervalExpr does not support non-interval type {other:?}"
         )))?,
@@ -1890,6 +1821,16 @@ impl ScalarValue {
             }
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(0))
+            }
+            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(None),
+            DataType::Duration(TimeUnit::Millisecond) => {
+                ScalarValue::DurationMillisecond(None)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                ScalarValue::DurationMicrosecond(None)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                ScalarValue::DurationNanosecond(None)
             }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -3191,6 +3132,20 @@ impl ScalarValue {
                     IntervalMonthDayNano
                 )
             }
+
+            DataType::Duration(TimeUnit::Second) => {
+                typed_cast!(array, index, DurationSecondArray, DurationSecond)
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                typed_cast!(array, index, DurationMillisecondArray, DurationMillisecond)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                typed_cast!(array, index, DurationMicrosecondArray, DurationMicrosecond)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                typed_cast!(array, index, DurationNanosecondArray, DurationNanosecond)
+            }
+
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a scalar from array of type \"{other:?}\""
@@ -3682,6 +3637,18 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(None)
             }
+
+            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(None),
+            DataType::Duration(TimeUnit::Millisecond) => {
+                ScalarValue::DurationMillisecond(None)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                ScalarValue::DurationMicrosecond(None)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                ScalarValue::DurationNanosecond(None)
+            }
+
             DataType::Dictionary(index_type, value_type) => ScalarValue::Dictionary(
                 index_type.clone(),
                 Box::new(value_type.as_ref().try_into()?),
@@ -3944,7 +3911,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::compute::kernels;
-    use arrow::compute::{self, concat, is_null};
+    use arrow::compute::{concat, is_null};
     use arrow::datatypes::ArrowPrimitiveType;
     use arrow::util::pretty::pretty_format_columns;
     use arrow_array::ArrowNumericType;
@@ -4073,7 +4040,7 @@ mod tests {
         let right_array = right.to_array();
         let arrow_left_array = left_array.as_primitive::<T>();
         let arrow_right_array = right_array.as_primitive::<T>();
-        let arrow_result = compute::add_checked(arrow_left_array, arrow_right_array);
+        let arrow_result = kernels::numeric::add(arrow_left_array, arrow_right_array);
 
         assert_eq!(scalar_result.is_ok(), arrow_result.is_ok());
     }

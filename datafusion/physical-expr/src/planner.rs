@@ -18,14 +18,12 @@
 use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
-    expressions::{
-        self, binary, date_time_interval_expr, like, Column, GetIndexedFieldExpr, Literal,
-    },
+    expressions::{self, binary, like, Column, GetIndexedFieldExpr, Literal},
     functions, udf,
     var_provider::VarType,
     PhysicalExpr,
 };
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::Schema;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
@@ -183,45 +181,14 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
-            // Match the data types and operator to determine the appropriate expression, if
-            // they are supported temporal types and operations, create DateTimeIntervalExpr,
-            // else create BinaryExpr.
-            match (
-                lhs.data_type(input_schema)?,
-                op,
-                rhs.data_type(input_schema)?,
-            ) {
-                (
-                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Interval(_),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                (
-                    DataType::Interval(_),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                ) => Ok(date_time_interval_expr(rhs, *op, lhs, input_schema)?),
-                (
-                    DataType::Timestamp(_, _),
-                    Operator::Minus,
-                    DataType::Timestamp(_, _),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                (
-                    DataType::Interval(_),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Interval(_),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                _ => {
-                    // Note that the logical planner is responsible
-                    // for type coercion on the arguments (e.g. if one
-                    // argument was originally Int32 and one was
-                    // Int64 they will both be coerced to Int64).
-                    //
-                    // There should be no coercion during physical
-                    // planning.
-                    binary(lhs, *op, rhs, input_schema)
-                }
-            }
+            // Note that the logical planner is responsible
+            // for type coercion on the arguments (e.g. if one
+            // argument was originally Int32 and one was
+            // Int64 they will both be coerced to Int64).
+            //
+            // There should be no coercion during physical
+            // planning.
+            binary(lhs, *op, rhs, input_schema)
         }
         Expr::Like(Like {
             negated,

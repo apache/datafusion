@@ -13998,9 +13998,6 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::ScalarUdf(v) => {
                     struct_ser.serialize_field("scalarUdf", v)?;
                 }
-                physical_expr_node::ExprType::DateTimeIntervalExpr(v) => {
-                    struct_ser.serialize_field("dateTimeIntervalExpr", v)?;
-                }
                 physical_expr_node::ExprType::LikeExpr(v) => {
                     struct_ser.serialize_field("likeExpr", v)?;
                 }
@@ -14046,8 +14043,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "windowExpr",
             "scalar_udf",
             "scalarUdf",
-            "date_time_interval_expr",
-            "dateTimeIntervalExpr",
             "like_expr",
             "likeExpr",
             "get_indexed_field_expr",
@@ -14072,7 +14067,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             TryCast,
             WindowExpr,
             ScalarUdf,
-            DateTimeIntervalExpr,
             LikeExpr,
             GetIndexedFieldExpr,
         }
@@ -14112,7 +14106,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "tryCast" | "try_cast" => Ok(GeneratedField::TryCast),
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             "scalarUdf" | "scalar_udf" => Ok(GeneratedField::ScalarUdf),
-                            "dateTimeIntervalExpr" | "date_time_interval_expr" => Ok(GeneratedField::DateTimeIntervalExpr),
                             "likeExpr" | "like_expr" => Ok(GeneratedField::LikeExpr),
                             "getIndexedFieldExpr" | "get_indexed_field_expr" => Ok(GeneratedField::GetIndexedFieldExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -14247,13 +14240,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("scalarUdf"));
                             }
                             expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::ScalarUdf)
-;
-                        }
-                        GeneratedField::DateTimeIntervalExpr => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("dateTimeIntervalExpr"));
-                            }
-                            expr_type__ = map.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::DateTimeIntervalExpr)
 ;
                         }
                         GeneratedField::LikeExpr => {

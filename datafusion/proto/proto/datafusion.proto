@@ -1065,6 +1065,9 @@ message PhysicalExtensionNode {
 
 // physical expressions
 message PhysicalExprNode {
+  // Was date_time_interval_expr
+  reserved 17;
+
   oneof ExprType {
     // column references
     PhysicalColumn column = 1;
@@ -1094,8 +1097,6 @@ message PhysicalExprNode {
     PhysicalWindowExprNode window_expr = 15;
 
     PhysicalScalarUdfNode scalar_udf = 16;
-
-    PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
 
     PhysicalLikeExprNode like_expr = 18;
 
