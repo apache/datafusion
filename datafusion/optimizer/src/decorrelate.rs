@@ -24,6 +24,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use std::collections::{BTreeSet, HashMap};
@@ -228,10 +229,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
-                        let un_matched_row = Expr::Alias(
-                            Box::new(Expr::Literal(ScalarValue::Boolean(Some(true)))),
+                        let un_matched_row = Expr::Alias(Alias::new(
+                            Expr::Literal(ScalarValue::Boolean(Some(true))),
                             UN_MATCHED_ROW_INDICATOR.to_string(),
-                        );
+                        ));
                         // add the unmatched rows indicator to the Aggregation's group expressions
                         missing_exprs.push(un_matched_row);
                     }
@@ -428,7 +429,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
-                Expr::Alias(_, alias) => alias.to_string(),
+                Expr::Alias(Alias { name, .. }) => name.to_string(),
                 Expr::Column(Column { relation: _, name }) => name.to_string(),
                 _ => expr.display_name()?,
             };

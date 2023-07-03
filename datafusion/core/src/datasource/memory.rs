@@ -20,12 +20,13 @@
 use futures::StreamExt;
 use log::debug;
 use std::any::Any;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_common::SchemaExt;
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 
@@ -36,9 +37,9 @@ use crate::logical_expr::Expr;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
+use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -189,13 +190,13 @@ impl TableProvider for MemTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !input.schema().eq(&self.schema) {
+        if !self.schema().equivalent_names_and_types(&input.schema()) {
             return Err(DataFusionError::Plan(
                 "Inserting query must have the same schema with the table.".to_string(),
             ));
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(InsertExec::new(input, sink)))
+        Ok(Arc::new(InsertExec::new(input, sink, self.schema.clone())))
     }
 }
 
@@ -213,10 +214,14 @@ impl Debug for MemSink {
     }
 }
 
-impl Display for MemSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let partition_count = self.batches.len();
-        write!(f, "MemoryTable (partitions={partition_count})")
+impl DisplayAs for MemSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let partition_count = self.batches.len();
+                write!(f, "MemoryTable (partitions={partition_count})")
+            }
+        }
     }
 }
 

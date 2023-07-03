@@ -602,7 +602,7 @@ mod tests {
 
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
+    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 
     use crate::TableReference;
 
@@ -658,6 +658,10 @@ mod tests {
 
         fn options(&self) -> &ConfigOptions {
             &self.options
+        }
+
+        fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
+            None
         }
     }
 

@@ -22,11 +22,12 @@ use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, GetIndexedField,
+    AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, GetIndexedField,
     GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, ScalarUDF,
     WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
+use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan, TryCast};
 use std::collections::HashMap;
@@ -121,14 +122,10 @@ fn check_column_satisfies_expr(
 ) -> Result<()> {
     if !columns.contains(expr) {
         return Err(DataFusionError::Plan(format!(
-            "{}: Expression {:?} could not be resolved from available columns: {}",
+            "{}: Expression {} could not be resolved from available columns: {}",
             message_prefix,
             expr,
-            columns
-                .iter()
-                .map(|e| format!("{e}"))
-                .collect::<Vec<String>>()
-                .join(", ")
+            expr_vec_fmt!(columns)
         )));
     }
     Ok(())
@@ -213,10 +210,10 @@ where
                 filter.clone(),
                 order_by.clone(),
             ))),
-            Expr::Alias(nested_expr, alias_name) => Ok(Expr::Alias(
-                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                alias_name.clone(),
-            )),
+            Expr::Alias(Alias { expr, name, .. }) => Ok(Expr::Alias(Alias::new(
+                clone_with_replacement(expr, replacement_fn)?,
+                name.clone(),
+            ))),
             Expr::Between(Between {
                 expr,
                 negated,
@@ -433,9 +430,7 @@ pub(crate) fn extract_aliases(exprs: &[Expr]) -> HashMap<String, Expr> {
     exprs
         .iter()
         .filter_map(|expr| match expr {
-            Expr::Alias(nested_expr, alias_name) => {
-                Some((alias_name.clone(), *nested_expr.clone()))
-            }
+            Expr::Alias(Alias { expr, name, .. }) => Some((name.clone(), *expr.clone())),
             _ => None,
         })
         .collect::<HashMap<String, Expr>>()
@@ -457,7 +452,7 @@ pub(crate) fn resolve_positions_to_exprs(
             let index = (position - 1) as usize;
             let select_expr = &select_exprs[index];
             Some(match select_expr {
-                Expr::Alias(nested_expr, _alias_name) => *nested_expr.clone(),
+                Expr::Alias(Alias { expr, .. }) => *expr.clone(),
                 _ => select_expr.clone(),
             })
         }
@@ -490,17 +485,14 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
         .iter()
         .map(|expr| match expr {
             Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
-            Expr::Alias(expr, _) => {
-                // convert &Box<T> to &T
-                match &**expr {
-                    Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
-                        Ok(partition_by)
-                    }
-                    expr => Err(DataFusionError::Execution(format!(
-                        "Impossibly got non-window expr {expr:?}"
-                    ))),
+            Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
+                Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
+                    Ok(partition_by)
                 }
-            }
+                expr => Err(DataFusionError::Execution(format!(
+                    "Impossibly got non-window expr {expr:?}"
+                ))),
+            },
             expr => Err(DataFusionError::Execution(format!(
                 "Impossibly got non-window expr {expr:?}"
             ))),
@@ -526,7 +518,7 @@ pub(crate) fn make_decimal_type(
         (Some(p), Some(s)) => (p as u8, s as i8),
         (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
-            return Err(DataFusionError::Internal(
+            return Err(DataFusionError::Plan(
                 "Cannot specify only scale for decimal data type".to_string(),
             ))
         }
@@ -538,7 +530,7 @@ pub(crate) fn make_decimal_type(
         || precision > DECIMAL128_MAX_PRECISION
         || scale.unsigned_abs() > precision
     {
-        Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Plan(format!(
             "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 38`, and `scale <= precision`."
         )))
     } else {

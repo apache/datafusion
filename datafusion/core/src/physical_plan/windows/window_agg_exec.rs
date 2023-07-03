@@ -231,7 +231,7 @@ impl ExecutionPlan for WindowAggExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "WindowAggExec: ")?;
                 let g: Vec<String> = self
                     .window_expr

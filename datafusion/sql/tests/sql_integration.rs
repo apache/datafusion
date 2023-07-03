@@ -28,7 +28,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
-    AggregateUDF, ScalarUDF, TableSource,
+    AggregateUDF, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_sql::{
     parser::DFParser,
@@ -197,31 +197,39 @@ fn try_cast_from_aggregation() {
 }
 
 #[test]
-fn cast_to_invalid_decimal_type() {
+fn cast_to_invalid_decimal_type_precision_0() {
     // precision == 0
     {
         let sql = "SELECT CAST(10 AS DECIMAL(0))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Internal("Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r##"Plan("Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
             format!("{err:?}")
         );
     }
+}
+
+#[test]
+fn cast_to_invalid_decimal_type_precision_gt_38() {
     // precision > 38
     {
         let sql = "SELECT CAST(10 AS DECIMAL(39))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Internal("Decimal(precision = 39, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r##"Plan("Decimal(precision = 39, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
             format!("{err:?}")
         );
     }
+}
+
+#[test]
+fn cast_to_invalid_decimal_type_precision_lt_scale() {
     // precision < scale
     {
         let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Internal("Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r##"Plan("Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
             format!("{err:?}")
         );
     }
@@ -1263,7 +1271,7 @@ fn select_interval_out_of_range() {
     let sql = "SELECT INTERVAL '100000000000000000 day'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "ArrowError(ParseError(\"Parsed interval field value out of range: 0 months 100000000000000000 days 0 nanos\"))",
+        "ArrowError(InvalidArgumentError(\"Unable to represent 100000000000000000 days in a signed 32-bit integer\"))",
         format!("{err:?}")
     );
 }
@@ -2691,6 +2699,10 @@ impl ContextProvider for MockContextProvider {
         unimplemented!()
     }
 
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
+        None
+    }
+
     fn options(&self) -> &ConfigOptions {
         &self.options
     }
@@ -3613,7 +3625,7 @@ fn test_prepare_statement_to_plan_no_param() {
 }
 
 #[test]
-#[should_panic(expected = "value: Internal(\"Expected 1 parameters, got 0\")")]
+#[should_panic(expected = "value: Plan(\"Expected 1 parameters, got 0\")")]
 fn test_prepare_statement_to_plan_one_param_no_value_panic() {
     // no embedded parameter but still declare it
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
@@ -3626,7 +3638,7 @@ fn test_prepare_statement_to_plan_one_param_no_value_panic() {
 
 #[test]
 #[should_panic(
-    expected = "value: Internal(\"Expected parameter of type Int32, got Float64 at index 0\")"
+    expected = "value: Plan(\"Expected parameter of type Int32, got Float64 at index 0\")"
 )]
 fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
     // no embedded parameter but still declare it
@@ -3639,7 +3651,7 @@ fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
 }
 
 #[test]
-#[should_panic(expected = "value: Internal(\"Expected 0 parameters, got 1\")")]
+#[should_panic(expected = "value: Plan(\"Expected 0 parameters, got 1\")")]
 fn test_prepare_statement_to_plan_no_param_on_value_panic() {
     // no embedded parameter but still declare it
     let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
