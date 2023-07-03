@@ -58,7 +58,9 @@ impl AccumulatorState {
     }
 
     fn size(&self) -> usize {
-        todo!()
+        self.accumulator.size()
+            + std::mem::size_of_val(self)
+            + std::mem::size_of::<u32>() * self.indices.capacity()
     }
 }
 
@@ -82,26 +84,51 @@ impl GroupsAccumulatorAdapter {
         let new_accumulators = total_num_groups - self.states.len();
         for _ in 0..new_accumulators {
             let accumulator = (self.factory)()?;
+            // todo update allocation
             self.states.push(AccumulatorState::new(accumulator));
         }
         Ok(())
     }
-}
 
-impl GroupsAccumulator for GroupsAccumulatorAdapter {
-    fn update_batch(
+    /// invokes f(accumulator, values) for the correct slices of the
+    /// input values of this array.
+    ///
+    /// This first reorders the input and filter so that values for group_indexes
+    /// are contiguous and then invokes f on the contiguous ranges
+    ///
+    /// ```text
+    /// ┌─────────┐   ┌─────────┐   ┌ ─ ─ ─ ─ ┐                       ┌─────────┐   ┌ ─ ─ ─ ─ ┐
+    /// │ ┌─────┐ │   │ ┌─────┐ │     ┌─────┐              ┏━━━━━┓    │ ┌─────┐ │     ┌─────┐
+    /// │ │  2  │ │   │ │ 200 │ │   │ │  t  │ │            ┃  0  ┃    │ │ 200 │ │   │ │  t  │ │
+    /// │ ├─────┤ │   │ ├─────┤ │     ├─────┤              ┣━━━━━┫    │ ├─────┤ │     ├─────┤
+    /// │ │  2  │ │   │ │ 100 │ │   │ │  f  │ │            ┃  0  ┃    │ │ 300 │ │   │ │  t  │ │
+    /// │ ├─────┤ │   │ ├─────┤ │     ├─────┤              ┣━━━━━┫    │ ├─────┤ │     ├─────┤
+    /// │ │  0  │ │   │ │ 200 │ │   │ │  t  │ │            ┃  1  ┃    │ │ 200 │ │   │ │NULL │ │
+    /// │ ├─────┤ │   │ ├─────┤ │     ├─────┤   ────────▶  ┣━━━━━┫    │ ├─────┤ │     ├─────┤
+    /// │ │  1  │ │   │ │ 200 │ │   │ │NULL │ │            ┃  2  ┃    │ │ 200 │ │   │ │  t  │ │
+    /// │ ├─────┤ │   │ ├─────┤ │     ├─────┤              ┣━━━━━┫    │ ├─────┤ │     ├─────┤
+    /// │ │  0  │ │   │ │ 300 │ │   │ │  t  │ │            ┃  2  ┃    │ │ 100 │ │   │ │  f  │ │
+    /// │ └─────┘ │   │ └─────┘ │     └─────┘              ┗━━━━━┛    │ └─────┘ │     └─────┘
+    /// └─────────┘   └─────────┘   └ ─ ─ ─ ─ ┘                       └─────────┘   └ ─ ─ ─ ─ ┘
+    ///
+    ///   values        opt_filter         logical group  values        opt_filter
+    ///                                                 index
+    /// ```
+    fn invoke_per_accumulator<F>(
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
-    ) -> Result<()> {
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
+    {
         self.make_accumulators_if_needed(total_num_groups)?;
 
-        // This logic:
         // reorderes the input and filter so that values for group_indexes are contiguous.
         // Then it invokes Accumulator::update / merge for each of those contiguous ranges
-
         assert_eq!(values[0].len(), group_indices.len());
 
         // figure out which input rows correspond to which groups
@@ -110,7 +137,8 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         }
 
         // groups_per_rows holds a list of group indexes that have
-        // rows that need to be accumulated
+        // any rows that need to be accumulated, stored in order of group_index
+
         let mut groups_with_rows = vec![];
 
         // batch_indices holds indices in values, each group contiguously
@@ -154,7 +182,10 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
             let values_to_accumulate =
                 slice_and_maybe_filter(&values, opt_filter.as_ref(), &offsets)?;
-            state.accumulator.update_batch(&values_to_accumulate)?;
+
+            (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
+
+            // clear out the state
             state.indices.clear();
 
             //let size_post = accumulator.size();
@@ -162,6 +193,28 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         }
         Ok(())
     }
+}
+
+impl GroupsAccumulator for GroupsAccumulatorAdapter {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.invoke_per_accumulator(
+            values,
+            group_indices,
+            opt_filter,
+            total_num_groups,
+            |accumulator, values_to_accumulate| {
+                accumulator.update_batch(values_to_accumulate)
+            },
+        )?;
+        Ok(())
+    }
+
     fn evaluate(&mut self) -> Result<ArrayRef> {
         todo!()
     }
@@ -177,7 +230,16 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        todo!()
+        self.invoke_per_accumulator(
+            values,
+            group_indices,
+            opt_filter,
+            total_num_groups,
+            |accumulator, values_to_accumulate| {
+                accumulator.merge_batch(values_to_accumulate)
+            },
+        )?;
+        Ok(())
     }
 
     fn size(&self) -> usize {
