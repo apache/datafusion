@@ -25,17 +25,16 @@ use std::sync::Arc;
 
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
-use crate::{AggregateExpr, PhysicalExpr, GroupsAccumulator};
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
 use arrow::compute;
 use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
-use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{UInt64Type, Int64Type, UInt32Type, Int32Type};
-use arrow_array::{PrimitiveArray, UInt64Array, ArrowNumericType};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer};
+use arrow_array::types::{Int32Type, Int64Type, UInt32Type, UInt64Type};
+use arrow_array::{ArrowNumericType, PrimitiveArray, UInt64Array};
+use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -91,115 +90,100 @@ impl Count {
 /// T::Native and a total count
 #[derive(Debug)]
 struct CountGroupsAccumulator<T>
-where T: ArrowNumericType + Send,
+where
+    T: ArrowNumericType + Send,
 {
     /// The type of the returned count
     return_data_type: DataType,
 
     /// Count per group (use u64 to make UInt64Array)
     counts: Vec<u64>,
-
-    /// If we have seen a null input value for this group_index
-    null_inputs: BooleanBufferBuilder,
-
     // Bind it to struct
-    phantom: PhantomData<T>
+    phantom: PhantomData<T>,
 }
 
-
 impl<T> CountGroupsAccumulator<T>
-where T: ArrowNumericType + Send,
+where
+    T: ArrowNumericType + Send,
 {
     pub fn new(return_data_type: &DataType) -> Self {
         Self {
             return_data_type: return_data_type.clone(),
             counts: vec![],
-            null_inputs: BooleanBufferBuilder::new(0),
-            phantom: PhantomData {}
+            phantom: PhantomData {},
         }
     }
 
-        /// Adds one to each group's counter
-        fn increment_counts(
-            &mut self,
-            group_indices: &[usize],
-            values: &PrimitiveArray<T>,
-            opt_filter: Option<&arrow_array::BooleanArray>,
-            total_num_groups: usize,
-        ) {
-            self.counts.resize(total_num_groups, 0);
-    
-            if values.null_count() == 0 {
-                accumulate_all(
-                    group_indices,
-                    values,
-                    opt_filter,
-                    |group_index, _new_value| {
+    /// Adds one to each group's counter
+    fn increment_counts(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) {
+        self.counts.resize(total_num_groups, 0);
+
+        if values.null_count() == 0 {
+            accumulate_all(
+                group_indices,
+                values,
+                opt_filter,
+                |group_index, _new_value| {
+                    self.counts[group_index] += 1;
+                },
+            )
+        } else {
+            accumulate_all_nullable(
+                group_indices,
+                values,
+                opt_filter,
+                |group_index, _new_value, is_valid| {
+                    if is_valid {
                         self.counts[group_index] += 1;
                     }
-                )
-            }else {
-                accumulate_all_nullable(
-                    group_indices,
-                    values,
-                    opt_filter,
-                    |group_index, _new_value, is_valid| {
-                        if is_valid {
-                            self.counts[group_index] += 1;
-                        }
-                    },
-                )
-            }
+                },
+            )
         }
+    }
 
-        /// Adds the counts with the partial counts
-        fn update_counts_with_partial_counts(
-            &mut self,
-            group_indices: &[usize],
-            partial_counts: &UInt64Array,
-            opt_filter: Option<&arrow_array::BooleanArray>,
-            total_num_groups: usize,
-        ) {
-            self.counts.resize(total_num_groups, 0);
-    
-            if partial_counts.null_count() == 0 {
-                accumulate_all(
-                    group_indices,
-                    partial_counts,
-                    opt_filter,
-                    |group_index, partial_count| {
+    /// Adds the counts with the partial counts
+    fn update_counts_with_partial_counts(
+        &mut self,
+        group_indices: &[usize],
+        partial_counts: &UInt64Array,
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) {
+        self.counts.resize(total_num_groups, 0);
+
+        if partial_counts.null_count() == 0 {
+            accumulate_all(
+                group_indices,
+                partial_counts,
+                opt_filter,
+                |group_index, partial_count| {
+                    self.counts[group_index] += partial_count;
+                },
+            )
+        } else {
+            accumulate_all_nullable(
+                group_indices,
+                partial_counts,
+                opt_filter,
+                |group_index, partial_count, is_valid| {
+                    if is_valid {
                         self.counts[group_index] += partial_count;
-                    },
-                )
-            } else {
-                accumulate_all_nullable(
-                    group_indices,
-                    partial_counts,
-                    opt_filter,
-                    |group_index, partial_count, is_valid| {
-                        if is_valid {
-                            self.counts[group_index] += partial_count;
-                        }
-                    },
-                )
-            }
+                    }
+                },
+            )
         }
-
-        /// Returns a NullBuffer representing which group_indices have
-        /// null values (if they saw a null input)
-        /// Resets `self.null_inputs`;
-        fn build_nulls(&mut self) -> Option<NullBuffer> {
-            let nulls = NullBuffer::new(self.null_inputs.finish());
-            if nulls.null_count() > 0 {
-                Some(nulls)
-            } else {
-                None
-            }
-        }
+    }
 }
 
-impl <T> GroupsAccumulator for CountGroupsAccumulator<T>
-where T: ArrowNumericType + Send
+impl<T> GroupsAccumulator for CountGroupsAccumulator<T>
+where
+    T: ArrowNumericType + Send,
 {
     fn update_batch(
         &mut self,
@@ -238,24 +222,8 @@ where T: ArrowNumericType + Send
 
     fn evaluate(&mut self) -> Result<ArrayRef> {
         let counts = std::mem::take(&mut self.counts);
-        let nulls = self.build_nulls();
 
-        // don't evaluate averages with null inputs to avoid errors on null vaues
-        let array: PrimitiveArray<UInt64Type> = if let Some(nulls) = nulls.as_ref() {
-            let mut builder = PrimitiveBuilder::<UInt64Type>::with_capacity(nulls.len());
-            let iter = counts.into_iter().zip(nulls.iter());
-
-            for (count, is_valid) in iter {
-                if is_valid {
-                    builder.append_value(count)
-                } else {
-                    builder.append_null();
-                }
-            }
-            builder.finish()
-        } else {
-            PrimitiveArray::<UInt64Type>::new(counts.into(), nulls) // no copy
-        };
+        let array = PrimitiveArray::<UInt64Type>::new(counts.into(), None);
         // TODO remove cast
         let array = cast(&array, &self.return_data_type)?;
 
@@ -264,13 +232,9 @@ where T: ArrowNumericType + Send
 
     // return arrays for sums and counts
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
-        // TODO nulls
-        let nulls = self.build_nulls();
         let counts = std::mem::take(&mut self.counts);
         let counts = UInt64Array::from(counts); // zero copy
-        Ok(vec![
-            Arc::new(counts) as ArrayRef,
-        ])
+        Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
     fn size(&self) -> usize {
@@ -353,33 +317,24 @@ impl AggregateExpr for Count {
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator
         match &self.data_type {
-            DataType::UInt64 => {
-                Ok(Box::new(CountGroupsAccumulator::<UInt64Type>::new(
-                    &self.data_type,
-                )))
-            },
-                DataType::Int64 => {
-                Ok(Box::new(CountGroupsAccumulator::<Int64Type>::new(
-                    &self.data_type,
-                )))
-            },
-                DataType::UInt32 => {
-                Ok(Box::new(CountGroupsAccumulator::<UInt32Type>::new(
-                    &self.data_type,
-                )))
-            },
-                DataType::Int32 => {
-                Ok(Box::new(CountGroupsAccumulator::<Int32Type>::new(
-                    &self.data_type,
-                )))
-            }
+            DataType::UInt64 => Ok(Box::new(CountGroupsAccumulator::<UInt64Type>::new(
+                &self.data_type,
+            ))),
+            DataType::Int64 => Ok(Box::new(CountGroupsAccumulator::<Int64Type>::new(
+                &self.data_type,
+            ))),
+            DataType::UInt32 => Ok(Box::new(CountGroupsAccumulator::<UInt32Type>::new(
+                &self.data_type,
+            ))),
+            DataType::Int32 => Ok(Box::new(CountGroupsAccumulator::<Int32Type>::new(
+                &self.data_type,
+            ))),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "CountGroupsAccumulator not supported for {}",
                 self.data_type
             ))),
         }
-
     }
 }
 
