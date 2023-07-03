@@ -21,7 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{
@@ -31,8 +31,13 @@ use arrow::{
     },
     datatypes::Field,
 };
+use arrow_array::cast::AsArray;
+use arrow_array::types::{UInt64Type, Int64Type, UInt32Type, Int32Type, Decimal128Type};
+use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
+use log::debug;
 
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
@@ -43,6 +48,8 @@ use arrow::array::Array;
 use arrow::array::Decimal128Array;
 use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
+
+use super::groups_accumulator::accumulate::{accumulate_all, accumulate_all_nullable};
 
 /// SUM aggregate expression
 #[derive(Debug, Clone)]
@@ -140,6 +147,34 @@ impl AggregateExpr for Sum {
             self.data_type.clone(),
         )))
     }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        // instantiate specialized accumulator
+        match self.data_type {
+            DataType::UInt64 => Ok(Box::new(SumGroupsAccumulator::<UInt64Type>::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Int64 => Ok(Box::new(SumGroupsAccumulator::<Int64Type>::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::UInt32 => Ok(Box::new(SumGroupsAccumulator::<UInt32Type>::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Int32 => Ok(Box::new(SumGroupsAccumulator::<Int32Type>::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Decimal128(_target_precision, _target_scale) => {
+                Ok(Box::new(SumGroupsAccumulator::<Decimal128Type>::new(
+                    &self.data_type, &self.data_type
+                )))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "SumGroupsAccumulator not supported for {}",
+                self.data_type
+            ))),
+        }
+    }
+
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
@@ -421,6 +456,167 @@ impl RowAccumulator for SumRowAccumulator {
     #[inline(always)]
     fn state_index(&self) -> usize {
         self.index
+    }
+}
+
+/// An accumulator to compute the average of PrimitiveArray<T>.
+/// Stores values as native types, and does overflow checking
+///
+/// F: Function that calcuates the average value from a sum of
+/// T::Native and a total count
+#[derive(Debug)]
+struct SumGroupsAccumulator<T>
+where
+    T: ArrowNumericType + Send,
+{
+    /// The type of the internal sum
+    sum_data_type: DataType,
+
+    /// The type of the returned sum
+    return_data_type: DataType,
+
+    /// Sums per group, stored as the native type
+    sums: Vec<T::Native>,
+
+    /// If we have seen a null input value for this group_index
+    null_inputs: BooleanBufferBuilder,
+}
+
+impl<T> SumGroupsAccumulator<T>
+where
+    T: ArrowNumericType + Send,
+{
+    pub fn new(sum_data_type: &DataType, return_data_type: &DataType) -> Self {
+        debug!(
+            "SumGroupsAccumulator ({}, sum type: {sum_data_type:?}) --> {return_data_type:?}",
+            std::any::type_name::<T>()
+        );
+
+        Self {
+            return_data_type: return_data_type.clone(),
+            sum_data_type: sum_data_type.clone(),
+            sums: vec![],
+            null_inputs: BooleanBufferBuilder::new(0),
+        }
+    }
+
+    /// Adds the values in `values` to self.sums
+    fn update_sums(
+        &mut self,
+        group_indices: &[usize],
+        values: &PrimitiveArray<T>,
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) {
+        if self.null_inputs.len() < total_num_groups {
+            let new_groups = total_num_groups - self.null_inputs.len();
+            // All groups start as valid (and are set to null if we
+            // see a null in the input)
+            self.null_inputs.append_n(new_groups, true);
+        }
+        self.sums
+            .resize_with(total_num_groups, || T::default_value());
+
+        if values.null_count() == 0 {
+            accumulate_all(
+                group_indices,
+                values,
+                opt_filter,
+                |group_index, new_value| {
+                    // note since add_wrapping doesn't error, we
+                    // simply add values in null sum slots rather than
+                    // checking if they are null first. The theory is
+                    // this is faster
+                    let sum = &mut self.sums[group_index];
+                    *sum = sum.add_wrapping(new_value);
+                },
+            )
+        } else {
+            accumulate_all_nullable(
+                group_indices,
+                values,
+                opt_filter,
+                |group_index, new_value, is_valid| {
+                    if is_valid {
+                        let sum = &mut self.sums[group_index];
+                        *sum = sum.add_wrapping(new_value);
+                    } else {
+                        // input null means this group is now null
+                        self.null_inputs.set_bit(group_index, false);
+                    }
+                },
+            )
+        }
+    }
+
+    /// Returns a NullBuffer representing which group_indices have
+    /// null values (if they saw a null input)
+    /// Resets `self.null_inputs`;
+    fn build_nulls(&mut self) -> Option<NullBuffer> {
+        let nulls = NullBuffer::new(self.null_inputs.finish());
+        if nulls.null_count() > 0 {
+            Some(nulls)
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> GroupsAccumulator for SumGroupsAccumulator<T>
+where
+    T: ArrowNumericType + Send,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values.get(0).unwrap().as_primitive::<T>();
+
+        self.update_sums(group_indices, values, opt_filter, total_num_groups);
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "two arguments to merge_batch");
+        // first batch is partial sums
+        let partial_sums: &PrimitiveArray<T> = values.get(1).unwrap().as_primitive::<T>();
+        self.update_sums(group_indices, partial_sums, opt_filter, total_num_groups);
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ArrayRef> {
+        let sums = std::mem::take(&mut self.sums);
+        let nulls = self.build_nulls();
+
+        let array = PrimitiveArray::<T>::new(sums.into(), nulls); // no copy
+
+        Ok(Arc::new(array))
+    }
+
+    // return arrays for sums and counts
+    fn state(&mut self) -> Result<Vec<ArrayRef>> {
+        let nulls = self.build_nulls();
+
+        let sums = std::mem::take(&mut self.sums);
+        let sums = PrimitiveArray::<T>::new(sums.into(), nulls); // zero copy
+
+        Ok(vec![Arc::new(sums) as ArrayRef])
+    }
+
+    fn size(&self) -> usize {
+        self.sums.capacity() * std::mem::size_of::<usize>()
     }
 }
 
