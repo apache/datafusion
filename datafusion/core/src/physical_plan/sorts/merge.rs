@@ -147,7 +147,7 @@ struct SortPreservingMergeStream<C> {
     /// Optional number of rows to fetch
     fetch: Option<usize>,
 
-    /// number of rows produces
+    /// number of rows produced
     produced: usize,
 }
 
