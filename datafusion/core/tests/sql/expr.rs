@@ -66,11 +66,47 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
 #[tokio::test]
 #[cfg_attr(not(feature = "crypto_expressions"), ignore)]
 async fn test_encoding_expressions() -> Result<()> {
-    // valid inputs
+    // Input Utf8
     test_expression!("encode('tom','base64')", "dG9t");
     test_expression!("arrow_cast(decode('dG9t','base64'), 'Utf8')", "tom");
     test_expression!("encode('tom','hex')", "746f6d");
     test_expression!("arrow_cast(decode('746f6d','hex'), 'Utf8')", "tom");
+
+    // Input LargeUtf8
+    test_expression!("encode(arrow_cast('tom', 'LargeUtf8'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'LargeUtf8'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'LargeUtf8'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'LargeUtf8'),'hex'), 'Utf8')",
+        "tom"
+    );
+
+    // Input Binary
+    test_expression!("encode(arrow_cast('tom', 'Binary'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'Binary'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'Binary'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'Binary'),'hex'), 'Utf8')",
+        "tom"
+    );
+
+    // Input LargeBinary
+    test_expression!("encode(arrow_cast('tom', 'LargeBinary'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'LargeBinary'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'LargeBinary'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'LargeBinary'),'hex'), 'Utf8')",
+        "tom"
+    );
 
     // NULL
     test_expression!("encode(NULL,'base64')", "NULL");
