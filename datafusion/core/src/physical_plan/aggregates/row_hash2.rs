@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use arrow::row::{OwnedRow, RowConverter, SortField};
+use arrow::row::{RowConverter, SortField, Rows};
 use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
@@ -165,11 +165,7 @@ pub(crate) struct GroupedHashAggregateStream2 {
     ///
     /// The row format is used to compare group keys quickly. This is
     /// especially important for multi-column group keys.
-    ///
-    /// TODO, make this Rows (rather than Vec<OwnedRow> to reduce
-    /// allocations once
-    /// https://github.com/apache/arrow-rs/issues/4466 is available
-    group_values: Vec<OwnedRow>,
+    group_values: Rows,
 
     /// scratch space for the current input Batch being
     /// processed. Reused across batches here to avoid reallocations
@@ -241,7 +237,7 @@ impl GroupedHashAggregateStream2 {
         let name = format!("GroupedHashAggregateStream2[{partition}]");
         let reservation = MemoryConsumer::new(name).register(context.memory_pool());
         let map = RawTable::with_capacity(0);
-        let group_by_values = vec![];
+        let group_by_values = row_converter.empty_rows(0, 0);
         let current_group_indices = vec![];
 
         timer.done();
@@ -398,7 +394,7 @@ impl GroupedHashAggregateStream2 {
                 // TODO update *allocated based on size of the row
                 // that was just pushed into
                 // aggr_state.group_by_values
-                group_rows.row(row) == self.group_values[*group_idx].row()
+                group_rows.row(row) == self.group_values.row(*group_idx)
             });
 
             let group_idx = match entry {
@@ -407,8 +403,8 @@ impl GroupedHashAggregateStream2 {
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
-                    let group_idx = self.group_values.len();
-                    self.group_values.push(group_rows.row(row).owned());
+                    let group_idx = self.group_values.num_rows();
+                    self.group_values.push(group_rows.row(row));
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
@@ -455,7 +451,7 @@ impl GroupedHashAggregateStream2 {
                 .zip(input_values.iter())
                 .zip(filter_values.iter());
 
-            let total_num_groups = self.group_values.len();
+            let total_num_groups = self.group_values.num_rows();
 
             for ((acc, values), opt_filter) in t {
                 let acc_size_pre = acc.size();
@@ -499,13 +495,13 @@ impl GroupedHashAggregateStream2 {
 impl GroupedHashAggregateStream2 {
     /// Create an output RecordBatch with all group keys and accumulator states/values
     fn create_batch_from_map(&mut self) -> Result<RecordBatch> {
-        if self.group_values.is_empty() {
+        if self.group_values.num_rows() == 0 {
             let schema = self.schema.clone();
             return Ok(RecordBatch::new_empty(schema));
         }
 
         // First output rows are the groups
-        let groups_rows = self.group_values.iter().map(|owned_row| owned_row.row());
+        let groups_rows = self.group_values.iter().map(|owned_row| owned_row);
 
         let mut output: Vec<ArrayRef> = self.row_converter.convert_rows(groups_rows)?;
 
