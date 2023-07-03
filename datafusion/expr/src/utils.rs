@@ -724,6 +724,9 @@ where
 /// // create new plan using rewritten_exprs in same position
 /// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
 /// ```
+///
+/// Notice: sometimes [from_plan] will use schema of original plan, it don't change schema!
+/// Such as `Projection/Aggregate/Window`
 pub fn from_plan(
     plan: &LogicalPlan,
     expr: &[Expr],
