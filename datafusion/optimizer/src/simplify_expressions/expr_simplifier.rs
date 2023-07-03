@@ -1670,9 +1670,12 @@ mod tests {
     fn test_simplify_divide_zero_by_zero() {
         // 0 / 0 -> null
         let expr = lit(0) / lit(0);
-        let expected = lit(ScalarValue::Int32(None));
+        let err = try_simplify(expr).unwrap_err();
 
-        assert_eq!(simplify(expr), expected);
+        assert!(
+            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
+            "{err}"
+        );
     }
 
     #[test]

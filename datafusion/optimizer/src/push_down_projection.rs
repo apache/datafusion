@@ -28,7 +28,7 @@ use datafusion_common::ScalarValue::UInt8;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema,
 };
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::utils::exprlist_to_fields;
 use datafusion_expr::{
     logical_plan::{Aggregate, LogicalPlan, Projection, TableScan, Union},
@@ -414,7 +414,7 @@ pub fn collect_projection_expr(projection: &Projection) -> HashMap<String, Expr>
         .flat_map(|(i, field)| {
             // strip alias, as they should not be part of filters
             let expr = match &projection.expr[i] {
-                Expr::Alias(expr, _) => expr.as_ref().clone(),
+                Expr::Alias(Alias { expr, .. }) => expr.as_ref().clone(),
                 expr => expr.clone(),
             };
 

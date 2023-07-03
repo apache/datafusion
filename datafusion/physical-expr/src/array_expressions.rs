@@ -22,11 +22,23 @@ use arrow::buffer::Buffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field};
 use core::any::type_name;
-use datafusion_common::cast::as_list_array;
+use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
+use itertools::Itertools;
 use std::sync::Arc;
+
+macro_rules! downcast_arg {
+    ($ARG:expr, $ARRAY_TYPE:ident) => {{
+        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "could not cast to {}",
+                type_name::<$ARRAY_TYPE>()
+            ))
+        })?
+    }};
+}
 
 macro_rules! downcast_vec {
     ($ARGS:expr, $ARRAY_TYPE:ident) => {{
@@ -56,20 +68,29 @@ macro_rules! new_builder {
 
 macro_rules! array {
     ($ARGS:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
-        // downcast all arguments to their common format
-        let args =
-            downcast_vec!($ARGS, $ARRAY_TYPE).collect::<Result<Vec<&$ARRAY_TYPE>>>()?;
-
-        let builder = new_builder!($BUILDER_TYPE, args[0].len());
+        let builder = new_builder!($BUILDER_TYPE, $ARGS[0].len());
         let mut builder =
-            ListBuilder::<$BUILDER_TYPE>::with_capacity(builder, args.len());
+            ListBuilder::<$BUILDER_TYPE>::with_capacity(builder, $ARGS.len());
+
         // for each entry in the array
-        for index in 0..args[0].len() {
-            for arg in &args {
-                if arg.is_null(index) {
-                    builder.values().append_null();
-                } else {
-                    builder.values().append_value(arg.value(index));
+        for index in 0..$ARGS[0].len() {
+            for arg in $ARGS {
+                match arg.as_any().downcast_ref::<$ARRAY_TYPE>() {
+                    Some(arr) => {
+                        builder.values().append_value(arr.value(index));
+                    }
+                    None => match arg.as_any().downcast_ref::<NullArray>() {
+                        Some(arr) => {
+                            for _ in 0..arr.len() {
+                                builder.values().append_null();
+                            }
+                        }
+                        None => {
+                            return Err(DataFusionError::Internal(
+                                "failed to downcast".to_string(),
+                            ))
+                        }
+                    },
                 }
             }
             builder.append(true);
@@ -78,7 +99,7 @@ macro_rules! array {
     }};
 }
 
-fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return Err(DataFusionError::Plan(
@@ -86,7 +107,6 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
         ));
     }
 
-    let data_type = args[0].data_type();
     let res = match data_type {
         DataType::List(..) => {
             let arrays =
@@ -105,7 +125,7 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
 
             let list_data_type =
-                DataType::List(Arc::new(Field::new("item", data_type.clone(), true)));
+                DataType::List(Arc::new(Field::new("item", data_type, false)));
 
             let list_data = ArrayData::builder(list_data_type)
                 .len(1)
@@ -148,28 +168,31 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
             ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
         })
         .collect();
-    Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
+
+    let mut data_type = DataType::Null;
+    for arg in &arrays {
+        let arg_data_type = arg.data_type();
+        if !arg_data_type.equals_datatype(&DataType::Null) {
+            data_type = arg_data_type.clone();
+            break;
+        }
+    }
+
+    match data_type {
+        DataType::Null => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
+            Some(vec![]),
+            DataType::Null,
+        ))),
+        _ => Ok(ColumnarValue::Array(array_array(
+            arrays.as_slice(),
+            data_type,
+        )?)),
+    }
 }
 
 /// `make_array` SQL function
 pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    match values[0].data_type() {
-        DataType::Null => Ok(datafusion_expr::ColumnarValue::Scalar(
-            ScalarValue::new_list(Some(vec![]), DataType::Null),
-        )),
-        _ => array(values),
-    }
-}
-
-macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast to {}",
-                type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
+    array(values)
 }
 
 macro_rules! append {
@@ -498,12 +521,13 @@ macro_rules! positions {
         let mut res = vec![];
         for (i, x) in child_array.iter().enumerate() {
             if x == Some(element) {
-                res.push(ScalarValue::UInt8(Some((i + 1) as u8)));
+                res.push(ColumnarValue::Array(Arc::new(UInt8Array::from(vec![
+                    Some((i + 1) as u8),
+                ]))));
             }
         }
 
-        let field = Arc::new(Field::new("item", DataType::UInt8, true));
-        Ok(ColumnarValue::Scalar(ScalarValue::List(Some(res), field)))
+        res
     }};
 }
 
@@ -523,7 +547,7 @@ pub fn array_positions(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     };
 
-    match arr.data_type() {
+    let res = match arr.data_type() {
         DataType::List(field) => match field.data_type() {
             DataType::Utf8 => positions!(arr, element, StringArray),
             DataType::LargeUtf8 => positions!(arr, element, LargeStringArray),
@@ -538,14 +562,20 @@ pub fn array_positions(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             DataType::UInt16 => positions!(arr, element, UInt16Array),
             DataType::UInt32 => positions!(arr, element, UInt32Array),
             DataType::UInt64 => positions!(arr, element, UInt64Array),
-            data_type => Err(DataFusionError::NotImplemented(format!(
-                "Array_positions is not implemented for types '{data_type:?}'."
-            ))),
+            data_type => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Array_positions is not implemented for types '{data_type:?}'."
+                )))
+            }
         },
-        data_type => Err(DataFusionError::NotImplemented(format!(
-            "Array is not type '{data_type:?}'."
-        ))),
-    }
+        data_type => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Array is not type '{data_type:?}'."
+            )))
+        }
+    };
+
+    array(res.as_slice())
 }
 
 macro_rules! remove {
@@ -721,7 +751,7 @@ pub fn array_replace(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMETER:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr, $ARRAY:expr, $DELIMETER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
         let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
         for x in arr {
             match x {
@@ -729,7 +759,12 @@ macro_rules! to_string {
                     $ARG.push_str(&x.to_string());
                     $ARG.push_str($DELIMETER);
                 }
-                None => {}
+                None => {
+                    if $WITH_NULL_STRING {
+                        $ARG.push_str($NULL_STRING);
+                        $ARG.push_str($DELIMETER);
+                    }
+                }
             }
         }
 
@@ -738,59 +773,147 @@ macro_rules! to_string {
 }
 
 /// Array_to_string SQL function
-pub fn array_to_string(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arr = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
-
-    let scalar = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Array_to_string function requires scalar element".to_string(),
-            ))
-        }
-    };
-
-    let delimeter = match scalar {
-        ScalarValue::Utf8(Some(value)) => String::from(&value),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Array_to_string function requires positive integer scalar element"
-                    .to_string(),
-            ))
-        }
-    };
+pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let arr = &args[0];
+    let delimeter = as_generic_string_array::<i32>(&args[1])?
+        .value(0)
+        .to_string();
+    let mut null_string = String::from("");
+    let mut with_null_string = false;
+    if args.len() == 3 {
+        null_string = as_generic_string_array::<i32>(&args[2])?
+            .value(0)
+            .to_string();
+        with_null_string = true;
+    }
 
     fn compute_array_to_string(
         arg: &mut String,
         arr: ArrayRef,
         delimeter: String,
+        null_string: String,
+        with_null_string: bool,
     ) -> Result<&mut String> {
         match arr.data_type() {
             DataType::List(..) => {
                 let list_array = downcast_arg!(arr, ListArray);
 
                 for i in 0..list_array.len() {
-                    compute_array_to_string(arg, list_array.value(i), delimeter.clone())?;
+                    compute_array_to_string(
+                        arg,
+                        list_array.value(i),
+                        delimeter.clone(),
+                        null_string.clone(),
+                        with_null_string,
+                    )?;
                 }
 
                 Ok(arg)
             }
-            DataType::Utf8 => to_string!(arg, arr, &delimeter, StringArray),
-            DataType::LargeUtf8 => to_string!(arg, arr, &delimeter, LargeStringArray),
-            DataType::Boolean => to_string!(arg, arr, &delimeter, BooleanArray),
-            DataType::Float32 => to_string!(arg, arr, &delimeter, Float32Array),
-            DataType::Float64 => to_string!(arg, arr, &delimeter, Float64Array),
-            DataType::Int8 => to_string!(arg, arr, &delimeter, Int8Array),
-            DataType::Int16 => to_string!(arg, arr, &delimeter, Int16Array),
-            DataType::Int32 => to_string!(arg, arr, &delimeter, Int32Array),
-            DataType::Int64 => to_string!(arg, arr, &delimeter, Int64Array),
-            DataType::UInt8 => to_string!(arg, arr, &delimeter, UInt8Array),
-            DataType::UInt16 => to_string!(arg, arr, &delimeter, UInt16Array),
-            DataType::UInt32 => to_string!(arg, arr, &delimeter, UInt32Array),
-            DataType::UInt64 => to_string!(arg, arr, &delimeter, UInt64Array),
+            DataType::Utf8 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                StringArray
+            ),
+            DataType::LargeUtf8 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                LargeStringArray
+            ),
+            DataType::Boolean => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                BooleanArray
+            ),
+            DataType::Float32 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                Float32Array
+            ),
+            DataType::Float64 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                Float64Array
+            ),
+            DataType::Int8 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                Int8Array
+            ),
+            DataType::Int16 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                Int16Array
+            ),
+            DataType::Int32 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                Int32Array
+            ),
+            DataType::Int64 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                Int64Array
+            ),
+            DataType::UInt8 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                UInt8Array
+            ),
+            DataType::UInt16 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                UInt16Array
+            ),
+            DataType::UInt32 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                UInt32Array
+            ),
+            DataType::UInt64 => to_string!(
+                arg,
+                arr,
+                &delimeter,
+                &null_string,
+                with_null_string,
+                UInt64Array
+            ),
             DataType::Null => Ok(arg),
             data_type => Err(DataFusionError::NotImplemented(format!(
                 "Array is not implemented for type '{data_type:?}'."
@@ -799,63 +922,40 @@ pub fn array_to_string(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     let mut arg = String::from("");
-    let mut res = compute_array_to_string(&mut arg, arr, delimeter.clone())?.clone();
+    let mut res = compute_array_to_string(
+        &mut arg,
+        arr.clone(),
+        delimeter.clone(),
+        null_string,
+        with_null_string,
+    )?
+    .clone();
     match res.as_str() {
-        "" => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res)))),
+        "" => Ok(Arc::new(StringArray::from(vec![Some(res)]))),
         _ => {
             res.truncate(res.len() - delimeter.len());
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res))))
+            Ok(Arc::new(StringArray::from(vec![Some(res)])))
         }
     }
 }
 
 /// Trim_array SQL function
-pub fn trim_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arr = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
+pub fn trim_array(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let n = as_int64_array(&args[1])?.value(0) as usize;
 
-    let scalar = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Trim_array function requires positive integer scalar element"
-                    .to_string(),
-            ))
-        }
-    };
-
-    let n = match scalar {
-        ScalarValue::Int8(Some(value)) => value as usize,
-        ScalarValue::Int16(Some(value)) => value as usize,
-        ScalarValue::Int32(Some(value)) => value as usize,
-        ScalarValue::Int64(Some(value)) => value as usize,
-        ScalarValue::UInt8(Some(value)) => value as usize,
-        ScalarValue::UInt16(Some(value)) => value as usize,
-        ScalarValue::UInt32(Some(value)) => value as usize,
-        ScalarValue::UInt64(Some(value)) => value as usize,
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Trim_array function requires positive integer scalar element"
-                    .to_string(),
-            ))
-        }
-    };
-
-    let list_array = downcast_arg!(arr, ListArray);
     let values = list_array.value(0);
     if values.len() <= n {
-        return Ok(datafusion_expr::ColumnarValue::Scalar(
-            ScalarValue::new_list(Some(vec![]), DataType::Null),
-        ));
+        return Ok(array(&[ColumnarValue::Scalar(ScalarValue::Null)])?.into_array(1));
     }
+
     let res = values.slice(0, values.len() - n);
     let mut scalars = vec![];
     for i in 0..res.len() {
         scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&res, i)?));
     }
-    array(scalars.as_slice())
+
+    Ok(array(scalars.as_slice())?.into_array(1))
 }
 
 /// Cardinality SQL function
@@ -988,20 +1088,17 @@ pub fn array_length(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 /// Array_dims SQL function
-pub fn array_dims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arr = match &args[0] {
-        ColumnarValue::Array(arr) => arr.clone(),
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-    };
-
+pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn compute_array_dims(
-        arg: &mut Vec<ScalarValue>,
+        arg: &mut Vec<ColumnarValue>,
         arr: ArrayRef,
-    ) -> Result<&mut Vec<ScalarValue>> {
+    ) -> Result<&mut Vec<ColumnarValue>> {
         match arr.data_type() {
             DataType::List(..) => {
                 let list_array = downcast_arg!(arr, ListArray).value(0);
-                arg.push(ScalarValue::UInt8(Some(list_array.len() as u8)));
+                arg.push(ColumnarValue::Scalar(ScalarValue::UInt8(Some(
+                    list_array.len() as u8,
+                ))));
                 return compute_array_dims(arg, list_array);
             }
             DataType::Null
@@ -1024,21 +1121,17 @@ pub fn array_dims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
 
-    let list_field = Arc::new(Field::new("item", DataType::UInt8, true));
-    let mut arg: Vec<ScalarValue> = vec![];
-    Ok(ColumnarValue::Scalar(ScalarValue::List(
-        Some(compute_array_dims(&mut arg, arr)?.clone()),
-        list_field,
-    )))
+    let mut arg: Vec<ColumnarValue> = vec![];
+    Ok(array(
+        compute_array_dims(&mut arg, args[0].clone())?
+            .clone()
+            .as_slice(),
+    )?
+    .into_array(1))
 }
 
 /// Array_ndims SQL function
-pub fn array_ndims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arr = match &args[0] {
-        ColumnarValue::Array(arr) => arr.clone(),
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-    };
-
+pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn compute_array_ndims(arg: u8, arr: ArrayRef) -> Result<u8> {
         match arr.data_type() {
             DataType::List(..) => {
@@ -1065,9 +1158,74 @@ pub fn array_ndims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
     let arg: u8 = 0;
-    Ok(ColumnarValue::Array(Arc::new(UInt8Array::from(vec![
-        compute_array_ndims(arg, arr)?,
-    ]))))
+    Ok(Arc::new(UInt8Array::from(vec![compute_array_ndims(
+        arg,
+        args[0].clone(),
+    )?])))
+}
+
+macro_rules! contains {
+    ($FIRST_ARRAY:expr, $SECOND_ARRAY:expr, $ARRAY_TYPE:ident) => {{
+        let first_array = downcast_arg!($FIRST_ARRAY, $ARRAY_TYPE);
+        let second_array = downcast_arg!($SECOND_ARRAY, $ARRAY_TYPE);
+        let mut res = true;
+        for x in second_array.values().iter().dedup() {
+            if !first_array.values().contains(x) {
+                res = false;
+            }
+        }
+
+        res
+    }};
+}
+
+/// Array_contains SQL function
+pub fn array_contains(args: &[ArrayRef]) -> Result<ArrayRef> {
+    fn concat_inner_lists(arg: ArrayRef) -> Result<ArrayRef> {
+        match arg.data_type() {
+            DataType::List(field) => match field.data_type() {
+                DataType::List(..) => {
+                    concat_inner_lists(array_concat(&[as_list_array(&arg)?
+                        .values()
+                        .clone()])?)
+                }
+                _ => Ok(as_list_array(&arg)?.values().clone()),
+            },
+            data_type => Err(DataFusionError::NotImplemented(format!(
+                "Array is not type '{data_type:?}'."
+            ))),
+        }
+    }
+
+    let concat_first_array = concat_inner_lists(args[0].clone())?.clone();
+    let concat_second_array = concat_inner_lists(args[1].clone())?.clone();
+
+    let res = match (concat_first_array.data_type(), concat_second_array.data_type()) {
+        (DataType::Utf8, DataType::Utf8) => contains!(concat_first_array, concat_second_array, StringArray),
+        (DataType::LargeUtf8, DataType::LargeUtf8) => contains!(concat_first_array, concat_second_array, LargeStringArray),
+        (DataType::Boolean, DataType::Boolean) => {
+            let first_array = downcast_arg!(concat_first_array, BooleanArray);
+            let second_array = downcast_arg!(concat_second_array, BooleanArray);
+            compute::bool_or(first_array) == compute::bool_or(second_array)
+        }
+        (DataType::Float32, DataType::Float32) => contains!(concat_first_array, concat_second_array, Float32Array),
+        (DataType::Float64, DataType::Float64) => contains!(concat_first_array, concat_second_array, Float64Array),
+        (DataType::Int8, DataType::Int8) => contains!(concat_first_array, concat_second_array, Int8Array),
+        (DataType::Int16, DataType::Int16) => contains!(concat_first_array, concat_second_array, Int16Array),
+        (DataType::Int32, DataType::Int32) => contains!(concat_first_array, concat_second_array, Int32Array),
+        (DataType::Int64, DataType::Int64) => contains!(concat_first_array, concat_second_array, Int64Array),
+        (DataType::UInt8, DataType::UInt8) => contains!(concat_first_array, concat_second_array, UInt8Array),
+        (DataType::UInt16, DataType::UInt16) => contains!(concat_first_array, concat_second_array, UInt16Array),
+        (DataType::UInt32, DataType::UInt32) => contains!(concat_first_array, concat_second_array, UInt32Array),
+        (DataType::UInt64, DataType::UInt64) => contains!(concat_first_array, concat_second_array, UInt64Array),
+        (first_array_data_type, second_array_data_type) => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Array_contains is not implemented for types '{first_array_data_type:?}' and '{second_array_data_type:?}'."
+            )))
+        }
+    };
+
+    Ok(Arc::new(BooleanArray::from(vec![res])))
 }
 
 #[cfg(test)]
@@ -1135,6 +1293,61 @@ mod tests {
                 .unwrap()
                 .values()
         );
+    }
+
+    #[test]
+    fn test_array_with_nulls() {
+        // make_array(NULL, 1, NULL, 2, NULL, 3, NULL, NULL, 4, 5) = [NULL, 1, NULL, 2, NULL, 3, NULL, NULL, 4, 5]
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+        ];
+        let array = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        let result = as_list_array(&array).expect("failed to initialize function array");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[0, 1, 0, 2, 0, 3, 0, 0, 4, 5],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        )
+    }
+
+    #[test]
+    fn test_array_all_nulls() {
+        // make_array(NULL, NULL, NULL) = []
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Null),
+        ];
+        let array = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        let result = as_list_array(&array).expect("failed to initialize function array");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            0,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<NullArray>()
+                .unwrap()
+                .null_count()
+        )
     }
 
     #[test]
@@ -1344,47 +1557,65 @@ mod tests {
     #[test]
     fn test_array_to_string() {
         // array_to_string([1, 2, 3, 4], ',') = 1,2,3,4
-        let list_array = return_array();
-        let array = array_to_string(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(",")))),
-        ])
-        .expect("failed to initialize function array_to_string")
-        .into_array(1);
+        let list_array = return_array().into_array(1);
+        let array =
+            array_to_string(&[list_array, Arc::new(StringArray::from(vec![Some(",")]))])
+                .expect("failed to initialize function array_to_string");
         let result = as_generic_string_array::<i32>(&array)
             .expect("failed to initialize function array_to_string");
 
         assert_eq!(result.len(), 1);
         assert_eq!("1,2,3,4", result.value(0));
+
+        // array_to_string([1, NULL, 3, NULL], ',', '*') = 1,*,3,*
+        let list_array = return_array_with_nulls().into_array(1);
+        let array = array_to_string(&[
+            list_array,
+            Arc::new(StringArray::from(vec![Some(",")])),
+            Arc::new(StringArray::from(vec![Some("*")])),
+        ])
+        .expect("failed to initialize function array_to_string");
+        let result = as_generic_string_array::<i32>(&array)
+            .expect("failed to initialize function array_to_string");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!("1,*,3,*", result.value(0));
     }
 
     #[test]
     fn test_nested_array_to_string() {
         // array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], '-') = 1-2-3-4-5-6-7-8
-        let list_array = return_nested_array();
-        let array = array_to_string(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("-")))),
-        ])
-        .expect("failed to initialize function array_to_string")
-        .into_array(1);
+        let list_array = return_nested_array().into_array(1);
+        let array =
+            array_to_string(&[list_array, Arc::new(StringArray::from(vec![Some("-")]))])
+                .expect("failed to initialize function array_to_string");
         let result = as_generic_string_array::<i32>(&array)
             .expect("failed to initialize function array_to_string");
 
         assert_eq!(result.len(), 1);
         assert_eq!("1-2-3-4-5-6-7-8", result.value(0));
+
+        // array_to_string([[1, NULL, 3, NULL], [NULL, 6, 7, NULL]], '-', '*') = 1-*-3-*-*-6-7-*
+        let list_array = return_nested_array_with_nulls().into_array(1);
+        let array = array_to_string(&[
+            list_array,
+            Arc::new(StringArray::from(vec![Some("-")])),
+            Arc::new(StringArray::from(vec![Some("*")])),
+        ])
+        .expect("failed to initialize function array_to_string");
+        let result = as_generic_string_array::<i32>(&array)
+            .expect("failed to initialize function array_to_string");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!("1-*-3-*-*-6-7-*", result.value(0));
     }
 
     #[test]
     fn test_trim_array() {
         // trim_array([1, 2, 3, 4], 1) = [1, 2, 3]
-        let list_array = return_array();
-        let arr = trim_array(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-        ])
-        .expect("failed to initialize function trim_array")
-        .into_array(1);
+        let list_array = return_array().into_array(1);
+        let arr = trim_array(&[list_array, Arc::new(Int64Array::from(vec![Some(1)]))])
+            .expect("failed to initialize function trim_array");
         let result =
             as_list_array(&arr).expect("failed to initialize function trim_array");
 
@@ -1400,13 +1631,9 @@ mod tests {
         );
 
         // trim_array([1, 2, 3, 4], 3) = [1]
-        let list_array = return_array();
-        let arr = trim_array(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-        ])
-        .expect("failed to initialize function trim_array")
-        .into_array(1);
+        let list_array = return_array().into_array(1);
+        let arr = trim_array(&[list_array, Arc::new(Int64Array::from(vec![Some(3)]))])
+            .expect("failed to initialize function trim_array");
         let result =
             as_list_array(&arr).expect("failed to initialize function trim_array");
 
@@ -1425,13 +1652,9 @@ mod tests {
     #[test]
     fn test_nested_trim_array() {
         // trim_array([[1, 2, 3, 4], [5, 6, 7, 8]], 1) = [[1, 2, 3, 4]]
-        let list_array = return_nested_array();
-        let arr = trim_array(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-        ])
-        .expect("failed to initialize function trim_array")
-        .into_array(1);
+        let list_array = return_nested_array().into_array(1);
+        let arr = trim_array(&[list_array, Arc::new(Int64Array::from(vec![Some(1)]))])
+            .expect("failed to initialize function trim_array");
         let binding = as_list_array(&arr)
             .expect("failed to initialize function trim_array")
             .value(0);
@@ -1488,7 +1711,7 @@ mod tests {
 
         assert_eq!(result, &UInt8Array::from(vec![4]));
 
-        // array_length([1, 2, 3, 4], 1) = 2
+        // array_length([1, 2, 3, 4], 1) = 4
         let array = array_length(&[
             list_array,
             ColumnarValue::Scalar(ScalarValue::UInt8(Some(1_u8))),
@@ -1545,11 +1768,10 @@ mod tests {
     #[test]
     fn test_array_dims() {
         // array_dims([1, 2, 3, 4]) = [4]
-        let list_array = return_array();
+        let list_array = return_array().into_array(1);
 
-        let array = array_dims(&[list_array])
-            .expect("failed to initialize function array_dims")
-            .into_array(1);
+        let array =
+            array_dims(&[list_array]).expect("failed to initialize function array_dims");
         let result =
             as_list_array(&array).expect("failed to initialize function array_dims");
 
@@ -1567,11 +1789,10 @@ mod tests {
     #[test]
     fn test_nested_array_dims() {
         // array_dims([[1, 2, 3, 4], [5, 6, 7, 8]]) = [2, 4]
-        let list_array = return_nested_array();
+        let list_array = return_nested_array().into_array(1);
 
-        let array = array_dims(&[list_array])
-            .expect("failed to initialize function array_dims")
-            .into_array(1);
+        let array =
+            array_dims(&[list_array]).expect("failed to initialize function array_dims");
         let result =
             as_list_array(&array).expect("failed to initialize function array_dims");
 
@@ -1588,12 +1809,11 @@ mod tests {
 
     #[test]
     fn test_array_ndims() {
-        // array_ndims([1, 2]) = 1
-        let list_array = return_array();
+        // array_ndims([1, 2, 3, 4]) = 1
+        let list_array = return_array().into_array(1);
 
         let array = array_ndims(&[list_array])
-            .expect("failed to initialize function array_ndims")
-            .into_array(1);
+            .expect("failed to initialize function array_ndims");
         let result =
             as_uint8_array(&array).expect("failed to initialize function array_ndims");
 
@@ -1602,16 +1822,72 @@ mod tests {
 
     #[test]
     fn test_nested_array_ndims() {
-        // array_ndims([[1, 2], [3, 4]]) = 2
-        let list_array = return_nested_array();
+        // array_ndims([[1, 2, 3, 4], [5, 6, 7, 8]]) = 2
+        let list_array = return_nested_array().into_array(1);
 
         let array = array_ndims(&[list_array])
-            .expect("failed to initialize function array_ndims")
-            .into_array(1);
+            .expect("failed to initialize function array_ndims");
         let result =
             as_uint8_array(&array).expect("failed to initialize function array_ndims");
 
         assert_eq!(result, &UInt8Array::from(vec![2]));
+    }
+
+    #[test]
+    fn test_array_contains() {
+        // array_contains([1, 2, 3, 4], array_append([1, 2, 3, 4], 3)) = t
+        let first_array = return_array().into_array(1);
+        let second_array = array_append(&[
+            first_array.clone(),
+            Arc::new(Int64Array::from(vec![Some(3)])),
+        ])
+        .expect("failed to initialize function array_contains");
+
+        let arr = array_contains(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_contains");
+        let result = as_boolean_array(&arr);
+
+        assert_eq!(result, &BooleanArray::from(vec![true]));
+
+        // array_contains([1, 2, 3, 4], array_append([1, 2, 3, 4], 5)) = f
+        let second_array = array_append(&[
+            first_array.clone(),
+            Arc::new(Int64Array::from(vec![Some(5)])),
+        ])
+        .expect("failed to initialize function array_contains");
+
+        let arr = array_contains(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_contains");
+        let result = as_boolean_array(&arr);
+
+        assert_eq!(result, &BooleanArray::from(vec![false]));
+    }
+
+    #[test]
+    fn test_nested_array_contains() {
+        // array_contains([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 3)) = t
+        let first_array = return_nested_array().into_array(1);
+        let array = return_array().into_array(1);
+        let second_array =
+            array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(3)]))])
+                .expect("failed to initialize function array_contains");
+
+        let arr = array_contains(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_contains");
+        let result = as_boolean_array(&arr);
+
+        assert_eq!(result, &BooleanArray::from(vec![true]));
+
+        // array_contains([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 9)) = f
+        let second_array =
+            array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(9)]))])
+                .expect("failed to initialize function array_contains");
+
+        let arr = array_contains(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_contains");
+        let result = as_boolean_array(&arr);
+
+        assert_eq!(result, &BooleanArray::from(vec![false]));
     }
 
     fn return_array() -> ColumnarValue {
@@ -1643,6 +1919,47 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(6))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
+        ];
+        let arr2 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)];
+        let result = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        ColumnarValue::Array(result.clone())
+    }
+
+    fn return_array_with_nulls() -> ColumnarValue {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+        ];
+        let result = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        ColumnarValue::Array(result.clone())
+    }
+
+    fn return_nested_array_with_nulls() -> ColumnarValue {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+        ];
+        let arr1 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(6))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
+            ColumnarValue::Scalar(ScalarValue::Null),
         ];
         let arr2 = array(&args)
             .expect("failed to initialize function array")

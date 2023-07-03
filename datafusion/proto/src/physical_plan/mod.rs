@@ -441,7 +441,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             ExprType::AggregateExpr(agg_node) => {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema).unwrap()).collect();
-
+                                let ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
+                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema).unwrap()).collect();
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
                                         AggregateFunction::AggrFunction(i) => {
@@ -458,6 +459,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                                 &aggr_function.into(),
                                                 agg_node.distinct,
                                                 input_phy_expr.as_slice(),
+                                                &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
                                             )

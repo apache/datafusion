@@ -563,6 +563,7 @@ enum ScalarFunction {
   ArrayToString = 97;
   Cardinality = 98;
   TrimArray = 99;
+  ArrayContains = 100;
 }
 
 message ScalarFunctionNode {
@@ -639,7 +640,8 @@ message WindowExprNode {
   oneof window_function {
     AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
-    // udaf = 3
+    string udaf = 3;
+    string udwf = 9;
   }
   LogicalExprNode expr = 4;
   repeated LogicalExprNode partition_by = 5;
@@ -1107,6 +1109,7 @@ message PhysicalAggregateExprNode {
     string user_defined_aggr_function = 4;
   }
   repeated PhysicalExprNode expr = 2;
+  repeated PhysicalSortExprNode ordering_req = 5;
   bool distinct = 3;
 }
 
