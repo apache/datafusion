@@ -915,7 +915,7 @@ fn analyze_expr_scalar_comparison(
             let expr = Arc::new(BinaryExpr::new(
                 left.clone(),
                 *op,
-                Arc::new(Literal::new(right.clone())),
+                Arc::new(Literal::new(right)),
             ));
             let mut graph = ExprIntervalGraph::try_new(expr)?;
 
