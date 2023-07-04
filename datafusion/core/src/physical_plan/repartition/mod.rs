@@ -339,10 +339,12 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(RepartitionExec::try_new(
-            children[0].clone(),
-            self.partitioning.clone(),
-        )?))
+        let mut repartition =
+            RepartitionExec::try_new(children[0].clone(), self.partitioning.clone())?;
+        if self.preserve_order {
+            repartition = repartition.with_preserve_order();
+        }
+        Ok(Arc::new(repartition))
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
@@ -1341,95 +1343,5 @@ mod tests {
         }
 
         Ok(())
-    }
-}
-
-#[derive(Debug)]
-#[allow(missing_docs)]
-pub struct SortPreservingRepartitionExec {
-    /// Input execution plan
-    input: Arc<dyn ExecutionPlan>,
-    /// Partitioning scheme to use
-    partitioning: Partitioning,
-}
-
-impl SortPreservingRepartitionExec {
-    /// Create a new SortPreservingRepartitionExec
-    pub fn try_new(
-        input: Arc<dyn ExecutionPlan>,
-        partitioning: Partitioning,
-    ) -> Result<Self> {
-        Ok(SortPreservingRepartitionExec {
-            input,
-            partitioning,
-        })
-    }
-}
-
-impl ExecutionPlan for SortPreservingRepartitionExec {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    /// Get the schema for this execution plan
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
-    }
-    fn output_partitioning(&self) -> Partitioning {
-        self.partitioning.clone()
-    }
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
-    }
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
-    }
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SortPreservingRepartitionExec::try_new(
-            children[0].clone(),
-            self.partitioning.clone(),
-        )?))
-    }
-    fn maintains_input_order(&self) -> Vec<bool> {
-        vec![true]
-    }
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        Err(DataFusionError::Execution(
-            "Executor is not implemented yet".to_string(),
-        ))
-    }
-    fn statistics(&self) -> Statistics {
-        self.input.statistics()
-    }
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "SortPreservingRepartitionExec: partitioning={:?}, input_partitions={}",
-                    self.partitioning,
-                    self.input.output_partitioning().partition_count()
-                )
-            }
-            DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "SortPreservingRepartitionExec: partitioning={:?}, input_partitions={}",
-                    self.partitioning,
-                    self.input.output_partitioning().partition_count()
-                )
-            }
-        }
     }
 }

@@ -22,7 +22,6 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use crate::error::Result;
 
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::repartition::SortPreservingRepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::ExecutionPlan;
 
@@ -68,11 +67,14 @@ impl ReplaceRepartitionExecs {
 /// Creates a `SortPreservingRepartitionExec` from given `RepartitionExec`
 fn sort_preserving_repartition(
     repartition: &RepartitionExec,
-) -> Result<Arc<SortPreservingRepartitionExec>> {
-    Ok(Arc::new(SortPreservingRepartitionExec::try_new(
-        repartition.input().clone(),
-        repartition.partitioning().clone(),
-    )?))
+) -> Result<Arc<RepartitionExec>> {
+    Ok(Arc::new(
+        RepartitionExec::try_new(
+            repartition.input().clone(),
+            repartition.partitioning().clone(),
+        )?
+        .with_preserve_order(),
+    ))
 }
 
 fn does_plan_maintains_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -121,7 +123,6 @@ impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
                 let changed_plan = replace_sort_children(&plan)?;
                 // Since we got the `SortExec` here, it's guaranteed that it has only one child
                 let input = &changed_plan.children()[0];
-
                 // Check if any child is changed, if changed remove the `SortExec`
                 // If ordering is being satisfied with the child then it means `SortExec` is unnecessary
                 if ordering_satisfy(
@@ -234,7 +235,7 @@ mod tests {
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -275,7 +276,7 @@ mod tests {
         let expected_optimized = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  FilterExec: c@2 > 3",
-            "    SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "    SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        SortExec: expr=[a@0 ASC]",
             "          CoalescePartitionsExec",
@@ -310,7 +311,7 @@ mod tests {
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "    FilterExec: c@2 > 3",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
@@ -346,7 +347,7 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@2 > 3",
-            "      SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -383,7 +384,7 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@2 > 3",
-            "      SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
@@ -452,10 +453,10 @@ mod tests {
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@2 > 3",
-            "        SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "        SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -559,7 +560,7 @@ mod tests {
         let expected_optimized = [
             "SortPreservingMergeExec: [c@2 ASC]",
             "  FilterExec: c@2 > 3",
-            "    SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "    SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        SortExec: expr=[c@2 ASC]",
             "          CoalescePartitionsExec",
