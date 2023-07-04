@@ -2048,11 +2048,13 @@ impl ScalarValue {
         impl_checked_op!(self, rhs, checked_sub, -)
     }
 
+    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
     pub fn and<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, &&)
     }
 
+    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
     pub fn or<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, ||)

@@ -18,7 +18,6 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::{AggregateExpr, PhysicalExpr};
@@ -219,23 +218,26 @@ impl PartialEq<dyn Any> for BoolAnd {
 
 #[derive(Debug)]
 struct BoolAndAccumulator {
-    bool_and: ScalarValue,
+    acc: Option<bool>,
 }
 
 impl BoolAndAccumulator {
     /// new bool_and accumulator
     pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
-            bool_and: ScalarValue::try_from(data_type)?,
-        })
+        assert_eq!(data_type, &DataType::Boolean);
+        Ok(Self { acc: None })
     }
 }
 
 impl Accumulator for BoolAndAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        let delta = &bool_and_batch(values)?;
-        self.bool_and = self.bool_and.and(delta)?;
+        self.acc = match (self.acc, bool_and_batch(values)?) {
+            (None, ScalarValue::Boolean(v)) => v,
+            (Some(v), ScalarValue::Boolean(None)) => Some(v),
+            (Some(a), ScalarValue::Boolean(Some(b))) => Some(a && b),
+            _ => unreachable!(),
+        };
         Ok(())
     }
 
@@ -244,16 +246,15 @@ impl Accumulator for BoolAndAccumulator {
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.bool_and.clone()])
+        Ok(vec![ScalarValue::Boolean(self.acc)])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(self.bool_and.clone())
+        Ok(ScalarValue::Boolean(self.acc))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.bool_and)
-            + self.bool_and.size()
+        std::mem::size_of_val(self)
     }
 }
 
@@ -413,27 +414,30 @@ impl PartialEq<dyn Any> for BoolOr {
 
 #[derive(Debug)]
 struct BoolOrAccumulator {
-    bool_or: ScalarValue,
+    acc: Option<bool>,
 }
 
 impl BoolOrAccumulator {
     /// new bool_or accumulator
     pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
-            bool_or: ScalarValue::try_from(data_type)?,
-        })
+        assert_eq!(data_type, &DataType::Boolean);
+        Ok(Self { acc: None })
     }
 }
 
 impl Accumulator for BoolOrAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.bool_or.clone()])
+        Ok(vec![ScalarValue::Boolean(self.acc)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        let delta = bool_or_batch(values)?;
-        self.bool_or = self.bool_or.or(&delta)?;
+        self.acc = match (self.acc, bool_or_batch(values)?) {
+            (None, ScalarValue::Boolean(v)) => v,
+            (Some(v), ScalarValue::Boolean(None)) => Some(v),
+            (Some(a), ScalarValue::Boolean(Some(b))) => Some(a || b),
+            _ => unreachable!(),
+        };
         Ok(())
     }
 
@@ -442,12 +446,11 @@ impl Accumulator for BoolOrAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(self.bool_or.clone())
+        Ok(ScalarValue::Boolean(self.acc))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.bool_or)
-            + self.bool_or.size()
+        std::mem::size_of_val(self)
     }
 }
 
