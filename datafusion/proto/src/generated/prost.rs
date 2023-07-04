@@ -1087,7 +1087,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1142,6 +1142,14 @@ pub mod scalar_value {
         IntervalYearmonthValue(i32),
         #[prost(int64, tag = "25")]
         IntervalDaytimeValue(i64),
+        #[prost(int64, tag = "35")]
+        DurationSecondValue(i64),
+        #[prost(int64, tag = "36")]
+        DurationMillisecondValue(i64),
+        #[prost(int64, tag = "37")]
+        DurationMicrosecondValue(i64),
+        #[prost(int64, tag = "38")]
+        DurationNanosecondValue(i64),
         #[prost(message, tag = "26")]
         TimestampValue(super::ScalarTimestampValue),
         #[prost(message, tag = "27")]
