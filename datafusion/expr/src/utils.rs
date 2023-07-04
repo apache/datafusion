@@ -39,7 +39,7 @@ use datafusion_common::{
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
@@ -1079,6 +1079,16 @@ pub fn exprlist_to_fields<'a>(
         let input_schema = &plan.schema();
         exprs.iter().map(|e| e.to_field(input_schema)).collect()
     }
+}
+
+/// Calculate updated primary key for the plan, and expression
+pub fn exprlist_to_primary_keys<'a>(
+    _expr: impl IntoIterator<Item = &'a Expr>,
+    _plan: &LogicalPlan,
+) -> Result<HashMap<usize, Vec<usize>>> {
+    // TODO: Add handling for primary key propagation here
+    //       if necessary similar to `exprlist_to_fields` implementation
+    Ok(HashMap::new())
 }
 
 /// Convert an expression into Column expression if it's already provided as input plan.

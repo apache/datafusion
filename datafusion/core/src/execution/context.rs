@@ -514,22 +514,17 @@ impl SessionContext {
                     .collect::<Result<Vec<_>>>()?;
 
                 let fields = df_schema.fields().to_vec();
+
+                // all of the primary keys are associated with all of the fields (since it is source).
+                let association_indices = (0..fields.len()).collect::<Vec<_>>();
                 let primary_keys_with_associations = primary_keys
                     .iter()
-                    .map(|idx| (*idx, (0..fields.len()).collect::<Vec<_>>()))
+                    .map(|idx| (*idx, association_indices.clone()))
                     .collect();
                 let updated_schema =
                     DFSchema::new_with_metadata(fields, df_schema.metadata().clone())?
                         .with_primary_keys(primary_keys_with_associations);
 
-                // let mut schema: Schema = updated_schema.into();
-                // if !primary_keys.is_empty() {
-                //     // Store primary key information in schema also. By this way we can keep track of primary key
-                //     // after DFSchema is converted to arrow::Schema
-                //     let mut metadata = schema.metadata().clone();
-                //     encode_primary_key_to_metadata(&mut metadata, &primary_keys);
-                //     schema = Schema::new_with_metadata(schema.fields, metadata);
-                // }
                 let schema = Arc::new(updated_schema.into());
 
                 let physical = DataFrame::new(self.state(), input);

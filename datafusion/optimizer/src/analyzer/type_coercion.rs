@@ -85,7 +85,6 @@ fn analyze_internal(
     let mut schema = merge_schema(new_inputs.iter().collect());
 
     if let LogicalPlan::TableScan(ts) = plan {
-        // arrow schema doesn't support primary_key. We do not know primary_key of ts.source if any.
         let source_schema =
             DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
         schema.merge(&source_schema);

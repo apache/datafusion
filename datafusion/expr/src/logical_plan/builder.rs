@@ -24,7 +24,9 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields};
+use crate::utils::{
+    columnize_expr, compare_sort_expr, exprlist_to_fields, exprlist_to_primary_keys,
+};
 use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
@@ -41,8 +43,9 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue, TableReference, ToDFSchema,
+    add_offset_to_primary_key, display::ToStringifiedPlan, Column, DFField, DFSchema,
+    DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -265,10 +268,10 @@ impl LogicalPlanBuilder {
         let schema = table_source.schema();
         let mut primary_keys = HashMap::new();
         let n_field = schema.fields.len();
+        // All the field indices are associated, since it is source,
+        let associated_indices = (0..n_field).collect::<Vec<_>>();
         for pk in table_source.primary_keys() {
-            // At source primary key is associated with all the fields
-            let associations = (0..n_field).collect();
-            primary_keys.insert(*pk, associations);
+            primary_keys.insert(*pk, associated_indices.clone());
         }
 
         let projected_schema = projection
@@ -1096,19 +1099,9 @@ pub fn build_join_schema(
         }
     };
 
-    let right_primary_keys = right
-        .primary_keys()
-        .iter()
-        .map(|(idx, associated_indices)| {
-            (
-                idx + left_fields.len(),
-                associated_indices
-                    .iter()
-                    .map(|item| item + left_fields.len())
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect::<HashMap<usize, Vec<usize>>>();
+    let right_primary_keys =
+        add_offset_to_primary_key(right.primary_keys(), left_fields.len());
+
     let left_primary_keys = left.primary_keys().clone();
     let mut primary_keys = HashMap::new();
     match join_type {
@@ -1117,24 +1110,16 @@ pub fn build_join_schema(
             primary_keys.extend(left_primary_keys);
             primary_keys.extend(right_primary_keys);
         }
-        JoinType::Left => {
-            // left then right, right set to nullable in case of not matched scenario
-            primary_keys.extend(left_primary_keys);
-        }
-        JoinType::Right => {
-            // left then right, left set to nullable in case of not matched scenario
-            primary_keys.extend(right_primary_keys);
-        }
-        JoinType::Full => {
-            // do nothing
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
+        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
             primary_keys.extend(left_primary_keys);
         }
-        JoinType::RightSemi | JoinType::RightAnti => {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
             primary_keys.extend(right_primary_keys);
+        }
+        JoinType::Full => {
+            // primary key is not preserved
         }
     }
 
@@ -1290,11 +1275,12 @@ pub fn project(
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
+    let primary_keys = exprlist_to_primary_keys(&projected_expr, &plan)?;
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?
-    .with_primary_keys(plan.schema().primary_keys().clone());
+    .with_primary_keys(primary_keys);
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,

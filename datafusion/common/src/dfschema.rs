@@ -33,6 +33,8 @@ use std::fmt::{Display, Formatter};
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
 
+type PrimaryKeyToAssociations = HashMap<usize, Vec<usize>>;
+
 /// DFSchema wraps an Arrow schema and adds relation names
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
@@ -41,7 +43,7 @@ pub struct DFSchema {
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
     /// primary key index and its associated fields indices
-    primary_keys: HashMap<usize, Vec<usize>>,
+    primary_keys: PrimaryKeyToAssociations,
 }
 
 impl DFSchema {
@@ -123,6 +125,7 @@ impl DFSchema {
         )
     }
 
+    /// Assing primary key
     pub fn with_primary_keys(mut self, primary_keys: HashMap<usize, Vec<usize>>) -> Self {
         self.primary_keys = primary_keys;
         self
@@ -136,19 +139,8 @@ impl DFSchema {
         fields.extend_from_slice(schema.fields().as_slice());
         metadata.extend(schema.metadata.clone());
         let mut primary_keys = self.primary_keys.clone();
-        let other_primary_keys = schema
-            .primary_keys
-            .iter()
-            .map(|(idx, associations)| {
-                (
-                    idx + self.fields.len(),
-                    associations
-                        .iter()
-                        .map(|item| item + self.fields.len())
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<HashMap<usize, Vec<usize>>>();
+        let other_primary_keys =
+            add_offset_to_primary_key(schema.primary_keys(), self.fields.len());
         primary_keys.extend(other_primary_keys);
         Ok(Self::new_with_metadata(fields, metadata)?.with_primary_keys(primary_keys))
     }
@@ -787,6 +779,25 @@ impl SchemaExt for Schema {
                     )
             })
     }
+}
+
+/// Add offset value to primary_keys and its associated indices
+pub fn add_offset_to_primary_key(
+    primary_keys: &PrimaryKeyToAssociations,
+    offset: usize,
+) -> PrimaryKeyToAssociations {
+    primary_keys
+        .iter()
+        .map(|(idx, associated_indices)| {
+            (
+                idx + offset,
+                associated_indices
+                    .iter()
+                    .map(|item| item + offset)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<HashMap<usize, Vec<usize>>>()
 }
 
 #[cfg(test)]

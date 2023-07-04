@@ -24,8 +24,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, from_plan,
-    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
+    enumerate_grouping_sets, exprlist_to_fields, exprlist_to_primary_keys,
+    find_out_reference_exprs, from_plan, grouping_set_expr_count,
+    grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
@@ -1258,12 +1259,13 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        let primary_keys = exprlist_to_primary_keys(&expr, &input)?;
         let schema = Arc::new(
             DFSchema::new_with_metadata(
                 exprlist_to_fields(&expr, &input)?,
                 input.schema().metadata().clone(),
             )?
-            .with_primary_keys(input.schema().primary_keys().clone()),
+            .with_primary_keys(primary_keys),
         );
         Self::try_new_with_schema(expr, input, schema)
     }
@@ -1413,7 +1415,7 @@ impl Window {
         window_fields
             .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
         let metadata = input.schema().metadata().clone();
-        let primary_keys = input.schema().primary_keys().clone();
+        let primary_keys = exprlist_to_primary_keys(window_expr.iter(), &input)?;
         Ok(Window {
             input,
             window_expr,
@@ -1607,11 +1609,12 @@ impl Aggregate {
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
+        let primary_keys = exprlist_to_primary_keys(all_expr.clone(), &input)?;
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
         )?
-        .with_primary_keys(input.schema().primary_keys().clone());
+        .with_primary_keys(primary_keys);
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 

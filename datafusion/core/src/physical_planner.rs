@@ -62,7 +62,7 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_common::{add_offset_to_primary_key, DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
@@ -1026,8 +1026,11 @@ impl DefaultPhysicalPlanner {
                                 )
                                 .unzip();
                             // Update indices of the fields according to filter schema (the index seen in the filter schema).
-                            let left_primary_keys = get_updated_primary_keys(left_df_schema, &left_field_indices, 0);
-                            let right_primary_keys = get_updated_primary_keys(right_df_schema, &right_field_indices, left_field_indices.len());
+                            let left_primary_keys = get_updated_primary_keys(left_df_schema, &left_field_indices);
+                            let right_primary_keys = get_updated_primary_keys(right_df_schema, &right_field_indices);
+
+                            // after join, indices from the right table will increase with the size of the left table. hence add offset
+                            let right_primary_keys = add_offset_to_primary_key(&right_primary_keys, left_field_indices.len());
 
                             let mut primary_keys = HashMap::new();
                             primary_keys.extend(left_primary_keys);
@@ -1307,14 +1310,13 @@ impl DefaultPhysicalPlanner {
 }
 
 /// Update primary key indices, with index of the number in `field_indices`
-/// If `field_indices` is [2, 5, 8], primary keys are [4, 5, 7] in the `df_schema`.
-/// return value will be `1`. This means that 1st index of the `field_indices`(5) is primary key
-/// e.g inside primary_keys vector ([4, 5, 7]). In the updated schema, fields at the indices [2, 5, 8] will
-/// be at [0, 1, 2].
+/// If `field_indices` is [2, 5, 8], primary keys are 5 -> [5, 8] in the `df_schema`.
+/// return value will be 1 -> [1, 2]. This means that 1st index of the `field_indices`(5) is primary key,
+/// and this primary key is associated with columns at indices 1 and 2 (in the updated schema).
+/// In the updated schema, fields at the indices [2, 5, 8] will be at [0, 1, 2].
 fn get_updated_primary_keys(
     df_schema: &DFSchema,
     field_indices: &[usize],
-    offset: usize,
 ) -> HashMap<usize, Vec<usize>> {
     let mut primary_keys = HashMap::new();
     let existing_primary_keys = df_schema.primary_keys();
@@ -1323,10 +1325,10 @@ fn get_updated_primary_keys(
             let mut new_associated_indices = vec![];
             for (idx, field_idx) in field_indices.iter().enumerate() {
                 if associated_indices.contains(field_idx) {
-                    new_associated_indices.push(idx + offset);
+                    new_associated_indices.push(idx);
                 }
             }
-            primary_keys.insert(idx + offset, new_associated_indices);
+            primary_keys.insert(idx, new_associated_indices);
         }
     }
     primary_keys
@@ -2460,6 +2462,29 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn test_get_updated_primary_keys() {
+        let mut schema = get_test_dfschema().unwrap();
+
+        let mut primary_keys = HashMap::new();
+        primary_keys.insert(1, vec![0, 1, 2]);
+        schema = schema.with_primary_keys(primary_keys);
+        let res = get_updated_primary_keys(&schema, &[1, 2]);
+        let mut expected = HashMap::new();
+        expected.insert(0, vec![0, 1]);
+        assert_eq!(res, expected);
+    }
+
+    fn get_test_dfschema() -> Result<DFSchema> {
+        let fields = vec![
+            DFField::new_unqualified("a", DataType::Int64, false),
+            DFField::new_unqualified("b", DataType::Int64, false),
+            DFField::new_unqualified("c", DataType::Int64, false),
+        ];
+        DFSchema::new_with_metadata(fields, HashMap::new())
+    }
+
     struct ErrorExtensionPlanner {}
 
     #[async_trait]

@@ -43,7 +43,7 @@ pub trait TableProvider: Sync + Send {
 
     /// Get a reference to the primary_key indices
     fn primary_keys(&self) -> &[usize] {
-        // By default return None
+        // By default return empty reference
         &[]
     }
 
