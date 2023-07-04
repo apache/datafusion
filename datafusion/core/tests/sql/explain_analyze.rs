@@ -210,7 +210,9 @@ async fn csv_explain_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -282,7 +284,9 @@ async fn csv_explain_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -427,7 +431,9 @@ async fn csv_explain_verbose_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -499,7 +505,9 @@ async fn csv_explain_verbose_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
