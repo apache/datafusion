@@ -1152,11 +1152,12 @@ fn make_substrait_window_function(
 }
 
 #[allow(deprecated)]
+#[allow(clippy::too_many_arguments)]
 fn make_substrait_like_expr(
     ignore_case: bool,
     negated: bool,
-    expr: &Box<Expr>,
-    pattern: &Box<Expr>,
+    expr: &Expr,
+    pattern: &Expr,
     escape_char: Option<char>,
     schema: &DFSchemaRef,
     col_ref_offset: usize,

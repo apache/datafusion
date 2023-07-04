@@ -1280,33 +1280,33 @@ async fn make_datafusion_like(
     extensions: &HashMap<u32, &String>,
 ) -> Result<Arc<Expr>> {
     if f.arguments.len() != 3 {
-        return Err(DataFusionError::NotImplemented(format!(
-            "Expect three arguments for `LIKE` expr",
-        )));
+        return Err(DataFusionError::NotImplemented(
+            "Expect three arguments for `LIKE` expr".to_string(),
+        ));
     }
 
     let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
-        return Err(DataFusionError::NotImplemented(format!(
-            "Invalid arguments type for `Like` expr"
-        )))
+        return Err(DataFusionError::NotImplemented(
+            "Invalid arguments type for `Like` expr".to_string()
+        ))
     };
     let expr = from_substrait_rex(expr_substrait, input_schema, extensions)
         .await?
         .as_ref()
         .clone();
     let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
-        return Err(DataFusionError::NotImplemented(format!(
-            "Invalid arguments type for `Like` expr"
-        )))
+        return Err(DataFusionError::NotImplemented(
+            "Invalid arguments type for `Like` expr".to_string()
+        ))
     };
     let pattern = from_substrait_rex(pattern_substrait, input_schema, extensions)
         .await?
         .as_ref()
         .clone();
     let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
-        return Err(DataFusionError::NotImplemented(format!(
-            "Invalid arguments type for `Like` expr"
-        )))
+        return Err(DataFusionError::NotImplemented(
+            "Invalid arguments type for `Like` expr".to_string()
+        ))
     };
     let escape_char_expr =
         from_substrait_rex(escape_char_substrait, input_schema, extensions)
