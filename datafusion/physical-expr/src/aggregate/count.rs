@@ -90,18 +90,14 @@ impl Count {
 /// F: Function that calcuates the average value from a sum of
 /// T::Native and a total count
 #[derive(Debug)]
-struct CountGroupsAccumulator
-{
+struct CountGroupsAccumulator {
     /// Count per group (use u64 to make Int64Array)
     counts: Vec<i64>,
 }
 
-impl CountGroupsAccumulator
-{
+impl CountGroupsAccumulator {
     pub fn new() -> Self {
-        Self {
-            counts: vec![],
-        }
+        Self { counts: vec![] }
     }
 
     /// Adds one to each group's counter
@@ -164,8 +160,7 @@ impl CountGroupsAccumulator
     }
 }
 
-impl GroupsAccumulator for CountGroupsAccumulator
-{
+impl GroupsAccumulator for CountGroupsAccumulator {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],

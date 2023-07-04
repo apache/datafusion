@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
+use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use arrow::{
     array::{
@@ -46,10 +47,10 @@ use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
-use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
 
 use super::groups_accumulator::accumulate::{accumulate_all, accumulate_all_nullable};
+use super::utils::adjust_output_array;
 
 /// SUM aggregate expression
 #[derive(Debug, Clone)]
@@ -136,6 +137,10 @@ impl AggregateExpr for Sum {
 
     fn row_accumulator_supported(&self) -> bool {
         is_row_accumulator_support_dtype(&self.data_type)
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
     }
 
     fn create_row_accumulator(
@@ -473,7 +478,7 @@ struct SumGroupsAccumulator<T>
 where
     T: ArrowNumericType + Send,
 {
-    /// The type of the internal sum
+    /// The type of the computed sum
     sum_data_type: DataType,
 
     /// The type of the returned sum
@@ -497,7 +502,7 @@ where
         );
 
         Self {
-            return_data_type: return_data_type.clone(),
+            return_data_type: sum_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
             sums: vec![],
             null_inputs: BooleanBufferBuilder::new(0),
@@ -592,7 +597,7 @@ where
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        assert_eq!(values.len(), 1, "two arguments to merge_batch");
+        assert_eq!(values.len(), 2, "two arguments to merge_batch");
         // first batch is partial sums
         let partial_sums: &PrimitiveArray<T> = values.get(0).unwrap().as_primitive::<T>();
         self.update_sums(group_indices, partial_sums, opt_filter, total_num_groups);
@@ -604,9 +609,10 @@ where
         let sums = std::mem::take(&mut self.sums);
         let nulls = self.build_nulls();
 
-        let array = PrimitiveArray::<T>::new(sums.into(), nulls); // no copy
+        let sums = PrimitiveArray::<T>::new(sums.into(), nulls); // no copy
+        let sums = adjust_output_array(&self.return_data_type, Arc::new(sums))?;
 
-        Ok(Arc::new(array))
+        Ok(Arc::new(sums))
     }
 
     // return arrays for sums and counts
@@ -614,9 +620,19 @@ where
         let nulls = self.build_nulls();
 
         let sums = std::mem::take(&mut self.sums);
-        let sums = PrimitiveArray::<T>::new(sums.into(), nulls); // zero copy
 
-        Ok(vec![Arc::new(sums) as ArrayRef])
+        let sums = Arc::new(PrimitiveArray::<T>::new(sums.into(), nulls.clone())); // zero copy
+
+        let sums = adjust_output_array(&self.sum_data_type, sums)?;
+
+        let counts = vec![0 as u64; sums.len()];
+        let counts = Arc::new(PrimitiveArray::<UInt64Type>::new(
+            counts.into(),
+            nulls.clone(),
+        ));
+
+        // TODO: Sum expects sum/count array, but count is not needed
+        Ok(vec![sums.clone() as ArrayRef, counts as ArrayRef])
     }
 
     fn size(&self) -> usize {

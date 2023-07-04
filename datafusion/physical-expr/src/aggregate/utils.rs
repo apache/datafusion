@@ -20,6 +20,8 @@
 use crate::{AggregateExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
+use arrow_array::cast::AsArray;
+use arrow_array::types::Decimal128Type;
 use arrow_schema::{DataType, Field};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -143,6 +145,27 @@ pub fn calculate_result_decimal_for_avg(
             "Invalid target type in AvgAccumulator {other:?}"
         ))),
     }
+}
+
+/// Adjust array type metadata if needed
+///
+/// Decimal128Arrays are are are created from Vec<NativeType> with default
+/// precision and scale. This function adjusts them down.
+pub fn adjust_output_array(
+    sum_data_type: &DataType,
+    array: ArrayRef,
+) -> Result<ArrayRef, DataFusionError> {
+    let array = match sum_data_type {
+        DataType::Decimal128(p, s) => Arc::new(
+            array
+                .as_primitive::<Decimal128Type>()
+                .clone()
+                .with_precision_and_scale(*p, *s)?,
+        ),
+        // no adjustment needed for other arrays
+        _ => array,
+    };
+    Ok(array)
 }
 
 /// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`

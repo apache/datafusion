@@ -47,7 +47,7 @@ use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 
 use super::groups_accumulator::{accumulate_all, accumulate_all_nullable};
-use super::utils::Decimal128Averager;
+use super::utils::{adjust_output_array, Decimal128Averager};
 
 /// AVG aggregate expression
 #[derive(Debug, Clone)]
@@ -700,24 +700,6 @@ where
     fn size(&self) -> usize {
         self.counts.capacity() * std::mem::size_of::<usize>()
     }
-}
-
-/// Adjust array type metadata if needed
-///
-/// Decimal128Arrays are are are created from Vec<NativeType> with default
-/// precision and scale. This function adjusts them down.
-fn adjust_output_array(sum_data_type: &DataType, array: ArrayRef) -> Result<ArrayRef> {
-    let array = match sum_data_type {
-        DataType::Decimal128(p, s) => Arc::new(
-            array
-                .as_primitive::<Decimal128Type>()
-                .clone()
-                .with_precision_and_scale(*p, *s)?,
-        ),
-        // no adjustment needed for other arrays
-        _ => array,
-    };
-    Ok(array)
 }
 
 #[cfg(test)]
