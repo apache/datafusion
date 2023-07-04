@@ -586,15 +586,15 @@ impl PhysicalExpr for BinaryExpr {
         if self.op.is_numerical_operators() {
             return match (&left_value, &right_value) {
                 (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
-                    self.evaluate_datum(&*left, &*right)
+                    self.evaluate_datum(&left.as_ref(), &right.as_ref())
                 }
                 (ColumnarValue::Scalar(left), ColumnarValue::Array(right)) => {
                     let left = left.to_array();
-                    self.evaluate_datum(&Scalar::new(left.as_ref()), &*right)
+                    self.evaluate_datum(&Scalar::new(left.as_ref()), &right.as_ref())
                 }
                 (ColumnarValue::Array(left), ColumnarValue::Scalar(right)) => {
                     let right = right.to_array();
-                    self.evaluate_datum(&*left, &Scalar::new(right.as_ref()))
+                    self.evaluate_datum(&left.as_ref(), &Scalar::new(right.as_ref()))
                 }
                 (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
                     let left = left.to_array();
