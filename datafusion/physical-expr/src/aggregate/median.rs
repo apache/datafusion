@@ -66,6 +66,7 @@ impl AggregateExpr for Median {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(MedianAccumulator {
             data_type: self.data_type.clone(),
+            batches: vec![],
             all_values: vec![],
         }))
     }
@@ -111,13 +112,28 @@ impl PartialEq<dyn Any> for Median {
 /// The intermediate state is represented as a List of those scalars
 struct MedianAccumulator {
     data_type: DataType,
+    batches: Vec<ArrayRef>,
     all_values: Vec<ScalarValue>,
+}
+
+fn to_scalar_values(arrays: &[ArrayRef]) -> Result<Vec<ScalarValue>> {
+    let num_values: usize = arrays.iter().map(|a| a.len()).sum();
+    let mut all_values = Vec::with_capacity(num_values);
+
+    for array in arrays {
+        for index in 0..array.len() {
+            all_values.push(ScalarValue::try_from_array(&array, index)?);
+        }
+    }
+
+    Ok(all_values)
 }
 
 impl Accumulator for MedianAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let state =
-            ScalarValue::new_list(Some(self.all_values.clone()), self.data_type.clone());
+        let all_values = to_scalar_values(&self.batches)?;
+        let state = ScalarValue::new_list(Some(all_values), self.data_type.clone());
+
         Ok(vec![state])
     }
 
@@ -126,11 +142,7 @@ impl Accumulator for MedianAccumulator {
         let array = &values[0];
 
         assert_eq!(array.data_type(), &self.data_type);
-        self.all_values.reserve(array.len());
-        for index in 0..array.len() {
-            self.all_values
-                .push(ScalarValue::try_from_array(array, index)?);
-        }
+        self.batches.push(array.clone());
 
         Ok(())
     }
@@ -157,7 +169,14 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        if !self.all_values.iter().any(|v| !v.is_null()) {
+        let batch_values = to_scalar_values(&self.batches)?;
+
+        if !self
+            .all_values
+            .iter()
+            .chain(batch_values.iter())
+            .any(|v| !v.is_null())
+        {
             return ScalarValue::try_from(&self.data_type);
         }
 
@@ -166,6 +185,7 @@ impl Accumulator for MedianAccumulator {
         let array = ScalarValue::iter_to_array(
             self.all_values
                 .iter()
+                .chain(batch_values.iter())
                 // ignore null values
                 .filter(|v| !v.is_null())
                 .cloned(),
@@ -214,7 +234,10 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn size(&self) -> usize {
+        let batches_size: usize = self.batches.iter().map(|a| a.len()).sum();
+
         std::mem::size_of_val(self) + ScalarValue::size_of_vec(&self.all_values)
+            + batches_size
             - std::mem::size_of_val(&self.all_values)
             + self.data_type.size()
             - std::mem::size_of_val(&self.data_type)
