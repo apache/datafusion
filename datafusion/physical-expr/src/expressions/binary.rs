@@ -919,10 +919,7 @@ fn analyze_expr_scalar_comparison(
             ));
             let mut graph = ExprIntervalGraph::try_new(expr)?;
 
-            let col_stats = vec![
-                (left.clone(), left_interval),
-                (Arc::new(Literal::new(right)), right_singleton),
-            ];
+            let col_stats = vec![(left.clone(), left_interval)];
             let expr_indexes = graph.gather_node_indices(
                 &col_stats.iter().map(|(e, _)| e.clone()).collect_vec(),
             );
