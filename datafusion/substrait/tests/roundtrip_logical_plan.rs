@@ -395,6 +395,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn roundtrip_like() -> Result<()> {
+        roundtrip("SELECT f FROM data WHERE f LIKE 'a%b'").await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_ilike() -> Result<()> {
+        roundtrip("SELECT f FROM data WHERE f ILIKE 'a%b'").await
+    }
+
+    #[tokio::test]
     async fn simple_intersect() -> Result<()> {
         assert_expected_plan(
             "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
