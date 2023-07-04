@@ -25,11 +25,14 @@ use async_trait::async_trait;
 use futures::stream::StreamExt;
 
 use datafusion_common::{DataFusionError, Result, Statistics};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use log::debug;
 
+use crate::datasource::physical_plan::{OutputOrderingDisplay, ProjectSchemaDisplay};
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
-use crate::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use crate::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+};
 use datafusion_execution::TaskContext;
 
 /// A partition that can be converted into a [`SendableRecordBatchStream`]
@@ -46,6 +49,7 @@ pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
     projected_schema: SchemaRef,
+    projected_output_ordering: Option<LexOrdering>,
     infinite: bool,
 }
 
@@ -55,6 +59,7 @@ impl StreamingTableExec {
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
         projection: Option<&Vec<usize>>,
+        projected_output_ordering: Option<LexOrdering>,
         infinite: bool,
     ) -> Result<Self> {
         for x in partitions.iter() {
@@ -79,6 +84,7 @@ impl StreamingTableExec {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
+            projected_output_ordering,
             infinite,
         })
     }
@@ -109,7 +115,11 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        if let Some(ordering) = &self.projected_output_ordering {
+            Some(ordering)
+        } else {
+            None
+        }
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -140,6 +150,42 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         })
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "StreamingTableExec: partition_sizes={:?}",
+                    self.partitions.len(),
+                )?;
+                if !self.projected_schema.fields().is_empty() {
+                    write!(
+                        f,
+                        ", projection={}",
+                        ProjectSchemaDisplay(&self.projected_schema)
+                    )?;
+                }
+                if self.infinite {
+                    write!(f, ", infinite_source=true")?;
+                }
+                if let Some(ordering) = &self.projected_output_ordering {
+                    if !ordering.is_empty() {
+                        write!(
+                            f,
+                            ", output_ordering={}",
+                            OutputOrderingDisplay(ordering)
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 
     fn statistics(&self) -> Statistics {

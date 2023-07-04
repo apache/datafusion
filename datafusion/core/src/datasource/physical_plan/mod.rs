@@ -417,7 +417,7 @@ where
 
 /// A wrapper to customize partitioned file display
 #[derive(Debug)]
-struct ProjectSchemaDisplay<'a>(&'a SchemaRef);
+pub struct ProjectSchemaDisplay<'a>(pub &'a SchemaRef);
 
 impl<'a> Display for ProjectSchemaDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
@@ -433,7 +433,7 @@ impl<'a> Display for ProjectSchemaDisplay<'a> {
 
 /// A wrapper to customize output ordering display.
 #[derive(Debug)]
-struct OutputOrderingDisplay<'a>(&'a [PhysicalSortExpr]);
+pub struct OutputOrderingDisplay<'a>(pub &'a [PhysicalSortExpr]);
 
 impl<'a> Display for OutputOrderingDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
