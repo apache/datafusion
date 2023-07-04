@@ -39,6 +39,12 @@ pub struct GroupsAccumulatorAdapter {
 
     /// [`Accumulators`] for each group, stored in group_index order
     states: Vec<AccumulatorState>,
+
+    /// Current memory usage, in bytes.
+    ///
+    /// Note this is incrementally updated to avoid size() being a
+    /// bottleneck, which we saw in earlier implementations.
+    allocation_bytes: usize,
 }
 
 struct AccumulatorState {
@@ -59,6 +65,7 @@ impl AccumulatorState {
         }
     }
 
+    /// Returns the amount of memory taken by this structre and its accumulator
     fn size(&self) -> usize {
         self.accumulator.size()
             + std::mem::size_of_val(self)
@@ -76,6 +83,7 @@ impl GroupsAccumulatorAdapter {
         Self {
             factory: Box::new(factory),
             states: vec![],
+            allocation_bytes: std::mem::size_of::<GroupsAccumulatorAdapter>(),
         }
     }
 
@@ -83,12 +91,21 @@ impl GroupsAccumulatorAdapter {
     fn make_accumulators_if_needed(&mut self, total_num_groups: usize) -> Result<()> {
         // can't shrink
         assert!(total_num_groups >= self.states.len());
+        let vec_size_pre =
+            std::mem::size_of::<AccumulatorState>() * self.states.capacity();
+
+        // instanatiate new accumulators
         let new_accumulators = total_num_groups - self.states.len();
         for _ in 0..new_accumulators {
             let accumulator = (self.factory)()?;
-            // todo update allocation
-            self.states.push(AccumulatorState::new(accumulator));
+            let state = AccumulatorState::new(accumulator);
+            self.allocation_bytes += state.size();
+            self.states.push(state);
         }
+        let vec_size_post =
+            std::mem::size_of::<AccumulatorState>() * self.states.capacity();
+
+        self.allocation_bytes += vec_size_post.saturating_sub(vec_size_pre);
         Ok(())
     }
 
@@ -134,7 +151,9 @@ impl GroupsAccumulatorAdapter {
         // Then it invokes Accumulator::update / merge for each of those contiguous ranges
         assert_eq!(values[0].len(), group_indices.len());
 
-        // figure out which input rows correspond to which groups
+        // figure out which input rows correspond to which groups Note
+        // that self.state.indices empty for all groups always (it is
+        // cleared out below)
         for (idx, group_index) in group_indices.iter().enumerate() {
             self.states[*group_index].indices.push(idx as u32);
         }
@@ -176,23 +195,19 @@ impl GroupsAccumulatorAdapter {
         // RecordBatch(es)
         let iter = groups_with_rows.iter().zip(offsets.windows(2));
 
-        // TODO memory accounting
-        let mut allocated = 0;
         for (group_idx, offsets) in iter {
             let state = &mut self.states[*group_idx as usize];
-
-            //let size_pre = accumulator.size();
+            let size_pre = state.size();
 
             let values_to_accumulate =
                 slice_and_maybe_filter(&values, opt_filter.as_ref(), &offsets)?;
-
             (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state
             state.indices.clear();
 
-            //let size_post = accumulator.size();
-            //*allocated += size_post.saturating_sub(size_pre);
+            let size_post = state.size();
+            self.allocation_bytes += size_post.saturating_sub(size_pre);
         }
         Ok(())
     }
@@ -285,11 +300,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     }
 
     fn size(&self) -> usize {
-        // TODO should calculate size incrementally during update and just return value here
-        self.states.iter().map(|a| a.size()).sum::<usize>()
-            //include the size of self and self.accumulators itself
-            + self.states.len() * std::mem::size_of::<AccumulatorState>()
-            + std::mem::size_of_val(&self.factory)
+        self.allocation_bytes
     }
 }
 

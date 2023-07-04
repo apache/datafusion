@@ -36,8 +36,8 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::{
-    BooleanType, DataType, Decimal128Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    DataType, Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::{
     array::{ArrayRef, UInt64Array},
@@ -107,6 +107,7 @@ macro_rules! instantiate_accumulator {
         Ok(Box::new(AvgGroupsAccumulator::<$NUMERICTYPE, _>::new(
             &$SELF.sum_data_type,
             &$SELF.rt_data_type,
+            // TODO handle overflow (e.g. count as u8 can overflow for 400)
             |sum, count| Ok(sum / count as <$NUMERICTYPE as ArrowPrimitiveType>::Native),
         )))
     }};
