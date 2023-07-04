@@ -41,9 +41,9 @@ use datafusion_row::accessor::RowAccessor;
 use crate::expressions::format_state_name;
 
 use super::groups_accumulator::accumulate::{
-    accumulate_all, accumulate_indices, accumulate_indices_nullable,
+    accumulate_all, accumulate_all_nullable, accumulate_indices,
+    accumulate_indices_nullable,
 };
-use super::groups_accumulator::accumulate_all_nullable;
 
 /// COUNT aggregate expression
 /// Returns the amount of non-null values of the given expression.

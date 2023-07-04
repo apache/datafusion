@@ -35,7 +35,6 @@ use arrow::{
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
 use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use log::debug;
@@ -49,7 +48,7 @@ use arrow::array::Array;
 use arrow::array::Decimal128Array;
 use datafusion_row::accessor::RowAccessor;
 
-use super::groups_accumulator::accumulate::{accumulate_all, accumulate_all_nullable};
+use super::groups_accumulator::accumulate::NullState;
 use super::utils::adjust_output_array;
 
 /// SUM aggregate expression
@@ -487,8 +486,8 @@ where
     /// Sums per group, stored as the native type
     sums: Vec<T::Native>,
 
-    /// If we have seen a null input value for this group_index
-    null_inputs: BooleanBufferBuilder,
+    /// Track nulls in the input / filters
+    null_state: NullState,
 }
 
 impl<T> SumGroupsAccumulator<T>
@@ -505,68 +504,7 @@ where
             return_data_type: sum_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
             sums: vec![],
-            null_inputs: BooleanBufferBuilder::new(0),
-        }
-    }
-
-    /// Adds the values in `values` to self.sums
-    fn update_sums(
-        &mut self,
-        group_indices: &[usize],
-        values: &PrimitiveArray<T>,
-        opt_filter: Option<&arrow_array::BooleanArray>,
-        total_num_groups: usize,
-    ) {
-        if self.null_inputs.len() < total_num_groups {
-            let new_groups = total_num_groups - self.null_inputs.len();
-            // All groups start as valid (and are set to null if we
-            // see a null in the input)
-            self.null_inputs.append_n(new_groups, true);
-        }
-        self.sums
-            .resize_with(total_num_groups, || T::default_value());
-
-        if values.null_count() == 0 {
-            accumulate_all(
-                group_indices,
-                values,
-                opt_filter,
-                |group_index, new_value| {
-                    // note since add_wrapping doesn't error, we
-                    // simply add values in null sum slots rather than
-                    // checking if they are null first. The theory is
-                    // this is faster
-                    let sum = &mut self.sums[group_index];
-                    *sum = sum.add_wrapping(new_value);
-                },
-            )
-        } else {
-            accumulate_all_nullable(
-                group_indices,
-                values,
-                opt_filter,
-                |group_index, new_value, is_valid| {
-                    if is_valid {
-                        let sum = &mut self.sums[group_index];
-                        *sum = sum.add_wrapping(new_value);
-                    } else {
-                        // input null means this group is now null
-                        self.null_inputs.set_bit(group_index, false);
-                    }
-                },
-            )
-        }
-    }
-
-    /// Returns a NullBuffer representing which group_indices have
-    /// null values (if they saw a null input)
-    /// Resets `self.null_inputs`;
-    fn build_nulls(&mut self) -> Option<NullBuffer> {
-        let nulls = NullBuffer::new(self.null_inputs.finish());
-        if nulls.null_count() > 0 {
-            Some(nulls)
-        } else {
-            None
+            null_state: NullState::new(),
         }
     }
 }
@@ -585,7 +523,21 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values.get(0).unwrap().as_primitive::<T>();
 
-        self.update_sums(group_indices, values, opt_filter, total_num_groups);
+        // update sums
+        self.sums
+            .resize_with(total_num_groups, || T::default_value());
+
+        // NullState dispatches / handles tracking nulls and groups that saw no values
+        self.null_state.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                let sum = &mut self.sums[group_index];
+                *sum = sum.add_wrapping(new_value);
+            },
+        );
 
         Ok(())
     }
@@ -600,14 +552,28 @@ where
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
         // first batch is partial sums
         let partial_sums: &PrimitiveArray<T> = values.get(0).unwrap().as_primitive::<T>();
-        self.update_sums(group_indices, partial_sums, opt_filter, total_num_groups);
+
+        // Sum partial sums
+        self.sums
+            .resize_with(total_num_groups, || T::default_value());
+
+        self.null_state.accumulate(
+            group_indices,
+            partial_sums,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                let sum = &mut self.sums[group_index];
+                *sum = sum.add_wrapping(new_value);
+            },
+        );
 
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ArrayRef> {
         let sums = std::mem::take(&mut self.sums);
-        let nulls = self.build_nulls();
+        let nulls = self.null_state.build();
 
         let sums = PrimitiveArray::<T>::new(sums.into(), nulls); // no copy
         let sums = adjust_output_array(&self.return_data_type, Arc::new(sums))?;
@@ -617,10 +583,9 @@ where
 
     // return arrays for sums and counts
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
-        let nulls = self.build_nulls();
+        let nulls = self.null_state.build();
 
         let sums = std::mem::take(&mut self.sums);
-
         let sums = Arc::new(PrimitiveArray::<T>::new(sums.into(), nulls.clone())); // zero copy
 
         let sums = adjust_output_array(&self.sum_data_type, sums)?;

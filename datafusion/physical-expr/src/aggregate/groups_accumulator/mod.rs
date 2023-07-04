@@ -20,7 +20,6 @@
 pub(crate) mod accumulate;
 mod adapter;
 
-pub(crate) use accumulate::{accumulate_all, accumulate_all_nullable};
 pub use adapter::GroupsAccumulatorAdapter;
 
 use arrow_array::{ArrayRef, BooleanArray};
