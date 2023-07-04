@@ -24,7 +24,9 @@ use arrow::{
     datatypes::UInt32Type,
 };
 use arrow_array::{ArrayRef, BooleanArray, PrimitiveArray};
-use datafusion_common::{utils::get_arrayref_at_indices, DataFusionError, Result};
+use datafusion_common::{
+    utils::get_arrayref_at_indices, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 
 /// An adpater that implements [`GroupsAccumulator`] for any [`Accumulator`]
@@ -90,11 +92,12 @@ impl GroupsAccumulatorAdapter {
         Ok(())
     }
 
-    /// invokes f(accumulator, values) for the correct slices of the
-    /// input values of this array.
+    /// invokes f(accumulator, values) for each group that has values
+    /// in group_indices.
     ///
-    /// This first reorders the input and filter so that values for group_indexes
-    /// are contiguous and then invokes f on the contiguous ranges
+    /// This function first reorders the input and filter so that
+    /// values for each group_index are contiguous and then invokes f
+    /// on the contiguous ranges, to minimize per-row overhead
     ///
     /// ```text
     /// ┌─────────┐   ┌─────────┐   ┌ ─ ─ ─ ─ ┐                       ┌─────────┐   ┌ ─ ─ ─ ─ ┐
@@ -216,11 +219,50 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     }
 
     fn evaluate(&mut self) -> Result<ArrayRef> {
-        todo!()
+        let states = std::mem::take(&mut self.states);
+
+        // todo update memory usage
+
+        let results: Vec<ScalarValue> = states
+            .into_iter()
+            .map(|state| state.accumulator.evaluate())
+            .collect::<Result<_>>()?;
+
+        ScalarValue::iter_to_array(results)
     }
 
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
-        todo!()
+        let states = std::mem::take(&mut self.states);
+
+        // todo update memory usage
+
+        // each accumulator produces a potential vector of values
+        // which we need to form into columns
+        let mut results: Vec<Vec<ScalarValue>> = vec![];
+
+        for state in states {
+            let accumulator_state = state.accumulator.state()?;
+            results.resize_with(accumulator_state.len(), || vec![]);
+            for (idx, state_val) in accumulator_state.into_iter().enumerate() {
+                results[idx].push(state_val);
+            }
+        }
+
+        // create an array for each intermediate column
+        let arrays = results
+            .into_iter()
+            .map(|state| ScalarValue::iter_to_array(state))
+            .collect::<Result<Vec<_>>>()?;
+
+        // double check each array has the same length (aka the
+        // accumulator was written correctly
+        if let Some(first_col) = arrays.get(0) {
+            for arr in &arrays {
+                assert_eq!(arr.len(), first_col.len())
+            }
+        }
+
+        Ok(arrays)
     }
 
     fn merge_batch(
