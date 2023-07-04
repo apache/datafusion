@@ -3802,7 +3802,7 @@ impl fmt::Debug for ScalarValue {
     }
 }
 
-/// Trait used to map a NativeTime to a ScalarType.
+/// Trait used to map a NativeType to a ScalarValue
 pub trait ScalarType<T: ArrowNativeType> {
     /// returns a scalar from an optional T
     fn scalar(r: Option<T>) -> ScalarValue;

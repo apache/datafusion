@@ -1792,7 +1792,7 @@ Limit: skip=0, fetch=5
 ------------TableScan: aggregate_test_100 projection=[c2, c3, c9]
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
---SortPreservingMergeExec: [c3@0 ASC NULLS LAST]
+--SortPreservingMergeExec: [c3@0 ASC NULLS LAST], fetch=5
 ----ProjectionExec: expr=[c3@0 as c3, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum2]
 ------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 --------SortExec: expr=[c3@0 ASC NULLS LAST,c9@1 DESC]
