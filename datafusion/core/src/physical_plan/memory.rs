@@ -52,7 +52,11 @@ impl fmt::Debug for MemoryExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "partitions: [...]")?;
         write!(f, "schema: {:?}", self.projected_schema)?;
-        write!(f, "projection: {:?}", self.projection)
+        write!(f, "projection: {:?}", self.projection)?;
+        if let Some(sort_info) = &self.sort_information {
+            write!(f, ", output_ordering: {:?}", sort_info)?;
+        }
+        Ok(())
     }
 }
 
@@ -116,7 +120,11 @@ impl ExecutionPlan for MemoryExec {
                     "MemoryExec: partitions={}, partition_sizes={:?}",
                     partitions.len(),
                     partitions
-                )
+                )?;
+                if let Some(sort_info) = &self.sort_information {
+                    write!(f, ", output_ordering: {:?}", sort_info)?;
+                }
+                Ok(())
             }
         }
     }
