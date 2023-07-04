@@ -80,11 +80,19 @@ impl GroupsAccumulatorAdapter {
     where
         F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
     {
-        Self {
+        let mut new_self = Self {
             factory: Box::new(factory),
             states: vec![],
-            allocation_bytes: std::mem::size_of::<GroupsAccumulatorAdapter>(),
-        }
+            allocation_bytes: 0,
+        };
+        new_self.reset_allocation();
+        new_self
+    }
+
+    // Reset the allocation bytes to empty state
+    fn reset_allocation(&mut self) {
+        assert!(self.states.is_empty());
+        self.allocation_bytes = std::mem::size_of::<GroupsAccumulatorAdapter>();
     }
 
     /// Ensure that self.accumulators has total_num_groups
@@ -243,7 +251,9 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             .map(|state| state.accumulator.evaluate())
             .collect::<Result<_>>()?;
 
-        ScalarValue::iter_to_array(results)
+        let result = ScalarValue::iter_to_array(results);
+        self.reset_allocation();
+        result
     }
 
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
@@ -277,6 +287,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             }
         }
 
+        self.reset_allocation();
         Ok(arrays)
     }
 
