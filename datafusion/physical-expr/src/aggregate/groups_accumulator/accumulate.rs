@@ -582,10 +582,6 @@ mod test {
             opt_filter: Option<&BooleanArray>,
             total_num_groups: usize,
         ) {
-            println!("group_indices: {group_indices:?}");
-            println!("values: {values:?}");
-            println!("opt_filter: {opt_filter:?}");
-            println!("total_num_groups: {total_num_groups}");
             Self::accumulate_values_test(
                 group_indices,
                 values,
@@ -682,60 +678,44 @@ mod test {
             }
 
             // Validate the final buffer (one value per group)
-            let expected_null_buffer = match (values.null_count() > 0, opt_filter.is_some()) {
-                (false, false) => None,
-                // only nulls
-                (true, false) => {
-                    let null_buffer: NullBuffer = (0..total_num_groups)
-                        .map(|group_index| {
-                            // there was and no null inputs
-                            !expected_null_input.contains(&group_index)
-                        })
-                        .collect();
-                    Some(null_buffer)
-                },
-                // only filter
-                (false, true) => {
-                    let null_buffer: NullBuffer = (0..total_num_groups)
-                        .map(|group_index| {
-                            // we saw a value
-                            expected_seen_values.contains(&group_index)
-                        })
-                        .collect();
-                    Some(null_buffer)
-                }
-                // nulls and filter
-                (true, true) => {
-                    let null_buffer: NullBuffer = (0..total_num_groups)
-                        .map(|group_index| {
-                            // output is valid if there was at least one
-                            // input value and no null inputs
-                            expected_seen_values.contains(&group_index)
-                                && !expected_null_input.contains(&group_index)
-                        })
-                        .collect();
-                    Some(null_buffer)
-                }
-            };
+            let expected_null_buffer =
+                match (values.null_count() > 0, opt_filter.is_some()) {
+                    (false, false) => None,
+                    // only nulls
+                    (true, false) => {
+                        let null_buffer: NullBuffer = (0..total_num_groups)
+                            .map(|group_index| {
+                                // there was and no null inputs
+                                !expected_null_input.contains(&group_index)
+                            })
+                            .collect();
+                        Some(null_buffer)
+                    }
+                    // only filter
+                    (false, true) => {
+                        let null_buffer: NullBuffer = (0..total_num_groups)
+                            .map(|group_index| {
+                                // we saw a value
+                                expected_seen_values.contains(&group_index)
+                            })
+                            .collect();
+                        Some(null_buffer)
+                    }
+                    // nulls and filter
+                    (true, true) => {
+                        let null_buffer: NullBuffer = (0..total_num_groups)
+                            .map(|group_index| {
+                                // output is valid if there was at least one
+                                // input value and no null inputs
+                                expected_seen_values.contains(&group_index)
+                                    && !expected_null_input.contains(&group_index)
+                            })
+                            .collect();
+                        Some(null_buffer)
+                    }
+                };
 
             let null_buffer = null_state.build();
-
-            if null_buffer != expected_null_buffer {
-                if let (Some(null_buffer), Some(expected_null_buffer)) = (null_buffer.as_ref(), expected_null_buffer.as_ref()) {
-                    null_buffer.iter()
-                        .zip(expected_null_buffer.iter())
-                        .enumerate()
-                        .for_each(|(i, (valid, expected_valid))| {
-                            println!("nulls[{i}]: valid: {valid}, expected: {expected_valid}");
-                            println!("  expected_seen_values: {} expected_null_input: {}",
-                                     expected_seen_values.contains(&i),
-                                     expected_null_input.contains(&i)
-                            );
-
-                            assert_eq!(valid, expected_valid, "Index {i}");
-                        })
-                };
-            }
 
             assert_eq!(null_buffer, expected_null_buffer);
         }
