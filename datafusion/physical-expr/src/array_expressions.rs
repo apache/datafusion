@@ -511,7 +511,7 @@ macro_rules! position {
                         }
                     }
                     None => {
-                        return Err(DataFusionError::Internal(
+                        return Err(DataFusionError::Execution(
                             "initial position must not be null".to_string(),
                         ))
                     }
