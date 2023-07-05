@@ -36,6 +36,7 @@
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
+use crate::physical_optimizer::replace_repartition_execs::replace_repartition_execs;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
     add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
@@ -370,7 +371,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
         // missed by the bottom-up traversal:
         let sort_pushdown = SortPushDown::init(new_plan);
         let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
-        Ok(adjusted.plan)
+        adjusted.plan.transform_down(&replace_repartition_execs)
     }
 
     fn name(&self) -> &str {
@@ -948,7 +949,7 @@ fn check_alignment(
 }
 
 // Get unbounded_output information for the executor
-fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
+pub(crate) fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
     let res = if plan.children().is_empty() {
         plan.unbounded_output(&[])
     } else {
