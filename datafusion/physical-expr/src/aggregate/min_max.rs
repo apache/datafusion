@@ -1257,8 +1257,7 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let val =
-                    &mut self.min_max[group_index];
+                let val = &mut self.min_max[group_index];
                 match MIN {
                     true => {
                         if new_value < *val {
