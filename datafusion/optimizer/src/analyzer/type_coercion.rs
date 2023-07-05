@@ -237,84 +237,18 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
-            // Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-            //     let (left_type, right_type) = get_input_types(
-            //         &left.get_type(&self.schema)?,
-            //         &op,
-            //         &right.get_type(&self.schema)?,
-            //     )?;
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                let (left_type, right_type) = get_input_types(
+                    &left.get_type(&self.schema)?,
+                    &op,
+                    &right.get_type(&self.schema)?,
+                )?;
 
-            //     Ok(Expr::BinaryExpr(BinaryExpr::new(
-            //         Box::new(left.cast_to(&left_type, &self.schema)?),
-            //         op,
-            //         Box::new(right.cast_to(&right_type, &self.schema)?),
-            //     )))
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                op,
-                ref right,
-            }) => {
-                // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
-                let left_type = left.get_type(&self.schema)?;
-                let right_type = right.get_type(&self.schema)?;
-                match (&left_type, &right_type) {
-                    // Handle some case about Interval.
-                    (
-                        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                        &DataType::Interval(_),
-                    ) if matches!(op, Operator::Plus | Operator::Minus) => Ok(expr),
-                    (
-                        &DataType::Interval(_),
-                        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                    ) if matches!(op, Operator::Plus) => Ok(expr),
-                    (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
-                        if op.is_numerical_operators() =>
-                    {
-                        if matches!(op, Operator::Minus) {
-                            Ok(expr)
-                        } else {
-                            Err(DataFusionError::Internal(format!(
-                                "Unsupported operation {op:?} between {left_type:?} and {right_type:?}"
-                            )))
-                        }
-                    }
-                    // For numerical operations between decimals, we don't coerce the types.
-                    // But if only one of the operands is decimal, we cast the other operand to decimal
-                    // if the other operand is integer. If the other operand is float, we cast the
-                    // decimal operand to float.
-                    (lhs_type, rhs_type)
-                        if op.is_numerical_operators()
-                            && any_decimal(lhs_type, rhs_type) =>
-                    {
-                        let (coerced_lhs_type, coerced_rhs_type) =
-                            math_decimal_coercion(lhs_type, rhs_type);
-                        let new_left = if let Some(lhs_type) = coerced_lhs_type {
-                            cast_expr(left, &lhs_type, &self.schema)?
-                        } else {
-                            left.as_ref().clone()
-                        };
-                        let new_right = if let Some(rhs_type) = coerced_rhs_type {
-                            cast_expr(right, &rhs_type, &self.schema)?
-                        } else {
-                            right.as_ref().clone()
-                        };
-                        let expr = Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(new_left),
-                            op,
-                            Box::new(new_right),
-                        ));
-                        Ok(expr)
-                    }
-                    _ => {
-                        let common_type = coerce_types(&left_type, &op, &right_type)?;
-                        let expr = Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(cast_expr(left, &common_type, &self.schema)?),
-                            op,
-                            Box::new(cast_expr(right, &common_type, &self.schema)?),
-                        ));
-                        Ok(expr)
-                    }
-                }
+                Ok(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(left.cast_to(&left_type, &self.schema)?),
+                    op,
+                    Box::new(right.cast_to(&right_type, &self.schema)?),
+                )))
             }
             Expr::Between(Between {
                 expr,
@@ -407,7 +341,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 )?;
                 let new_args =
                     coerce_arguments_for_fun(new_args.as_slice(), &self.schema, &fun)?;
-                Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
+                let p = Expr::ScalarFunction(ScalarFunction::new(fun, new_args));
+                Ok(p)
             }
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
@@ -633,15 +568,15 @@ fn coerce_arguments_for_fun(
     // Cast Fixedsizelist to List for array functions
     if *fun == BuiltinScalarFunction::MakeArray {
         expressions = expressions
-            .iter()
+            .into_iter()
             .map(|expr| {
                 let data_type = expr.get_type(schema).unwrap();
                 if let DataType::FixedSizeList(field, _) = data_type {
                     let field = field.as_ref().clone();
                     let to_type = DataType::List(Arc::new(field));
-                    cast_expr(expr, &to_type, schema)
+                    expr.cast_to(&to_type, schema)
                 } else {
-                    Ok(expr.clone())
+                    Ok(expr)
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -685,7 +620,8 @@ fn cast_array_expr(
     if from_type.equals_datatype(&DataType::Null) {
         Ok(expr.clone())
     } else {
-        expr.clone().cast_to(to_type, schema)
+        cast_expr(expr, to_type, schema)
+        // expr.clone().cast_to(to_type, schema)
     }
 }
 

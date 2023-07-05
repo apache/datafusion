@@ -125,7 +125,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
             }
 
             let list_data_type =
-                DataType::List(Arc::new(Field::new("item", data_type, false)));
+                DataType::List(Arc::new(Field::new("item", data_type, true)));
 
             let list_data = ArrayData::builder(list_data_type)
                 .len(1)

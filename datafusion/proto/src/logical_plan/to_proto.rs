@@ -1068,13 +1068,11 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            // ScalarValue::List(values, boxed_field) => {
-            scalar::ScalarValue::Fixedsizelist(..) => Err(Error::General(
+            ScalarValue::Fixedsizelist(..) => Err(Error::General(
                 "Proto serialization error: ScalarValue::Fixedsizelist not supported"
                     .to_string(),
             )),
             ScalarValue::List(values, boxed_field) => {
-            // scalar::ScalarValue::List(values, boxed_field) => {
                 let is_null = values.is_none();
 
                 let values = if let Some(values) = values.as_ref() {

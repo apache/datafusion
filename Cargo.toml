@@ -54,14 +54,6 @@ arrow-array = { version = "43.0.0", default-features = false, features = ["chron
 parquet = { version = "43.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.35", features = ["visitor"] }
 
-[patch.crates-io]
-arrow-cast = {git = "https://github.com/apache/arrow-rs.git", branch = "master"}
-arrow-array = {git = "https://github.com/apache/arrow-rs.git", branch = "master"}
-arrow-schema = {git = "https://github.com/apache/arrow-rs.git", branch = "master"}
-arrow-data = {git = "https://github.com/apache/arrow-rs.git", branch = "master"} 
-arrow-buffer = {git = "https://github.com/apache/arrow-rs.git", branch = "master"} 
-arrow-select = {git = "https://github.com/apache/arrow-rs.git", branch = "master"} 
-
 [profile.release]
 codegen-units = 1
 lto = true

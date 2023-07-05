@@ -529,6 +529,7 @@ SELECT
 FROM t
 ----
 true true
+
 statement ok
 CREATE EXTERNAL TABLE fixed_size_list_array STORED AS PARQUET LOCATION 'tests/data/fixed_size_list_array.parquet';
 
@@ -545,20 +546,26 @@ select * from fixed_size_list_array;
 [3, 4]
 
 query ?
+select f0 from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
 select arrow_cast(f0, 'List(Int64)') from fixed_size_list_array;
 ----
 [1, 2]
 [3, 4]
 
 query ?
-select make_array([1, 2], [3, 4])
-----
-[[1, 2], [3, 4]]
-
-query ?
 select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
 ----
 [[1, 2]]
+
+query ?
+select make_array([10, 20], [30, 40]);
+----
+[[10, 20], [30, 40]]
 
 query ?
 select make_array(f0) from fixed_size_list_array
