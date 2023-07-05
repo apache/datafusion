@@ -37,7 +37,7 @@ use datafusion_expr::Accumulator;
 pub struct GroupsAccumulatorAdapter {
     factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
 
-    /// [`Accumulators`] for each group, stored in group_index order
+    /// state for each group, stored in group_index order
     states: Vec<AccumulatorState>,
 
     /// Current memory usage, in bytes.
@@ -48,12 +48,12 @@ pub struct GroupsAccumulatorAdapter {
 }
 
 struct AccumulatorState {
-    /// [`Accumulators`]
+    /// [`Accumulator`] that stores the per-group state
     accumulator: Box<dyn Accumulator>,
 
-    // scratch space for holding the indexes in the input array that
-    // will be fed to this accumulator. Use u32 to match take kernel
-    // input
+    // scratch space: indexes in the input array that will be fed to
+    // this accumulator. Stores indexes as `u32` to match the arrow
+    // `take` kernel input.
     indices: Vec<u32>,
 }
 

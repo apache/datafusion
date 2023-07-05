@@ -130,11 +130,11 @@ pub(crate) struct GroupedHashAggregateStream2 {
     /// specialized for that partcular aggregate and its input types
     accumulators: Vec<Box<dyn GroupsAccumulator>>,
 
-    /// Arguments or each accumulator.
+    /// Arguments to pass to  accumulator.
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     /// Optional filter expression to evaluate, one for each for
-    /// aggregate. If present, only those rows for which the filter
+    /// accumulator. If present, only those rows for which the filter
     /// evaluate to true should be included in the aggregate results.
     ///
     /// For example, for an aggregate like `SUM(x FILTER x > 100)`,
@@ -161,17 +161,19 @@ pub(crate) struct GroupedHashAggregateStream2 {
     map: RawTable<(u64, usize)>,
 
     /// The actual group by values, stored in arrow [`Row`] format. The
-    /// group_values[i] holds the group value for group_index `i`.
+    /// `group_values[i]` holds the group value for group_index `i`.
     ///
     /// The row format is used to compare group keys quickly. This is
     /// especially important for multi-column group keys.
+    ///
+    /// [`Row`]: arrow::row::Row
     group_values: Rows,
 
-    /// scratch space for the current input Batch being
+    /// scratch space for the current input [`RecordBatch`] being
     /// processed. Reused across batches here to avoid reallocations
     current_group_indices: Vec<usize>,
 
-    /// Tracks if this stream is generating input/output?
+    /// Tracks if this stream is generating input or output
     exec_state: ExecutionState,
 
     /// Execution metrics

@@ -478,11 +478,7 @@ impl RowAccumulator for SumRowAccumulator {
     }
 }
 
-/// An accumulator to compute the average of PrimitiveArray<T>.
-/// Stores values as native types, and does overflow checking
-///
-/// F: Function that calcuates the average value from a sum of
-/// T::Native and a total count
+/// An accumulator to compute the sum of values in [`PrimitiveArray<T>`]
 #[derive(Debug)]
 struct SumGroupsAccumulator<T>
 where

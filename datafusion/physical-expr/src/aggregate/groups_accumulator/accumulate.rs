@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Vectorized [`accumulate`] and [`accumulate_nullable`] functions.
+//! Vectorized accumulate helpers: [`NullState`] and [`accumulate_indices`]
 //!
 //! These functions are designed to be the performance critical inner
 //! loops of accumlators and thus there are multiple versions, to be
@@ -51,21 +51,21 @@ pub struct NullState {
     /// Tracks validity (if we we have seen a null input value for
     /// `group_index`)
     ///
-    /// If null_inputs[i] is true, it means we haven't seen any null values for
-    /// that group (including not having seen any)
+    /// If `null_inputs[i]` is true, have not seen any null values for
+    /// that group (also true for no values)
     ///
-    /// If null_inputs[i] is false, it means we saw at least one null value for
+    /// If `null_inputs[i]` is false, saw at least one null value for
     /// that group
     null_inputs: Option<BooleanBufferBuilder>,
 
     /// If there has been a filter value, has it seen any non-filtered
     /// input values for `group_index`?
     ///
-    /// If seen_values[i] is true, it means we have seen at least one
-    /// non null value for this group
+    /// If `seen_values[i]` is true, it seen at least one non null
+    /// value for this group
     ///
-    /// If seen_values[i] is false, it means we have not seen any
-    /// values that pass the filter yet for the group
+    /// If `seen_values[i]` is false, have not seen any values that
+    /// pass the filter yet for the group
     seen_values: Option<BooleanBufferBuilder>,
 }
 

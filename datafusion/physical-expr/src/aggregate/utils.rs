@@ -149,8 +149,9 @@ pub fn calculate_result_decimal_for_avg(
 
 /// Adjust array type metadata if needed
 ///
-/// Decimal128Arrays are are are created from Vec<NativeType> with default
-/// precision and scale. This function adjusts them down.
+/// Since `Decimal128Arrays` created from `Vec<NativeType>` have
+/// default precision and scale, this function adjusts the output to
+/// match `sum_data_type`.
 pub fn adjust_output_array(
     sum_data_type: &DataType,
     array: ArrayRef,

@@ -465,7 +465,7 @@ impl RowAccumulator for AvgRowAccumulator {
     }
 }
 
-/// An accumulator to compute the average of PrimitiveArray<T>.
+/// An accumulator to compute the average of `[PrimitiveArray<T>]`.
 /// Stores values as native types, and does overflow checking
 ///
 /// F: Function that calcuates the average value from a sum of

@@ -81,7 +81,7 @@ impl Count {
     }
 }
 
-/// An accumulator to compute the average of PrimitiveArray<T>.
+/// An accumulator to compute the counts of [`PrimitiveArray<T>`].
 /// Stores values as native types, and does overflow checking
 ///
 /// Unlike most other accumulators, COUNT never produces NULLs. If no
