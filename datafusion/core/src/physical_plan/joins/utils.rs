@@ -174,7 +174,7 @@ fn adjust_right_order(
         .collect::<Result<Vec<_>>>()
 }
 
-/// Calculate the output order for Join Node
+/// Calculate the output order for hash join.
 pub fn calculate_hash_join_output_order(
     join_type: &JoinType,
     maybe_left_order: Option<&[PhysicalSortExpr]>,
@@ -185,6 +185,8 @@ pub fn calculate_hash_join_output_order(
         Some(right_order) => {
             let result = match join_type {
                 JoinType::Inner => {
+                    // We modify the indices of the right order columns because their
+                    // columns are appended to the right side of the left schema.
                     let mut adjusted_right_order =
                         adjust_right_order(right_order, left_len)?;
                     if let Some(left_order) = maybe_left_order {

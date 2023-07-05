@@ -314,8 +314,6 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
-    // TODO Output ordering might be kept for some cases.
-    // For example if it is inner join then the stream side order can be kept
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         if let Some(order) = &self.output_order {
             Some(order)
@@ -324,6 +322,22 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
+    // For [JoinType::Inner] and [JoinType::RightSemi] in hash joins, the probe phase initiates by
+    // applying the hash function to convert the join key(s) in each row into a hash value from the
+    // probe side table in the order they're arranged. The hash value is used to look up corresponding
+    // entries in the hash table that was constructed from the build side table during the build phase.
+    //
+    // Because of the immediate generation of result rows once a match is found,
+    // the output of the join tends to follow the order in which the rows were read from
+    // the probe side table. This is simply due to the sequence in which the rows were processed.
+    // Hence, it appears that the hash join is preserving the order of the probe side.
+    //
+    // Meanwhile, in the case of a [JoinType::RightAnti] hash join,
+    // the unmatched rows from the probe side are also kept in order.
+    // This is because the **`RightAnti`** join is designed to return rows from the right
+    // (probe side) table that have no match in the left (build side) table. Because the rows
+    // are processed sequentially in the probe phase, and unmatched rows are directly output
+    // as results, these results tend to retain the order of the probe side table.
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![
             false,
