@@ -225,11 +225,11 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn size(&self) -> usize {
-        let batches_size: usize = self.arrays.iter().map(|a| a.len()).sum();
+        let arrays_size: usize = self.arrays.iter().map(|a| a.len()).sum();
 
         std::mem::size_of_val(self)
             + ScalarValue::size_of_vec(&self.all_values)
-            + batches_size
+            + arrays_size
             - std::mem::size_of_val(&self.all_values)
             + self.data_type.size()
             - std::mem::size_of_val(&self.data_type)
