@@ -601,11 +601,8 @@ where
 
         let sums = adjust_output_array(&self.sum_data_type, sums)?;
 
-        let counts = vec![0 as u64; sums.len()];
-        let counts = Arc::new(PrimitiveArray::<UInt64Type>::new(
-            counts.into(),
-            nulls.clone(),
-        ));
+        let counts = vec![0_u64; sums.len()];
+        let counts = Arc::new(PrimitiveArray::<UInt64Type>::new(counts.into(), nulls));
 
         // TODO: Sum expects sum/count array, but count is not needed
         Ok(vec![sums.clone() as ArrayRef, counts as ArrayRef])

@@ -182,20 +182,19 @@ impl AggregateExpr for Avg {
     fn groups_accumulator_supported(&self) -> bool {
         use DataType::*;
 
-        match &self.sum_data_type {
-            Int8
-            | Int16
-            | Int32
-            | Int64
-            | UInt8
-            | UInt16
-            | UInt32
-            | UInt64
-            | Float32
-            | Float64
-            | Decimal128(_, _) => true,
-            _ => false,
-        }
+        matches!(
+            &self.sum_data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+        )
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {

@@ -463,7 +463,7 @@ impl GroupedHashAggregateStream2 {
                     AggregateMode::Partial | AggregateMode::Single => {
                         acc.update_batch(
                             values,
-                            &group_indices,
+                            group_indices,
                             opt_filter,
                             total_num_groups,
                         )?;
@@ -473,7 +473,7 @@ impl GroupedHashAggregateStream2 {
                         // use merge
                         acc.merge_batch(
                             values,
-                            &group_indices,
+                            group_indices,
                             opt_filter,
                             total_num_groups,
                         )?;
@@ -501,7 +501,7 @@ impl GroupedHashAggregateStream2 {
         }
 
         // First output rows are the groups
-        let groups_rows = self.group_values.iter().map(|owned_row| owned_row);
+        let groups_rows = self.group_values.iter();
 
         let mut output: Vec<ArrayRef> = self.row_converter.convert_rows(groups_rows)?;
 

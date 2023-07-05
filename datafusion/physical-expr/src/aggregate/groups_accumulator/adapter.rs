@@ -203,12 +203,12 @@ impl GroupsAccumulatorAdapter {
         // RecordBatch(es)
         let iter = groups_with_rows.iter().zip(offsets.windows(2));
 
-        for (group_idx, offsets) in iter {
-            let state = &mut self.states[*group_idx as usize];
+        for (&group_idx, offsets) in iter {
+            let state = &mut self.states[group_idx];
             let size_pre = state.size();
 
             let values_to_accumulate =
-                slice_and_maybe_filter(&values, opt_filter.as_ref(), &offsets)?;
+                slice_and_maybe_filter(&values, opt_filter.as_ref(), offsets)?;
             (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state
@@ -267,7 +267,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         for state in states {
             let accumulator_state = state.accumulator.state()?;
-            results.resize_with(accumulator_state.len(), || vec![]);
+            results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
                 results[idx].push(state_val);
             }
@@ -276,7 +276,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // create an array for each intermediate column
         let arrays = results
             .into_iter()
-            .map(|state| ScalarValue::iter_to_array(state))
+            .map(ScalarValue::iter_to_array)
             .collect::<Result<Vec<_>>>()?;
 
         // double check each array has the same length (aka the
@@ -348,7 +348,7 @@ pub(crate) fn slice_and_maybe_filter(
         sliced_arrays
             .iter()
             .map(|array| {
-                compute::filter(array, &filter_array).map_err(DataFusionError::ArrowError)
+                compute::filter(array, filter_array).map_err(DataFusionError::ArrowError)
             })
             .collect()
     } else {
