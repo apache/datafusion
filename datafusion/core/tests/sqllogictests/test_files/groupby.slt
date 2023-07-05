@@ -2966,3 +2966,48 @@ SELECT l.sn, r.sn, SUM(l.amount), r.amount
   ON l.sn >= r.sn
   GROUP BY l.sn
   ORDER BY l.sn
+
+# window should propagate primary key successfully
+query TT
+EXPLAIN SELECT *
+  FROM(SELECT *, SUM(l.amount) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as sum_amount
+    FROM sales_global_with_pk AS l
+  ) as l
+  GROUP BY l.sn
+  ORDER BY l.sn
+----
+logical_plan
+Sort: l.sn ASC NULLS LAST
+--Projection: l.zip_code, l.country, l.sn, l.ts, l.currency, l.amount, l.sum_amount
+----Aggregate: groupBy=[[l.sn, l.zip_code, l.country, l.ts, l.currency, l.amount, l.sum_amount]], aggr=[[]]
+------SubqueryAlias: l
+--------Projection: l.zip_code, l.country, l.sn, l.ts, l.currency, l.amount, SUM(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS sum_amount
+----------WindowAggr: windowExpr=[[SUM(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+------------SubqueryAlias: l
+--------------TableScan: sales_global_with_pk projection=[zip_code, country, sn, ts, currency, amount]
+physical_plan
+SortPreservingMergeExec: [sn@2 ASC NULLS LAST]
+--SortExec: expr=[sn@2 ASC NULLS LAST]
+----ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount]
+------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, zip_code@1 as zip_code, country@2 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([sn@0, zip_code@1, country@2, ts@3, currency@4, amount@5, sum_amount@6], 8), input_partitions=1
+------------AggregateExec: mode=Partial, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
+--------------ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, SUM(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@6 as sum_amount]
+----------------BoundedWindowAggExec: wdw=[SUM(l.amount): Ok(Field { name: "SUM(l.amount)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
+------------------CoalescePartitionsExec
+--------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+
+query ITIPTRR
+SELECT *
+  FROM(SELECT *, SUM(l.amount) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as sum_amount
+    FROM sales_global_with_pk AS l
+  ) as l
+  GROUP BY l.sn
+  ORDER BY l.sn
+----
+0 GRC 0 2022-01-01T06:00:00 EUR 30 80
+1 FRA 1 2022-01-01T08:00:00 EUR 50 155
+1 TUR 2 2022-01-01T11:30:00 TRY 75 325
+1 FRA 3 2022-01-02T12:00:00 EUR 200 375
+1 TUR 4 2022-01-03T10:00:00 TRY 100 300
