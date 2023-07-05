@@ -40,10 +40,7 @@ use datafusion_row::accessor::RowAccessor;
 
 use crate::expressions::format_state_name;
 
-use super::groups_accumulator::accumulate::{
-    accumulate_all, accumulate_all_nullable, accumulate_indices,
-    accumulate_indices_nullable,
-};
+use super::groups_accumulator::accumulate::accumulate_indices;
 
 /// COUNT aggregate expression
 /// Returns the amount of non-null values of the given expression.
@@ -87,8 +84,9 @@ impl Count {
 /// An accumulator to compute the average of PrimitiveArray<T>.
 /// Stores values as native types, and does overflow checking
 ///
-/// F: Function that calcuates the average value from a sum of
-/// T::Native and a total count
+/// Unlike most other accumulators, COUNT never produces NULLs. If no
+/// non-null values are seen in any group the output is 0. Thus, this
+/// accumulator has no additional null or seen filter tracking.
 #[derive(Debug)]
 struct CountGroupsAccumulator {
     /// Count per group (use u64 to make Int64Array)
@@ -98,65 +96,6 @@ struct CountGroupsAccumulator {
 impl CountGroupsAccumulator {
     pub fn new() -> Self {
         Self { counts: vec![] }
-    }
-
-    /// Adds one to each group's counter
-    fn increment_counts(
-        &mut self,
-        group_indices: &[usize],
-        values: &dyn Array,
-        opt_filter: Option<&arrow_array::BooleanArray>,
-        total_num_groups: usize,
-    ) {
-        self.counts.resize(total_num_groups, 0);
-
-        if values.null_count() == 0 {
-            accumulate_indices(group_indices, opt_filter, |group_index| {
-                self.counts[group_index] += 1;
-            })
-        } else {
-            accumulate_indices_nullable(
-                group_indices,
-                values,
-                opt_filter,
-                |group_index| {
-                    self.counts[group_index] += 1;
-                },
-            )
-        }
-    }
-
-    /// Adds the counts with the partial counts
-    fn update_counts_with_partial_counts(
-        &mut self,
-        group_indices: &[usize],
-        partial_counts: &Int64Array,
-        opt_filter: Option<&arrow_array::BooleanArray>,
-        total_num_groups: usize,
-    ) {
-        self.counts.resize(total_num_groups, 0);
-
-        if partial_counts.null_count() == 0 {
-            accumulate_all(
-                group_indices,
-                partial_counts,
-                opt_filter,
-                |group_index, partial_count| {
-                    self.counts[group_index] += partial_count;
-                },
-            )
-        } else {
-            accumulate_all_nullable(
-                group_indices,
-                partial_counts,
-                opt_filter,
-                |group_index, partial_count, is_valid| {
-                    if is_valid {
-                        self.counts[group_index] += partial_count;
-                    }
-                },
-            )
-        }
     }
 }
 
@@ -171,7 +110,17 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values.get(0).unwrap();
 
-        self.increment_counts(group_indices, values, opt_filter, total_num_groups);
+        // Add one to each group's counter for each non null, non
+        // filtered value
+        self.counts.resize(total_num_groups, 0);
+        accumulate_indices(
+            group_indices,
+            values.nulls(), // ignore values
+            opt_filter,
+            |group_index| {
+                self.counts[group_index] += 1;
+            },
+        );
 
         Ok(())
     }
@@ -186,12 +135,29 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
         // first batch is counts, second is partial sums
         let partial_counts = values.get(0).unwrap().as_primitive::<Int64Type>();
-        self.update_counts_with_partial_counts(
-            group_indices,
-            partial_counts,
-            opt_filter,
-            total_num_groups,
-        );
+
+        // intermediate counts are always created as non null
+        assert_eq!(partial_counts.null_count(), 0);
+        let partial_counts = partial_counts.values();
+
+        // Adds the counts with the partial counts
+        self.counts.resize(total_num_groups, 0);
+        match opt_filter {
+            Some(filter) => filter
+                .iter()
+                .zip(group_indices.iter())
+                .zip(partial_counts.iter())
+                .for_each(|((filter_value, &group_index), partial_count)| {
+                    if let Some(true) = filter_value {
+                        self.counts[group_index] += partial_count;
+                    }
+                }),
+            None => group_indices.iter().zip(partial_counts.iter()).for_each(
+                |(&group_index, partial_count)| {
+                    self.counts[group_index] += partial_count;
+                },
+            ),
+        }
 
         Ok(())
     }
@@ -199,7 +165,9 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     fn evaluate(&mut self) -> Result<ArrayRef> {
         let counts = std::mem::take(&mut self.counts);
 
-        let array = PrimitiveArray::<Int64Type>::new(counts.into(), None);
+        // Count is always non null (null inputs just don't contribute to the overall values)
+        let nulls = None;
+        let array = PrimitiveArray::<Int64Type>::new(counts.into(), nulls);
 
         Ok(Arc::new(array))
     }
@@ -207,7 +175,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     // return arrays for sums and counts
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
         let counts = std::mem::take(&mut self.counts);
-        let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy
+        let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
