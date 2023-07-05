@@ -339,12 +339,15 @@ async fn find_first_newline(
     let offset = match object_store.get_opts(location, options).await? {
         GetResult::File(_, _) => {
             // Range currently is ignored for GetResult::File(...)
+            // Alternative get_range() will copy the whole range into memory, thus set a limit of
+            // max bytes to read to find the first newline
+            let max_line_length = 4096; // in bytes
             let get_range_end_result = object_store
                 .get_range(
                     location,
                     Range {
                         start: start_byte,
-                        end: end_byte,
+                        end: std::cmp::min(start_byte + max_line_length, end_byte),
                     },
                 )
                 .await;
