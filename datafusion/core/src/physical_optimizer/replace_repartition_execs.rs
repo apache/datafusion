@@ -16,8 +16,7 @@
 // under the License.
 
 //! Repartition optimizer that replaces `SortExec`s and their suitable `RepartitionExec` children with `SortPreservingRepartitionExec`s.
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::Transformed;
 
 use crate::error::Result;
 
@@ -26,22 +25,11 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::ExecutionPlan;
 
 use super::utils::is_repartition;
-use super::PhysicalOptimizerRule;
 
 use datafusion_physical_expr::utils::ordering_satisfy;
 use itertools::enumerate;
 
 use std::sync::Arc;
-
-#[derive(Default)]
-struct ReplaceRepartitionExecs {}
-
-impl ReplaceRepartitionExecs {
-    #[allow(missing_docs)]
-    fn new() -> Self {
-        Self {}
-    }
-}
 
 /// Creates a `SortPreservingRepartitionExec` from given `RepartitionExec`
 fn sort_preserving_repartition(
@@ -137,24 +125,6 @@ pub fn replace_repartition_execs(
     }
 }
 
-impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_down(&replace_repartition_execs)
-    }
-
-    fn name(&self) -> &str {
-        "replace_repartition_execs"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +134,7 @@ mod tests {
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_common::tree_node::TreeNode;
 
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -171,7 +142,6 @@ mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, Partitioning};
-    use crate::prelude::SessionContext;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
@@ -189,9 +159,6 @@ mod tests {
     ///
     macro_rules! assert_optimized {
         ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr) => {
-            let session_ctx = SessionContext::new();
-            let state = session_ctx.state();
-
             let physical_plan = $PLAN;
             let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -206,8 +173,8 @@ mod tests {
 
             let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES.iter().map(|s| *s).collect();
 
-            // Run the actual optimizer
-            let optimized_physical_plan = ReplaceRepartitionExecs::new().optimize(physical_plan, state.config_options())?;
+            // Run the rule top-down
+            let optimized_physical_plan = physical_plan.transform_down(&replace_repartition_execs)?;
 
             // Get string representation of the plan
             let actual = get_plan_string(&optimized_physical_plan);
@@ -225,7 +192,7 @@ mod tests {
         let sort_exprs = vec![sort_expr("a", &schema)];
         let source = csv_exec_sorted(&schema, sort_exprs, false);
         let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
-        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition);
+        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition, true);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
@@ -255,11 +222,15 @@ mod tests {
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
         let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-        let sort = sort_exec(vec![sort_expr_default("a", &schema)], coalesce_partitions);
+        let sort = sort_exec(
+            vec![sort_expr_default("a", &schema)],
+            coalesce_partitions,
+            false,
+        );
         let repartition_rr2 = repartition_exec_round_robin(sort);
         let repartition_hash2 = repartition_exec_hash(repartition_rr2);
         let filter = filter_exec(repartition_hash2, &schema);
-        let sort2 = sort_exec(vec![sort_expr_default("a", &schema)], filter);
+        let sort2 = sort_exec(vec![sort_expr_default("a", &schema)], filter, true);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr_default("a", &schema)], sort2);
@@ -300,7 +271,7 @@ mod tests {
         let repartition_rr = repartition_exec_round_robin(source);
         let filter = filter_exec(repartition_rr, &schema);
         let repartition_hash = repartition_exec_hash(filter);
-        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash);
+        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash, true);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
@@ -333,7 +304,7 @@ mod tests {
         let repartition_hash = repartition_exec_hash(repartition_rr);
         let filter = filter_exec(repartition_hash, &schema);
         let coalesce_batches_exec: Arc<dyn ExecutionPlan> = coalesce_batches_exec(filter);
-        let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec);
+        let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec, true);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
@@ -369,7 +340,8 @@ mod tests {
         let repartition_hash = repartition_exec_hash(coalesce_batches_exec_1);
         let filter = filter_exec(repartition_hash, &schema);
         let coalesce_batches_exec_2 = coalesce_batches_exec(filter);
-        let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec_2);
+        let sort =
+            sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec_2, true);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
@@ -440,7 +412,7 @@ mod tests {
         let filter = filter_exec(repartition_hash, &schema);
         let coalesce_batches = coalesce_batches_exec(filter);
         let repartition_hash_2 = repartition_exec_hash(coalesce_batches);
-        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash_2);
+        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash_2, true);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
@@ -475,7 +447,11 @@ mod tests {
         let source = csv_exec_sorted(&schema, sort_exprs, false);
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
-        let sort = sort_exec(vec![sort_expr_default("c", &schema)], repartition_hash);
+        let sort = sort_exec(
+            vec![sort_expr_default("c", &schema)],
+            repartition_hash,
+            true,
+        );
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr_default("c", &schema)], sort);
@@ -506,7 +482,7 @@ mod tests {
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
         let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-        let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
+        let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions, false);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
@@ -539,11 +515,15 @@ mod tests {
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
         let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-        let sort = sort_exec(vec![sort_expr_default("c", &schema)], coalesce_partitions);
+        let sort = sort_exec(
+            vec![sort_expr_default("c", &schema)],
+            coalesce_partitions,
+            false,
+        );
         let repartition_rr2 = repartition_exec_round_robin(sort);
         let repartition_hash2 = repartition_exec_hash(repartition_rr2);
         let filter = filter_exec(repartition_hash2, &schema);
-        let sort2 = sort_exec(vec![sort_expr_default("c", &schema)], filter);
+        let sort2 = sort_exec(vec![sort_expr_default("c", &schema)], filter, true);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr_default("c", &schema)], sort2);
@@ -596,7 +576,7 @@ mod tests {
 
         let hash_join_exec =
             hash_join_exec(left_coalesce_partitions, right_coalesce_partitions);
-        let sort = sort_exec(vec![sort_expr_default("a", &schema)], hash_join_exec);
+        let sort = sort_exec(vec![sort_expr_default("a", &schema)], hash_join_exec, true);
 
         let physical_plan =
             sort_preserving_merge_exec(vec![sort_expr_default("a", &schema)], sort);
@@ -662,9 +642,13 @@ mod tests {
     fn sort_exec(
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
+        preserve_partitioning: bool,
     ) -> Arc<dyn ExecutionPlan> {
         let sort_exprs = sort_exprs.into_iter().collect();
-        Arc::new(SortExec::new(sort_exprs, input))
+        Arc::new(
+            SortExec::new(sort_exprs, input)
+                .with_preserve_partitioning(preserve_partitioning),
+        )
     }
 
     fn sort_preserving_merge_exec(

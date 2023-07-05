@@ -372,7 +372,6 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let sort_pushdown = SortPushDown::init(new_plan);
         let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
         adjusted.plan.transform_down(&replace_repartition_execs)
-        // Ok(adjusted.plan)
     }
 
     fn name(&self) -> &str {
