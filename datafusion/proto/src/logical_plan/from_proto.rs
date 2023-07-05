@@ -680,6 +680,10 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
+            Value::DurationSecondValue(v) => Self::DurationSecond(Some(*v)),
+            Value::DurationMillisecondValue(v) => Self::DurationMillisecond(Some(*v)),
+            Value::DurationMicrosecondValue(v) => Self::DurationMicrosecond(Some(*v)),
+            Value::DurationNanosecondValue(v) => Self::DurationNanosecond(Some(*v)),
             Value::TimestampValue(v) => {
                 let timezone = if v.timezone.is_empty() {
                     None

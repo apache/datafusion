@@ -18938,6 +18938,18 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::IntervalDaytimeValue(v) => {
                     struct_ser.serialize_field("intervalDaytimeValue", ToString::to_string(&v).as_str())?;
                 }
+                scalar_value::Value::DurationSecondValue(v) => {
+                    struct_ser.serialize_field("durationSecondValue", ToString::to_string(&v).as_str())?;
+                }
+                scalar_value::Value::DurationMillisecondValue(v) => {
+                    struct_ser.serialize_field("durationMillisecondValue", ToString::to_string(&v).as_str())?;
+                }
+                scalar_value::Value::DurationMicrosecondValue(v) => {
+                    struct_ser.serialize_field("durationMicrosecondValue", ToString::to_string(&v).as_str())?;
+                }
+                scalar_value::Value::DurationNanosecondValue(v) => {
+                    struct_ser.serialize_field("durationNanosecondValue", ToString::to_string(&v).as_str())?;
+                }
                 scalar_value::Value::TimestampValue(v) => {
                     struct_ser.serialize_field("timestampValue", v)?;
                 }
@@ -19016,6 +19028,14 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "intervalYearmonthValue",
             "interval_daytime_value",
             "intervalDaytimeValue",
+            "duration_second_value",
+            "durationSecondValue",
+            "duration_millisecond_value",
+            "durationMillisecondValue",
+            "duration_microsecond_value",
+            "durationMicrosecondValue",
+            "duration_nanosecond_value",
+            "durationNanosecondValue",
             "timestamp_value",
             "timestampValue",
             "dictionary_value",
@@ -19057,6 +19077,10 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             Date64Value,
             IntervalYearmonthValue,
             IntervalDaytimeValue,
+            DurationSecondValue,
+            DurationMillisecondValue,
+            DurationMicrosecondValue,
+            DurationNanosecondValue,
             TimestampValue,
             DictionaryValue,
             BinaryValue,
@@ -19107,6 +19131,10 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "date64Value" | "date_64_value" => Ok(GeneratedField::Date64Value),
                             "intervalYearmonthValue" | "interval_yearmonth_value" => Ok(GeneratedField::IntervalYearmonthValue),
                             "intervalDaytimeValue" | "interval_daytime_value" => Ok(GeneratedField::IntervalDaytimeValue),
+                            "durationSecondValue" | "duration_second_value" => Ok(GeneratedField::DurationSecondValue),
+                            "durationMillisecondValue" | "duration_millisecond_value" => Ok(GeneratedField::DurationMillisecondValue),
+                            "durationMicrosecondValue" | "duration_microsecond_value" => Ok(GeneratedField::DurationMicrosecondValue),
+                            "durationNanosecondValue" | "duration_nanosecond_value" => Ok(GeneratedField::DurationNanosecondValue),
                             "timestampValue" | "timestamp_value" => Ok(GeneratedField::TimestampValue),
                             "dictionaryValue" | "dictionary_value" => Ok(GeneratedField::DictionaryValue),
                             "binaryValue" | "binary_value" => Ok(GeneratedField::BinaryValue),
@@ -19266,6 +19294,30 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("intervalDaytimeValue"));
                             }
                             value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::IntervalDaytimeValue(x.0));
+                        }
+                        GeneratedField::DurationSecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationSecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::DurationSecondValue(x.0));
+                        }
+                        GeneratedField::DurationMillisecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationMillisecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::DurationMillisecondValue(x.0));
+                        }
+                        GeneratedField::DurationMicrosecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationMicrosecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::DurationMicrosecondValue(x.0));
+                        }
+                        GeneratedField::DurationNanosecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationNanosecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::DurationNanosecondValue(x.0));
                         }
                         GeneratedField::TimestampValue => {
                             if value__.is_some() {
