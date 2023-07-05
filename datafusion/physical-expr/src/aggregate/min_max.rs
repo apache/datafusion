@@ -1187,17 +1187,17 @@ impl MinMax for i128 {
 }
 
 /// An accumulator to compute the min or max of PrimitiveArray<T>.
-/// Stores values as native types, and does overflow checking
+/// Stores values as native/primitive type
 #[derive(Debug)]
 struct MinMaxGroupsPrimitiveAccumulator<T, const MIN: bool>
 where
     T: ArrowNumericType + Send,
     T::Native: MinMax,
 {
-    /// The type of the computed sum
+    /// The type of the computed min/max
     min_max_data_type: DataType,
 
-    /// The type of the returned sum
+    /// The type of the returned min/max
     return_data_type: DataType,
 
     /// Min/max per group, stored as the native type
@@ -1214,7 +1214,7 @@ where
 {
     pub fn new(min_max_data_type: &DataType, return_data_type: &DataType) -> Self {
         debug!(
-            "MinMaxGroupsPrimitiveAccumulator ({}, sum type: {min_max_data_type:?}) --> {return_data_type:?}",
+            "MinMaxGroupsPrimitiveAccumulator ({}, min/max type: {min_max_data_type:?}) --> {return_data_type:?}",
             std::any::type_name::<T>()
         );
 
@@ -1257,7 +1257,7 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let val: &mut <T as ArrowPrimitiveType>::Native =
+                let val =
                     &mut self.min_max[group_index];
                 match MIN {
                     true => {
@@ -1297,17 +1297,16 @@ where
         Ok(Arc::new(min_max))
     }
 
-    // return arrays for sums and counts
+    // return arrays for min/max values
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build();
 
         let min_max = std::mem::take(&mut self.min_max);
         let min_max = Arc::new(PrimitiveArray::<T>::new(min_max.into(), nulls)); // zero copy
 
-        let sums = adjust_output_array(&self.min_max_data_type, min_max)?;
+        let min_max = adjust_output_array(&self.min_max_data_type, min_max)?;
 
-        // TODO: Sum expects sum/count array, but count is not needed
-        Ok(vec![sums.clone() as ArrayRef])
+        Ok(vec![min_max])
     }
 
     fn size(&self) -> usize {
