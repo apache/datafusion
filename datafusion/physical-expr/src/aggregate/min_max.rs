@@ -1124,12 +1124,75 @@ impl RowAccumulator for MinRowAccumulator {
     }
 }
 
+trait MinMax {
+    fn min() -> Self;
+    fn max() -> Self;
+}
+
+impl MinMax for u32 {
+    fn min() -> Self {
+        u32::MIN
+    }
+    fn max() -> Self {
+        u32::MAX
+    }
+}
+impl MinMax for i32 {
+    fn min() -> Self {
+        i32::MIN
+    }
+    fn max() -> Self {
+        i32::MAX
+    }
+}
+impl MinMax for i64 {
+    fn min() -> Self {
+        i64::MIN
+    }
+    fn max() -> Self {
+        i64::MAX
+    }
+}
+impl MinMax for u64 {
+    fn min() -> Self {
+        u64::MIN
+    }
+    fn max() -> Self {
+        u64::MAX
+    }
+}
+impl MinMax for f32 {
+    fn min() -> Self {
+        f32::MIN
+    }
+    fn max() -> Self {
+        f32::MAX
+    }
+}
+impl MinMax for f64 {
+    fn min() -> Self {
+        f64::MIN
+    }
+    fn max() -> Self {
+        f64::MAX
+    }
+}
+impl MinMax for i128 {
+    fn min() -> Self {
+        i128::MIN
+    }
+    fn max() -> Self {
+        i128::MAX
+    }
+}
+
 /// An accumulator to compute the min or max of PrimitiveArray<T>.
 /// Stores values as native types, and does overflow checking
 #[derive(Debug)]
 struct MinMaxGroupsPrimitiveAccumulator<T, const MIN: bool>
 where
     T: ArrowNumericType + Send,
+    T::Native: MinMax,
 {
     /// The type of the computed sum
     min_max_data_type: DataType,
@@ -1147,6 +1210,7 @@ where
 impl<T, const MIN: bool> MinMaxGroupsPrimitiveAccumulator<T, MIN>
 where
     T: ArrowNumericType + Send,
+    T::Native: MinMax,
 {
     pub fn new(min_max_data_type: &DataType, return_data_type: &DataType) -> Self {
         debug!(
@@ -1166,6 +1230,7 @@ where
 impl<T, const MIN: bool> GroupsAccumulator for MinMaxGroupsPrimitiveAccumulator<T, MIN>
 where
     T: ArrowNumericType + Send,
+    T::Native: MinMax,
 {
     fn update_batch(
         &mut self,
@@ -1218,8 +1283,13 @@ where
             values.get(0).unwrap().as_primitive::<T>();
 
         // Sum partial sums
-        self.min_max
-            .resize_with(total_num_groups, || T::default_value());
+        self.min_max.resize_with(total_num_groups, || {
+            if MIN {
+                T::Native::min()
+            } else {
+                T::Native::max()
+            }
+        });
 
         self.null_state.accumulate(
             group_indices,
@@ -1228,7 +1298,6 @@ where
             total_num_groups,
             |group_index, new_value| {
                 let val = &mut self.min_max[group_index];
-                // TODO: support min and max
                 if MIN {
                     if new_value < *val {
                         *val = new_value;
