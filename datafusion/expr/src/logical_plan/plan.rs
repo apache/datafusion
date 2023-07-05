@@ -1845,31 +1845,46 @@ mod tests {
     fn test_display_graphviz() -> Result<()> {
         let plan = display_plan()?;
 
+        let expected_graphviz = r###"
+// Begin DataFusion GraphViz Plan,
+// display it online here: https://dreampuf.github.io/GraphvizOnline
+
+digraph {
+  subgraph cluster_1
+  {
+    graph[label="LogicalPlan"]
+    2[shape=box label="Projection: employee_csv.id"]
+    3[shape=box label="Filter: employee_csv.state IN (<subquery>)"]
+    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
+    4[shape=box label="Subquery:"]
+    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
+    5[shape=box label="TableScan: employee_csv projection=[state]"]
+    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
+    6[shape=box label="TableScan: employee_csv projection=[id, state]"]
+    3 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
+  }
+  subgraph cluster_7
+  {
+    graph[label="Detailed LogicalPlan"]
+    8[shape=box label="Projection: employee_csv.id\nSchema: [id:Int32]"]
+    9[shape=box label="Filter: employee_csv.state IN (<subquery>)\nSchema: [id:Int32, state:Utf8]"]
+    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
+    10[shape=box label="Subquery:\nSchema: [state:Utf8]"]
+    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
+    11[shape=box label="TableScan: employee_csv projection=[state]\nSchema: [state:Utf8]"]
+    10 -> 11 [arrowhead=none, arrowtail=normal, dir=back]
+    12[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]
+    9 -> 12 [arrowhead=none, arrowtail=normal, dir=back]
+  }
+}
+// End DataFusion GraphViz Plan
+"###;
+
         // just test for a few key lines in the output rather than the
         // whole thing to make test mainteance easier.
         let graphviz = format!("{}", plan.display_graphviz());
 
-        assert!(
-            graphviz.contains(
-                r#"// Begin DataFusion GraphViz Plan (see https://graphviz.org)"#
-            ),
-            "\n{}",
-            plan.display_graphviz()
-        );
-        assert!(
-            graphviz.contains(
-                r#"[shape=box label="TableScan: employee_csv projection=[id, state]"]"#
-            ),
-            "\n{}",
-            plan.display_graphviz()
-        );
-        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]"#),
-                "\n{}", plan.display_graphviz());
-        assert!(
-            graphviz.contains(r#"// End DataFusion GraphViz Plan"#),
-            "\n{}",
-            plan.display_graphviz()
-        );
+        assert_eq!(expected_graphviz, graphviz);
         Ok(())
     }
 
