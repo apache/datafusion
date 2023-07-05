@@ -30,6 +30,7 @@ use std::fmt::{Debug, Display};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 
+use crate::expressions::Column;
 use crate::intervals::{Interval, IntervalBound};
 use std::any::Any;
 use std::hash::{Hash, Hasher};
@@ -151,27 +152,36 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// the boundaries for all known columns.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnalysisContext {
-    /// A list of known column boundaries, ordered by the index
-    /// of the column in the current schema.
+    // A list of known column boundaries, ordered by the index
+    // of the column in the current schema.
     pub column_boundaries: Vec<Option<ExprBoundaries>>,
     // Result of the current analysis.
     pub boundaries: Option<ExprBoundaries>,
+    // Since the analysis can be done on only one column yet,
+    // it is enough to hold one element
+    pub target_column: Option<Column>,
 }
 
 impl AnalysisContext {
     pub fn new(
         input_schema: &Schema,
         column_boundaries: Vec<Option<ExprBoundaries>>,
+        target_column: Option<Column>,
     ) -> Self {
         assert_eq!(input_schema.fields().len(), column_boundaries.len());
         Self {
             column_boundaries,
             boundaries: None,
+            target_column: target_column,
         }
     }
 
     /// Create a new analysis context from column statistics.
-    pub fn from_statistics(input_schema: &Schema, statistics: &Statistics) -> Self {
+    pub fn from_statistics(
+        input_schema: &Schema,
+        statistics: &Statistics,
+        target_column: Option<Column>,
+    ) -> Self {
         // Even if the underlying statistics object doesn't have any column level statistics,
         // we can still create an analysis context with the same number of columns and see whether
         // we can infer it during the way.
@@ -182,7 +192,7 @@ impl AnalysisContext {
                 .collect::<Vec<_>>(),
             None => vec![None; input_schema.fields().len()],
         };
-        Self::new(input_schema, column_boundaries)
+        Self::new(input_schema, column_boundaries, target_column)
     }
 
     pub fn boundaries(&self) -> Option<&ExprBoundaries> {
@@ -222,7 +232,7 @@ pub struct ExprBoundaries {
 
 impl ExprBoundaries {
     /// Create a new `ExprBoundaries`.
-    pub fn try_new(interval: Interval, distinct_count: Option<usize>) -> Result<Self> {
+    pub fn new(interval: Interval, distinct_count: Option<usize>) -> Self {
         Self::new_with_selectivity(interval, distinct_count, None)
     }
 
@@ -231,20 +241,15 @@ impl ExprBoundaries {
         interval: Interval,
         distinct_count: Option<usize>,
         selectivity: Option<f64>,
-    ) -> Result<Self> {
-        if interval.lower.value > interval.upper.value {
-            return Err(DataFusionError::Internal(
-                "Min value of the interval cannot be larger than max value".to_string(),
-            ));
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             interval: Interval::new(
                 IntervalBound::new(interval.lower.value, false),
                 IntervalBound::new(interval.upper.value, false),
             ),
             distinct_count,
             selectivity,
-        })
+        }
     }
 
     /// Create a new `ExprBoundaries` from a column level statistics.
@@ -437,38 +442,42 @@ mod tests {
 
     #[test]
     fn reduce_boundaries() -> Result<()> {
-        let different_boundaries = ExprBoundaries::try_new(
+        let different_boundaries = ExprBoundaries::new(
             Interval::new(
                 IntervalBound::new(ScalarValue::Int32(Some(1)), false),
                 IntervalBound::new(ScalarValue::Int32(Some(10)), false),
             ),
             None,
-        )?;
-        assert_eq!(different_boundaries.interval.reduce(), None);
+        );
+        assert_ne!(
+            different_boundaries.interval.lower.value,
+            different_boundaries.interval.upper.value
+        );
 
-        let scalar_boundaries = ExprBoundaries::try_new(
+        let scalar_boundaries = ExprBoundaries::new(
             Interval::new(
                 IntervalBound::new(ScalarValue::Int32(Some(1)), false),
                 IntervalBound::new(ScalarValue::Int32(Some(1)), false),
             ),
             None,
-        )?;
-        assert_eq!(
-            scalar_boundaries.interval.reduce(),
-            Some(ScalarValue::Int32(Some(1)))
+        );
+        assert!(
+            scalar_boundaries.interval.lower.value
+                == scalar_boundaries.interval.upper.value
+                && scalar_boundaries.interval.lower.value == ScalarValue::Int32(Some(1))
         );
 
         // Can still reduce.
-        let no_boundaries = ExprBoundaries::try_new(
+        let no_boundaries = ExprBoundaries::new(
             Interval::new(
                 IntervalBound::new(ScalarValue::Int32(None), false),
                 IntervalBound::new(ScalarValue::Int32(None), false),
             ),
             None,
-        )?;
-        assert_eq!(
-            no_boundaries.interval.reduce(),
-            Some(ScalarValue::Int32(None))
+        );
+        assert!(
+            no_boundaries.interval.lower.value == no_boundaries.interval.upper.value
+                && no_boundaries.interval.lower.value == ScalarValue::Int32(None)
         );
 
         Ok(())

@@ -535,6 +535,10 @@ impl ExprIntervalGraph {
             Ok(PropagationResult::CannotPropagate)
         }
     }
+
+    pub fn get_interval(&self, index: usize) -> Interval {
+        self.graph[NodeIndex::new(index)].interval.clone()
+    }
 }
 
 /// Indicates whether interval arithmetic is supported for the given expression.

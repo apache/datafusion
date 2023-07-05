@@ -91,13 +91,13 @@ impl PhysicalExpr for Literal {
     /// Return the boundaries of this literal expression (which is the same as
     /// the value it represents).
     fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
-        Ok(context.with_boundaries(Some(ExprBoundaries::try_new(
+        Ok(context.with_boundaries(Some(ExprBoundaries::new(
             Interval::new(
                 IntervalBound::new(self.value().clone(), false),
                 IntervalBound::new(self.value().clone(), false),
             ),
             Some(1),
-        )?)))
+        ))))
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn literal_bounds_analysis() -> Result<()> {
         let schema = Schema::empty();
-        let context = AnalysisContext::new(&schema, vec![]);
+        let context = AnalysisContext::new(&schema, vec![], None);
 
         let literal_expr = lit(42i32);
         let result_ctx = literal_expr.analyze(context)?;

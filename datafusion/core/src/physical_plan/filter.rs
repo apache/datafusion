@@ -37,6 +37,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::intervals::is_operator_supported;
 use datafusion_physical_expr::{split_conjunction, AnalysisContext};
 
 use log::trace;
@@ -176,9 +177,25 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
+        // We currently only support comparisons with one column, and without
+        // a logical operator such AND, OR, etc.
+        let mut columns = vec![];
+        get_columns(self.predicate(), &mut columns);
+        if let Some(binary) = self.predicate().as_any().downcast_ref::<BinaryExpr>() {
+            if !is_operator_supported(&binary.op())
+                || binary.op().ne(&Operator::And)
+                || columns.len() > 1
+            {
+                return Statistics::default();
+            }
+        }
+
         let input_stats = self.input.statistics();
-        let starter_ctx =
-            AnalysisContext::from_statistics(self.input.schema().as_ref(), &input_stats);
+        let starter_ctx = AnalysisContext::from_statistics(
+            self.input.schema().as_ref(),
+            &input_stats,
+            Some(columns[0].clone()),
+        );
 
         let analysis_ctx = match self.predicate.analyze(starter_ctx) {
             Ok(analysis_ctx) => analysis_ctx,
@@ -188,8 +205,9 @@ impl ExecutionPlan for FilterExec {
         match analysis_ctx.boundaries {
             Some(boundaries) => {
                 // Build back the column level statistics from the boundaries inside the
-                // analysis context. It is possible that these are going to be different
-                // than the input statistics, especially when a comparison is made inside
+                // analysis context. Since we can only support filters with one column,
+                // we could update only its column boundaries; however, to be future-proof,
+                // all boundaries are updated.
                 let column_statistics = analysis_ctx
                     .column_boundaries
                     .iter()
@@ -221,6 +239,15 @@ impl ExecutionPlan for FilterExec {
             }
             None => Statistics::default(),
         }
+    }
+}
+
+fn get_columns(expr: &Arc<dyn PhysicalExpr>, columns: &mut Vec<Column>) {
+    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        get_columns(binary.left(), columns);
+        get_columns(binary.right(), columns);
+    } else if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        columns.push(col.clone())
     }
 }
 

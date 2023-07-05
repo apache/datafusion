@@ -511,15 +511,6 @@ impl Interval {
             ))),
         }
     }
-
-    /// Try to reduce the boundaries into a single scalar value, if possible.
-    pub fn reduce(&self) -> Option<ScalarValue> {
-        if self.lower.value == self.upper.value && !self.lower.open && !self.upper.open {
-            Some(self.lower.value.clone())
-        } else {
-            None
-        }
-    }
 }
 
 /// Indicates whether interval arithmetic is supported for the given operator.
@@ -533,6 +524,7 @@ pub fn is_operator_supported(op: &Operator) -> bool {
             | &Operator::GtEq
             | &Operator::Lt
             | &Operator::LtEq
+            | &Operator::Eq
     )
 }
 

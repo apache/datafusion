@@ -19,6 +19,7 @@ mod adapter;
 mod kernels;
 mod kernels_arrow;
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
@@ -83,13 +84,15 @@ use self::kernels_arrow::{
 };
 
 use super::column::Column;
-use super::Literal;
+use super::{lit, Literal};
 use crate::array_expressions::{array_append, array_concat, array_prepend};
 use crate::expressions::cast_column;
 use crate::intervals::cp_solver::{
     propagate_arithmetic, propagate_comparison, PropagationResult,
 };
-use crate::intervals::{apply_operator, ExprIntervalGraph, Interval, IntervalBound};
+use crate::intervals::{
+    apply_operator, is_operator_supported, ExprIntervalGraph, Interval, IntervalBound,
+};
 use crate::physical_expr::down_cast_any_ref;
 use crate::{analysis_expect, AnalysisContext, ExprBoundaries, PhysicalExpr};
 use datafusion_common::cast::as_boolean_array;
@@ -102,7 +105,7 @@ use datafusion_expr::type_coercion::binary::{
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, Clone)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
@@ -767,51 +770,99 @@ impl PhysicalExpr for BinaryExpr {
 
     /// Return the boundaries of this binary expression's result.
     fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
-        match &self.op {
-            Operator::Eq
-            | Operator::Gt
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::GtEq => {
-                // We currently only support comparison when we know at least one of the sides are
-                // a known value (a scalar). This includes predicates like a > 20 or 5 > a.
-                let context = self.left.analyze(context)?;
-                let left_boundaries =
-                    analysis_expect!(context, context.boundaries()).clone();
-
-                let context = self.right.analyze(context)?;
-                let right_boundaries =
-                    analysis_expect!(context, context.boundaries.clone());
-
-                match (
-                    left_boundaries.interval.reduce(),
-                    right_boundaries.interval.reduce(),
-                ) {
-                    (_, Some(right_value)) => {
-                        // We know the right side is a scalar, so we can use the operator as is
-                        analyze_expr_scalar_comparison(
-                            context,
-                            &self.op,
-                            &self.left,
-                            right_value,
-                        )
-                    }
-                    (Some(left_value), _) => {
-                        // If not, we have to swap the operator and left/right (since this means
-                        // left has to be a scalar).
-                        let swapped_op = analysis_expect!(context, self.op.swap());
-                        analyze_expr_scalar_comparison(
-                            context,
-                            &swapped_op,
-                            &self.right,
-                            left_value,
-                        )
-                    }
-                    _ => {
-                        // Both sides are columns, so we give up.
-                        Ok(context.with_boundaries(None))
-                    }
+        let mut graph = ExprIntervalGraph::try_new(Arc::new(self.clone()))?;
+        let target_column = match &context.target_column {
+            Some(col) => col.clone(),
+            None => {
+                return Err(DataFusionError::Internal(
+                    "Target column must be defined in AnalysisContext".to_string(),
+                ))
+            }
+        };
+        let target_index = graph.gather_node_indices(&[Arc::new(target_column.clone())]);
+        let expr = target_index.iter().find(|e| {
+            if let Some(col) = e.0.as_any().downcast_ref::<Column>() {
+                col.name().eq(target_column.name())
+            } else {
+                false
+            }
+        });
+        let (target_boundaries, ind) =
+            match (&context.column_boundaries[target_column.index()], expr) {
+                (Some(val), Some(expr)) => (val.interval.clone(), expr.1),
+                _ => {
+                    return Err(DataFusionError::Internal(
+                        "Interval of target column must be set before analysis"
+                            .to_string(),
+                    ))
                 }
+            };
+
+        let target_interval = (ind, target_boundaries);
+        match graph.update_ranges(&mut [target_interval.clone()])? {
+            PropagationResult::Success => {
+                let predicate = graph.gather_node_indices(&[Arc::new(self.clone())]);
+                let expr = predicate.iter().find(|e| {
+                    if let Some(bin) = e.0.as_any().downcast_ref::<BinaryExpr>() {
+                        bin.eq(self)
+                    } else {
+                        false
+                    }
+                });
+                let ind = match expr {
+                    Some(i) => i.1,
+                    _ => {
+                        return Err(DataFusionError::Internal(
+                            "Undefined predicate".to_string(),
+                        ))
+                    }
+                };
+                let final_result = graph.get_interval(ind);
+
+                let target_updated_interval =
+                    graph.get_interval(target_interval.0.clone());
+                let new_context = context.with_column_update(
+                    target_column.index(),
+                    ExprBoundaries {
+                        interval: target_updated_interval.clone(),
+                        distinct_count: None,
+                        selectivity: None,
+                    },
+                );
+                let pred_distinct =
+                    if final_result.lower.value == final_result.upper.value {
+                        1
+                    } else {
+                        2
+                    };
+                let selectivity =
+                    match (final_result.lower.value, final_result.upper.value) {
+                        (
+                            ScalarValue::Boolean(Some(true)),
+                            ScalarValue::Boolean(Some(true)),
+                        ) => 1.0,
+                        (
+                            ScalarValue::Boolean(Some(false)),
+                            ScalarValue::Boolean(Some(false)),
+                        ) => 0.0,
+                        _ => calculate_selectivity(
+                            &target_interval.1,
+                            &target_updated_interval,
+                        )?,
+                    };
+                if selectivity > 1.0 || selectivity < 0.0 {
+                    return Err(DataFusionError::Internal(format!(
+                        "Selectivity is out of limit: {}",
+                        selectivity
+                    )));
+                }
+
+                let result_boundaries = Some(ExprBoundaries::new_with_selectivity(
+                    target_updated_interval,
+                    Some(pred_distinct),
+                    Some(selectivity),
+                ));
+                Ok(new_context.with_boundaries(result_boundaries))
             }
             _ => Ok(context.with_boundaries(None)),
         }
@@ -871,193 +922,11 @@ impl PartialEq<dyn Any> for BinaryExpr {
     }
 }
 
-// Analyze the comparison between an expression (on the left) and a scalar value
-// (on the right). The new boundaries will indicate whether it is always true, always
-// false, or unknown (with a probablistic selectivity value attached). This operation
-// will also include the new upper/lower boundaries for the operand on the left if
-// they can be determined.
-fn analyze_expr_scalar_comparison(
-    context: AnalysisContext,
-    op: &Operator,
-    left: &Arc<dyn PhysicalExpr>,
-    right: ScalarValue,
-) -> Result<AnalysisContext> {
-    let analyzed = left.analyze(context.clone())?;
-    let left_bounds = analysis_expect!(context, analyzed.boundaries);
-    let left_interval = Interval::new(
-        IntervalBound::new(left_bounds.interval.lower.value, false),
-        IntervalBound::new(left_bounds.interval.upper.value, false),
-    );
-    let right_singleton = Interval::new(
-        IntervalBound::new(right.clone(), false),
-        IntervalBound::new(right.clone(), false),
-    );
-
-    // Direct selectivity is applicable when we can determine that this comparison will
-    // always be true or false (e.g. `x > 10` where the `x`'s min value is 11 or `a < 5`
-    // where the `a`'s max value is 4).
-    let selective_interval = apply_operator(op, &left_interval, &right_singleton)?;
-
-    let selectivity = match (
-        &selective_interval.lower.value,
-        &selective_interval.upper.value,
-    ) {
-        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => 1.0,
-        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => 0.0,
-        _ => calculate_selectivity(op, &left_interval, &right)?,
-    };
-
-    // The context represents all the knowledge we have gathered during the
-    // analysis process, which we can now add more since the expression's upper
-    // and lower boundaries might have changed.
-    let context = match left.as_any().downcast_ref::<Column>() {
-        Some(column_expr) => {
-            let expr = Arc::new(BinaryExpr::new(
-                left.clone(),
-                *op,
-                Arc::new(Literal::new(right)),
-            ));
-            let mut graph = ExprIntervalGraph::try_new(expr)?;
-
-            let col_stats = vec![(left.clone(), left_interval)];
-            let expr_indexes = graph.gather_node_indices(
-                &col_stats.iter().map(|(e, _)| e.clone()).collect_vec(),
-            );
-            let mut col_stat_nodes = col_stats
-                .iter()
-                .zip(expr_indexes.iter())
-                .map(|((_, interval), (_, index))| (*index, interval.clone()))
-                .collect_vec();
-            match graph.update_ranges(&mut col_stat_nodes[..])? {
-                PropagationResult::Success => {
-                    let left_bounds = ExprBoundaries::try_new(
-                        col_stat_nodes[0].1.clone(),
-                        left_bounds.distinct_count,
-                    )?;
-                    context.with_column_update(column_expr.index(), left_bounds)
-                }
-                _ => context,
-            }
-        }
-        None => context,
-    };
-
-    let pred_distinct =
-        if selective_interval.lower.value == selective_interval.upper.value {
-            1
-        } else {
-            2
-        };
-
-    let result_boundaries = Some(ExprBoundaries::new_with_selectivity(
-        selective_interval,
-        Some(pred_distinct),
-        Some(selectivity),
-    )?);
-    Ok(context.with_boundaries(result_boundaries))
-}
-
 fn calculate_selectivity(
-    op: &Operator,
-    left_interval: &Interval,
-    right: &ScalarValue,
+    initial_interval: &Interval,
+    final_interval: &Interval,
 ) -> Result<f64> {
-    // If only one point of the floating value satisfies the filter expression,
-    // the selectivity is the inverse of the number of all possible floating points in the interval.
-    if (right.get_datatype().is_floating() && *op == Operator::Eq)
-        || (right.get_datatype().is_floating()
-            && *op == Operator::LtEq
-            && !left_interval.lower.open
-            && &left_interval.lower.value == right)
-        || (right.get_datatype().is_floating()
-            && *op == Operator::GtEq
-            && !left_interval.upper.open
-            && &left_interval.upper.value == right)
-    {
-        return Ok(1.0 / left_interval.cardinality()? as f64);
-    };
-
-    let left_datatype = left_interval.get_datatype()?;
-    if left_datatype.is_floating() && right.get_datatype().is_floating() {
-        calculate_float_selectivity(left_interval, op, right)
-    } else if left_datatype.is_integer() && right.get_datatype().is_integer() {
-        calculate_integer_selectivity(left_interval, op, right)
-    } else {
-        // Selectivity is supported for integer and floating point types
-        return Err(DataFusionError::Execution(
-            "Couldn't calculate selectivity".to_string(),
-        ));
-    }
-}
-
-fn calculate_float_selectivity(
-    left_interval: &Interval,
-    op: &Operator,
-    right: &ScalarValue,
-) -> Result<f64> {
-    let total_range = left_interval
-        .upper
-        .value
-        .distance(&left_interval.lower.value)
-        .ok_or_else(|| {
-            DataFusionError::Execution(
-                "Distance between interval bounds cannot be calculated".to_string(),
-            )
-        })? as f64;
-
-    // Endpoints are not considered in floating values,
-    // unless endpoints are the only intersection points.
-    let ratio = |lower: &ScalarValue, upper: &ScalarValue| {
-        let diff = upper.sub(lower)?;
-        Ok(match diff {
-            ScalarValue::Float32(Some(diff)) => diff as f64 / total_range,
-            ScalarValue::Float64(Some(diff)) => diff / total_range,
-            _ => 0.0,
-        })
-    };
-    match op {
-        Operator::Lt | Operator::LtEq => ratio(&left_interval.lower.value, right),
-        Operator::Gt | Operator::GtEq => ratio(right, &left_interval.upper.value),
-        // Eq case must be handled in the outer scope.
-        _ => Err(DataFusionError::Execution(
-            "Couldn't calculate selectivity".to_string(),
-        )),
-    }
-}
-
-fn calculate_integer_selectivity(
-    left_interval: &Interval,
-    op: &Operator,
-    right: &ScalarValue,
-) -> Result<f64> {
-    let total_range = left_interval.cardinality()?;
-
-    let ratio = |lower: &IntervalBound, upper: &IntervalBound| {
-        let value = Interval::new(lower.clone(), upper.clone()).cardinality()?;
-        Ok(value as f64 / total_range as f64)
-    };
-    match op {
-        Operator::Lt => {
-            let upper = IntervalBound::new(right.clone(), true);
-            ratio(&left_interval.lower, &upper)
-        }
-        Operator::LtEq => {
-            let upper = IntervalBound::new(right.clone(), false);
-            ratio(&left_interval.lower, &upper)
-        }
-        Operator::Gt => {
-            let lower = IntervalBound::new(right.clone(), true);
-            ratio(&lower, &left_interval.upper)
-        }
-        Operator::GtEq => {
-            let lower = IntervalBound::new(right.clone(), false);
-            ratio(&lower, &left_interval.upper)
-        }
-        Operator::Eq => Ok(1.0 / total_range as f64),
-        _ => Err(DataFusionError::Execution(
-            "Couldn't calculate selectivity".to_string(),
-        )),
-    }
+    Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
 }
 
 /// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
@@ -4577,241 +4446,6 @@ mod tests {
     }
 
     #[test]
-    fn test_analyze_expr_scalar_comparison() -> Result<()> {
-        // A table where the column 'a' has a min of 1, a max of 100.
-        let (schema, statistics) =
-            get_test_table_stats(ScalarValue::from(1i64), ScalarValue::from(100i64));
-
-        let cases = [
-            // (operator, rhs), (expected selectivity, expected min, expected max)
-            // -------------------------------------------------------------------
-            //
-            // Table:
-            //   - a (min = 1, max = 100, distinct_count = null)
-            //
-            // Equality (a = $):
-            //
-            ((Operator::Eq, 1), (1.0 / 100.0, 1, 1)),
-            ((Operator::Eq, 5), (1.0 / 100.0, 5, 5)),
-            ((Operator::Eq, 99), (1.0 / 100.0, 99, 99)),
-            ((Operator::Eq, 100), (1.0 / 100.0, 100, 100)),
-            // For never matches like the following, we still produce the correct
-            // min/max values since if this condition holds by an off chance, then
-            // the result of expression will effectively become the = $limit.
-            ((Operator::Eq, 0), (0.0, 1, 100)),
-            ((Operator::Eq, -101), (0.0, 1, 100)),
-            ((Operator::Eq, 101), (0.0, 1, 100)),
-            //
-            // Less than (a < $):
-            //
-            // Note: upper bounds for less than is currently overstated (by the closest value).
-            // see the comment in `compare_left_boundaries` for the reason
-            ((Operator::Lt, 5), (4.0 / 100.0, 1, 5)),
-            ((Operator::Lt, 99), (98.0 / 100.0, 1, 99)),
-            ((Operator::Lt, 101), (100.0 / 100.0, 1, 100)),
-            // Unlike equality, we now have an obligation to provide a range of values here
-            // so if "col < -100" expr is executed, we don't want to say col can take [0, -100].
-            ((Operator::Lt, 0), (0.0, 1, 100)),
-            ((Operator::Lt, 1), (0.0, 1, 100)),
-            ((Operator::Lt, -100), (0.0, 1, 100)),
-            ((Operator::Lt, -200), (0.0, 1, 100)),
-            // We also don't want to expand the range unnecessarily even if the predicate is
-            // successful.
-            ((Operator::Lt, 200), (1.0, 1, 100)),
-            //
-            // Less than or equal (a <= $):
-            //
-            ((Operator::LtEq, -100), (0.0, 1, 100)),
-            ((Operator::LtEq, 0), (0.0, 1, 100)),
-            ((Operator::LtEq, 1), (1.0 / 100.0, 1, 1)),
-            ((Operator::LtEq, 5), (5.0 / 100.0, 1, 5)),
-            ((Operator::LtEq, 99), (99.0 / 100.0, 1, 99)),
-            ((Operator::LtEq, 100), (100.0 / 100.0, 1, 100)),
-            ((Operator::LtEq, 101), (1.0, 1, 100)),
-            ((Operator::LtEq, 200), (1.0, 1, 100)),
-            //
-            // Greater than (a > $):
-            //
-            ((Operator::Gt, -100), (1.0, 1, 100)),
-            ((Operator::Gt, 0), (1.0, 1, 100)),
-            ((Operator::Gt, 1), (99.0 / 100.0, 1, 100)),
-            ((Operator::Gt, 5), (95.0 / 100.0, 5, 100)),
-            ((Operator::Gt, 99), (1.0 / 100.0, 99, 100)),
-            ((Operator::Gt, 100), (0.0, 1, 100)),
-            ((Operator::Gt, 101), (0.0, 1, 100)),
-            ((Operator::Gt, 200), (0.0, 1, 100)),
-            //
-            // Greater than or equal (a >= $):
-            //
-            ((Operator::GtEq, -100), (1.0, 1, 100)),
-            ((Operator::GtEq, 0), (1.0, 1, 100)),
-            ((Operator::GtEq, 1), (1.0, 1, 100)),
-            ((Operator::GtEq, 5), (96.0 / 100.0, 5, 100)),
-            ((Operator::GtEq, 99), (2.0 / 100.0, 99, 100)),
-            ((Operator::GtEq, 100), (1.0 / 100.0, 100, 100)),
-            ((Operator::GtEq, 101), (0.0, 1, 100)),
-            ((Operator::GtEq, 200), (0.0, 1, 100)),
-        ];
-
-        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
-            let context = AnalysisContext::from_statistics(&schema, &statistics);
-            let left = col("a", &schema).unwrap();
-            let right = ScalarValue::Int64(Some(rhs));
-            let analysis_ctx =
-                analyze_expr_scalar_comparison(context, &operator, &left, right)?;
-            let boundaries = analysis_ctx
-                .boundaries
-                .as_ref()
-                .expect("Analysis must complete for this test!");
-
-            assert_eq!(
-                boundaries
-                    .selectivity
-                    .expect("compare_left_boundaries must produce a selectivity value"),
-                exp_selectivity
-            );
-
-            if exp_selectivity == 1.0 {
-                // When the expected selectivity is 1.0, the resulting expression
-                // should always be true.
-                assert_eq!(
-                    boundaries.interval.reduce(),
-                    Some(ScalarValue::Boolean(Some(true)))
-                );
-            } else if exp_selectivity == 0.0 {
-                // When the expected selectivity is 0.0, the resulting expression
-                // should always be false.
-                assert_eq!(
-                    boundaries.interval.reduce(),
-                    Some(ScalarValue::Boolean(Some(false)))
-                );
-            } else {
-                // Otherwise, it should be [false, true] (since we don't know anything for sure)
-                assert_eq!(
-                    boundaries.interval.lower.value,
-                    ScalarValue::Boolean(Some(false))
-                );
-                assert_eq!(
-                    boundaries.interval.upper.value,
-                    ScalarValue::Boolean(Some(true))
-                );
-            }
-
-            // For getting the updated boundaries, we can simply analyze the LHS
-            // with the existing context.
-            let left_boundaries = left
-                .analyze(analysis_ctx)?
-                .boundaries
-                .expect("this case should not return None");
-            assert_eq!(
-                left_boundaries.interval.lower.value,
-                ScalarValue::Int64(Some(exp_min))
-            );
-            assert_eq!(
-                left_boundaries.interval.upper.value,
-                ScalarValue::Int64(Some(exp_max))
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_comparison_result_estimate_different_type() -> Result<()> {
-        // A table where the column 'a' has a min of 0.0, a max of 50.0.
-        let (schema, statistics) =
-            get_test_table_stats(ScalarValue::from(0.0), ScalarValue::from(50.0));
-        let distance = 50.0;
-
-        // Since the generic version already covers all the paths, we can just
-        // test a small subset of the cases.
-        let cases = [
-            // (operator, rhs), (expected selectivity, expected min, expected max)
-            // -------------------------------------------------------------------
-            //
-            // Table:
-            //   - a (min = 0.0, max = 50.0)
-            //
-            // Never selects (out of range)
-            ((Operator::Eq, -0.1), (0.0, 0.0, 50.0)),
-            ((Operator::Eq, 50.1), (0.0, 0.0, 50.0)),
-            ((Operator::Lt, 0.0), (0.0, 0.0, 50.0)),
-            ((Operator::LtEq, -0.0001), (0.0, 0.0, 50.0)),
-            ((Operator::Gt, 50.1), (0.0, 0.0, 50.0)),
-            ((Operator::GtEq, 50.0001), (0.0, 0.0, 50.0)),
-            // Always selects
-            ((Operator::Lt, 50.0001), (1.0, 0.0, 50.0)),
-            ((Operator::LtEq, 50.0), (1.0, 0.0, 50.0)),
-            ((Operator::Gt, -0.0001), (1.0, 0.0, 50.0)),
-            ((Operator::GtEq, 0.0), (1.0, 0.0, 50.0)),
-            // Partial selection (the x in 'x/distance' is basically
-            // the rounded version of the bound distance, as per the implementation).
-            // 4632233691727265792 is the number of how many floating points
-            // exist in the interval of 0.0 and 50.0.
-            (
-                (Operator::Eq, 27.8),
-                (1.0 / 4632233691727265792.0, 27.8, 27.8),
-            ),
-            ((Operator::Lt, 5.2), (5.2 / distance, 0.0, 5.2)),
-            (
-                (Operator::LtEq, 0.0),
-                (1.0 / 4632233691727265792.0, 0.0, 0.0),
-            ),
-            ((Operator::Gt, 45.5), (4.5 / distance, 45.5, 50.0)),
-            (
-                (Operator::GtEq, 50.0),
-                (1.0 / 4632233691727265792.0, 50.0, 50.0),
-            ),
-        ];
-
-        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
-            let context = AnalysisContext::from_statistics(&schema, &statistics);
-            let left = col("a", &schema).unwrap();
-            let right = ScalarValue::from(rhs);
-            let analysis_ctx =
-                analyze_expr_scalar_comparison(context, &operator, &left, right)?;
-            let boundaries = analysis_ctx
-                .clone()
-                .boundaries
-                .expect("Analysis must complete for this test!");
-
-            assert_eq!(
-                boundaries
-                    .selectivity
-                    .expect("compare_left_boundaries must produce a selectivity value"),
-                exp_selectivity
-            );
-
-            if exp_selectivity == 1.0 {
-                // When the expected selectivity is 1.0, the resulting expression
-                // should always be true.
-                assert_eq!(boundaries.interval.reduce(), Some(ScalarValue::from(true)));
-            } else if exp_selectivity == 0.0 {
-                // When the expected selectivity is 0.0, the resulting expression
-                // should always be false.
-                assert_eq!(boundaries.interval.reduce(), Some(ScalarValue::from(false)));
-            } else {
-                // Otherwise, it should be [false, true] (since we don't know anything for sure)
-                assert_eq!(boundaries.interval.lower.value, ScalarValue::from(false));
-                assert_eq!(boundaries.interval.upper.value, ScalarValue::from(true));
-            }
-
-            let left_boundaries = left
-                .analyze(analysis_ctx)?
-                .boundaries
-                .expect("this case should not return None");
-            assert_eq!(
-                left_boundaries.interval.lower.value,
-                ScalarValue::Float64(Some(exp_min))
-            );
-            assert_eq!(
-                left_boundaries.interval.upper.value,
-                ScalarValue::Float64(Some(exp_max))
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
     fn test_binary_expression_boundaries() -> Result<()> {
         // A table where the column 'a' has a min of 1, a max of 100.
         let (schema, statistics) =
@@ -4826,7 +4460,7 @@ mod tests {
             &schema,
         )?;
 
-        let context = AnalysisContext::from_statistics(&schema, &statistics);
+        let context = AnalysisContext::from_statistics(&schema, &statistics, None);
         let predicate_boundaries = gt
             .analyze(context)?
             .boundaries
@@ -4855,7 +4489,7 @@ mod tests {
             &schema,
         )?;
 
-        let context = AnalysisContext::from_statistics(&schema, &statistics);
+        let context = AnalysisContext::from_statistics(&schema, &statistics, None);
         let predicate_boundaries = gt
             .analyze(context)?
             .boundaries
@@ -4960,4 +4594,71 @@ mod tests {
                 .unwrap();
         assert_eq!(&casted, &dictionary);
     }
+}
+
+#[test]
+fn test_01() {
+    let bin = BinaryExpr::new(
+        lit(ScalarValue::from(1)),
+        Operator::Lt,
+        Arc::new(Column::new("a", 2)),
+    );
+    let field = [
+        Field::new("c", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+        Field::new("a", DataType::Int32, false),
+    ]
+    .into_iter();
+    let analysis = AnalysisContext::new(
+        &Schema {
+            fields: Fields::from_iter(field),
+            metadata: HashMap::new(),
+        },
+        vec![
+            Some(ExprBoundaries {
+                interval: Interval::new(
+                    IntervalBound {
+                        value: ScalarValue::from(10),
+                        open: false,
+                    },
+                    IntervalBound {
+                        value: ScalarValue::from(25),
+                        open: false,
+                    },
+                ),
+                selectivity: None,
+                distinct_count: None,
+            }),
+            Some(ExprBoundaries {
+                interval: Interval::new(
+                    IntervalBound {
+                        value: ScalarValue::from(0),
+                        open: false,
+                    },
+                    IntervalBound {
+                        value: ScalarValue::from(50),
+                        open: false,
+                    },
+                ),
+                selectivity: None,
+                distinct_count: None,
+            }),
+            Some(ExprBoundaries {
+                interval: Interval::new(
+                    IntervalBound {
+                        value: ScalarValue::from(0),
+                        open: false,
+                    },
+                    IntervalBound {
+                        value: ScalarValue::from(100),
+                        open: false,
+                    },
+                ),
+                selectivity: None,
+                distinct_count: None,
+            }),
+        ],
+        Some(Column::new("a", 2)),
+    );
+    let _ = bin.analyze(analysis);
 }
