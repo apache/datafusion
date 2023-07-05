@@ -582,7 +582,7 @@ where
             partial_sums,
             opt_filter,
             total_num_groups,
-            |group_index, new_value| {
+            |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
                 let sum = &mut self.sums[group_index];
                 *sum = sum.add_wrapping(new_value);
             },
