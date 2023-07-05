@@ -17884,6 +17884,8 @@ impl serde::Serialize for ScalarFunction {
             Self::Cardinality => "Cardinality",
             Self::TrimArray => "TrimArray",
             Self::ArrayContains => "ArrayContains",
+            Self::Encode => "Encode",
+            Self::Decode => "Decode",
         };
         serializer.serialize_str(variant)
     }
@@ -17996,6 +17998,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cardinality",
             "TrimArray",
             "ArrayContains",
+            "Encode",
+            "Decode",
         ];
 
         struct GeneratedVisitor;
@@ -18139,6 +18143,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cardinality" => Ok(ScalarFunction::Cardinality),
                     "TrimArray" => Ok(ScalarFunction::TrimArray),
                     "ArrayContains" => Ok(ScalarFunction::ArrayContains),
+                    "Encode" => Ok(ScalarFunction::Encode),
+                    "Decode" => Ok(ScalarFunction::Decode),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

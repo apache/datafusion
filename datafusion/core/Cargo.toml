@@ -38,10 +38,11 @@ path = "src/lib.rs"
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "compression"]
+default = ["crypto_expressions", "encoding__expressions", "regex_expressions", "unicode_expressions", "compression"]
 # Enables support for non-scalar, binary operations on dictionaries
 # Note: this results in significant additional codegen
 dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions", "datafusion-optimizer/dictionary_expressions"]
+encoding__expressions = ["datafusion-physical-expr/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 pyarrow = ["datafusion-common/pyarrow"]

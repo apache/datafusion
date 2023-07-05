@@ -63,10 +63,14 @@ pub enum BuiltinScalarFunction {
     Cos,
     /// cos
     Cosh,
+    /// Decode
+    Decode,
     /// degrees
     Degrees,
     /// Digest
     Digest,
+    /// Encode
+    Encode,
     /// exp
     Exp,
     /// factorial
@@ -298,7 +302,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
             BuiltinScalarFunction::Cosh => Volatility::Immutable,
+            BuiltinScalarFunction::Decode => Volatility::Immutable,
             BuiltinScalarFunction::Degrees => Volatility::Immutable,
+            BuiltinScalarFunction::Encode => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
@@ -626,6 +632,32 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Digest => {
                 utf8_or_binary_to_binary_type(&input_expr_types[0], "digest")
             }
+            BuiltinScalarFunction::Encode => Ok(match input_expr_types[0] {
+                Utf8 => Utf8,
+                LargeUtf8 => LargeUtf8,
+                Binary => Utf8,
+                LargeBinary => LargeUtf8,
+                Null => Null,
+                _ => {
+                    // this error is internal as `data_types` should have captured this.
+                    return Err(DataFusionError::Internal(
+                        "The encode function can only accept utf8 or binary.".to_string(),
+                    ));
+                }
+            }),
+            BuiltinScalarFunction::Decode => Ok(match input_expr_types[0] {
+                Utf8 => Binary,
+                LargeUtf8 => LargeBinary,
+                Binary => Binary,
+                LargeBinary => LargeBinary,
+                Null => Null,
+                _ => {
+                    // this error is internal as `data_types` should have captured this.
+                    return Err(DataFusionError::Internal(
+                        "The decode function can only accept utf8 or binary.".to_string(),
+                    ));
+                }
+            }),
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
             }
@@ -887,6 +919,24 @@ impl BuiltinScalarFunction {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
             BuiltinScalarFunction::Digest => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Binary, Utf8]),
+                    Exact(vec![LargeBinary, Utf8]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Encode => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Binary, Utf8]),
+                    Exact(vec![LargeBinary, Utf8]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Decode => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8]),
                     Exact(vec![LargeUtf8, Utf8]),
@@ -1174,6 +1224,10 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::SHA256 => &["sha256"],
         BuiltinScalarFunction::SHA384 => &["sha384"],
         BuiltinScalarFunction::SHA512 => &["sha512"],
+
+        // encode/decode
+        BuiltinScalarFunction::Encode => &["encode"],
+        BuiltinScalarFunction::Decode => &["decode"],
 
         // other functions
         BuiltinScalarFunction::Struct => &["struct"],
