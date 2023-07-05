@@ -73,9 +73,13 @@ query II
 SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvEngineID" ORDER BY COUNT(*) DESC;
 ----
 
-# https://github.com/apache/arrow-datafusion/issues/6790
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed
+query II rowsort
 SELECT "RegionID", COUNT(DISTINCT "UserID") AS u FROM hits GROUP BY "RegionID" ORDER BY u DESC LIMIT 10;
+----
+197 1
+229 1
+39 1
+839 2
 
 query IIIRI rowsort
 SELECT "RegionID", SUM("AdvEngineID"), COUNT(*) AS c, AVG("ResolutionWidth"), COUNT(DISTINCT "UserID") FROM hits GROUP BY "RegionID" ORDER BY c DESC LIMIT 10;
@@ -85,20 +89,21 @@ SELECT "RegionID", SUM("AdvEngineID"), COUNT(*) AS c, AVG("ResolutionWidth"), CO
 39 0 1 0 1
 839 0 6 0 2
 
-# https://github.com/apache/arrow-datafusion/issues/6790
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed
+query TI
 SELECT "MobilePhoneModel", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "MobilePhoneModel" <> '' GROUP BY "MobilePhoneModel" ORDER BY u DESC LIMIT 10;
+----
 
-# https://github.com/apache/arrow-datafusion/issues/6790
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed
+query ITI
 SELECT "MobilePhone", "MobilePhoneModel", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "MobilePhoneModel" <> '' GROUP BY "MobilePhone", "MobilePhoneModel" ORDER BY u DESC LIMIT 10;
+----
 
 query TI
 SELECT "SearchPhrase", COUNT(*) AS c FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
 ----
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed
+query TI
 SELECT "SearchPhrase", COUNT(DISTINCT "UserID") AS u FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY u DESC LIMIT 10;
+----
 
 query ITI
 SELECT "SearchEngineID", "SearchPhrase", COUNT(*) AS c FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchEngineID", "SearchPhrase" ORDER BY c DESC LIMIT 10;
