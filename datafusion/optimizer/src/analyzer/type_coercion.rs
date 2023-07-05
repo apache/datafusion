@@ -330,8 +330,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     &self.schema,
                     &fun.signature,
                 )?;
-                let expr = Expr::ScalarUDF(ScalarUDF::new(fun, new_expr));
-                Ok(expr)
+                Ok(Expr::ScalarUDF(ScalarUDF::new(fun, new_expr)))
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let new_args = coerce_arguments_for_signature(
@@ -341,8 +340,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 )?;
                 let new_args =
                     coerce_arguments_for_fun(new_args.as_slice(), &self.schema, &fun)?;
-                let p = Expr::ScalarFunction(ScalarFunction::new(fun, new_args));
-                Ok(p)
+                Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
             }
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
@@ -521,9 +519,6 @@ fn coerce_window_frame(
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
     get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
-    // expr.clone().cast_to(&DataType::Boolean, schema)
-
-    // coerce_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
     cast_expr(expr, &DataType::Boolean, schema)
 }
 
@@ -621,7 +616,6 @@ fn cast_array_expr(
         Ok(expr.clone())
     } else {
         cast_expr(expr, to_type, schema)
-        // expr.clone().cast_to(to_type, schema)
     }
 }
 
@@ -1245,7 +1239,7 @@ mod test {
     }
 
     #[test]
-    fn test_fixed_size_list() -> Result<()> {
+    fn test_casting_for_fixed_size_list() -> Result<()> {
         let val = lit(ScalarValue::Fixedsizelist(
             Some(vec![
                 ScalarValue::from(1i32),
