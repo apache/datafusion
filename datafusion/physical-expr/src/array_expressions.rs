@@ -111,7 +111,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
         DataType::List(..) => {
             let arrays =
                 downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
-            let len: i32 = arrays.len() as i32;
+            let len = arrays.iter().map(|arr| arr.len() as i32).sum();
             let capacity =
                 Capacities::Array(arrays.iter().map(|a| a.get_array_memory_size()).sum());
             let array_data: Vec<_> =

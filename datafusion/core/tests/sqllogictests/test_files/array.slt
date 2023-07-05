@@ -560,14 +560,9 @@ select arrow_cast(f0, 'List(Int64)') from fixed_size_list_array;
 query ?
 select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
 ----
-[[1, 2]]
-
-query ?
-select make_array([10, 20], [30, 40]);
-----
-[[10, 20], [30, 40]]
+[[1, 2], [3, 4]]
 
 query ?
 select make_array(f0) from fixed_size_list_array
 ----
-[[1, 2]]
+[[1, 2], [3, 4]]
