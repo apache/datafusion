@@ -18,9 +18,9 @@
 //! Implementation of the `arrow_cast` function that allows
 //! casting to arbitrary arrow types (rather than SQL types)
 
-use std::{fmt::Display, iter::Peekable, str::Chars};
+use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 
 use datafusion_expr::{Expr, ExprSchemable};
@@ -150,11 +150,22 @@ impl<'a> Parser<'a> {
             Token::Decimal128 => self.parse_decimal_128(),
             Token::Decimal256 => self.parse_decimal_256(),
             Token::Dictionary => self.parse_dictionary(),
+            Token::List => self.parse_list(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
             )),
         }
+    }
+
+    /// Parses the List type
+    fn parse_list(&mut self) -> Result<DataType> {
+        self.expect_token(Token::LParen)?;
+        let data_type = self.parse_next_type()?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::List(Arc::new(Field::new(
+            "item", data_type, true,
+        ))))
     }
 
     /// Parses the next timeunit
@@ -486,6 +497,8 @@ impl<'a> Tokenizer<'a> {
             "Date32" => Token::SimpleType(DataType::Date32),
             "Date64" => Token::SimpleType(DataType::Date64),
 
+            "List" => Token::List,
+
             "Second" => Token::TimeUnit(TimeUnit::Second),
             "Millisecond" => Token::TimeUnit(TimeUnit::Millisecond),
             "Microsecond" => Token::TimeUnit(TimeUnit::Microsecond),
@@ -573,12 +586,14 @@ enum Token {
     None,
     Integer(i64),
     DoubleQuotedString(String),
+    List,
 }
 
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Token::SimpleType(t) => write!(f, "{t}"),
+            Token::List => write!(f, "List"),
             Token::Timestamp => write!(f, "Timestamp"),
             Token::Time32 => write!(f, "Time32"),
             Token::Time64 => write!(f, "Time64"),
