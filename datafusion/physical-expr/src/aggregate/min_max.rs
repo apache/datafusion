@@ -37,7 +37,7 @@ use arrow::{
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowPrimitiveType, Decimal128Type, Float32Type, Float64Type, UInt32Type, UInt64Type,
+    Decimal128Type, Float32Type, Float64Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{ArrowNumericType, PrimitiveArray};
 use datafusion_common::ScalarValue;

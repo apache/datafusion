@@ -532,19 +532,8 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values.get(0).unwrap().as_primitive::<T>();
 
-        // increment counts
+        // increment counts, update sums
         self.counts.resize(total_num_groups, 0);
-        self.null_state.accumulate(
-            group_indices,
-            values,
-            opt_filter,
-            total_num_groups,
-            |group_index, _new_value| {
-                self.counts[group_index] += 1;
-            },
-        );
-
-        // update sums
         self.sums.resize(total_num_groups, T::default_value());
         self.null_state.accumulate(
             group_indices,
@@ -554,6 +543,8 @@ where
             |group_index, new_value| {
                 let sum = &mut self.sums[group_index];
                 *sum = sum.add_wrapping(new_value);
+
+                self.counts[group_index] += 1;
             },
         );
 
