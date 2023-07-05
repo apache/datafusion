@@ -33,7 +33,10 @@ use arrow::{
     datatypes::Field,
 };
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Decimal128Type, Int32Type, Int64Type, UInt32Type, UInt64Type};
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type,
+    UInt64Type,
+};
 use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -168,6 +171,14 @@ impl AggregateExpr for Sum {
                 &self.data_type,
             ))),
             DataType::Int32 => Ok(Box::new(SumGroupsAccumulator::<Int32Type>::new(
+                &self.data_type,
+                &self.data_type,
+            ))),
+            DataType::Float32 => Ok(Box::new(SumGroupsAccumulator::<Float32Type>::new(
+                &self.data_type,
+                &self.data_type,
+            ))),
+            DataType::Float64 => Ok(Box::new(SumGroupsAccumulator::<Float64Type>::new(
                 &self.data_type,
                 &self.data_type,
             ))),
