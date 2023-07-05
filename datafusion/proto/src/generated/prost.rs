@@ -2239,6 +2239,7 @@ pub enum ScalarFunction {
     Cardinality = 98,
     TrimArray = 99,
     ArrayContains = 100,
+    CurrentTimestamp = 101,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2348,6 +2349,7 @@ impl ScalarFunction {
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::TrimArray => "TrimArray",
             ScalarFunction::ArrayContains => "ArrayContains",
+            ScalarFunction::CurrentTimestamp => "CurrentTimestamp",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2454,6 +2456,7 @@ impl ScalarFunction {
             "Cardinality" => Some(Self::Cardinality),
             "TrimArray" => Some(Self::TrimArray),
             "ArrayContains" => Some(Self::ArrayContains),
+            "CurrentTimestamp" => Some(Self::CurrentTimestamp),
             _ => None,
         }
     }
