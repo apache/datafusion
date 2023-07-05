@@ -488,9 +488,9 @@ impl BuiltinScalarFunction {
             )))),
             BuiltinScalarFunction::ArrayLength => Ok(UInt8),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt8),
-            BuiltinScalarFunction::ArrayPosition => Ok(UInt8),
+            BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
             BuiltinScalarFunction::ArrayPositions => {
-                Ok(List(Arc::new(Field::new("item", UInt8, true))))
+                Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
             BuiltinScalarFunction::ArrayPrepend => Ok(List(Arc::new(Field::new(
                 "item",
