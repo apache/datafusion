@@ -1281,40 +1281,7 @@ where
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        assert_eq!(values.len(), 1, "one argument to merge_batch");
-        // first batch is partial sums
-        let partial_min_max: &PrimitiveArray<T> =
-            values.get(0).unwrap().as_primitive::<T>();
-
-        // Sum partial sums
-        self.min_max.resize_with(total_num_groups, || {
-            if MIN {
-                T::Native::max()
-            } else {
-                T::Native::min()
-            }
-        });
-
-        self.null_state.accumulate(
-            group_indices,
-            partial_min_max,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value| {
-                let val = &mut self.min_max[group_index];
-                if MIN {
-                    if new_value < *val {
-                        *val = new_value;
-                    }
-                } else {
-                    if new_value > *val {
-                        *val = new_value;
-                    }
-                }
-            },
-        );
-
-        Ok(())
+        Self::update_batch(self, values, group_indices, opt_filter, total_num_groups)
     }
 
     fn evaluate(&mut self) -> Result<ArrayRef> {
