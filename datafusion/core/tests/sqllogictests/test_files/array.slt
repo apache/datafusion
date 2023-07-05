@@ -417,8 +417,6 @@ select make_array(x, y) from foo2;
 
 # array_contains
 
-
-
 # array_contains scalar function #1
 query BBB rowsort
 select array_contains(make_array(1, 2, 3), make_array(1, 1, 2, 3)), array_contains([1, 2, 3], [1, 1, 2]), array_contains([1, 2, 3], [2, 1, 3, 1]);
@@ -531,3 +529,40 @@ SELECT
 FROM t
 ----
 true true
+
+statement ok
+CREATE EXTERNAL TABLE fixed_size_list_array STORED AS PARQUET LOCATION 'tests/data/fixed_size_list_array.parquet';
+
+query T
+select arrow_typeof(f0) from fixed_size_list_array;
+----
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+
+query ?
+select * from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select f0 from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select arrow_cast(f0, 'List(Int64)') from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
+----
+[[1, 2], [3, 4]]
+
+query ?
+select make_array(f0) from fixed_size_list_array
+----
+[[1, 2], [3, 4]]
