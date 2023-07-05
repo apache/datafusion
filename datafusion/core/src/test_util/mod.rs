@@ -26,7 +26,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
-use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
@@ -412,7 +412,7 @@ impl ExecutionPlan for UnboundedExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "UnboundableExec: unbounded={}",
@@ -518,7 +518,7 @@ pub async fn register_unbounded_file_with_ordering(
     schema: SchemaRef,
     file_path: &Path,
     table_name: &str,
-    file_sort_order: Option<Vec<Expr>>,
+    file_sort_order: Vec<Vec<Expr>>,
     with_unbounded_execution: bool,
 ) -> Result<()> {
     // Mark infinite and provide schema:

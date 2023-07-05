@@ -34,6 +34,6 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
-datafusion-common = { path = "../common", version = "24.0.0" }
+datafusion-common = { path = "../common", version = "27.0.0" }
 paste = "^1.0"
 rand = "0.8"

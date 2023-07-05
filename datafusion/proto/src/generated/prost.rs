@@ -38,7 +38,7 @@ pub struct DfSchema {
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -97,6 +97,8 @@ pub mod logical_plan_node {
         CustomScan(super::CustomTableScanNode),
         #[prost(message, tag = "26")]
         Prepare(::prost::alloc::boxed::Box<super::PrepareNode>),
+        #[prost(message, tag = "27")]
+        DropView(super::DropViewNode),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -129,6 +131,12 @@ pub struct ParquetFormat {}
 pub struct AvroFormat {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LogicalExprNodeCollection {
+    #[prost(message, repeated, tag = "1")]
+    pub logical_expr_nodes: ::prost::alloc::vec::Vec<LogicalExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListingTableScanNode {
     #[prost(message, optional, tag = "14")]
     pub table_name: ::core::option::Option<OwnedTableReference>,
@@ -149,7 +157,7 @@ pub struct ListingTableScanNode {
     #[prost(uint32, tag = "9")]
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
-    pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12")]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,
@@ -292,7 +300,9 @@ pub struct CreateExternalTableNode {
     #[prost(string, tag = "10")]
     pub file_compression_type: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "13")]
-    pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
+    #[prost(bool, tag = "14")]
+    pub unbounded: bool,
     #[prost(map = "string, string", tag = "11")]
     pub options: ::std::collections::HashMap<
         ::prost::alloc::string::String,
@@ -326,6 +336,16 @@ pub struct CreateCatalogNode {
     pub catalog_name: ::prost::alloc::string::String,
     #[prost(bool, tag = "2")]
     pub if_not_exists: bool,
+    #[prost(message, optional, tag = "3")]
+    pub schema: ::core::option::Option<DfSchema>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DropViewNode {
+    #[prost(message, optional, tag = "1")]
+    pub name: ::core::option::Option<OwnedTableReference>,
+    #[prost(bool, tag = "2")]
+    pub if_exists: bool,
     #[prost(message, optional, tag = "3")]
     pub schema: ::core::option::Option<DfSchema>,
 }
@@ -727,7 +747,7 @@ pub struct WindowExprNode {
     /// repeated LogicalExprNode filter = 7;
     #[prost(message, optional, tag = "8")]
     pub window_frame: ::core::option::Option<WindowFrame>,
-    #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2")]
+    #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2, 3, 9")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
 }
 /// Nested message and enum types in `WindowExprNode`.
@@ -737,9 +757,12 @@ pub mod window_expr_node {
     pub enum WindowFunction {
         #[prost(enumeration = "super::AggregateFunction", tag = "1")]
         AggrFunction(i32),
-        /// udaf = 3
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
+        #[prost(string, tag = "3")]
+        Udaf(::prost::alloc::string::String),
+        #[prost(string, tag = "9")]
+        Udwf(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1064,7 +1087,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1119,6 +1142,14 @@ pub mod scalar_value {
         IntervalYearmonthValue(i32),
         #[prost(int64, tag = "25")]
         IntervalDaytimeValue(i64),
+        #[prost(int64, tag = "35")]
+        DurationSecondValue(i64),
+        #[prost(int64, tag = "36")]
+        DurationMillisecondValue(i64),
+        #[prost(int64, tag = "37")]
+        DurationMicrosecondValue(i64),
+        #[prost(int64, tag = "38")]
+        DurationNanosecondValue(i64),
         #[prost(message, tag = "26")]
         TimestampValue(super::ScalarTimestampValue),
         #[prost(message, tag = "27")]
@@ -1493,6 +1524,8 @@ pub struct PhysicalScalarUdfNode {
 pub struct PhysicalAggregateExprNode {
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "5")]
+    pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
@@ -1686,6 +1719,12 @@ pub struct ScanLimit {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalSortExprNodeCollection {
+    #[prost(message, repeated, tag = "1")]
+    pub physical_sort_expr_nodes: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileScanExecConf {
     #[prost(message, repeated, tag = "1")]
     pub file_groups: ::prost::alloc::vec::Vec<FileGroup>,
@@ -1702,7 +1741,7 @@ pub struct FileScanExecConf {
     #[prost(string, tag = "8")]
     pub object_store_url: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "9")]
-    pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1895,6 +1934,9 @@ pub struct SortPreservingMergeExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Maximum number of highest/lowest rows to fetch; negative means no limit
+    #[prost(int64, tag = "3")]
+    pub fetch: i64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2182,6 +2224,21 @@ pub enum ScalarFunction {
     Factorial = 83,
     Lcm = 84,
     Gcd = 85,
+    ArrayAppend = 86,
+    ArrayConcat = 87,
+    ArrayDims = 88,
+    ArrayFill = 89,
+    ArrayLength = 90,
+    ArrayNdims = 91,
+    ArrayPosition = 92,
+    ArrayPositions = 93,
+    ArrayPrepend = 94,
+    ArrayRemove = 95,
+    ArrayReplace = 96,
+    ArrayToString = 97,
+    Cardinality = 98,
+    TrimArray = 99,
+    ArrayContains = 100,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2276,6 +2333,21 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
+            ScalarFunction::ArrayAppend => "ArrayAppend",
+            ScalarFunction::ArrayConcat => "ArrayConcat",
+            ScalarFunction::ArrayDims => "ArrayDims",
+            ScalarFunction::ArrayFill => "ArrayFill",
+            ScalarFunction::ArrayLength => "ArrayLength",
+            ScalarFunction::ArrayNdims => "ArrayNdims",
+            ScalarFunction::ArrayPosition => "ArrayPosition",
+            ScalarFunction::ArrayPositions => "ArrayPositions",
+            ScalarFunction::ArrayPrepend => "ArrayPrepend",
+            ScalarFunction::ArrayRemove => "ArrayRemove",
+            ScalarFunction::ArrayReplace => "ArrayReplace",
+            ScalarFunction::ArrayToString => "ArrayToString",
+            ScalarFunction::Cardinality => "Cardinality",
+            ScalarFunction::TrimArray => "TrimArray",
+            ScalarFunction::ArrayContains => "ArrayContains",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2367,6 +2439,21 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
+            "ArrayAppend" => Some(Self::ArrayAppend),
+            "ArrayConcat" => Some(Self::ArrayConcat),
+            "ArrayDims" => Some(Self::ArrayDims),
+            "ArrayFill" => Some(Self::ArrayFill),
+            "ArrayLength" => Some(Self::ArrayLength),
+            "ArrayNdims" => Some(Self::ArrayNdims),
+            "ArrayPosition" => Some(Self::ArrayPosition),
+            "ArrayPositions" => Some(Self::ArrayPositions),
+            "ArrayPrepend" => Some(Self::ArrayPrepend),
+            "ArrayRemove" => Some(Self::ArrayRemove),
+            "ArrayReplace" => Some(Self::ArrayReplace),
+            "ArrayToString" => Some(Self::ArrayToString),
+            "Cardinality" => Some(Self::Cardinality),
+            "TrimArray" => Some(Self::TrimArray),
+            "ArrayContains" => Some(Self::ArrayContains),
             _ => None,
         }
     }
@@ -2398,6 +2485,10 @@ pub enum AggregateFunction {
     BitXor = 21,
     BoolAnd = 22,
     BoolOr = 23,
+    /// When a function with the same name exists among built-in window functions,
+    /// we append "_AGG" to obey name scoping rules.
+    FirstValueAgg = 24,
+    LastValueAgg = 25,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2432,6 +2523,8 @@ impl AggregateFunction {
             AggregateFunction::BitXor => "BIT_XOR",
             AggregateFunction::BoolAnd => "BOOL_AND",
             AggregateFunction::BoolOr => "BOOL_OR",
+            AggregateFunction::FirstValueAgg => "FIRST_VALUE_AGG",
+            AggregateFunction::LastValueAgg => "LAST_VALUE_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2463,6 +2556,8 @@ impl AggregateFunction {
             "BIT_XOR" => Some(Self::BitXor),
             "BOOL_AND" => Some(Self::BoolAnd),
             "BOOL_OR" => Some(Self::BoolOr),
+            "FIRST_VALUE_AGG" => Some(Self::FirstValueAgg),
+            "LAST_VALUE_AGG" => Some(Self::LastValueAgg),
             _ => None,
         }
     }

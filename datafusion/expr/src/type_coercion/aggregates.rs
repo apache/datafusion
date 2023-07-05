@@ -264,7 +264,9 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Median => Ok(input_types.to_vec()),
+        AggregateFunction::Median
+        | AggregateFunction::FirstValue
+        | AggregateFunction::LastValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
     }
 }
@@ -537,7 +539,6 @@ pub fn is_approx_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate_function;
     use arrow::datatypes::DataType;
 
     #[test]
@@ -545,21 +546,21 @@ mod tests {
         // test input args with error number input types
         let fun = AggregateFunction::Min;
         let input_types = vec![DataType::Int64, DataType::Int32];
-        let signature = aggregate_function::signature(&fun);
+        let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!("Error during planning: The function Min expects 1 arguments, but 2 were provided", result.unwrap_err().to_string());
 
         // test input args is invalid data type for sum or avg
         let fun = AggregateFunction::Sum;
         let input_types = vec![DataType::Utf8];
-        let signature = aggregate_function::signature(&fun);
+        let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
             "Error during planning: The function Sum does not support inputs of type Utf8.",
             result.unwrap_err().to_string()
         );
         let fun = AggregateFunction::Avg;
-        let signature = aggregate_function::signature(&fun);
+        let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
             "Error during planning: The function Avg does not support inputs of type Utf8.",
@@ -582,7 +583,7 @@ mod tests {
         ];
         for fun in funs {
             for input_type in &input_types {
-                let signature = aggregate_function::signature(&fun);
+                let signature = fun.signature();
                 let result = coerce_types(&fun, input_type, &signature);
                 assert_eq!(*input_type, result.unwrap());
             }
@@ -596,7 +597,7 @@ mod tests {
         ];
         for fun in funs {
             for input_type in &input_types {
-                let signature = aggregate_function::signature(&fun);
+                let signature = fun.signature();
                 let result = coerce_types(&fun, input_type, &signature);
                 assert_eq!(*input_type, result.unwrap());
             }
@@ -616,8 +617,7 @@ mod tests {
             vec![DataType::Float64, DataType::Float64],
         ];
         for input_type in &input_types {
-            let signature =
-                aggregate_function::signature(&AggregateFunction::ApproxPercentileCont);
+            let signature = AggregateFunction::ApproxPercentileCont.signature();
             let result = coerce_types(
                 &AggregateFunction::ApproxPercentileCont,
                 input_type,

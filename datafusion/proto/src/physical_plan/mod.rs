@@ -22,6 +22,7 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::file_format::file_type::FileCompressionType;
+use datafusion::datasource::physical_plan::{AvroExec, CsvExec, ParquetExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFrame;
@@ -32,7 +33,6 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
-use datafusion::physical_plan::file_format::{AvroExec, CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::CrossJoinExec;
@@ -61,7 +61,7 @@ use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
 use crate::protobuf::{self, PhysicalPlanNode};
-use crate::{convert_required, into_physical_plan, into_required};
+use crate::{convert_required, into_required};
 
 pub mod from_proto;
 pub mod to_proto;
@@ -86,7 +86,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
         })
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn try_into_physical_plan(
         &self,
         registry: &dyn FunctionRegistry,
@@ -109,11 +108,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 explain.verbose,
             ))),
             PhysicalPlanType::Projection(projection) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    projection.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &projection.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let exprs = projection
                     .expr
@@ -129,11 +128,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Filter(filter) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    filter.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &filter.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let predicate = filter
                     .expr
@@ -184,11 +183,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?)))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    coalesce_batches.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &coalesce_batches.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 Ok(Arc::new(CoalesceBatchesExec::new(
                     input,
@@ -197,15 +196,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(merge.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&merge.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    repart.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &repart.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 match repart.partition_method {
                     Some(PartitionMethod::Hash(ref hash_part)) => {
@@ -248,7 +247,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::GlobalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&limit.input, registry, runtime, extension_codec)?;
                 let fetch = if limit.fetch >= 0 {
                     Some(limit.fetch as usize)
                 } else {
@@ -262,15 +261,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::LocalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&limit.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    window_agg.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &window_agg.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let input_schema = window_agg
                     .input_schema
@@ -338,11 +337,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::Aggregate(hash_agg) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hash_agg.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hash_agg.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(
                     || {
@@ -442,7 +441,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             ExprType::AggregateExpr(agg_node) => {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema).unwrap()).collect();
-
+                                let ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
+                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema).unwrap()).collect();
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
                                         AggregateFunction::AggrFunction(i) => {
@@ -459,6 +459,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                                 &aggr_function.into(),
                                                 agg_node.distinct,
                                                 input_phy_expr.as_slice(),
+                                                &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
                                             )
@@ -491,17 +492,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
-                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hashjoin.left,
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hashjoin.left,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
-                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hashjoin.right,
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hashjoin.right,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let on: Vec<(Column, Column)> = hashjoin
                     .on
@@ -590,17 +591,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(UnionExec::new(inputs)))
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
-                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    crossjoin.left,
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &crossjoin.left,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
-                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    crossjoin.right,
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &crossjoin.right,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 Ok(Arc::new(CrossJoinExec::new(left, right)))
             }
@@ -610,7 +611,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Sort(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -657,7 +658,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -691,7 +692,14 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Arc::new(SortPreservingMergeExec::new(exprs, input)))
+                let fetch = if sort.fetch < 0 {
+                    None
+                } else {
+                    Some(sort.fetch as usize)
+                };
+                Ok(Arc::new(
+                    SortPreservingMergeExec::new(exprs, input).with_fetch(fetch),
+                ))
             }
             PhysicalPlanType::Extension(extension) => {
                 let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
@@ -1143,6 +1151,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Box::new(protobuf::SortPreservingMergeExecNode {
                         input: Some(Box::new(input)),
                         expr,
+                        fetch: exec.fetch().map(|f| f as i64).unwrap_or(-1),
                     }),
                 )),
             })
@@ -1237,17 +1246,17 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
     }
 }
 
-#[macro_export]
-macro_rules! into_physical_plan {
-    ($PB:expr, $REG:expr, $RUNTIME:expr, $CODEC:expr) => {{
-        if let Some(field) = $PB.as_ref() {
-            field
-                .as_ref()
-                .try_into_physical_plan($REG, $RUNTIME, $CODEC)
-        } else {
-            Err(proto_error("Missing required field in protobuf"))
-        }
-    }};
+fn into_physical_plan(
+    node: &Option<Box<PhysicalPlanNode>>,
+    registry: &dyn FunctionRegistry,
+    runtime: &RuntimeEnv,
+    extension_codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+    if let Some(field) = node {
+        field.try_into_physical_plan(registry, runtime, extension_codec)
+    } else {
+        Err(proto_error("Missing required field in protobuf"))
+    }
 }
 
 #[cfg(test)]
@@ -1277,14 +1286,16 @@ mod roundtrip_tests {
             compute::kernels::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
-        datasource::listing::PartitionedFile,
+        datasource::{
+            listing::PartitionedFile,
+            physical_plan::{FileScanConfig, ParquetExec},
+        },
         logical_expr::{JoinType, Operator},
         physical_plan::{
             aggregates::{AggregateExec, AggregateMode},
             empty::EmptyExec,
             expressions::{binary, col, lit, NotExpr},
             expressions::{Avg, Column, DistinctCount, PhysicalSortExpr},
-            file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
             joins::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
@@ -1296,7 +1307,7 @@ mod roundtrip_tests {
     };
     use datafusion_common::Result;
     use datafusion_expr::{
-        Accumulator, AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction,
+        Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
         Signature, StateTypeFunction,
     };
 
@@ -1483,8 +1494,7 @@ mod roundtrip_tests {
 
         let rt_func: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| Ok(Box::new(Example)));
+        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| Ok(Box::new(Example)));
         let st_func: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::Int64])));
 
@@ -1628,7 +1638,7 @@ mod roundtrip_tests {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         };
 

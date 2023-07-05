@@ -21,7 +21,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::from_slice::FromSlice;
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
 use futures::executor::block_on;
@@ -49,8 +48,8 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
             RecordBatch::try_new(
                 schema.clone(),
                 vec![
-                    Arc::new(Float32Array::from_slice(vec![i as f32; batch_size])),
-                    Arc::new(Float64Array::from_slice(vec![i as f64; batch_size])),
+                    Arc::new(Float32Array::from(vec![i as f32; batch_size])),
+                    Arc::new(Float64Array::from(vec![i as f64; batch_size])),
                 ],
             )
             .unwrap()

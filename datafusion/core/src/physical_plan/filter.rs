@@ -25,7 +25,6 @@ use std::task::{Context, Poll};
 
 use super::expressions::PhysicalSortExpr;
 use super::{ColumnStatistics, RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
@@ -35,13 +34,14 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::{split_conjunction, AnalysisContext};
 
 use log::trace;
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
@@ -163,7 +163,7 @@ impl ExecutionPlan for FilterExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "FilterExec: {}", self.predicate)
             }
         }
@@ -341,6 +341,7 @@ mod tests {
     use crate::test::exec::StatisticsExec;
     use crate::test_util;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::utils::DataPtr;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -378,7 +379,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::vtable_address_comparisons)]
     async fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
@@ -391,11 +391,11 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input.clone())?);
 
         let new_filter = filter.clone().with_new_children(vec![input.clone()])?;
-        assert!(!Arc::ptr_eq(&filter, &new_filter));
+        assert!(!Arc::data_ptr_eq(&filter, &new_filter));
 
         let new_filter2 =
             with_new_children_if_necessary(filter.clone(), vec![input])?.into();
-        assert!(Arc::ptr_eq(&filter, &new_filter2));
+        assert!(Arc::data_ptr_eq(&filter, &new_filter2));
 
         Ok(())
     }

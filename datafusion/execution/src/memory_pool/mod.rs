@@ -25,7 +25,30 @@ pub mod proxy;
 
 pub use pool::*;
 
-/// The pool of memory on which [`MemoryReservation`] record their memory reservations
+/// The pool of memory on which [`MemoryReservation`]s record their
+/// memory reservations.
+///
+/// DataFusion is a streaming query engine, processing most queries
+/// without buffering the entire input. However, certain operations
+/// such as sorting and grouping/joining with a large number of
+/// distinct groups/keys, can require buffering intermediate results
+/// and for large datasets this can require large amounts of memory.
+///
+/// In order to avoid allocating memory until the OS or the container
+/// system kills the process, DataFusion operators only allocate
+/// memory they are able to reserve from the configured
+/// [`MemoryPool`]. Once the memory tracked by the pool is exhausted,
+/// operators must either free memory by spilling to local disk or
+/// error.
+///
+/// A `MemoryPool` can be shared by concurrently executing plans in
+/// the same process to control memory usage in a multi-tenant system.
+///
+/// The following memory pool implementations are available:
+///
+/// * [`UnboundedMemoryPool`](pool::UnboundedMemoryPool)
+/// * [`GreedyMemoryPool`](pool::GreedyMemoryPool)
+/// * [`FairSpillPool`](pool::FairSpillPool)
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///

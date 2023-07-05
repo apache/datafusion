@@ -16,7 +16,6 @@
 // under the License.
 
 use super::*;
-use datafusion::from_slice::FromSlice;
 use std::ops::Add;
 
 #[tokio::test]
@@ -509,7 +508,7 @@ async fn group_by_timestamp_millis() -> Result<()> {
         schema.clone(),
         vec![
             Arc::new(TimestampMillisecondArray::from(timestamps)),
-            Arc::new(Int32Array::from_slice([10, 20, 30, 40, 50, 60])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
         ],
     )?;
     ctx.register_batch("t1", data).unwrap();
@@ -566,7 +565,6 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/3327
 async fn timestamp_add_interval_months() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -577,12 +575,12 @@ async fn timestamp_add_interval_months() -> Result<()> {
     let res1 = actual[0][0].as_str();
     let res2 = actual[0][1].as_str();
 
-    let format = "%Y-%m-%d %H:%M:%S%.6f";
+    let format = "%Y-%m-%dT%H:%M:%S%.6fZ";
     let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
     let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
 
-    let year = t1_naive.year() + (t1_naive.month() as i32 + 17) / 12;
-    let month = (t1_naive.month() + 17) % 12;
+    let year = t1_naive.year() + (t1_naive.month0() as i32 + 17) / 12;
+    let month = (t1_naive.month0() + 17) % 12 + 1;
 
     assert_eq!(
         t1_naive.with_year(year).unwrap().with_month(month).unwrap(),
@@ -711,44 +709,44 @@ async fn test_arrow_typeof() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+----------------------------------------------------------------------+",
-        "| arrowtypeof(datetrunc(Utf8(\"minute\"),totimestampseconds(Int64(61)))) |",
-        "+----------------------------------------------------------------------+",
-        "| Timestamp(Second, None)                                              |",
-        "+----------------------------------------------------------------------+",
+        "+--------------------------------------------------------------------------+",
+        "| arrow_typeof(date_trunc(Utf8(\"minute\"),to_timestamp_seconds(Int64(61)))) |",
+        "+--------------------------------------------------------------------------+",
+        "| Timestamp(Second, None)                                                  |",
+        "+--------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "select arrow_typeof(date_trunc('second', to_timestamp_millis(61)));";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---------------------------------------------------------------------+",
-        "| arrowtypeof(datetrunc(Utf8(\"second\"),totimestampmillis(Int64(61)))) |",
-        "+---------------------------------------------------------------------+",
-        "| Timestamp(Millisecond, None)                                        |",
-        "+---------------------------------------------------------------------+",
+        "+-------------------------------------------------------------------------+",
+        "| arrow_typeof(date_trunc(Utf8(\"second\"),to_timestamp_millis(Int64(61)))) |",
+        "+-------------------------------------------------------------------------+",
+        "| Timestamp(Millisecond, None)                                            |",
+        "+-------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "select arrow_typeof(date_trunc('millisecond', to_timestamp_micros(61)));";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------------------------------------------+",
-        "| arrowtypeof(datetrunc(Utf8(\"millisecond\"),totimestampmicros(Int64(61)))) |",
-        "+--------------------------------------------------------------------------+",
-        "| Timestamp(Microsecond, None)                                             |",
-        "+--------------------------------------------------------------------------+",
+        "+------------------------------------------------------------------------------+",
+        "| arrow_typeof(date_trunc(Utf8(\"millisecond\"),to_timestamp_micros(Int64(61)))) |",
+        "+------------------------------------------------------------------------------+",
+        "| Timestamp(Microsecond, None)                                                 |",
+        "+------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "select arrow_typeof(date_trunc('microsecond', to_timestamp(61)));";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------------------------------------------------------+",
-        "| arrowtypeof(datetrunc(Utf8(\"microsecond\"),totimestamp(Int64(61)))) |",
-        "+--------------------------------------------------------------------+",
-        "| Timestamp(Nanosecond, None)                                        |",
-        "+--------------------------------------------------------------------+",
+        "+-----------------------------------------------------------------------+",
+        "| arrow_typeof(date_trunc(Utf8(\"microsecond\"),to_timestamp(Int64(61)))) |",
+        "+-----------------------------------------------------------------------+",
+        "| Timestamp(Nanosecond, None)                                           |",
+        "+-----------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -767,7 +765,7 @@ async fn cast_timestamp_to_timestamptz() -> Result<()> {
 
     let expected = vec![
         "+-----------------------------+---------------------------------------+",
-        "| table_a.ts                  | arrowtypeof(table_a.ts)               |",
+        "| table_a.ts                  | arrow_typeof(table_a.ts)              |",
         "+-----------------------------+---------------------------------------+",
         "| 2020-09-08T13:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
         "| 2020-09-08T12:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
@@ -1018,7 +1016,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     }
     assert_eq!(
         res,
-        Some("Projection: now() = currentdate()\n  EmptyRelation".to_string())
+        Some("Projection: now() = current_date()\n  EmptyRelation".to_string())
     );
 
     Ok(())

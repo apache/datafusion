@@ -16,6 +16,38 @@
 # under the License.
 
 ##########
+## Common timestamp data
+#
+# ts_data:        Int64 nanosecods
+# ts_data_nanos:  Timestamp(Nanosecond, None)
+# ts_data_micros: Timestamp(Microsecond, None)
+# ts_data_millis: Timestamp(Millisecond, None)
+# ts_data_secs:   Timestamp(Second, None)
+##########
+
+# Create timestamp tables with different precisions but the same logical values
+
+statement ok
+create table ts_data(ts bigint, value int) as values
+  (1599572549190855123, 1),
+  (1599568949190855123, 2),
+  (1599565349190855123, 3);
+
+statement ok
+create table ts_data_nanos as select arrow_cast(ts, 'Timestamp(Nanosecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_micros as select arrow_cast(ts / 1000, 'Timestamp(Microsecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_millis as select arrow_cast(ts / 1000000, 'Timestamp(Millisecond, None)') as ts, value from ts_data;
+
+statement ok
+create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
+
+
+
+##########
 ## Timestamp Handling Tests
 ##########
 
@@ -104,29 +136,6 @@ SELECT to_timestamp_seconds(ts / 1000) FROM t1 LIMIT 3
 2009-03-01T00:00:00
 2009-03-01T00:01:00
 2009-04-01T00:00:00
-
-statement error DataFusion error: Execution error: Table 'ts' doesn't exist\.
-drop table ts;
-
-# Create timestamp tables with different precisions but the same logical values
-
-statement ok
-create table ts_data(ts bigint, value int) as values
-  (1599572549190855000, 1),
-  (1599568949190855000, 2),
-  (1599565349190855000, 3);
-
-statement ok
-create table ts_data_nanos as select arrow_cast(ts, 'Timestamp(Nanosecond, None)') as ts, value from ts_data;
-
-statement ok
-create table ts_data_micros as select arrow_cast(ts / 1000, 'Timestamp(Microsecond, None)') as ts, value from ts_data;
-
-statement ok
-create table ts_data_millis as select arrow_cast(ts / 1000000, 'Timestamp(Millisecond, None)') as ts, value from ts_data;
-
-statement ok
-create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
 
 
 
@@ -261,9 +270,9 @@ SELECT COUNT(*) FROM ts_data_secs where ts > from_unixtime(1599566400)
 query P rowsort
 SELECT DISTINCT ts FROM ts_data_nanos;
 ----
-2020-09-08T11:42:29.190855
-2020-09-08T12:42:29.190855
-2020-09-08T13:42:29.190855
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
 
 
 query I
@@ -377,26 +386,28 @@ select to_timestamp_seconds(cast (1 as int));
 ----
 1970-01-01T00:00:01
 
-statement ok
-drop table ts_data
-
-statement ok
-drop table ts_data_nanos
-
-statement ok
-drop table ts_data_micros
-
-statement ok
-drop table ts_data_millis
-
-statement ok
-drop table ts_data_secs
-
-
-
 ##########
 ## test date_bin function
 ##########
+
+# not support interval 0
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT DATE_BIN(INTERVAL '0 second', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
+
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT DATE_BIN(INTERVAL '0 month', TIMESTAMP '2022-08-03 14:38:50.000000006Z')
+
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT
+  DATE_BIN(INTERVAL '0' minute, time) AS time,
+  count(val)
+FROM (
+  VALUES
+    (TIMESTAMP '2021-06-10 17:05:00Z', 0.5),
+    (TIMESTAMP '2021-06-10 17:19:10Z', 0.3)
+  ) as t (time, val)
+group by time;
+
 query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
 ----
@@ -827,6 +838,16 @@ SELECT DATE_TRUNC('YEAR', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-01-01T00:00:00
 
 query P
+SELECT DATE_TRUNC('year', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('YEAR', NULL);
+----
+NULL
+
+query P
 SELECT DATE_TRUNC('quarter', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-07-01T00:00:00
@@ -835,6 +856,16 @@ query P
 SELECT DATE_TRUNC('QUARTER', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-07-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('quarter', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('QUARTER', NULL);
+----
+NULL
 
 query P
 SELECT DATE_TRUNC('month', TIMESTAMP '2022-08-03 14:38:50Z');
@@ -847,6 +878,16 @@ SELECT DATE_TRUNC('MONTH', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-08-01T00:00:00
 
 query P
+SELECT DATE_TRUNC('month', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('MONTH', NULL);
+----
+NULL
+
+query P
 SELECT DATE_TRUNC('week', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-01T00:00:00
@@ -855,6 +896,16 @@ query P
 SELECT DATE_TRUNC('WEEK', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('week', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('WEEK', NULL);
+----
+NULL
 
 query P
 SELECT DATE_TRUNC('day', TIMESTAMP '2022-08-03 14:38:50Z');
@@ -867,6 +918,16 @@ SELECT DATE_TRUNC('DAY', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-08-03T00:00:00
 
 query P
+SELECT DATE_TRUNC('day', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('DAY', NULL);
+----
+NULL
+
+query P
 SELECT DATE_TRUNC('hour', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:00:00
@@ -875,6 +936,16 @@ query P
 SELECT DATE_TRUNC('HOUR', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:00:00
+
+query P
+SELECT DATE_TRUNC('hour', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('HOUR', NULL);
+----
+NULL
 
 query P
 SELECT DATE_TRUNC('minute', TIMESTAMP '2022-08-03 14:38:50Z');
@@ -887,6 +958,16 @@ SELECT DATE_TRUNC('MINUTE', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-08-03T14:38:00
 
 query P
+SELECT DATE_TRUNC('minute', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('MINUTE', NULL);
+----
+NULL
+
+query P
 SELECT DATE_TRUNC('second', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
@@ -895,6 +976,144 @@ query P
 SELECT DATE_TRUNC('SECOND', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
+
+query P
+SELECT DATE_TRUNC('second', NULL);
+----
+NULL
+
+query P
+SELECT DATE_TRUNC('SECOND', NULL);
+----
+NULL
+
+# Test date trunc on different timestamp types and ensure types are consistent
+query TP rowsort
+SELECT 'ts_data_nanos', DATE_TRUNC('day', ts) FROM ts_data_nanos
+ UNION ALL
+SELECT 'ts_data_micros', DATE_TRUNC('day', ts) FROM ts_data_micros
+ UNION ALL
+SELECT 'ts_data_millis', DATE_TRUNC('day', ts) FROM ts_data_millis
+ UNION ALL
+SELECT 'ts_data_secs', DATE_TRUNC('day', ts) FROM ts_data_secs
+----
+ts_data_micros 2020-09-08T00:00:00
+ts_data_micros 2020-09-08T00:00:00
+ts_data_micros 2020-09-08T00:00:00
+ts_data_millis 2020-09-08T00:00:00
+ts_data_millis 2020-09-08T00:00:00
+ts_data_millis 2020-09-08T00:00:00
+ts_data_nanos 2020-09-08T00:00:00
+ts_data_nanos 2020-09-08T00:00:00
+ts_data_nanos 2020-09-08T00:00:00
+ts_data_secs 2020-09-08T00:00:00
+ts_data_secs 2020-09-08T00:00:00
+ts_data_secs 2020-09-08T00:00:00
+
+# Test date trun on different granularity
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_nanos
+----
+microsecond 2020-09-08T11:42:29.190855
+microsecond 2020-09-08T12:42:29.190855
+microsecond 2020-09-08T13:42:29.190855
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_micros
+----
+microsecond 2020-09-08T11:42:29.190855
+microsecond 2020-09-08T12:42:29.190855
+microsecond 2020-09-08T13:42:29.190855
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_millis
+----
+microsecond 2020-09-08T11:42:29.190
+microsecond 2020-09-08T12:42:29.190
+microsecond 2020-09-08T13:42:29.190
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_secs
+----
+microsecond 2020-09-08T11:42:29
+microsecond 2020-09-08T12:42:29
+microsecond 2020-09-08T13:42:29
+millisecond 2020-09-08T11:42:29
+millisecond 2020-09-08T12:42:29
+millisecond 2020-09-08T13:42:29
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+
+# test date trunc on different timestamp scalar types and ensure they are consistent
+query P rowsort
+SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Nanosecond, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Microsecond, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Millisecond, None)')) as ts
+----
+2023-08-03T00:00:00
+2023-08-03T00:00:00
+2023-08-03T14:38:50
+2023-08-03T14:38:50
 
 
 # Demonstrate that strings are automatically coerced to timestamps (don't use TIMESTAMP)
@@ -1014,7 +1233,7 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-query error DataFusion error: type_coercion\ncaused by\nInternal error: Unsupported operation Plus between Timestamp\(Nanosecond, None\) and Timestamp\(Nanosecond, None\)\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error DataFusion error: Arrow error: Cast error: Cannot perform arithmetic operation between array of type Timestamp\(Nanosecond, None\) and array of type Timestamp\(Nanosecond, None\)
 SELECT ts1 + ts2
 FROM foo;
 
@@ -1061,3 +1280,24 @@ SELECT
 ;
 ----
 true false true true
+
+
+
+##########
+## Common timestamp data
+##########
+
+statement ok
+drop table ts_data
+
+statement ok
+drop table ts_data_nanos
+
+statement ok
+drop table ts_data_micros
+
+statement ok
+drop table ts_data_millis
+
+statement ok
+drop table ts_data_secs

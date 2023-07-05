@@ -19,16 +19,16 @@
 
 use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -151,7 +151,7 @@ impl ExecutionPlan for ValuesExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ValuesExec")
             }
         }

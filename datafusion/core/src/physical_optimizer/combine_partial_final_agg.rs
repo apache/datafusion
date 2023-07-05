@@ -207,11 +207,11 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::lit;
-    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{displayable, Partitioning, Statistics};
 
@@ -225,7 +225,7 @@ mod tests {
             let config = ConfigOptions::new();
             let optimized = optimizer.optimize($PLAN, &config)?;
             // Now format correctly
-            let plan = displayable(optimized.as_ref()).indent().to_string();
+            let plan = displayable(optimized.as_ref()).indent(true).to_string();
             let actual_lines = trim_plan_display(&plan);
 
             assert_eq!(
@@ -261,7 +261,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,

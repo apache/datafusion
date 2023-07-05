@@ -21,20 +21,24 @@
 
 [![Coverage Status](https://codecov.io/gh/apache/arrow-datafusion/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-datafusion?branch=master)
 
-<img src="docs/source/_static/images/DataFusion-Logo-Background-White.svg" width="256" alt="logo"/>
+<img src="https://arrow.apache.org/datafusion/_images/DataFusion-Logo-Background-White.png" width="256" alt="logo"/>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
-in-memory format.
+in-memory format. [Python Bindings](https://github.com/apache/arrow-datafusion-python) are also available.
 
 DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
 
-See the Project Website at https://arrow.apache.org/datafusion/ for more details.
+https://arrow.apache.org/datafusion/ contains the project's documentation.
 
-## Getting Started
+## Using DataFusion
 
-Please see the [developer’s guide](https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide) for more information on how to get started.
+The [example usage] section in the user guide and the [datafusion-examples] code in the crate contain information on using DataFusion.
 
-## Examples
+## Contributing to DataFusion
 
-Please see the [example usage](https://arrow.apache.org/datafusion/user-guide/example-usage.html) in the user guide and the [datafusion-examples](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples) crate for more information on how to use DataFusion.
+The [developer’s guide] contains information on how to contribute.
+
+[example usage]: https://arrow.apache.org/datafusion/user-guide/example-usage.html
+[datafusion-examples]: https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples
+[developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide

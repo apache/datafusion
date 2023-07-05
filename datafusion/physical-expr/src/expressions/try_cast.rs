@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
@@ -31,7 +32,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and retuns NULL on invalid cast
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct TryCastExpr {
     /// The expression to cast
     expr: Arc<dyn PhysicalExpr>,
@@ -104,6 +105,11 @@ impl PhysicalExpr for TryCastExpr {
             children[0].clone(),
             self.cast_type.clone(),
         )))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 
@@ -209,6 +215,7 @@ mod tests {
     macro_rules! generic_test_cast {
         ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $A_TYPE, true)]);
+            let a_vec_len = $A_VEC.len();
             let a = $A_ARRAY::from($A_VEC);
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
@@ -232,7 +239,7 @@ mod tests {
             assert_eq!(*result.data_type(), $TYPE);
 
             // verify that the len is correct
-            assert_eq!(result.len(), $A_VEC.len());
+            assert_eq!(result.len(), a_vec_len);
 
             // verify that the data itself is downcastable
             let result = result
@@ -517,7 +524,6 @@ mod tests {
         Ok(())
     }
 
-    #[allow(clippy::redundant_clone)]
     #[test]
     fn test_cast_i64_t64() -> Result<()> {
         let original = vec![1, 2, 3, 4, 5];
@@ -528,7 +534,7 @@ mod tests {
         generic_test_cast!(
             Int64Array,
             DataType::Int64,
-            original.clone(),
+            original,
             TimestampNanosecondArray,
             DataType::Timestamp(TimeUnit::Nanosecond, None),
             expected

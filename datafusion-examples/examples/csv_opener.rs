@@ -20,14 +20,13 @@ use std::{sync::Arc, vec};
 use datafusion::{
     assert_batches_eq,
     datasource::{
-        file_format::file_type::FileCompressionType, listing::PartitionedFile,
+        file_format::file_type::FileCompressionType,
+        listing::PartitionedFile,
         object_store::ObjectStoreUrl,
+        physical_plan::{CsvConfig, CsvOpener, FileScanConfig, FileStream},
     },
     error::Result,
-    physical_plan::{
-        file_format::{CsvConfig, CsvOpener, FileScanConfig, FileStream},
-        metrics::ExecutionPlanMetricsSet,
-    },
+    physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
 use futures::StreamExt;
@@ -64,7 +63,7 @@ async fn main() -> Result<()> {
         projection: Some(vec![12, 0]),
         limit: Some(5),
         table_partition_cols: vec![],
-        output_ordering: None,
+        output_ordering: vec![],
         infinite_source: false,
     };
 

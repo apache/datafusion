@@ -38,7 +38,7 @@ WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 # csv_query_error
-statement error Error during planning: Coercion from \[Utf8\] to the signature Uniform\(1, \[Float64, Float32\]\) failed\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'sin\(Utf8\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsin\(Float64/Float32\)
 SELECT sin(c1) FROM aggregate_test_100
 
 # cast_expressions_error

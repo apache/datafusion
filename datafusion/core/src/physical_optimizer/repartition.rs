@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
 use crate::config::ConfigOptions;
+use crate::datasource::physical_plan::ParquetExec;
 use crate::error::Result;
 use crate::physical_plan::Partitioning::*;
 use crate::physical_plan::{
-    file_format::ParquetExec, repartition::RepartitionExec,
-    with_new_children_if_necessary, ExecutionPlan,
+    repartition::RepartitionExec, with_new_children_if_necessary, ExecutionPlan,
 };
 
 /// Optimizer that introduces repartition to introduce more
@@ -325,13 +325,13 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::{col, PhysicalSortExpr};
-    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::projection::ProjectionExec;
@@ -356,7 +356,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -378,7 +378,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -402,7 +402,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: Some(sort_exprs),
+                output_ordering: vec![sort_exprs],
                 infinite_source: false,
             },
             None,
@@ -429,7 +429,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: Some(sort_exprs),
+                output_ordering: vec![sort_exprs],
                 infinite_source: false,
             },
             None,
@@ -557,7 +557,7 @@ mod tests {
             });
 
             // Now format correctly
-            let plan = displayable(optimized.as_ref()).indent().to_string();
+            let plan = displayable(optimized.as_ref()).indent(true).to_string();
             let actual_lines = trim_plan_display(&plan);
 
             assert_eq!(

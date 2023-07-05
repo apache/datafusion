@@ -26,8 +26,8 @@ use arrow::compute;
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow::{
     array::{
-        ArrayRef, Date32Array, Date64Array, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
+        ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
@@ -123,10 +123,6 @@ impl AggregateExpr for Max {
 
     fn row_accumulator_supported(&self) -> bool {
         is_row_accumulator_support_dtype(&self.data_type)
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 
     fn create_row_accumulator(
@@ -290,6 +286,9 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::LargeUtf8 => {
             typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, min_string)
         }
+        DataType::Boolean => {
+            typed_min_max_batch!(values, BooleanArray, Boolean, min_boolean)
+        }
         _ => min_max_batch!(values, min),
     })
 }
@@ -302,6 +301,9 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::LargeUtf8 => {
             typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, max_string)
+        }
+        DataType::Boolean => {
+            typed_min_max_batch!(values, BooleanArray, Boolean, max_boolean)
         }
         _ => min_max_batch!(values, max),
     })
@@ -385,6 +387,9 @@ macro_rules! min_max {
                     (lhs, rhs)
                 )));
                 }
+            }
+            (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
+                typed_min_max!(lhs, rhs, Boolean, $OP)
             }
             (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
                 typed_min_max!(lhs, rhs, Float64, $OP)
@@ -532,6 +537,9 @@ macro_rules! min_max {
 macro_rules! min_max_v2 {
     ($INDEX:ident, $ACC:ident, $SCALAR:expr, $OP:ident) => {{
         Ok(match $SCALAR {
+            ScalarValue::Boolean(rhs) => {
+                typed_min_max_v2!($INDEX, $ACC, rhs, bool, $OP)
+            }
             ScalarValue::Float64(rhs) => {
                 typed_min_max_v2!($INDEX, $ACC, rhs, f64, $OP)
             }
@@ -687,6 +695,10 @@ impl Accumulator for SlidingMaxAccumulator {
         Ok(self.max.clone())
     }
 
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
     }
@@ -811,10 +823,6 @@ impl AggregateExpr for Min {
 
     fn row_accumulator_supported(&self) -> bool {
         is_row_accumulator_support_dtype(&self.data_type)
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 
     fn create_row_accumulator(
@@ -944,6 +952,10 @@ impl Accumulator for SlidingMinAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.min.clone())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -1428,5 +1440,79 @@ mod tests {
             Max,
             ScalarValue::Time64Nanosecond(Some(5))
         )
+    }
+
+    #[test]
+    fn max_bool() -> Result<()> {
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, false]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(false))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, true]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, true, false]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(Vec::<bool>::new()));
+        generic_test_op!(
+            a,
+            DataType::Boolean,
+            Max,
+            ScalarValue::from(None as Option<bool>)
+        )?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![None as Option<bool>]));
+        generic_test_op!(
+            a,
+            DataType::Boolean,
+            Max,
+            ScalarValue::from(None as Option<bool>)
+        )?;
+
+        let a: ArrayRef =
+            Arc::new(BooleanArray::from(vec![None, Some(true), Some(false)]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn min_bool() -> Result<()> {
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, false]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, true]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(true))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, true, false]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(Vec::<bool>::new()));
+        generic_test_op!(
+            a,
+            DataType::Boolean,
+            Min,
+            ScalarValue::from(None as Option<bool>)
+        )?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![None as Option<bool>]));
+        generic_test_op!(
+            a,
+            DataType::Boolean,
+            Min,
+            ScalarValue::from(None as Option<bool>)
+        )?;
+
+        let a: ArrayRef =
+            Arc::new(BooleanArray::from(vec![None, Some(true), Some(false)]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
+
+        Ok(())
     }
 }

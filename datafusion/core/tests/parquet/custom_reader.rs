@@ -23,7 +23,7 @@ use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::physical_plan::file_format::{
+use datafusion::datasource::physical_plan::{
     FileMeta, FileScanConfig, ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -82,7 +82,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         },
         None,
@@ -185,6 +185,7 @@ async fn store_parquet_in_memory(
                     .expect("creating path"),
                 last_modified: chrono::DateTime::from(SystemTime::now()),
                 size: buf.len(),
+                e_tag: None,
             };
 
             (meta, Bytes::from(buf))

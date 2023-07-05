@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod alias;
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
+pub mod decorrelate;
 pub mod decorrelate_predicate_subquery;
 pub mod eliminate_cross_join;
 pub mod eliminate_duplicated_expr;
 pub mod eliminate_filter;
+pub mod eliminate_join;
 pub mod eliminate_limit;
 pub mod eliminate_outer_join;
 pub mod eliminate_project;
@@ -48,3 +49,10 @@ pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;
 
 mod plan_signature;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
+}

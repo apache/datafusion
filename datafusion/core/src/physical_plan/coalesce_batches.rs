@@ -23,16 +23,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::Result;
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream,
 };
+use datafusion_common::Result;
 
-use crate::execution::context::TaskContext;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -107,6 +107,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_ordering()
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
@@ -143,7 +147,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "CoalesceBatchesExec: target_batch_size={}",

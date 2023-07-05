@@ -25,11 +25,11 @@ use arrow::datatypes::UInt32Type;
 use arrow::record_batch::RecordBatch;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::{Parser, ParserError};
-use sqlparser::tokenizer::{Token, TokenWithLocation};
+use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
@@ -220,56 +220,10 @@ fn needs_quotes(s: &str) -> bool {
     !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-// TODO: remove when can use https://github.com/sqlparser-rs/sqlparser-rs/issues/805
 pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     let dialect = GenericDialect;
     let mut parser = Parser::new(&dialect).try_with_sql(s)?;
-    let mut idents = vec![];
-
-    // expecting at least one word for identifier
-    match parser.next_token_no_skip() {
-        Some(TokenWithLocation {
-            token: Token::Word(w),
-            ..
-        }) => idents.push(w.to_ident()),
-        Some(TokenWithLocation { token, .. }) => {
-            return Err(ParserError::ParserError(format!(
-                "Unexpected token in identifier: {token}"
-            )))?
-        }
-        None => {
-            return Err(ParserError::ParserError(
-                "Empty input when parsing identifier".to_string(),
-            ))?
-        }
-    };
-
-    while let Some(TokenWithLocation { token, .. }) = parser.next_token_no_skip() {
-        match token {
-            // ensure that optional period is succeeded by another identifier
-            Token::Period => match parser.next_token_no_skip() {
-                Some(TokenWithLocation {
-                    token: Token::Word(w),
-                    ..
-                }) => idents.push(w.to_ident()),
-                Some(TokenWithLocation { token, .. }) => {
-                    return Err(ParserError::ParserError(format!(
-                        "Unexpected token following period in identifier: {token}"
-                    )))?
-                }
-                None => {
-                    return Err(ParserError::ParserError(
-                        "Trailing period in identifier".to_string(),
-                    ))?
-                }
-            },
-            _ => {
-                return Err(ParserError::ParserError(format!(
-                    "Unexpected token in identifier: {token}"
-                )))?
-            }
-        }
-    }
+    let idents = parser.parse_multipart_identifier()?;
     Ok(idents)
 }
 
@@ -336,26 +290,120 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
+/// An extension trait for smart pointers. Provides an interface to get a
+/// raw pointer to the data (with metadata stripped away).
+///
+/// This is useful to see if two smart pointers point to the same allocation.
+pub trait DataPtr {
+    /// Returns a raw pointer to the data, stripping away all metadata.
+    fn data_ptr(this: &Self) -> *const ();
+
+    /// Check if two pointers point to the same data.
+    fn data_ptr_eq(this: &Self, other: &Self) -> bool {
+        // Discard pointer metadata (including the v-table).
+        let this = Self::data_ptr(this);
+        let other = Self::data_ptr(other);
+
+        std::ptr::eq(this, other)
+    }
+}
+
+// Currently, it's brittle to compare `Arc`s of dyn traits with `Arc::ptr_eq`
+// due to this check including v-table equality. It may be possible to use
+// `Arc::ptr_eq` directly if a fix to https://github.com/rust-lang/rust/issues/103763
+// is stabilized.
+impl<T: ?Sized> DataPtr for Arc<T> {
+    fn data_ptr(this: &Self) -> *const () {
+        Arc::as_ptr(this) as *const ()
+    }
+}
+
+/// Adopted from strsim-rs for string similarity metrics
+pub mod datafusion_strsim {
+    // Source: https://github.com/dguo/strsim-rs/blob/master/src/lib.rs
+    // License: https://github.com/dguo/strsim-rs/blob/master/LICENSE
+    use std::cmp::min;
+    use std::str::Chars;
+
+    struct StringWrapper<'a>(&'a str);
+
+    impl<'a, 'b> IntoIterator for &'a StringWrapper<'b> {
+        type Item = char;
+        type IntoIter = Chars<'b>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.0.chars()
+        }
+    }
+
+    /// Calculates the minimum number of insertions, deletions, and substitutions
+    /// required to change one sequence into the other.
+    fn generic_levenshtein<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
+        a: &'a Iter1,
+        b: &'b Iter2,
+    ) -> usize
+    where
+        &'a Iter1: IntoIterator<Item = Elem1>,
+        &'b Iter2: IntoIterator<Item = Elem2>,
+        Elem1: PartialEq<Elem2>,
+    {
+        let b_len = b.into_iter().count();
+
+        if a.into_iter().next().is_none() {
+            return b_len;
+        }
+
+        let mut cache: Vec<usize> = (1..b_len + 1).collect();
+
+        let mut result = 0;
+
+        for (i, a_elem) in a.into_iter().enumerate() {
+            result = i + 1;
+            let mut distance_b = i;
+
+            for (j, b_elem) in b.into_iter().enumerate() {
+                let cost = if a_elem == b_elem { 0usize } else { 1usize };
+                let distance_a = distance_b + cost;
+                distance_b = cache[j];
+                result = min(result + 1, min(distance_a, distance_b + 1));
+                cache[j] = result;
+            }
+        }
+
+        result
+    }
+
+    /// Calculates the minimum number of insertions, deletions, and substitutions
+    /// required to change one string into the other.
+    ///
+    /// ```
+    /// use datafusion_common::utils::datafusion_strsim::levenshtein;
+    ///
+    /// assert_eq!(3, levenshtein("kitten", "sitting"));
+    /// ```
+    pub fn levenshtein(a: &str, b: &str) -> usize {
+        generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::ScalarValue;
+    use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
     use arrow_array::Array;
     use std::ops::Range;
     use std::sync::Arc;
-
-    use crate::from_slice::FromSlice;
-    use crate::ScalarValue;
-    use crate::ScalarValue::Null;
 
     use super::*;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from(vec![2.0, 3.0, 3.0, 4.0, 5.0])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 10., 11.0])),
+            Arc::new(Float64Array::from(vec![15.0, 13.0, 8.0, 5., 0.0])),
         ];
         let search_tuple: Vec<ScalarValue> = vec![
             ScalarValue::Float64(Some(8.0)),
@@ -428,9 +476,8 @@ mod tests {
     #[test]
     fn test_bisect_linear_left_and_right_diff_sort() -> Result<()> {
         // Descending, left
-        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
-            4.0, 3.0, 2.0, 1.0, 0.0,
-        ]))];
+        let arrays: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![4.0, 3.0, 2.0, 1.0, 0.0]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(4.0))];
         let ords = [SortOptions {
             descending: true,
@@ -442,9 +489,8 @@ mod tests {
         assert_eq!(res, 0);
 
         // Descending, right
-        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
-            4.0, 3.0, 2.0, 1.0, 0.0,
-        ]))];
+        let arrays: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![4.0, 3.0, 2.0, 1.0, 0.0]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(4.0))];
         let ords = [SortOptions {
             descending: true,
@@ -457,7 +503,7 @@ mod tests {
 
         // Ascending, left
         let arrays: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.]))];
+            vec![Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(7.0))];
         let ords = [SortOptions {
             descending: false,
@@ -470,7 +516,7 @@ mod tests {
 
         // Ascending, right
         let arrays: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.]))];
+            vec![Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(7.0))];
         let ords = [SortOptions {
             descending: false,
@@ -482,8 +528,8 @@ mod tests {
         assert_eq!(res, 2);
 
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([10.0, 9.0, 8.0, 7.5, 7., 6.])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from(vec![10.0, 9.0, 8.0, 7.5, 7., 6.])),
         ];
         let search_tuple: Vec<ScalarValue> = vec![
             ScalarValue::Float64(Some(8.0)),
@@ -514,8 +560,8 @@ mod tests {
     #[test]
     fn test_evaluate_partition_ranges() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([1.0, 1.0, 1.0, 2.0, 2.0, 2.0])),
-            Arc::new(Float64Array::from_slice([4.0, 4.0, 3.0, 2.0, 1.0, 1.0])),
+            Arc::new(Float64Array::from(vec![1.0, 1.0, 1.0, 2.0, 2.0, 2.0])),
+            Arc::new(Float64Array::from(vec![4.0, 4.0, 3.0, 2.0, 1.0, 1.0])),
         ];
         let n_row = arrays[0].len();
         let options: Vec<SortOptions> = vec![
@@ -542,64 +588,6 @@ mod tests {
         assert_eq!(ranges[1], Range { start: 2, end: 3 });
         assert_eq!(ranges[2], Range { start: 3, end: 4 });
         assert_eq!(ranges[3], Range { start: 4, end: 6 });
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_identifiers() -> Result<()> {
-        let s = "CATALOG.\"F(o)o. \"\"bar\".table";
-        let actual = parse_identifiers(s)?;
-        let expected = vec![
-            Ident {
-                value: "CATALOG".to_string(),
-                quote_style: None,
-            },
-            Ident {
-                value: "F(o)o. \"bar".to_string(),
-                quote_style: Some('"'),
-            },
-            Ident {
-                value: "table".to_string(),
-                quote_style: None,
-            },
-        ];
-        assert_eq!(expected, actual);
-
-        let s = "";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Empty input when parsing identifier\"))",
-            format!("{err:?}")
-        );
-
-        let s = "*schema.table";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token in identifier: *\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.table*";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token in identifier: *\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.table.";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Trailing period in identifier\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.*";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token following period in identifier: *\"))",
-            format!("{err:?}")
-        );
-
         Ok(())
     }
 
@@ -649,10 +637,10 @@ mod tests {
     #[test]
     fn test_get_arrayref_at_indices() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from(vec![2.0, 3.0, 3.0, 4.0, 5.0])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 10., 11.0])),
+            Arc::new(Float64Array::from(vec![15.0, 13.0, 8.0, 5., 0.0])),
         ];
 
         let row_indices_vec: Vec<Vec<u32>> = vec![
@@ -695,5 +683,25 @@ mod tests {
         assert_eq!(longest_consecutive_prefix([0, 1, 3, 4]), 2);
         assert_eq!(longest_consecutive_prefix([0, 1, 2, 3, 4]), 5);
         assert_eq!(longest_consecutive_prefix([1, 2, 3, 4]), 0);
+    }
+
+    #[test]
+    fn arc_data_ptr_eq() {
+        let x = Arc::new(());
+        let y = Arc::new(());
+        let y_clone = Arc::clone(&y);
+
+        assert!(
+            Arc::data_ptr_eq(&x, &x),
+            "same `Arc`s should point to same data"
+        );
+        assert!(
+            !Arc::data_ptr_eq(&x, &y),
+            "different `Arc`s should point to different data"
+        );
+        assert!(
+            Arc::data_ptr_eq(&y, &y_clone),
+            "cloned `Arc` should point to same data as the original"
+        );
     }
 }

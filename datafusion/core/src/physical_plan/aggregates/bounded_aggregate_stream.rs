@@ -31,9 +31,6 @@ use futures::stream::{Stream, StreamExt};
 use hashbrown::raw::RawTable;
 use itertools::izip;
 
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     AggregationOrdering, GroupByOrderMode, PhysicalGroupBy, RowAccumulatorItem,
@@ -41,6 +38,9 @@ use crate::physical_plan::aggregates::{
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 
 use crate::physical_plan::aggregates::utils::{
     aggr_state_schema, col_to_scalar, get_at_indices, get_optional_filters,
@@ -58,6 +58,8 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
+
+use super::AggregateExec;
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
@@ -119,25 +121,24 @@ pub(crate) struct BoundedAggregateStream {
 
 impl BoundedAggregateStream {
     /// Create a new BoundedAggregateStream
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        mode: AggregateMode,
-        schema: SchemaRef,
-        group_by: PhysicalGroupBy,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        input: SendableRecordBatchStream,
-        baseline_metrics: BaselineMetrics,
-        batch_size: usize,
-        scalar_update_factor: usize,
+        agg: &AggregateExec,
         context: Arc<TaskContext>,
         partition: usize,
-        // Stores algorithm mode and output ordering
-        aggregation_ordering: AggregationOrdering,
+        aggregation_ordering: AggregationOrdering, // Stores algorithm mode and output ordering
     ) -> Result<Self> {
+        let agg_schema = Arc::clone(&agg.schema);
+        let agg_group_by = agg.group_by.clone();
+        let agg_filter_expr = agg.filter_expr.clone();
+
+        let batch_size = context.session_config().batch_size();
+        let scalar_update_factor = context.session_config().agg_scalar_update_factor();
+        let input = agg.input.execute(partition, Arc::clone(&context))?;
+        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let mut start_idx = group_by.expr.len();
+        let mut start_idx = agg_group_by.expr.len();
         let mut row_aggr_expr = vec![];
         let mut row_agg_indices = vec![];
         let mut row_aggregate_expressions = vec![];
@@ -150,19 +151,20 @@ impl BoundedAggregateStream {
         // Assuming create_schema() always puts group columns in front of aggregation columns, we set
         // col_idx_base to the group expression count.
         let all_aggregate_expressions =
-            aggregates::aggregate_expressions(&aggr_expr, &mode, start_idx)?;
-        let filter_expressions = match mode {
-            AggregateMode::Partial | AggregateMode::Single => filter_expr,
+            aggregates::aggregate_expressions(&agg.aggr_expr, &agg.mode, start_idx)?;
+        let filter_expressions = match agg.mode {
+            AggregateMode::Partial | AggregateMode::Single => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; aggr_expr.len()]
+                vec![None; agg.aggr_expr.len()]
             }
         };
-        for ((expr, others), filter) in aggr_expr
+        for ((expr, others), filter) in agg
+            .aggr_expr
             .iter()
             .zip(all_aggregate_expressions.into_iter())
             .zip(filter_expressions.into_iter())
         {
-            let n_fields = match mode {
+            let n_fields = match agg.mode {
                 // In partial aggregation, we keep additional fields in order to successfully
                 // merge aggregation results downstream.
                 AggregateMode::Partial => expr.state_fields()?.len(),
@@ -191,7 +193,7 @@ impl BoundedAggregateStream {
 
         let row_aggr_schema = aggr_state_schema(&row_aggr_expr);
 
-        let group_schema = group_schema(&schema, group_by.expr.len());
+        let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
         let row_converter = RowConverter::new(
             group_schema
                 .fields()
@@ -214,9 +216,9 @@ impl BoundedAggregateStream {
         let exec_state = ExecutionState::ReadingInput;
 
         Ok(BoundedAggregateStream {
-            schema: Arc::clone(&schema),
+            schema: agg_schema,
             input,
-            mode,
+            mode: agg.mode,
             normal_aggr_expr,
             normal_aggregate_expressions,
             normal_filter_expressions,
@@ -226,7 +228,7 @@ impl BoundedAggregateStream {
             row_converter,
             row_aggr_schema,
             row_aggr_layout,
-            group_by,
+            group_by: agg_group_by,
             aggr_state,
             exec_state,
             baseline_metrics,
@@ -405,8 +407,7 @@ impl BoundedAggregateStream {
 
                     // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
@@ -512,8 +513,7 @@ impl BoundedAggregateStream {
 
                     // NOTE: do NOT include the `GroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());

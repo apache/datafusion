@@ -19,8 +19,10 @@
 
 use crate::expr_fn::binary_expr;
 use crate::Expr;
+use crate::Like;
 use std::fmt;
 use std::ops;
+use std::ops::Not;
 
 /// Operators applied to expressions
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -349,52 +351,93 @@ impl ops::Neg for Expr {
     }
 }
 
+impl Not for Expr {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        match self {
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::Like(Like::new(!negated, expr, pattern, escape_char)),
+            Expr::ILike(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::ILike(Like::new(!negated, expr, pattern, escape_char)),
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::SimilarTo(Like::new(!negated, expr, pattern, escape_char)),
+            _ => Expr::Not(Box::new(self)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::lit;
 
     #[test]
     fn test_operators() {
+        // Add
         assert_eq!(
-            format!("{:?}", lit(1u32) + lit(2u32)),
+            format!("{}", lit(1u32) + lit(2u32)),
             "UInt32(1) + UInt32(2)"
         );
+        // Sub
         assert_eq!(
-            format!("{:?}", lit(1u32) - lit(2u32)),
+            format!("{}", lit(1u32) - lit(2u32)),
             "UInt32(1) - UInt32(2)"
         );
+        // Mul
         assert_eq!(
-            format!("{:?}", lit(1u32) * lit(2u32)),
+            format!("{}", lit(1u32) * lit(2u32)),
             "UInt32(1) * UInt32(2)"
         );
+        // Div
         assert_eq!(
-            format!("{:?}", lit(1u32) / lit(2u32)),
+            format!("{}", lit(1u32) / lit(2u32)),
             "UInt32(1) / UInt32(2)"
         );
+        // Rem
         assert_eq!(
-            format!("{:?}", lit(1u32) % lit(2u32)),
+            format!("{}", lit(1u32) % lit(2u32)),
             "UInt32(1) % UInt32(2)"
         );
+        // BitAnd
         assert_eq!(
-            format!("{:?}", lit(1u32) & lit(2u32)),
+            format!("{}", lit(1u32) & lit(2u32)),
             "UInt32(1) & UInt32(2)"
         );
+        // BitOr
         assert_eq!(
-            format!("{:?}", lit(1u32) | lit(2u32)),
+            format!("{}", lit(1u32) | lit(2u32)),
             "UInt32(1) | UInt32(2)"
         );
+        // BitXor
         assert_eq!(
-            format!("{:?}", lit(1u32) ^ lit(2u32)),
+            format!("{}", lit(1u32) ^ lit(2u32)),
             "UInt32(1) # UInt32(2)"
         );
+        // Shl
         assert_eq!(
-            format!("{:?}", lit(1u32) << lit(2u32)),
+            format!("{}", lit(1u32) << lit(2u32)),
             "UInt32(1) << UInt32(2)"
         );
+        // Shr
         assert_eq!(
-            format!("{:?}", lit(1u32) >> lit(2u32)),
+            format!("{}", lit(1u32) >> lit(2u32)),
             "UInt32(1) >> UInt32(2)"
         );
-        assert_eq!(format!("{:?}", -lit(1u32)), "(- UInt32(1))");
+        // Neg
+        assert_eq!(format!("{}", -lit(1u32)), "(- UInt32(1))");
+        // Not
+        assert_eq!(format!("{}", !lit(1u32)), "NOT UInt32(1)");
     }
 }

@@ -646,32 +646,40 @@ SELECT CASE WHEN NULL THEN 'foo' ELSE 'bar' END
 bar
 
 # case_expr_with_null()
-query I
+query ?
 select case when b is null then null else b end from (select a,b from (values (1,null),(2,3)) as t (a,b)) a;
 ----
 NULL
 3
 
-query I
+query ?
 select case when b is null then null else b end from (select a,b from (values (1,1),(2,3)) as t (a,b)) a;
 ----
 1
 3
 
 # case_expr_with_nulls()
-query I
+query ?
 select case when b is null then null when b < 3 then null when b >=3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a
 ----
 NULL
 NULL
 4
 
-query I
+query ?
 select case b when 1 then null when 2 then null when 3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a;
 ----
 NULL
 NULL
 4
+
+# issue: https://github.com/apache/arrow-datafusion/issues/6376
+query I
+select case when a = 0 then 123 end from (values(1), (0), (null)) as t(a);
+----
+NULL
+123
+NULL
 
 # csv_query_sum_cast() {
 
@@ -903,17 +911,15 @@ SELECT not(true), not(false)
 ----
 false true
 
-query BB
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Int64\(1\) \}' can't be evaluated because the expression's type is Int64, not boolean or NULL\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 SELECT not(1), not(0)
-----
--2 -1
 
 query ?B
 SELECT null, not(null)
 ----
 NULL NULL
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT/BITWISE_NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL or Integer\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 SELECT NOT('hi')
 
 # test_negative_expressions()
@@ -1209,3 +1215,51 @@ NULL NULL NULL NULL 8 15.625
 
 statement ok
 drop table test
+
+# error message for wrong function signature (Variadic: arbitrary number of args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'concat\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tconcat\(Utf8, ..\)
+SELECT concat();
+
+# error message for wrong function signature (Uniform: t args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tnullif\(Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8, Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8\)
+SELECT nullif(1);
+
+# error message for wrong function signature (Exact: exact number of args of an exact type)
+statement error Error during planning: No function matches the given name and argument types 'pi\(Float64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpi\(\)
+SELECT pi(3.14);
+
+# error message for wrong function signature (Any: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'arrow_typeof\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarrow_typeof\(Any\)
+SELECT arrow_typeof(1, 1);
+
+# error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
+SELECT power(1, 2, 3);
+
+# turn off enable_ident_normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld
+
+# turn on enable_ident_normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld

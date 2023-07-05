@@ -76,14 +76,45 @@ PyPI.
 
 ### Change Log
 
-We maintain a `CHANGELOG.md` so our users know what has been
-changed between releases.
+We maintain a `CHANGELOG.md` so our users know what has been changed between releases.
 
-The CHANGELOG is managed automatically using
-[update_change_log.sh](https://github.com/apache/arrow-datafusion/blob/main/dev/release/update_change_log.sh)
+You will need a GitHub Personal Access Token for the following steps. Follow
+[these instructions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
+to generate one if you do not already have one.
 
-This script creates a changelog using GitHub PRs and issues based on the labels
-associated with them.
+The changelog is generated using a Python script. There is a depency on `PyGitHub`, which can be installed using pip:
+
+```bash
+pip3 install PyGitHub
+```
+
+Run the following command to generate the changelog content.
+
+```bash
+$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/arrow-datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
+```
+
+This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
+titles starting with `feat:`, `fix:`, or `docs:` . The script will produce output similar to:
+
+```
+Fetching list of commits between 24.0.0 and HEAD
+Fetching pull requests
+Categorizing pull requests
+Generating changelog content
+```
+
+This process is not fully automated, so there are some additional manual steps:
+
+- Add the ASF header to the generated file
+- Add a link to this changelog from the top-level `/datafusion/CHANGELOG.md`
+- Add the following content (copy from the previous version's changelog and update as appropriate:
+
+```
+## [24.0.0](https://github.com/apache/arrow-datafusion/tree/24.0.0) (2023-05-06)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/23.0.0...24.0.0)
+```
 
 ## Prepare release commits and PR
 
@@ -114,34 +145,6 @@ Lastly commit the version change:
 ```
 git commit -a -m 'Update version'
 ```
-
-### Update CHANGELOG.md
-
-Define release branch (e.g. `main`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
-populate the changelog content.
-
-You will need a GitHub Personal Access Token for the following steps. Follow
-[these instructions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
-to generate one if you do not already have one.
-
-```bash
-# create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh main 8.0.0 7.0.0
-# review change log / edit issues and labels if needed, rerun until you are happy with the result
-git commit -a -m 'Create changelog for release'
-```
-
-_If you see the error `"You have exceeded a secondary rate limit"` when running this script, try reducing the CPU
-allocation to slow the process down and throttle the number of GitHub requests made per minute, by modifying the
-value of the `--cpus` argument in the `update_change_log.sh` script._
-
-You can add `invalid` or `development-process` label to exclude items from
-release notes.
-
-Send a PR to get these changes merged into `main` branch. If new commits that
-could change the change log content landed in the `main` branch before you
-could merge the PR, you need to rerun the changelog update script to regenerate
-the changelog and update the PR accordingly.
 
 ## Prepare release candidate artifacts
 

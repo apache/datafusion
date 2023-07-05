@@ -15,11 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, Value};
+use datafusion_expr::{
+    CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
+};
+use sqlparser::ast::{
+    Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
+};
 
 use sqlparser::parser::ParserError::ParserError;
 
@@ -71,9 +77,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 planner_context.insert_cte(cte_name, logical_plan);
             }
         }
-        let plan = self.set_expr_to_plan(*set_expr, planner_context)?;
+        let plan = self.set_expr_to_plan(*(set_expr.clone()), planner_context)?;
         let plan = self.order_by(plan, query.order_by, planner_context)?;
-        self.limit(plan, query.offset, query.limit)
+        let plan = self.limit(plan, query.offset, query.limit)?;
+
+        let plan = match *set_expr {
+            SetExpr::Select(select) if select.into.is_some() => {
+                let select_into = select.into.unwrap();
+                LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
+                    name: self.object_name_to_table_reference(select_into.name)?,
+                    primary_key: Vec::new(),
+                    input: Arc::new(plan),
+                    if_not_exists: false,
+                    or_replace: false,
+                }))
+            }
+            _ => plan,
+        };
+
+        Ok(plan)
     }
 
     /// Wrap a plan in a limit
@@ -143,11 +165,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(plan);
         }
 
-        let order_by_rex = order_by
-            .into_iter()
-            .map(|e| self.order_by_to_sort_expr(e, plan.schema(), planner_context))
-            .collect::<Result<Vec<_>>>()?;
-
+        let order_by_rex =
+            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
         LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
     }
 }

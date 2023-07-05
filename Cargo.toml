@@ -33,9 +33,10 @@ members = [
     "test-utils",
     "benchmarks",
 ]
+resolver = "2"
 
 [workspace.package]
-version = "24.0.0"
+version = "27.0.0"
 edition = "2021"
 readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -45,12 +46,13 @@ repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.64"
 
 [workspace.dependencies]
-arrow = { version = "39.0.0", features = ["prettyprint"] }
-arrow-flight = { version = "39.0.0", features = ["flight-sql-experimental"] }
-arrow-buffer = { version = "39.0.0", default-features = false }
-arrow-schema = { version = "39.0.0", default-features = false }
-arrow-array = { version = "39.0.0", default-features = false, features = ["chrono-tz"] }
-parquet = { version = "39.0.0", features = ["arrow", "async", "object_store"] }
+arrow = { version = "43.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow-flight = { version = "43.0.0", features = ["flight-sql-experimental"] }
+arrow-buffer = { version = "43.0.0", default-features = false }
+arrow-schema = { version = "43.0.0", default-features = false }
+arrow-array = { version = "43.0.0", default-features = false, features = ["chrono-tz"] }
+parquet = { version = "43.0.0", features = ["arrow", "async", "object_store"] }
+sqlparser = { version = "0.35", features = ["visitor"] }
 
 [profile.release]
 codegen-units = 1

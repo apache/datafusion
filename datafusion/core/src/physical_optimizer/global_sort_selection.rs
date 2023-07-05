@@ -70,7 +70,7 @@ impl PhysicalOptimizerRule for GlobalSortSelection {
                                 Arc::new(SortPreservingMergeExec::new(
                                     sort_exec.expr().to_vec(),
                                     Arc::new(sort),
-                                ));
+                                ).with_fetch(sort_exec.fetch()));
                             Some(global_sort)
                         } else {
                             None

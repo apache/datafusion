@@ -24,22 +24,19 @@ use arrow::array::{
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_execution::TaskContext;
 use futures::Stream;
 use futures::StreamExt;
 use log::trace;
 use std::time::Instant;
 use std::{any::Any, sync::Arc};
 
-use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, expressions::Column, DisplayFormatType,
     Distribution, EquivalenceProperties, ExecutionPlan, Partitioning, PhysicalExpr,
     PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 
 /// Unnest the given column by joining the row with each value in the nested type.
 #[derive(Debug)]
@@ -135,7 +132,7 @@ impl ExecutionPlan for UnnestExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "UnnestExec")
             }
         }

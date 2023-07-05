@@ -298,6 +298,34 @@ select column1 is not distinct from column2 from t;
 false
 
 
+# Binary Expression for Binary
+statement ok
+CREATE TABLE binary_t as select arrow_cast('Bar', 'Binary') as column1, arrow_cast('B%', 'Binary') as column2;
+
+query B
+select column1 is distinct from column2 from binary_t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from binary_t;
+----
+false
+
+# Binary Expression for LargeBinary
+statement ok
+CREATE TABLE large_binary_t as select arrow_cast('Bar', 'LargeBinary') as column1, arrow_cast('B%', 'LargeBinary') as column2;
+
+query B
+select column1 is distinct from column2 from large_binary_t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from large_binary_t;
+----
+false
+
 # select all
 # these two queries should return the same result
 query R
@@ -731,6 +759,92 @@ SELECT a FROM annotated_data_finite2
 0
 0
 
+# create a table to test SELECT * EXCLUDE, SELECT * EXCEPT syntax
+statement ok
+CREATE TABLE table1 (
+  a int,
+  b int,
+  c int,
+  d int
+) as values
+  (1, 10, 100, 1000),
+  (2, 20, 200, 2000);
+
+# Below query should emit all the columns except a and b
+# The syntax is as follows: `SELECT * EXCLUDE(<col_name>, ...)`
+# when only single column is excluded, we can either use
+# `EXCLUDE <col_name>` or `EXCLUDE(<col_name>)` syntax
+query II
+SELECT * EXCLUDE(b) FROM (
+  SELECT * EXCLUDE a
+    FROM table1
+    ORDER BY c
+    LIMIT 5
+  )
+----
+100 1000
+200 2000
+
+# Below query should emit all the columns except a and b
+# To exclude some columns, we can use except clause also,
+# the behavior is similar to EXCLUDE clause.
+# The syntax is as follows: `SELECT * EXCEPT(<col_name>, ...)`
+query II
+SELECT * EXCEPT(a, b)
+FROM table1
+ORDER BY c
+LIMIT 5
+----
+100 1000
+200 2000
+
+# below query should emit all the columns except a and b
+query II
+SELECT * EXCLUDE(a, b)
+FROM table1
+ORDER BY c
+LIMIT 5
+----
+100 1000
+200 2000
+
+# when wildcard is prepended with table name, exclude should still work
+# below query should emit all the columns except a and b
+query II
+SELECT table1.* EXCLUDE(a, b)
+FROM table1
+ORDER BY c
+LIMIT 5
+----
+100 1000
+200 2000
+
+# Trying to exclude non-existing column should give error
+statement error DataFusion error: Schema error: No field named e. Valid fields are table1.a, table1.b, table1.c, table1.d.
+SELECT * EXCLUDE e
+FROM table1
+
+# similarly, except should raise error if excluded column is not in the table
+statement error DataFusion error: Schema error: No field named e. Valid fields are table1.a, table1.b, table1.c, table1.d.
+SELECT * EXCEPT(e)
+FROM table1
+
+# EXCEPT, or EXCLUDE can only be used after wildcard *
+# below query should give 4 columns, a1, b1, b, c, d
+query IIIII
+SELECT a as a1, b as b1, * EXCEPT(a)
+FROM table1
+----
+1 10 10 100 1000
+2 20 20 200 2000
+
+# EXCEPT, or EXCLUDE shouldn't contain duplicate column names
+statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT contains duplicate column names
+SELECT * EXCLUDE(a, a)
+FROM table1
 
 statement ok
 drop table annotated_data_finite2;
+
+statement ok
+drop table t;

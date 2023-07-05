@@ -19,10 +19,11 @@
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion::physical_plan::streaming::PartitionStream;
 use futures::StreamExt;
 use std::sync::Arc;
 
-use datafusion::datasource::streaming::{PartitionStream, StreamingTable};
+use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::disk_manager::DiskManagerConfig;
@@ -39,6 +40,7 @@ use test_utils::AccessLogGenerator;
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
+    // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();
 }
 

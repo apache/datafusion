@@ -21,7 +21,7 @@
 
 use std::fmt;
 
-use crate::logical_expr::{StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::display::StringifiedPlan;
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
@@ -30,6 +30,8 @@ use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 pub enum DisplayFormatType {
     /// Default, compact format. Example: `FilterExec: c12 < 10.0`
     Default,
+    /// Verbose, showing all available details
+    Verbose,
 }
 
 /// Wraps an `ExecutionPlan` with various ways to display this plan
@@ -79,16 +81,21 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///       RepartitionExec: partitioning=RoundRobinBatch(16)
     ///         CsvExec: source=...",
     /// ```
-    pub fn indent(&self) -> impl fmt::Display + 'a {
+    pub fn indent(&self, verbose: bool) -> impl fmt::Display + 'a {
+        let format_type = if verbose {
+            DisplayFormatType::Verbose
+        } else {
+            DisplayFormatType::Default
+        };
         struct Wrapper<'a> {
+            format_type: DisplayFormatType,
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
         }
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                let t = DisplayFormatType::Default;
                 let mut visitor = IndentVisitor {
-                    t,
+                    t: self.format_type,
                     f,
                     indent: 0,
                     show_metrics: self.show_metrics,
@@ -97,6 +104,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             }
         }
         Wrapper {
+            format_type,
             plan: self.inner,
             show_metrics: self.show_metrics,
         }
@@ -127,6 +135,15 @@ impl<'a> DisplayableExecutionPlan<'a> {
             plan: self.inner,
             show_metrics: self.show_metrics,
         }
+    }
+
+    /// format as a `StringifiedPlan`
+    pub fn to_stringified(
+        &self,
+        verbose: bool,
+        plan_type: crate::logical_expr::PlanType,
+    ) -> StringifiedPlan {
+        StringifiedPlan::new(plan_type, self.indent(verbose).to_string())
     }
 }
 
@@ -192,11 +209,29 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
     }
 }
 
-impl<'a> ToStringifiedPlan for DisplayableExecutionPlan<'a> {
-    fn to_stringified(
-        &self,
-        plan_type: crate::logical_expr::PlanType,
-    ) -> StringifiedPlan {
-        StringifiedPlan::new(plan_type, self.indent().to_string())
+/// Trait for types which could have additional details when formatted in `Verbose` mode
+pub trait DisplayAs {
+    /// Format according to `DisplayFormatType`, used when verbose representation looks
+    /// different from the default one
+    ///
+    /// Should not include a newline
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result;
+}
+
+/// A newtype wrapper to display `T` implementing`DisplayAs` using the `Default` mode
+pub struct DefaultDisplay<T>(pub T);
+
+impl<T: DisplayAs> fmt::Display for DefaultDisplay<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_as(DisplayFormatType::Default, f)
+    }
+}
+
+/// A newtype wrapper to display `T` implementing `DisplayAs` using the `Verbose` mode
+pub struct VerboseDisplay<T>(pub T);
+
+impl<T: DisplayAs> fmt::Display for VerboseDisplay<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_as(DisplayFormatType::Verbose, f)
     }
 }

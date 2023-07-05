@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::aggregate::row_accumulator::RowAccumulator;
-use crate::PhysicalExpr;
+use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
+use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -30,6 +31,7 @@ pub(crate) mod approx_percentile_cont;
 pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
+pub(crate) mod array_agg_ordered;
 pub(crate) mod average;
 pub(crate) mod bit_and_or_xor;
 pub(crate) mod bool_and_or;
@@ -37,6 +39,7 @@ pub(crate) mod correlation;
 pub(crate) mod count;
 pub(crate) mod count_distinct;
 pub(crate) mod covariance;
+pub(crate) mod first_last;
 pub(crate) mod grouping;
 pub(crate) mod median;
 #[macro_use]
@@ -83,6 +86,13 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 
+    /// Order by requirements for the aggregate function
+    /// By default it is `None` (there is no requirement)
+    /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
     /// Human readable name such as `"MIN(c2)"`. The default
     /// implementation returns placeholder text.
     fn name(&self) -> &str {
@@ -91,12 +101,6 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 
     /// If the aggregate expression is supported by row format
     fn row_accumulator_supported(&self) -> bool {
-        false
-    }
-
-    /// Specifies whether this aggregate function can run using bounded memory.
-    /// Any accumulator returning "true" needs to implement `retract_batch`.
-    fn supports_bounded_execution(&self) -> bool {
         false
     }
 
@@ -128,4 +132,14 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
             "Retractable Accumulator hasn't been implemented for {self:?} yet"
         )))
     }
+}
+
+/// Checks whether the given aggregate expression is order-sensitive.
+/// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
+/// However, a `FirstValue` depends on the input ordering (if the order changes,
+/// the first value in the list would change).
+pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
+    aggr_expr.as_any().is::<FirstValue>()
+        || aggr_expr.as_any().is::<LastValue>()
+        || aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
 }

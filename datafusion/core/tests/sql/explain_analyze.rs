@@ -599,12 +599,12 @@ async fn test_physical_plan_display_indent() {
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
         "GlobalLimitExec: skip=0, fetch=10",
-        "  SortPreservingMergeExec: [the_min@2 DESC]",
+        "  SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
         "    SortExec: fetch=10, expr=[the_min@2 DESC]",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
-        "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000), input_partitions=9000",
+        "            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
         "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < 10",
@@ -613,7 +613,7 @@ async fn test_physical_plan_display_indent() {
     ];
 
     let normalizer = ExplainNormalizer::new();
-    let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
         .trim()
         .lines()
         // normalize paths
@@ -646,20 +646,20 @@ async fn test_physical_plan_display_indent_multi_children() {
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1]",
         "  CoalesceBatchesExec: target_batch_size=4096",
-        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c2\", index: 0 })]",
+        "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)]",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000), input_partitions=9000",
+        "        RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
         "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
         "            CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000), input_partitions=9000",
+        "        RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
         "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
         "            ProjectionExec: expr=[c1@0 as c2]",
         "              CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
-    let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
         .trim()
         .lines()
         // normalize paths
@@ -687,11 +687,29 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
     // in greater depth
-    let needle = "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=";
+    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))], metrics=[output_rows=5";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
     assert_not_contains!(formatted, verbose_needle);
+}
+
+#[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
+async fn csv_explain_analyze_order_by() {
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
+    let sql = "EXPLAIN ANALYZE SELECT c1 FROM aggregate_test_100 order by c1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // Ensure that the ordering is not optimized away from the plan
+    // https://github.com/apache/arrow-datafusion/issues/6379
+    let needle =
+        "SortExec: expr=[c1@0 ASC NULLS LAST], metrics=[output_rows=100, elapsed_compute";
+    assert_contains!(&formatted, needle);
 }
 
 #[tokio::test]

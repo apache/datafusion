@@ -275,7 +275,7 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[b@0 as b, MAX(d.a)@1 as max_a]
 ------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[MAX(d.a)]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "b", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[MAX(d.a)]
 --------------UnionExec
 ----------------ProjectionExec: expr=[1 as a, aa as b]
@@ -362,7 +362,7 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 --------BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ----------SortExec: expr=[b@1 ASC NULLS LAST,a@0 ASC NULLS LAST]
 ------------CoalesceBatchesExec: target_batch_size=8192
---------------RepartitionExec: partitioning=Hash([Column { name: "b", index: 1 }], 4), input_partitions=4
+--------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
 ----------------UnionExec
 ------------------ProjectionExec: expr=[1 as a, aa as b]
 --------------------EmptyExec: produce_one_row=true
@@ -920,7 +920,7 @@ drop table temp
 
 
 #fn window_frame_ranges_unbounded_preceding_err
-statement error DataFusion error: Error during planning: Invalid window frame: end bound cannot be unbounded preceding
+statement error DataFusion error: Error during planning: Invalid window frame: end bound cannot be UNBOUNDED PRECEDING
 SELECT
 SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING),
 COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING)
@@ -1036,7 +1036,7 @@ LIMIT 10
 #fn window_frame_groups_without_order_by
 # Try executing an erroneous query (the ORDER BY clause is missing in the
 # window frame):
-statement error Error during planning: GROUPS mode requires an ORDER BY clause
+statement error Error during planning: GROUPS requires an ORDER BY clause
 SELECT
     SUM(c4) OVER(PARTITION BY c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
     FROM aggregate_test_100
@@ -1061,7 +1061,7 @@ SELECT
  COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
  FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: GROUPS mode requires an ORDER BY clause
+statement error DataFusion error: Error during planning: GROUPS requires an ORDER BY clause
 SELECT
  COUNT(c1) OVER(GROUPS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
  FROM aggregate_test_100
@@ -1286,12 +1286,12 @@ ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_10
 --BoundedWindowAggExec: wdw=[COUNT(UInt8(1)): Ok(Field { name: "COUNT(UInt8(1))", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
 ----SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]
 ------CoalesceBatchesExec: target_batch_size=4096
---------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ----------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as SUM(aggregate_test_100.c4)]
 ------------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4): Ok(Field { name: "SUM(aggregate_test_100.c4)", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
 --------------SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]
 ----------------CoalesceBatchesExec: target_batch_size=4096
-------------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }, Column { name: "c2", index: 1 }], 2), input_partitions=2
+------------------RepartitionExec: partitioning=Hash([c1@0, c2@1], 2), input_partitions=2
 --------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c4], has_header=true
 
@@ -1750,7 +1750,7 @@ ProjectionExec: expr=[COUNT(UInt8(1))@0 as global_count]
 ----------ProjectionExec: expr=[c1@0 as c1]
 ------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))]
 --------------CoalesceBatchesExec: target_batch_size=4096
-----------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))]
 --------------------ProjectionExec: expr=[c1@0 as c1]
 ----------------------CoalesceBatchesExec: target_batch_size=4096
@@ -1792,12 +1792,12 @@ Limit: skip=0, fetch=5
 ------------TableScan: aggregate_test_100 projection=[c2, c3, c9]
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
---SortPreservingMergeExec: [c3@0 ASC NULLS LAST]
+--SortPreservingMergeExec: [c3@0 ASC NULLS LAST], fetch=5
 ----ProjectionExec: expr=[c3@0 as c3, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum2]
 ------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 --------SortExec: expr=[c3@0 ASC NULLS LAST,c9@1 DESC]
 ----------CoalesceBatchesExec: target_batch_size=4096
-------------RepartitionExec: partitioning=Hash([Column { name: "c3", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=Hash([c3@0], 2), input_partitions=2
 --------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------------ProjectionExec: expr=[c3@1 as c3, c9@2 as c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as SUM(aggregate_test_100.c9)]
 ------------------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int16(NULL)), end_bound: CurrentRow }], mode=[Sorted]
@@ -1839,7 +1839,7 @@ SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 ----BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
 ------SortExec: expr=[c1@0 ASC NULLS LAST]
 --------CoalesceBatchesExec: target_batch_size=4096
-----------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
@@ -1966,7 +1966,7 @@ SortExec: expr=[c1@0 ASC NULLS LAST]
 ------BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
 --------SortExec: expr=[c1@0 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=4096
-------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 --------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
@@ -1995,7 +1995,7 @@ SortExec: expr=[c1@0 ASC NULLS LAST]
 ----------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(3)) }], mode=[Sorted]
 ------------SortExec: expr=[c1@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]
 --------------CoalesceBatchesExec: target_batch_size=4096
-----------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
 
@@ -2007,16 +2007,16 @@ query TT
 EXPLAIN SELECT ARRAY_AGG(c13) as array_agg1 FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1)
 ----
 logical_plan
-Projection: ARRAYAGG(aggregate_test_100.c13) AS array_agg1
---Aggregate: groupBy=[[]], aggr=[[ARRAYAGG(aggregate_test_100.c13)]]
+Projection: ARRAY_AGG(aggregate_test_100.c13) AS array_agg1
+--Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(aggregate_test_100.c13)]]
 ----Limit: skip=0, fetch=1
 ------Sort: aggregate_test_100.c13 ASC NULLS LAST, fetch=1
 --------TableScan: aggregate_test_100 projection=[c13]
 physical_plan
-ProjectionExec: expr=[ARRAYAGG(aggregate_test_100.c13)@0 as array_agg1]
---AggregateExec: mode=Final, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]
+ProjectionExec: expr=[ARRAY_AGG(aggregate_test_100.c13)@0 as array_agg1]
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(aggregate_test_100.c13)]
 ----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]
+------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(aggregate_test_100.c13)]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------GlobalLimitExec: skip=0, fetch=1
 ------------SortExec: fetch=1, expr=[c13@0 ASC NULLS LAST]
@@ -2405,6 +2405,30 @@ GlobalLimitExec: skip=0, fetch=5
 ------SortExec: expr=[c9@0 DESC]
 --------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], has_header=true
 
+# This test shows that ordering equivalence can keep track of complex expressions (not just Column expressions)
+# during ordering satisfy analysis. In the final plan we should only see single SortExec.
+query TT
+EXPLAIN SELECT c5, c9, rn1 FROM (SELECT c5, c9,
+                       ROW_NUMBER() OVER(ORDER BY c9 + c5 DESC) as rn1
+                       FROM aggregate_test_100
+                       ORDER BY c9 + c5 DESC)
+       ORDER BY rn1, c9 + c5 DESC
+       LIMIT 5
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: rn1 ASC NULLS LAST, CAST(aggregate_test_100.c9 AS Int32) + aggregate_test_100.c5 DESC NULLS FIRST, fetch=5
+----Sort: CAST(aggregate_test_100.c9 AS Int32) + aggregate_test_100.c5 DESC NULLS FIRST
+------Projection: aggregate_test_100.c5, aggregate_test_100.c9, ROW_NUMBER() ORDER BY [aggregate_test_100.c9 + aggregate_test_100.c5 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn1
+--------WindowAggr: windowExpr=[[ROW_NUMBER() ORDER BY [CAST(aggregate_test_100.c9 AS Int32) + aggregate_test_100.c5 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS ROW_NUMBER() ORDER BY [aggregate_test_100.c9 + aggregate_test_100.c5 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+----------TableScan: aggregate_test_100 projection=[c5, c9]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--ProjectionExec: expr=[c5@0 as c5, c9@1 as c9, ROW_NUMBER() ORDER BY [aggregate_test_100.c9 + aggregate_test_100.c5 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn1]
+----BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [aggregate_test_100.c9 + aggregate_test_100.c5 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() ORDER BY [aggregate_test_100.c9 + aggregate_test_100.c5 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+------SortExec: expr=[CAST(c9@1 AS Int32) + c5@0 DESC]
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5, c9], has_header=true
+
 # The following query has type error. We should test the error could be detected
 # from either the logical plan (when `skip_failed_rules` is set to `false`) or
 # the physical plan (when `skip_failed_rules` is set to `true`).
@@ -2451,7 +2475,7 @@ LOCATION 'tests/data/window_1.csv'
 # Source is CsvExec which is ordered by ts column.
 # Infinite source
 statement ok
-CREATE EXTERNAL TABLE annotated_data_infinite (
+CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite (
   ts INTEGER,
   inc_col INTEGER,
   desc_col INTEGER,
@@ -2459,7 +2483,6 @@ CREATE EXTERNAL TABLE annotated_data_infinite (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (ts ASC)
-OPTIONS('infinite_source' 'true')
 LOCATION 'tests/data/window_1.csv';
 
 # test_source_sorted_aggregate
@@ -2866,7 +2889,7 @@ LOCATION 'tests/data/window_2.csv';
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
 # Column c has cardinality 100 (unique entries). Column d has cardinality 5.
 statement ok
-CREATE EXTERNAL TABLE annotated_data_infinite2 (
+CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
   a0 INTEGER,
   a INTEGER,
   b INTEGER,
@@ -2876,7 +2899,6 @@ CREATE EXTERNAL TABLE annotated_data_infinite2 (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-OPTIONS('infinite_source' 'true')
 LOCATION 'tests/data/window_2.csv';
 
 
@@ -3019,9 +3041,135 @@ SELECT a, b, c,
 0 0 3 11 96 11 2 10 36 10 36 11 5 11 9
 0 0 4 9 72 9 NULL 14 45 14 45 9 4 9 9
 
+#fn aggregate order by with window frame
+# In window expressions, aggregate functions should not have an ordering requirement, such requirements
+# should be defined in the window frame. Therefore, the query below should generate an error. Note that
+# PostgreSQL also behaves this way.
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+SELECT SUM(b ORDER BY a ASC) OVER() as sum1
+       FROM annotated_data_infinite2
+
+# Even if, requirement of window clause and aggregate function match;
+# we should raise an error, when an ordering requirement is given to aggregate functions in window clauses.
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+EXPLAIN SELECT a, b, LAST_VALUE(c ORDER BY a ASC) OVER (order by a ASC) as last_c
+       FROM annotated_data_infinite2
 
 statement ok
 drop table annotated_data_finite2
 
 statement ok
 drop table annotated_data_infinite2
+
+# window3 spec is not used in window functions.
+# The query should still work.
+query RR
+SELECT
+  MAX(c12) OVER window1,
+  MIN(c12) OVER window2 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12),
+  window2 AS (PARTITION BY C11),
+  window3 AS (ORDER BY C1)
+  ORDER BY C3
+  LIMIT 5
+----
+0.970671228336 0.970671228336
+0.850672105305 0.850672105305
+0.152498292972 0.152498292972
+0.369363046006 0.369363046006
+0.56535284223 0.56535284223
+
+query TT
+EXPLAIN SELECT
+  MAX(c12) OVER window1 as min1,
+  MIN(c12) OVER window2 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12),
+  window2 AS (PARTITION BY C11),
+  window3 AS (ORDER BY C1)
+  ORDER BY C3
+  LIMIT 5
+----
+logical_plan
+Projection: min1, max1
+--Limit: skip=0, fetch=5
+----Sort: aggregate_test_100.c3 ASC NULLS LAST, fetch=5
+------Projection: MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS min1, MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS max1, aggregate_test_100.c3
+--------WindowAggr: windowExpr=[[MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+----------Projection: aggregate_test_100.c3, aggregate_test_100.c12, MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+------------WindowAggr: windowExpr=[[MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+--------------TableScan: aggregate_test_100 projection=[c3, c11, c12]
+physical_plan
+ProjectionExec: expr=[min1@0 as min1, max1@1 as max1]
+--GlobalLimitExec: skip=0, fetch=5
+----SortExec: fetch=5, expr=[c3@2 ASC NULLS LAST]
+------ProjectionExec: expr=[MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as min1, MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as max1, c3@0 as c3]
+--------BoundedWindowAggExec: wdw=[MAX(aggregate_test_100.c12): Ok(Field { name: "MAX(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Float64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+----------SortExec: expr=[c12@1 ASC NULLS LAST]
+------------ProjectionExec: expr=[c3@0 as c3, c12@2 as c12, MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as MIN(aggregate_test_100.c12)]
+--------------WindowAggExec: wdw=[MIN(aggregate_test_100.c12): Ok(Field { name: "MIN(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]
+----------------SortExec: expr=[c11@1 ASC NULLS LAST]
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c11, c12], has_header=true
+
+# window1 spec is used multiple times under different aggregations.
+# The query should still work.
+query RR
+SELECT
+  MAX(c12) OVER window1 as min1,
+  MIN(c12) OVER window1 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12)
+  ORDER BY C3
+  LIMIT 5
+----
+0.970671228336 0.014793053078
+0.850672105305 0.014793053078
+0.152498292972 0.014793053078
+0.369363046006 0.014793053078
+0.56535284223 0.014793053078
+
+query TT
+EXPLAIN SELECT
+  MAX(c12) OVER window1 as min1,
+  MIN(c12) OVER window1 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12)
+  ORDER BY C3
+  LIMIT 5
+----
+logical_plan
+Projection: min1, max1
+--Limit: skip=0, fetch=5
+----Sort: aggregate_test_100.c3 ASC NULLS LAST, fetch=5
+------Projection: MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS min1, MIN(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS max1, aggregate_test_100.c3
+--------WindowAggr: windowExpr=[[MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, MIN(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+----------TableScan: aggregate_test_100 projection=[c3, c12]
+physical_plan
+ProjectionExec: expr=[min1@0 as min1, max1@1 as max1]
+--GlobalLimitExec: skip=0, fetch=5
+----SortExec: fetch=5, expr=[c3@2 ASC NULLS LAST]
+------ProjectionExec: expr=[MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as min1, MIN(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as max1, c3@0 as c3]
+--------BoundedWindowAggExec: wdw=[MAX(aggregate_test_100.c12): Ok(Field { name: "MAX(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Float64(NULL)), end_bound: CurrentRow }, MIN(aggregate_test_100.c12): Ok(Field { name: "MIN(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Float64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+----------SortExec: expr=[c12@1 ASC NULLS LAST]
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c12], has_header=true
+
+# window2 spec is not defined
+statement error DataFusion error: Error during planning: The window window2 is not defined!
+SELECT
+  MAX(c12) OVER window1 as min1,
+  MIN(c12) OVER window2 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12)
+  ORDER BY C3
+  LIMIT 5
+
+# window1 spec is defined multiple times
+statement error DataFusion error: Error during planning: The window window1 is defined multiple times!
+SELECT
+  MAX(c12) OVER window1 as min1,
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12),
+  window1 AS (ORDER BY C3)
+  ORDER BY C3
+  LIMIT 5

@@ -46,14 +46,16 @@ pub use crate::aggregate::approx_percentile_cont::ApproxPercentileCont;
 pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use crate::aggregate::array_agg::ArrayAgg;
 pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
+pub use crate::aggregate::array_agg_ordered::OrderSensitiveArrayAgg;
 pub use crate::aggregate::average::{Avg, AvgAccumulator};
-pub use crate::aggregate::bit_and_or_xor::{BitAnd, BitOr, BitXor};
+pub use crate::aggregate::bit_and_or_xor::{BitAnd, BitOr, BitXor, DistinctBitXor};
 pub use crate::aggregate::bool_and_or::{BoolAnd, BoolOr};
 pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::correlation::Correlation;
 pub use crate::aggregate::count::Count;
 pub use crate::aggregate::count_distinct::DistinctCount;
 pub use crate::aggregate::covariance::{Covariance, CovariancePop};
+pub use crate::aggregate::first_last::{FirstValue, LastValue};
 pub use crate::aggregate::grouping::Grouping;
 pub use crate::aggregate::median::Median;
 pub use crate::aggregate::min_max::{Max, Min};
@@ -76,9 +78,7 @@ pub use crate::window::row_number::RowNumber;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{
-    cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
-};
+pub use cast::{cast, cast_column, cast_with_options, CastExpr};
 pub use column::{col, Column, UnKnownColumn};
 pub use datetime::{date_time_interval_expr, DateTimeIntervalExpr};
 pub use get_indexed_field::GetIndexedFieldExpr;
@@ -89,7 +89,7 @@ pub use like::{like, LikeExpr};
 pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
-pub use not::{bitwise_not, not, NotExpr};
+pub use not::{not, NotExpr};
 pub use nullif::nullif_func;
 pub use try_cast::{try_cast, TryCastExpr};
 
@@ -128,7 +128,7 @@ pub(crate) mod tests {
 
             assert_eq!(expected, actual);
 
-            Ok(())
+            Ok(()) as Result<(), DataFusionError>
         }};
     }
 

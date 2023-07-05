@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod alias;
 pub mod cast;
 mod column;
 pub mod config;
 pub mod delta;
 mod dfschema;
+pub mod display;
 mod error;
-pub mod from_slice;
+mod join_type;
 pub mod parsers;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
@@ -34,11 +36,12 @@ pub mod tree_node;
 pub mod utils;
 
 pub use column::Column;
-pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
+pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema};
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
 };
+pub use join_type::{JoinConstraint, JoinType};
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::{OwnedSchemaReference, SchemaReference};
 pub use stats::{ColumnStatistics, Statistics};

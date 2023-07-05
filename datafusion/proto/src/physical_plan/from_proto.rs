@@ -24,6 +24,7 @@ use chrono::Utc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
@@ -32,11 +33,10 @@ use datafusion::physical_plan::expressions::{
     date_time_interval_expr, GetIndexedFieldExpr,
 };
 use datafusion::physical_plan::expressions::{in_list, LikeExpr};
-use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
-        NegativeExpr, NotExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
+        NegativeExpr, NotExpr, TryCastExpr,
     },
     functions, Partitioning,
 };
@@ -237,7 +237,7 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
             convert_required!(e.arrow_type)?,
-            DEFAULT_DATAFUSION_CAST_OPTIONS,
+            None,
         )),
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(
@@ -430,29 +430,28 @@ pub fn parse_protobuf_file_scan_config(
         })
         .collect::<Result<Vec<(String, DataType)>>>()?;
 
-    let output_ordering = proto
-        .output_ordering
-        .iter()
-        .map(|o| {
-            let expr = o
-                .expr
-                .as_ref()
-                .map(|e| parse_physical_expr(e.as_ref(), registry, &schema))
-                .unwrap()?;
-            Ok(PhysicalSortExpr {
-                expr,
-                options: SortOptions {
-                    descending: !o.asc,
-                    nulls_first: o.nulls_first,
-                },
+    let mut output_ordering = vec![];
+    for node_collection in &proto.output_ordering {
+        let sort_expr = node_collection
+            .physical_sort_expr_nodes
+            .iter()
+            .map(|node| {
+                let expr = node
+                    .expr
+                    .as_ref()
+                    .map(|e| parse_physical_expr(e.as_ref(), registry, &schema))
+                    .unwrap()?;
+                Ok(PhysicalSortExpr {
+                    expr,
+                    options: SortOptions {
+                        descending: !node.asc,
+                        nulls_first: node.nulls_first,
+                    },
+                })
             })
-        })
-        .collect::<Result<Vec<PhysicalSortExpr>>>()?;
-    let output_ordering = if output_ordering.is_empty() {
-        None
-    } else {
-        Some(output_ordering)
-    };
+            .collect::<Result<Vec<PhysicalSortExpr>>>()?;
+        output_ordering.push(sort_expr);
+    }
 
     Ok(FileScanConfig {
         object_store_url,
@@ -476,6 +475,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 location: Path::from(val.path.as_str()),
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
                 size: val.size as usize,
+                e_tag: None,
             },
             partition_values: val
                 .partition_values

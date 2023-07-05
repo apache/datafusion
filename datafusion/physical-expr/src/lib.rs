@@ -37,7 +37,6 @@ mod sort_expr;
 pub mod string_expressions;
 pub mod struct_expressions;
 pub mod tree_node;
-pub mod type_coercion;
 pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
@@ -47,18 +46,19 @@ pub mod window;
 
 // reexport this to maintain compatibility with anything that used from_slice previously
 pub use aggregate::AggregateExpr;
-pub use datafusion_common::from_slice;
 pub use equivalence::{
     project_equivalence_properties, project_ordering_equivalence_properties,
-    EquivalenceProperties, EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
+    EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
 pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
-pub use sort_expr::{PhysicalSortExpr, PhysicalSortRequirement};
+pub use sort_expr::{
+    LexOrdering, LexOrderingReq, PhysicalSortExpr, PhysicalSortRequirement,
+};
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order,
     normalize_expr_with_equivalence_properties, normalize_out_expr_with_columns_map,
-    sort_expr_list_eq_strict_order, split_conjunction,
+    reverse_order_bys, split_conjunction,
 };

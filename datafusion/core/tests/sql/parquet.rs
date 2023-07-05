@@ -58,9 +58,7 @@ async fn parquet_with_sort_order_specified() {
     let session_config = SessionConfig::new().with_target_partitions(2);
 
     // The sort order is not specified
-    let options_no_sort = parquet_read_options
-        .to_listing_options(&session_config)
-        .with_file_sort_order(None);
+    let options_no_sort = parquet_read_options.to_listing_options(&session_config);
 
     // The sort order is specified (not actually correct in this case)
     let file_sort_order = [col("string_col"), col("int_col")]
@@ -74,7 +72,7 @@ async fn parquet_with_sort_order_specified() {
 
     let options_sort = parquet_read_options
         .to_listing_options(&session_config)
-        .with_file_sort_order(Some(file_sort_order));
+        .with_file_sort_order(vec![file_sort_order]);
 
     // This string appears in ParquetExec if the output ordering is
     // specified
@@ -313,9 +311,9 @@ async fn parquet_query_with_max_min() {
                 .unwrap();
 
         // create mock record batch
-        let c1s = Arc::new(Int32Array::from_slice([1, 2, 3]));
-        let c2s = Arc::new(StringArray::from_slice(["aaa", "bbb", "ccc"]));
-        let c3s = Arc::new(Int64Array::from_slice([100, 200, 300]));
+        let c1s = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let c2s = Arc::new(StringArray::from(vec!["aaa", "bbb", "ccc"]));
+        let c3s = Arc::new(Int64Array::from(vec![100, 200, 300]));
         let c4s = Arc::new(Date32Array::from(vec![Some(1), Some(2), Some(3)]));
         let rec_batch =
             RecordBatch::try_new(schema.clone(), vec![c1s, c2s, c3s, c4s]).unwrap();

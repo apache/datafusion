@@ -20,8 +20,6 @@
 //! the input data seen so far), which makes it appropriate when processing
 //! infinite inputs.
 
-use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -33,6 +31,8 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
+use datafusion_common::Result;
+use datafusion_execution::TaskContext;
 
 use ahash::RandomState;
 use arrow::{
@@ -41,6 +41,7 @@ use arrow::{
     datatypes::{Schema, SchemaBuilder, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use hashbrown::raw::RawTable;
@@ -62,8 +63,7 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::window::{
-    PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
-    WindowAggState, WindowState,
+    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr,
@@ -305,7 +305,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BoundedWindowAggExec: ")?;
                 let g: Vec<String> = self
                     .window_expr

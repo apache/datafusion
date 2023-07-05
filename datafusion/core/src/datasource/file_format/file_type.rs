@@ -19,6 +19,7 @@
 
 use crate::error::{DataFusionError, Result};
 
+use crate::datasource::file_format::arrow::DEFAULT_ARROW_EXTENSION;
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
@@ -31,6 +32,8 @@ use async_compression::tokio::bufread::{
     ZstdDecoder as AsyncZstdDecoer, ZstdEncoder as AsyncZstdEncoder,
 };
 
+#[cfg(feature = "compression")]
+use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use bytes::Bytes;
 #[cfg(feature = "compression")]
 use bzip2::read::MultiBzDecoder;
@@ -43,6 +46,7 @@ use futures::StreamExt;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
 use std::str::FromStr;
+use tokio::io::AsyncWrite;
 #[cfg(feature = "compression")]
 use tokio_util::io::{ReaderStream, StreamReader};
 #[cfg(feature = "compression")]
@@ -148,6 +152,31 @@ impl FileCompressionType {
         })
     }
 
+    /// Wrap the given `AsyncWrite` so that it performs compressed writes
+    /// according to this `FileCompressionType`.
+    pub fn convert_async_writer(
+        &self,
+        w: Box<dyn AsyncWrite + Send + Unpin>,
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+        Ok(match self.variant {
+            #[cfg(feature = "compression")]
+            GZIP => Box::new(GzipEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            BZIP2 => Box::new(BzEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            XZ => Box::new(XzEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            ZSTD => Box::new(ZstdEncoder::new(w)),
+            #[cfg(not(feature = "compression"))]
+            GZIP | BZIP2 | XZ | ZSTD => {
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
+            }
+            UNCOMPRESSED => w,
+        })
+    }
+
     /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
     pub fn convert_stream(
         &self,
@@ -211,6 +240,8 @@ impl FileCompressionType {
 /// Readable file type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileType {
+    /// Apache Arrow file
+    ARROW,
     /// Apache Avro file
     AVRO,
     /// Apache Parquet file
@@ -224,6 +255,7 @@ pub enum FileType {
 impl GetExt for FileType {
     fn get_ext(&self) -> String {
         match self {
+            FileType::ARROW => DEFAULT_ARROW_EXTENSION.to_owned(),
             FileType::AVRO => DEFAULT_AVRO_EXTENSION.to_owned(),
             FileType::PARQUET => DEFAULT_PARQUET_EXTENSION.to_owned(),
             FileType::CSV => DEFAULT_CSV_EXTENSION.to_owned(),
@@ -238,6 +270,7 @@ impl FromStr for FileType {
     fn from_str(s: &str) -> Result<Self> {
         let s = s.to_uppercase();
         match s.as_str() {
+            "ARROW" => Ok(FileType::ARROW),
             "AVRO" => Ok(FileType::AVRO),
             "PARQUET" => Ok(FileType::PARQUET),
             "CSV" => Ok(FileType::CSV),
@@ -256,7 +289,7 @@ impl FileType {
 
         match self {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
-            FileType::PARQUET | FileType::AVRO => match c.variant {
+            FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
                 _ => Err(DataFusionError::Internal(
                     "FileCompressionType can be specified for CSV/JSON FileType.".into(),
