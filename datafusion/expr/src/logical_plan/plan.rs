@@ -24,9 +24,8 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, exprlist_to_primary_keys,
-    find_out_reference_exprs, from_plan, grouping_set_expr_count,
-    grouping_set_to_exprlist, inspect_expr_pre,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, from_plan,
+    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
@@ -45,6 +44,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 // backwards compatibility
+use crate::builder::project_primary_keys;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -1259,7 +1259,8 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        let primary_keys = exprlist_to_primary_keys(&expr, &input)?;
+        // let primary_keys = exprlist_to_primary_keys(&expr, &input)?;
+        let primary_keys = project_primary_keys(&expr, &input)?;
         let schema = Arc::new(
             DFSchema::new_with_metadata(
                 exprlist_to_fields(&expr, &input)?,
@@ -1415,7 +1416,20 @@ impl Window {
         window_fields
             .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
         let metadata = input.schema().metadata().clone();
-        let primary_keys = exprlist_to_primary_keys(window_expr.iter(), &input)?;
+
+        // Update primary key for window
+        let mut primary_keys = input.schema().primary_keys().clone();
+        let n_input_fields = input.schema().fields().len();
+        let n_window_expr = window_expr.len();
+        let new_associated_fields: Vec<usize> =
+            (n_input_fields..n_input_fields + n_window_expr).collect();
+        for (_pk, (is_unique, associations)) in primary_keys.iter_mut() {
+            // if unique extend associations with new fields
+            if *is_unique {
+                associations.extend(&new_associated_fields);
+            }
+        }
+        // let primary_keys = exprlist_to_primary_keys(window_expr.iter(), &input)?;
         Ok(Window {
             input,
             window_expr,
@@ -1609,7 +1623,9 @@ impl Aggregate {
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        let primary_keys = exprlist_to_primary_keys(all_expr.clone(), &input)?;
+        // let primary_keys = exprlist_to_primary_keys(all_expr.clone(), &input)?;
+        // TODO: Add handling for aggregate primary key
+        let primary_keys = HashMap::new();
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),

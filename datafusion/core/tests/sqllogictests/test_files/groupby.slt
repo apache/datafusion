@@ -3011,3 +3011,51 @@ SELECT *
 1 TUR 2 2022-01-01T11:30:00 TRY 75 325
 1 FRA 3 2022-01-02T12:00:00 EUR 200 375
 1 TUR 4 2022-01-03T10:00:00 TRY 100 300
+
+# join should propagate primary key correctly
+query IRP
+SELECT l.sn, SUM(l.amount), l.ts
+FROM
+  (SELECT *
+  FROM sales_global_with_pk AS l
+  JOIN sales_global_with_pk AS r ON l.sn >= r.sn)
+GROUP BY l.sn
+ORDER BY l.sn
+----
+0 30 2022-01-01T06:00:00
+1 100 2022-01-01T08:00:00
+2 225 2022-01-01T11:30:00
+3 800 2022-01-02T12:00:00
+4 500 2022-01-03T10:00:00
+
+# Projection propagates primary keys correctly
+# (we can use r.ts at the final projection, because it
+# is associated with primary key r.sn)
+query IRP
+SELECT r.sn, SUM(r.amount), r.ts
+FROM
+  (SELECT r.ts, r.sn, r.amount
+   FROM
+     (SELECT *
+      FROM sales_global_with_pk AS l
+      JOIN sales_global_with_pk AS r ON l.sn >= r.sn))
+GROUP BY r.sn
+ORDER BY r.sn
+----
+0 150 2022-01-01T06:00:00
+1 200 2022-01-01T08:00:00
+2 225 2022-01-01T11:30:00
+3 400 2022-01-02T12:00:00
+4 100 2022-01-03T10:00:00
+
+# after join, new window expressions shouldn't be associated with primary keys
+statement error DataFusion error: Error during planning: Projection references non-aggregate values: Expression rn1 could not be resolved from available columns: r.sn, SUM\(r.amount\)
+SELECT r.sn, SUM(r.amount), rn1
+FROM
+  (SELECT r.ts, r.sn, r.amount,
+          ROW_NUMBER() OVER() AS rn1
+   FROM
+     (SELECT *
+      FROM sales_global_with_pk AS l
+      JOIN sales_global_with_pk AS r ON l.sn >= r.sn))
+GROUP BY r.sn

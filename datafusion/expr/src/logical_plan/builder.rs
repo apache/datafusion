@@ -24,9 +24,7 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{
-    columnize_expr, compare_sort_expr, exprlist_to_fields, exprlist_to_primary_keys,
-};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields};
 use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
@@ -44,8 +42,8 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
     add_offset_to_primary_key, display::ToStringifiedPlan, Column, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, OwnedTableReference, Result, ScalarValue,
-    TableReference, ToDFSchema,
+    DFSchemaRef, DataFusionError, OwnedTableReference, PrimaryKeyToAssociations, Result,
+    ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -271,7 +269,7 @@ impl LogicalPlanBuilder {
         // All the field indices are associated, since it is source,
         let associated_indices = (0..n_field).collect::<Vec<_>>();
         for pk in table_source.primary_keys() {
-            primary_keys.insert(*pk, associated_indices.clone());
+            primary_keys.insert(*pk, (true, associated_indices.clone()));
         }
 
         let projected_schema = projection
@@ -1099,10 +1097,19 @@ pub fn build_join_schema(
         }
     };
 
-    let right_primary_keys =
+    // TODO: Update is_unique flag
+    let mut right_primary_keys =
         add_offset_to_primary_key(right.primary_keys(), left_fields.len());
 
-    let left_primary_keys = left.primary_keys().clone();
+    let mut left_primary_keys = left.primary_keys().clone();
+
+    // After join, primary key may be cloned. reset is_unique flag.
+    left_primary_keys
+        .iter_mut()
+        .for_each(|(_pk, (is_unique, _))| *is_unique = false);
+    right_primary_keys
+        .iter_mut()
+        .for_each(|(_pk, (is_unique, _))| *is_unique = false);
     let mut primary_keys = HashMap::new();
     match join_type {
         JoinType::Inner => {
@@ -1250,6 +1257,56 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }))
 }
 
+pub(crate) fn project_primary_keys(
+    exprs: &[Expr],
+    input: &LogicalPlan,
+) -> Result<PrimaryKeyToAssociations> {
+    let mut updated_primary_key = HashMap::new();
+    let mut input_to_proj_mapping: HashMap<usize, usize> = HashMap::new();
+
+    let input_schema = &input.schema();
+    // println!("exprs: {:?}", exprs);
+    // println!("plan schema: {:?}", input_schema);
+    // println!("existing primary keys: {:?}", input_schema.primary_keys());
+    // look for exact match in plan's output schema
+    let input_fields = input_schema.fields();
+    for (idx, expr) in exprs.iter().enumerate() {
+        // println!("{}", format!("{:?}", expr));
+        // println!("{}", format!("{}", expr));
+        let expr_name = format!("{}", expr);
+        if let Some(match_idx) = input_fields
+            .iter()
+            .position(|item| item.qualified_name() == expr_name)
+        {
+            input_to_proj_mapping.insert(match_idx, idx);
+        }
+        // expr.to_field(input_schema)
+    }
+    for (idx, (is_unique, associations)) in input_schema.primary_keys() {
+        if let Some(target) = input_to_proj_mapping.get(idx) {
+            // Do mapping for associations
+            let updated_associations = if *is_unique {
+                (0..exprs.len()).collect()
+            } else {
+                // println!("not unique, associations: {:?}", associations);
+                let mut new_associations = vec![];
+                for assoc_idx in associations {
+                    if let Some(target_assoc_idx) = input_to_proj_mapping.get(assoc_idx) {
+                        new_associations.push(*target_assoc_idx);
+                    }
+                }
+                new_associations
+            };
+            if !updated_associations.is_empty() {
+                updated_primary_key.insert(*target, (*is_unique, updated_associations));
+            }
+        }
+    }
+    // println!("input_to_proj_mapping:{:?}", input_to_proj_mapping);
+    // println!("updated_primary_key:{:?}", updated_primary_key);
+    Ok(updated_primary_key)
+}
+
 /// Create Projection
 /// # Errors
 /// This function errors under any of the following conditions:
@@ -1275,7 +1332,20 @@ pub fn project(
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
-    let primary_keys = exprlist_to_primary_keys(&projected_expr, &plan)?;
+
+    // println!("projected exprs");
+    // for item in &projected_expr {
+    //     println!("item:{:?}", item);
+    // }
+    // println!("projected exprs");
+
+    let primary_keys = project_primary_keys(&projected_expr, &plan)?;
+    // let primary_keys = exprlist_to_primary_keys(&projected_expr, &plan)?;
+
+    // println!("---------------PROJECTION--------------");
+    // print_primary_key(&plan);
+    // println!("projection primary_keys: {:?}", primary_keys);
+    // println!("---------------PROJECTION--------------");
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),

@@ -62,7 +62,9 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{add_offset_to_primary_key, DFSchema, ScalarValue};
+use datafusion_common::{
+    add_offset_to_primary_key, DFSchema, PrimaryKeyToAssociations, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
@@ -1317,18 +1319,20 @@ impl DefaultPhysicalPlanner {
 fn get_updated_primary_keys(
     df_schema: &DFSchema,
     field_indices: &[usize],
-) -> HashMap<usize, Vec<usize>> {
+) -> PrimaryKeyToAssociations {
     let mut primary_keys = HashMap::new();
     let existing_primary_keys = df_schema.primary_keys();
     for (idx, field_idx) in field_indices.iter().enumerate() {
-        if let Some(associated_indices) = existing_primary_keys.get(field_idx) {
+        if let Some((is_unique, associated_indices)) =
+            existing_primary_keys.get(field_idx)
+        {
             let mut new_associated_indices = vec![];
             for (idx, field_idx) in field_indices.iter().enumerate() {
                 if associated_indices.contains(field_idx) {
                     new_associated_indices.push(idx);
                 }
             }
-            primary_keys.insert(idx, new_associated_indices);
+            primary_keys.insert(idx, (*is_unique, new_associated_indices));
         }
     }
     primary_keys
@@ -2468,11 +2472,11 @@ mod tests {
         let mut schema = get_test_dfschema().unwrap();
 
         let mut primary_keys = HashMap::new();
-        primary_keys.insert(1, vec![0, 1, 2]);
+        primary_keys.insert(1, (true, vec![0, 1, 2]));
         schema = schema.with_primary_keys(primary_keys);
         let res = get_updated_primary_keys(&schema, &[1, 2]);
         let mut expected = HashMap::new();
-        expected.insert(0, vec![0, 1]);
+        expected.insert(0, (true, vec![0, 1]));
         assert_eq!(res, expected);
     }
 

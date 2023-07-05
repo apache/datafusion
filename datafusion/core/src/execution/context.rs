@@ -519,7 +519,7 @@ impl SessionContext {
                 let association_indices = (0..fields.len()).collect::<Vec<_>>();
                 let primary_keys_with_associations = primary_keys
                     .iter()
-                    .map(|idx| (*idx, association_indices.clone()))
+                    .map(|idx| (*idx, (true, association_indices.clone())))
                     .collect();
                 let updated_schema =
                     DFSchema::new_with_metadata(fields, df_schema.metadata().clone())?

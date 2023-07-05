@@ -440,7 +440,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|elem| elem.qualified_name())
             .collect::<Vec<_>>();
         let mut new_group_by_exprs = group_by_exprs.clone();
-        for (pk, associations) in primary_keys {
+        for (pk, (_is_unique, associations)) in primary_keys {
             for group_by_expr in &group_by_exprs {
                 let expr_name = format!("{}", group_by_expr);
                 if field_names[*pk] == expr_name {
@@ -465,7 +465,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
             .build()?;
-
         // in this next section of code we are re-writing the projection to refer to columns
         // output by the aggregate plan. For example, if the projection contains the expression
         // `SUM(a)` then we replace that with a reference to a column `SUM(a)` produced by

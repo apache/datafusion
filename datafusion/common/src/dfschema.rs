@@ -33,7 +33,7 @@ use std::fmt::{Display, Formatter};
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
 
-type PrimaryKeyToAssociations = HashMap<usize, Vec<usize>>;
+pub type PrimaryKeyToAssociations = HashMap<usize, (bool, Vec<usize>)>;
 
 /// DFSchema wraps an Arrow schema and adds relation names
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,7 +126,7 @@ impl DFSchema {
     }
 
     /// Assing primary key
-    pub fn with_primary_keys(mut self, primary_keys: HashMap<usize, Vec<usize>>) -> Self {
+    pub fn with_primary_keys(mut self, primary_keys: PrimaryKeyToAssociations) -> Self {
         self.primary_keys = primary_keys;
         self
     }
@@ -496,7 +496,7 @@ impl DFSchema {
     }
 
     /// Get primary keys
-    pub fn primary_keys(&self) -> &HashMap<usize, Vec<usize>> {
+    pub fn primary_keys(&self) -> &PrimaryKeyToAssociations {
         &self.primary_keys
     }
 }
@@ -788,16 +788,19 @@ pub fn add_offset_to_primary_key(
 ) -> PrimaryKeyToAssociations {
     primary_keys
         .iter()
-        .map(|(idx, associated_indices)| {
+        .map(|(idx, (is_unique, associated_indices))| {
             (
                 idx + offset,
-                associated_indices
-                    .iter()
-                    .map(|item| item + offset)
-                    .collect::<Vec<_>>(),
+                (
+                    *is_unique,
+                    associated_indices
+                        .iter()
+                        .map(|item| item + offset)
+                        .collect::<Vec<_>>(),
+                ),
             )
         })
-        .collect::<HashMap<usize, Vec<usize>>>()
+        .collect::<PrimaryKeyToAssociations>()
 }
 
 #[cfg(test)]

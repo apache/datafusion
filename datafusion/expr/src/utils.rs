@@ -39,7 +39,7 @@ use datafusion_common::{
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 ///  The value to which `COUNT(*)` is expanded to in
@@ -1078,31 +1078,6 @@ pub fn exprlist_to_fields<'a>(
         // look for exact match in plan's output schema
         let input_schema = &plan.schema();
         exprs.iter().map(|e| e.to_field(input_schema)).collect()
-    }
-}
-
-/// Calculate updated primary key for the plan, and expression
-pub fn exprlist_to_primary_keys<'a>(
-    expr: impl IntoIterator<Item = &'a Expr>,
-    plan: &LogicalPlan,
-) -> Result<HashMap<usize, Vec<usize>>> {
-    // TODO: Add handling for primary key propagation here
-    //       if necessary similar to `exprlist_to_fields` implementation
-    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
-    match plan {
-        // Below operators associate existing primary key with all the fields
-        LogicalPlan::Window(_)
-        | LogicalPlan::SubqueryAlias(_)
-        | LogicalPlan::Filter(_)
-        | LogicalPlan::Limit(_)
-        | LogicalPlan::Repartition(_) => {
-            let mut primary_keys = plan.schema().primary_keys().clone();
-            for (_pk, associations) in primary_keys.iter_mut() {
-                *associations = (0..exprs.len()).collect();
-            }
-            Ok(primary_keys)
-        }
-        _ => Ok(HashMap::new()),
     }
 }
 
