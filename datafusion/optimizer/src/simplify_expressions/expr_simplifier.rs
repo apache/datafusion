@@ -1187,11 +1187,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 lit(!negated)
             }
 
-            // a IS NOT NULL --> true, if a is not nullable
-            Expr::IsNotNull(expr) if !info.nullable(&expr)? => lit(true),
+            // a is not null/unknown --> true (if a is not nullable)
+            Expr::IsNotNull(expr) | Expr::IsNotUnknown(expr)
+                if !info.nullable(&expr)? =>
+            {
+                lit(true)
+            }
 
-            // a IS NULL --> false, if a is not nullable
-            Expr::IsNull(expr) if !info.nullable(&expr)? => lit(false),
+            // a is null/unknown --> false (if a is not nullable)
+            Expr::IsNull(expr) | Expr::IsUnknown(expr) if !info.nullable(&expr)? => {
+                lit(false)
+            }
 
             // no additional rewrites possible
             expr => expr,
@@ -2724,6 +2730,25 @@ mod tests {
             simplify(Expr::IsNull(Box::new(col("c1_non_null")))),
             lit(false)
         );
+    }
+
+    #[test]
+    fn simplify_expr_is_unknown() {
+        assert_eq!(simplify(col("c2").is_unknown()), col("c2").is_unknown(),);
+
+        // 'c2_non_null is unknown' is always false
+        assert_eq!(simplify(col("c2_non_null").is_unknown()), lit(false));
+    }
+
+    #[test]
+    fn simplify_expr_is_not_known() {
+        assert_eq!(
+            simplify(col("c2").is_not_unknown()),
+            col("c2").is_not_unknown()
+        );
+
+        // 'c2_non_null is not unknown' is always true
+        assert_eq!(simplify(col("c2_non_null").is_not_unknown()), lit(true));
     }
 
     #[test]

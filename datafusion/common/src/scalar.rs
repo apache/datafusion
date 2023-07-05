@@ -132,6 +132,14 @@ pub enum ScalarValue {
     /// Months and days are encoded as 32-bit signed integers.
     /// Nanoseconds is encoded as a 64-bit signed integer (no leap seconds).
     IntervalMonthDayNano(Option<i128>),
+    /// Duration in seconds
+    DurationSecond(Option<i64>),
+    /// Duration in milliseconds
+    DurationMillisecond(Option<i64>),
+    /// Duration in microseconds
+    DurationMicrosecond(Option<i64>),
+    /// Duration in nanoseconds
+    DurationNanosecond(Option<i64>),
     /// struct of nested ScalarValue
     Struct(Option<Vec<ScalarValue>>, Fields),
     /// Dictionary type: index type and value
@@ -210,6 +218,14 @@ impl PartialEq for ScalarValue {
             (TimestampMicrosecond(_, _), _) => false,
             (TimestampNanosecond(v1, _), TimestampNanosecond(v2, _)) => v1.eq(v2),
             (TimestampNanosecond(_, _), _) => false,
+            (DurationSecond(v1), DurationSecond(v2)) => v1.eq(v2),
+            (DurationSecond(_), _) => false,
+            (DurationMillisecond(v1), DurationMillisecond(v2)) => v1.eq(v2),
+            (DurationMillisecond(_), _) => false,
+            (DurationMicrosecond(v1), DurationMicrosecond(v2)) => v1.eq(v2),
+            (DurationMicrosecond(_), _) => false,
+            (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.eq(v2),
+            (DurationNanosecond(_), _) => false,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.eq(v2),
             (IntervalYearMonth(v1), IntervalDayTime(v2)) => {
                 ym_to_milli(v1).eq(&dt_to_milli(v2))
@@ -357,6 +373,14 @@ impl PartialOrd for ScalarValue {
                 mdn_to_nano(v1).partial_cmp(&dt_to_nano(v2))
             }
             (IntervalMonthDayNano(_), _) => None,
+            (DurationSecond(v1), DurationSecond(v2)) => v1.partial_cmp(v2),
+            (DurationSecond(_), _) => None,
+            (DurationMillisecond(v1), DurationMillisecond(v2)) => v1.partial_cmp(v2),
+            (DurationMillisecond(_), _) => None,
+            (DurationMicrosecond(v1), DurationMicrosecond(v2)) => v1.partial_cmp(v2),
+            (DurationMicrosecond(_), _) => None,
+            (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.partial_cmp(v2),
+            (DurationNanosecond(_), _) => None,
             (Struct(v1, t1), Struct(v2, t2)) => {
                 if t1.eq(t2) {
                     v1.partial_cmp(v2)
@@ -1508,6 +1532,10 @@ impl std::hash::Hash for ScalarValue {
             TimestampMillisecond(v, _) => v.hash(state),
             TimestampMicrosecond(v, _) => v.hash(state),
             TimestampNanosecond(v, _) => v.hash(state),
+            DurationSecond(v) => v.hash(state),
+            DurationMillisecond(v) => v.hash(state),
+            DurationMicrosecond(v) => v.hash(state),
+            DurationNanosecond(v) => v.hash(state),
             IntervalYearMonth(v) => v.hash(state),
             IntervalDayTime(v) => v.hash(state),
             IntervalMonthDayNano(v) => v.hash(state),
@@ -1984,6 +2012,16 @@ impl ScalarValue {
             ScalarValue::IntervalMonthDayNano(_) => {
                 DataType::Interval(IntervalUnit::MonthDayNano)
             }
+            ScalarValue::DurationSecond(_) => DataType::Duration(TimeUnit::Second),
+            ScalarValue::DurationMillisecond(_) => {
+                DataType::Duration(TimeUnit::Millisecond)
+            }
+            ScalarValue::DurationMicrosecond(_) => {
+                DataType::Duration(TimeUnit::Microsecond)
+            }
+            ScalarValue::DurationNanosecond(_) => {
+                DataType::Duration(TimeUnit::Nanosecond)
+            }
             ScalarValue::Struct(_, fields) => DataType::Struct(fields.clone()),
             ScalarValue::Dictionary(k, v) => {
                 DataType::Dictionary(k.clone(), Box::new(v.get_datatype()))
@@ -2118,6 +2156,10 @@ impl ScalarValue {
             ScalarValue::IntervalYearMonth(v) => v.is_none(),
             ScalarValue::IntervalDayTime(v) => v.is_none(),
             ScalarValue::IntervalMonthDayNano(v) => v.is_none(),
+            ScalarValue::DurationSecond(v) => v.is_none(),
+            ScalarValue::DurationMillisecond(v) => v.is_none(),
+            ScalarValue::DurationMicrosecond(v) => v.is_none(),
+            ScalarValue::DurationNanosecond(v) => v.is_none(),
             ScalarValue::Struct(v, _) => v.is_none(),
             ScalarValue::Dictionary(_, v) => v.is_null(),
         }
@@ -2897,6 +2939,34 @@ impl ScalarValue {
                 e,
                 size
             ),
+            ScalarValue::DurationSecond(e) => build_array_from_option!(
+                Duration,
+                TimeUnit::Second,
+                DurationSecondArray,
+                e,
+                size
+            ),
+            ScalarValue::DurationMillisecond(e) => build_array_from_option!(
+                Duration,
+                TimeUnit::Millisecond,
+                DurationMillisecondArray,
+                e,
+                size
+            ),
+            ScalarValue::DurationMicrosecond(e) => build_array_from_option!(
+                Duration,
+                TimeUnit::Microsecond,
+                DurationMicrosecondArray,
+                e,
+                size
+            ),
+            ScalarValue::DurationNanosecond(e) => build_array_from_option!(
+                Duration,
+                TimeUnit::Nanosecond,
+                DurationNanosecondArray,
+                e,
+                size
+            ),
             ScalarValue::Struct(values, fields) => match values {
                 Some(values) => {
                     let field_values: Vec<_> = fields
@@ -3264,6 +3334,18 @@ impl ScalarValue {
             ScalarValue::IntervalMonthDayNano(val) => {
                 eq_array_primitive!(array, index, IntervalMonthDayNanoArray, val)
             }
+            ScalarValue::DurationSecond(val) => {
+                eq_array_primitive!(array, index, DurationSecondArray, val)
+            }
+            ScalarValue::DurationMillisecond(val) => {
+                eq_array_primitive!(array, index, DurationMillisecondArray, val)
+            }
+            ScalarValue::DurationMicrosecond(val) => {
+                eq_array_primitive!(array, index, DurationMicrosecondArray, val)
+            }
+            ScalarValue::DurationNanosecond(val) => {
+                eq_array_primitive!(array, index, DurationNanosecondArray, val)
+            }
             ScalarValue::Struct(_, _) => unimplemented!(),
             ScalarValue::Dictionary(key_type, v) => {
                 let (values_array, values_index) = match key_type.as_ref() {
@@ -3313,7 +3395,11 @@ impl ScalarValue {
                 | ScalarValue::Time64Nanosecond(_)
                 | ScalarValue::IntervalYearMonth(_)
                 | ScalarValue::IntervalDayTime(_)
-                | ScalarValue::IntervalMonthDayNano(_) => 0,
+                | ScalarValue::IntervalMonthDayNano(_)
+                | ScalarValue::DurationSecond(_)
+                | ScalarValue::DurationMillisecond(_)
+                | ScalarValue::DurationMicrosecond(_)
+                | ScalarValue::DurationNanosecond(_) => 0,
                 ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) => {
                     s.as_ref().map(|s| s.capacity()).unwrap_or_default()
                 }
@@ -3699,6 +3785,10 @@ impl fmt::Display for ScalarValue {
             ScalarValue::IntervalDayTime(e) => format_option!(f, e)?,
             ScalarValue::IntervalYearMonth(e) => format_option!(f, e)?,
             ScalarValue::IntervalMonthDayNano(e) => format_option!(f, e)?,
+            ScalarValue::DurationSecond(e) => format_option!(f, e)?,
+            ScalarValue::DurationMillisecond(e) => format_option!(f, e)?,
+            ScalarValue::DurationMicrosecond(e) => format_option!(f, e)?,
+            ScalarValue::DurationNanosecond(e) => format_option!(f, e)?,
             ScalarValue::Struct(e, fields) => match e {
                 Some(l) => write!(
                     f,
@@ -3781,6 +3871,16 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::IntervalMonthDayNano(_) => {
                 write!(f, "IntervalMonthDayNano(\"{self}\")")
             }
+            ScalarValue::DurationSecond(_) => write!(f, "DurationSecond(\"{self}\")"),
+            ScalarValue::DurationMillisecond(_) => {
+                write!(f, "DurationMillisecond(\"{self}\")")
+            }
+            ScalarValue::DurationMicrosecond(_) => {
+                write!(f, "DurationMicrosecond(\"{self}\")")
+            }
+            ScalarValue::DurationNanosecond(_) => {
+                write!(f, "DurationNanosecond(\"{self}\")")
+            }
             ScalarValue::Struct(e, fields) => {
                 // Use Debug representation of field values
                 match e {
@@ -3802,7 +3902,7 @@ impl fmt::Debug for ScalarValue {
     }
 }
 
-/// Trait used to map a NativeTime to a ScalarType.
+/// Trait used to map a NativeType to a ScalarValue
 pub trait ScalarType<T: ArrowNativeType> {
     /// returns a scalar from an optional T
     fn scalar(r: Option<T>) -> ScalarValue;

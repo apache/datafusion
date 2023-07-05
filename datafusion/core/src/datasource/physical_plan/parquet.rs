@@ -31,7 +31,6 @@ use crate::{
     execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
-        common::AbortOnDropSingle,
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
         Partitioning, SendableRecordBatchStream, Statistics,
@@ -64,6 +63,7 @@ use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMas
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
+use tokio::task::JoinSet;
 
 mod metrics;
 pub mod page_filter;
@@ -701,7 +701,7 @@ pub async fn plan_to_parquet(
         )));
     }
 
-    let mut tasks = vec![];
+    let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let plan = plan.clone();
         let filename = format!("part-{i}.parquet");
@@ -710,27 +710,30 @@ pub async fn plan_to_parquet(
         let mut writer =
             ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
         let stream = plan.execute(i, task_ctx.clone())?;
-        let handle: tokio::task::JoinHandle<Result<()>> =
-            tokio::task::spawn(async move {
-                stream
-                    .map(|batch| {
-                        writer.write(&batch?).map_err(DataFusionError::ParquetError)
-                    })
-                    .try_collect()
-                    .await
-                    .map_err(DataFusionError::from)?;
+        join_set.spawn(async move {
+            stream
+                .map(|batch| writer.write(&batch?).map_err(DataFusionError::ParquetError))
+                .try_collect()
+                .await
+                .map_err(DataFusionError::from)?;
 
-                writer.close().map_err(DataFusionError::from).map(|_| ())
-            });
-        tasks.push(AbortOnDropSingle::new(handle));
+            writer.close().map_err(DataFusionError::from).map(|_| ())
+        });
     }
 
-    futures::future::join_all(tasks)
-        .await
-        .into_iter()
-        .try_for_each(|result| {
-            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-        })?;
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(res) => res?,
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
