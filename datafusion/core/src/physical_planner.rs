@@ -64,8 +64,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
-    GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
+    self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
+    GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -111,7 +111,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(c.flat_name())
             }
         }
-        Expr::Alias(_, name) => Ok(name.clone()),
+        Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{value:?}")),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -629,7 +629,7 @@ impl DefaultPhysicalPlanner {
                             ref order_by,
                             ..
                         }) => generate_sort_key(partition_by, order_by),
-                        Expr::Alias(expr, _) => {
+                        Expr::Alias(Alias{expr,..}) => {
                             // Convert &Box<T> to &T
                             match &**expr {
                                 Expr::WindowFunction(WindowFunction{
@@ -1596,8 +1596,8 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
-        Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-        _ => (physical_name(e)?, e),
+        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
+        _ => (e.display_name()?, e),
     };
     create_window_expr_with_name(
         e,
@@ -1740,7 +1740,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
-        Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
+        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (physical_name(e)?, e),
     };
 

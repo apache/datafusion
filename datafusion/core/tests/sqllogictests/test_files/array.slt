@@ -619,6 +619,7 @@ select array_contains(make_array(true, true, true), make_array(false, false)), a
 ----
 false false
 
+
 ### Array operators tests
 
 
@@ -671,6 +672,48 @@ query ?
 select make_array(1.0, '2', null)
 ----
 [1.0, 2, ]
+
+
+### FixedSizeListArray
+
+
+statement ok
+CREATE EXTERNAL TABLE fixed_size_list_array STORED AS PARQUET LOCATION 'tests/data/fixed_size_list_array.parquet';
+
+query T
+select arrow_typeof(f0) from fixed_size_list_array;
+----
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+
+query ?
+select * from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select f0 from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select arrow_cast(f0, 'List(Int64)') from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
+----
+[[1, 2], [3, 4]]
+
+query ?
+select make_array(f0) from fixed_size_list_array
+----
+[[1, 2], [3, 4]]
+
 
 ### Delete tables
 

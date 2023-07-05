@@ -226,13 +226,13 @@ fn math_decimal_coercion(
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
-        (Dictionary(key_type, value_type), _) => {
+        (Dictionary(_, value_type), _) => {
             let (value_type, rhs_type) = math_decimal_coercion(value_type, rhs_type)?;
-            Some((Dictionary(key_type.clone(), Box::new(value_type)), rhs_type))
+            Some((value_type, rhs_type))
         }
-        (_, Dictionary(key_type, value_type)) => {
+        (_, Dictionary(_, value_type)) => {
             let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type)?;
-            Some((lhs_type, Dictionary(key_type.clone(), Box::new(value_type))))
+            Some((lhs_type, value_type))
         }
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some((dec_type.clone(), dec_type.clone()))
@@ -490,10 +490,8 @@ fn mathematics_numerical_coercion(
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
             mathematics_numerical_coercion(lhs_value_type, rhs_value_type)
         }
-        (Dictionary(key_type, value_type), _) => {
-            let value_type = mathematics_numerical_coercion(value_type, rhs_type);
-            value_type
-                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)))
+        (Dictionary(_, value_type), _) => {
+            mathematics_numerical_coercion(value_type, rhs_type)
         }
         (_, Dictionary(_, value_type)) => {
             mathematics_numerical_coercion(lhs_type, value_type)

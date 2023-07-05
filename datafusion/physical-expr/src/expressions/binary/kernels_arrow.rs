@@ -20,23 +20,17 @@
 
 use arrow::compute::{
     add_dyn, add_scalar_dyn, divide_dyn_checked, divide_scalar_dyn, modulus_dyn,
-    modulus_scalar_dyn, multiply_dyn, multiply_fixed_point, multiply_scalar_dyn,
-    subtract_dyn, subtract_scalar_dyn, try_unary,
+    modulus_scalar_dyn, multiply_fixed_point, multiply_scalar_dyn, subtract_dyn,
+    subtract_scalar_dyn, try_unary,
 };
-use arrow::datatypes::{
-    i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    DECIMAL128_MAX_PRECISION,
-};
-use arrow::{array::*, datatypes::ArrowNumericType, downcast_dictionary_array};
-use arrow_array::types::{ArrowDictionaryKeyType, DecimalType};
+use arrow::datatypes::{Date32Type, Date64Type, Decimal128Type};
+use arrow::{array::*, datatypes::ArrowNumericType};
 use arrow_array::ArrowNativeTypeOp;
-use arrow_buffer::ArrowNativeType;
 use arrow_schema::{DataType, IntervalUnit};
 use chrono::{Days, Duration, Months, NaiveDate, NaiveDateTime};
 use datafusion_common::cast::{as_date32_array, as_date64_array, as_decimal128_array};
 use datafusion_common::scalar::{date32_op, date64_op};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use std::cmp::min;
 use std::ops::Add;
 use std::sync::Arc;
 
@@ -641,20 +635,6 @@ fn decimal_array_with_precision_scale(
             Arc::new(array.clone().with_precision_and_scale(precision, scale)?)
                 as ArrayRef
         }
-        DataType::Dictionary(_, _) => {
-            downcast_dictionary_array!(
-                array => match array.values().data_type() {
-                    DataType::Decimal128(_, _) => {
-                        let decimal_dict_array = array.downcast_dict::<Decimal128Array>().unwrap();
-                        let decimal_array = decimal_dict_array.values().clone();
-                        let decimal_array = decimal_array.with_precision_and_scale(precision, scale)?;
-                        Arc::new(array.with_values(&decimal_array)) as ArrayRef
-                    }
-                    t => return Err(DataFusionError::Internal(format!("Unexpected dictionary value type {t}"))),
-                },
-                t => return Err(DataFusionError::Internal(format!("Unexpected datatype {t}"))),
-            )
-        }
         _ => {
             return Err(DataFusionError::Internal(
                 "Unexpected data type".to_string(),
@@ -699,75 +679,6 @@ pub(crate) fn subtract_dyn_decimal(
 }
 
 /// Remove this once arrow-rs provides `multiply_fixed_point_dyn`.
-fn math_op_dict<K, T, F>(
-    left: &DictionaryArray<K>,
-    right: &DictionaryArray<K>,
-    op: F,
-) -> Result<PrimitiveArray<T>>
-where
-    K: ArrowDictionaryKeyType + ArrowNumericType,
-    T: ArrowNumericType,
-    F: Fn(T::Native, T::Native) -> T::Native,
-{
-    if left.len() != right.len() {
-        return Err(DataFusionError::Internal(format!(
-            "Cannot perform operation on arrays of different length ({}, {})",
-            left.len(),
-            right.len()
-        )));
-    }
-
-    // Safety justification: Since the inputs are valid Arrow arrays, all values are
-    // valid indexes into the dictionary (which is verified during construction)
-
-    let left_iter = unsafe {
-        left.values()
-            .as_primitive::<T>()
-            .take_iter_unchecked(left.keys_iter())
-    };
-
-    let right_iter = unsafe {
-        right
-            .values()
-            .as_primitive::<T>()
-            .take_iter_unchecked(right.keys_iter())
-    };
-
-    let result = left_iter
-        .zip(right_iter)
-        .map(|(left_value, right_value)| {
-            if let (Some(left), Some(right)) = (left_value, right_value) {
-                Some(op(left, right))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    Ok(result)
-}
-
-/// Divide a decimal native value by given divisor and round the result.
-/// Remove this once arrow-rs provides `multiply_fixed_point_dyn`.
-fn divide_and_round<I>(input: I::Native, div: I::Native) -> I::Native
-where
-    I: DecimalType,
-    I::Native: ArrowNativeTypeOp,
-{
-    let d = input.div_wrapping(div);
-    let r = input.mod_wrapping(div);
-
-    let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
-    let half_neg = half.neg_wrapping();
-    // Round result
-    match input >= I::Native::ZERO {
-        true if r >= half => d.add_wrapping(I::Native::ONE),
-        false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-        _ => d,
-    }
-}
-
-/// Remove this once arrow-rs provides `multiply_fixed_point_dyn`.
 /// <https://github.com/apache/arrow-rs/issues/4135>
 fn multiply_fixed_point_dyn(
     left: &dyn Array,
@@ -775,56 +686,9 @@ fn multiply_fixed_point_dyn(
     required_scale: i8,
 ) -> Result<ArrayRef> {
     match (left.data_type(), right.data_type()) {
-        (
-            DataType::Dictionary(_, lhs_value_type),
-            DataType::Dictionary(_, rhs_value_type),
-        ) if matches!(lhs_value_type.as_ref(), &DataType::Decimal128(_, _))
-            && matches!(rhs_value_type.as_ref(), &DataType::Decimal128(_, _)) =>
-        {
-            downcast_dictionary_array!(
-                left => match left.values().data_type() {
-                    DataType::Decimal128(_, _) => {
-                        let lhs_precision_scale = get_precision_scale(lhs_value_type.as_ref())?;
-                        let rhs_precision_scale = get_precision_scale(rhs_value_type.as_ref())?;
-
-                        let product_scale = lhs_precision_scale.1 + rhs_precision_scale.1;
-                        let precision = min(lhs_precision_scale.0 + rhs_precision_scale.0 + 1, DECIMAL128_MAX_PRECISION);
-
-                        if required_scale == product_scale {
-                            return Ok(multiply_dyn(left, right)?.as_primitive::<Decimal128Type>().clone()
-                                .with_precision_and_scale(precision, required_scale).map(|a| Arc::new(a) as ArrayRef)?);
-                        }
-
-                        if required_scale > product_scale {
-                            return Err(DataFusionError::Internal(format!(
-                                "Required scale {required_scale} is greater than product scale {product_scale}"
-                            )));
-                        }
-
-                        let divisor =
-                            i256::from_i128(10).pow_wrapping((product_scale - required_scale) as u32);
-
-                        let right = as_dictionary_array::<_>(right);
-
-                        let array = math_op_dict::<_, Decimal128Type, _>(left, right, |a, b| {
-                            let a = i256::from_i128(a);
-                            let b = i256::from_i128(b);
-
-                            let mut mul = a.wrapping_mul(b);
-                            mul = divide_and_round::<Decimal256Type>(mul, divisor);
-                            mul.as_i128()
-                        }).map(|a| a.with_precision_and_scale(precision, required_scale).unwrap())?;
-
-                        Ok(Arc::new(array))
-                    }
-                    t => unreachable!("Unsupported dictionary value type {}", t),
-                },
-                t => unreachable!("Unsupported data type {}", t),
-            )
-        }
         (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => {
-            let left = left.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            let right = right.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let left = left.as_primitive::<Decimal128Type>();
+            let right = right.as_primitive::<Decimal128Type>();
 
             Ok(multiply_fixed_point(left, right, required_scale)
                 .map(|a| Arc::new(a) as ArrayRef)?)
@@ -2525,9 +2389,10 @@ mod tests {
             "1234567890.0000000000000000000000000000"
         );
 
-        // [123456789, 10]
+        // [123456789, 10, 10]
         let a = Decimal128Array::from(vec![
             123456789000000000000000000,
+            10000000000000000000,
             10000000000000000000,
         ])
         .with_precision_and_scale(38, 18)
@@ -2542,18 +2407,12 @@ mod tests {
         .with_precision_and_scale(38, 18)
         .unwrap();
 
-        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1), None]);
-        let array1 = DictionaryArray::new(keys, Arc::new(a));
-        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(2), None]);
-        let array2 = DictionaryArray::new(keys, Arc::new(b));
-
-        let result = multiply_fixed_point_dyn(&array1, &array2, 28).unwrap();
+        let result = multiply_fixed_point_dyn(&a, &b, 28).unwrap();
         let expected = Arc::new(
             Decimal128Array::from(vec![
                 Some(12345678900000000000000000000000000000),
                 Some(12345678900000000000000000000000000000),
                 Some(1200000000000000000000000000000),
-                None,
             ])
             .with_precision_and_scale(38, 28)
             .unwrap(),

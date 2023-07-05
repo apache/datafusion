@@ -335,6 +335,7 @@ impl GroupedHashAggregateStream {
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
                 let group_state = &group_states[*group_idx];
+
                 group_rows.row(row) == group_state.group_by_values.row()
             });
 

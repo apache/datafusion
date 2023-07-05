@@ -30,7 +30,7 @@ use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    BinaryExpr, Case, Cast, InList, ScalarFunction as DFScalarFunction, Sort,
+    Alias, BinaryExpr, Case, Cast, InList, ScalarFunction as DFScalarFunction, Sort,
     WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
@@ -504,7 +504,7 @@ pub fn to_substrait_agg_measure(
                 }
             })
         }
-        Expr::Alias(expr, _name) => {
+        Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
         }
         _ => Err(DataFusionError::Internal(format!(
@@ -858,7 +858,7 @@ pub fn to_substrait_rex(
             })
         }
         Expr::Literal(value) => to_substrait_literal(value),
-        Expr::Alias(expr, _alias) => {
+        Expr::Alias(Alias { expr, .. }) => {
             to_substrait_rex(expr, schema, col_ref_offset, extension_info)
         }
         Expr::WindowFunction(WindowFunction {
