@@ -478,8 +478,7 @@ impl RowAccumulator for SumRowAccumulator {
     }
 }
 
-/// An accumulator to compute the sum of PrimitiveArray<T>.
-/// Stores values as native types, and does overflow checking
+/// An accumulator to compute the sum of values in [`PrimitiveArray<T>`]
 #[derive(Debug)]
 struct SumGroupsAccumulator<T>
 where
