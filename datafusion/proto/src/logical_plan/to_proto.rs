@@ -1394,6 +1394,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::SHA384 => Self::Sha384,
             BuiltinScalarFunction::SHA512 => Self::Sha512,
             BuiltinScalarFunction::Digest => Self::Digest,
+            BuiltinScalarFunction::Decode => Self::Decode,
+            BuiltinScalarFunction::Encode => Self::Encode,
             BuiltinScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
