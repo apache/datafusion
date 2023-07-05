@@ -29,9 +29,9 @@
 
 statement ok
 create table ts_data(ts bigint, value int) as values
-  (1599572549190855000, 1),
-  (1599568949190855000, 2),
-  (1599565349190855000, 3);
+  (1599572549190855123, 1),
+  (1599568949190855123, 2),
+  (1599565349190855123, 3);
 
 statement ok
 create table ts_data_nanos as select arrow_cast(ts, 'Timestamp(Nanosecond, None)') as ts, value from ts_data;
@@ -270,9 +270,9 @@ SELECT COUNT(*) FROM ts_data_secs where ts > from_unixtime(1599566400)
 query P rowsort
 SELECT DISTINCT ts FROM ts_data_nanos;
 ----
-2020-09-08T11:42:29.190855
-2020-09-08T12:42:29.190855
-2020-09-08T13:42:29.190855
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
 
 
 query I
@@ -1010,6 +1010,96 @@ ts_data_secs 2020-09-08T00:00:00
 ts_data_secs 2020-09-08T00:00:00
 ts_data_secs 2020-09-08T00:00:00
 
+# Test date trun on different granularity
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_nanos
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_nanos
+----
+microsecond 2020-09-08T11:42:29.190855
+microsecond 2020-09-08T12:42:29.190855
+microsecond 2020-09-08T13:42:29.190855
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_micros
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_micros
+----
+microsecond 2020-09-08T11:42:29.190855
+microsecond 2020-09-08T12:42:29.190855
+microsecond 2020-09-08T13:42:29.190855
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_millis
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_millis
+----
+microsecond 2020-09-08T11:42:29.190
+microsecond 2020-09-08T12:42:29.190
+microsecond 2020-09-08T13:42:29.190
+millisecond 2020-09-08T11:42:29.190
+millisecond 2020-09-08T12:42:29.190
+millisecond 2020-09-08T13:42:29.190
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+query TP rowsort
+SELECT 'millisecond', DATE_TRUNC('millisecond', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'microsecond', DATE_TRUNC('microsecond', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'second', DATE_TRUNC('second', ts) FROM ts_data_secs
+  UNION ALL
+SELECT 'minute', DATE_TRUNC('minute', ts) FROM ts_data_secs
+----
+microsecond 2020-09-08T11:42:29
+microsecond 2020-09-08T12:42:29
+microsecond 2020-09-08T13:42:29
+millisecond 2020-09-08T11:42:29
+millisecond 2020-09-08T12:42:29
+millisecond 2020-09-08T13:42:29
+minute 2020-09-08T11:42:00
+minute 2020-09-08T12:42:00
+minute 2020-09-08T13:42:00
+second 2020-09-08T11:42:29
+second 2020-09-08T12:42:29
+second 2020-09-08T13:42:29
+
+
 # test date trunc on different timestamp scalar types and ensure they are consistent
 query P rowsort
 SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, None)')) as ts
@@ -1024,8 +1114,6 @@ SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp
 2023-08-03T00:00:00
 2023-08-03T14:38:50
 2023-08-03T14:38:50
-
-
 
 
 # Demonstrate that strings are automatically coerced to timestamps (don't use TIMESTAMP)
@@ -1145,7 +1233,7 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-query error DataFusion error: type_coercion\ncaused by\nInternal error: Unsupported operation Plus between Timestamp\(Nanosecond, None\) and Timestamp\(Nanosecond, None\)\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error DataFusion error: Arrow error: Cast error: Cannot perform arithmetic operation between array of type Timestamp\(Nanosecond, None\) and array of type Timestamp\(Nanosecond, None\)
 SELECT ts1 + ts2
 FROM foo;
 

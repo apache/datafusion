@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "26.0.0"
+version = "27.0.0"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
@@ -29,12 +29,12 @@ rust-version = "1.62"
 readme = "README.md"
 
 [dependencies]
-arrow = "42.0.0"
+arrow = "43.0.0"
 async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "26.0.0" }
+datafusion = { path = "../datafusion/core", version = "27.0.0" }
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }
@@ -43,3 +43,9 @@ parking_lot = { version = "0.12" }
 rustyline = "11.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 url = "2.2"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+ctor = "0.2.0"
+predicates = "3.0"
+rstest = "0.17"
