@@ -1285,9 +1285,9 @@ where
         // Sum partial sums
         self.min_max.resize_with(total_num_groups, || {
             if MIN {
-                T::Native::min()
-            } else {
                 T::Native::max()
+            } else {
+                T::Native::min()
             }
         });
 
