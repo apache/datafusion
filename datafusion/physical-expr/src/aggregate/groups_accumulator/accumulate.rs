@@ -717,6 +717,29 @@ mod test {
 
             let null_buffer = null_state.build();
 
+            if null_buffer != expected_null_buffer {
+                if let (Some(null_buffer), Some(expected_null_buffer)) =
+                    (null_buffer.as_ref(), expected_null_buffer.as_ref())
+                {
+                    null_buffer
+                        .iter()
+                        .zip(expected_null_buffer.iter())
+                        .enumerate()
+                        .for_each(|(i, (valid, expected_valid))| {
+                            println!(
+                                "nulls[{i}]: valid: {valid}, expected: {expected_valid}"
+                            );
+                            println!(
+                                "  expected_seen_values: {} expected_null_input: {}",
+                                expected_seen_values.contains(&i),
+                                expected_null_input.contains(&i)
+                            );
+
+                            assert_eq!(valid, expected_valid, "Index {i}");
+                        })
+                };
+            }
+
             assert_eq!(null_buffer, expected_null_buffer);
         }
 
