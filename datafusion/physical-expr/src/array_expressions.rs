@@ -18,7 +18,7 @@
 //! Array expressions
 
 use arrow::array::*;
-use arrow::buffer::Buffer;
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::compute;
 use arrow::datatypes::{DataType, Field};
 use core::any::type_name;
@@ -197,15 +197,53 @@ pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 macro_rules! append {
     ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let child_array =
-            downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
+
         let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        let cat = compute::concat(&[child_array, element])?;
-        let mut scalars = vec![];
-        for i in 0..cat.len() {
-            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&cat, i)?));
+        for (arr, el) in $ARRAY.iter().zip(element.iter()) {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty",))
+            })?;
+            match arr {
+                Some(arr) => {
+                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+                    values = downcast_arg!(
+                        compute::concat(&[
+                            &values,
+                            child_array,
+                            &$ARRAY_TYPE::from(vec![el])
+                        ])?
+                        .clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.push(last_offset + child_array.len() as i32 + 1i32);
+                }
+                None => {
+                    values = downcast_arg!(
+                        compute::concat(&[
+                            &values,
+                            &$ARRAY_TYPE::from(vec![el.clone()])
+                        ])?
+                        .clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.push(last_offset + 1i32);
+                }
+            }
         }
-        scalars
+
+        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
     }};
 }
 
@@ -221,7 +259,7 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
-    let scalars = match (arr.value_type(), element.data_type()) {
+    let res = match (arr.value_type(), element.data_type()) {
                 (DataType::Utf8, DataType::Utf8) => append!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => append!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => append!(arr, element, BooleanArray),
@@ -243,20 +281,58 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
     };
 
-    Ok(array(scalars.as_slice())?.into_array(1))
+    Ok(res)
 }
 
 macro_rules! prepend {
     ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let child_array =
-            downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
+
         let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        let cat = compute::concat(&[element, child_array])?;
-        let mut scalars = vec![];
-        for i in 0..cat.len() {
-            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&cat, i)?));
+        for (arr, el) in $ARRAY.iter().zip(element.iter()) {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty",))
+            })?;
+            match arr {
+                Some(arr) => {
+                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+                    values = downcast_arg!(
+                        compute::concat(&[
+                            &values,
+                            &$ARRAY_TYPE::from(vec![el]),
+                            child_array
+                        ])?
+                        .clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.push(last_offset + child_array.len() as i32 + 1i32);
+                }
+                None => {
+                    values = downcast_arg!(
+                        compute::concat(&[
+                            &values,
+                            &$ARRAY_TYPE::from(vec![el.clone()])
+                        ])?
+                        .clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.push(last_offset + 1i32);
+                }
+            }
         }
-        scalars
+
+        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
     }};
 }
 
@@ -272,7 +348,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[0];
     let arr = as_list_array(&args[1])?;
 
-    let scalars = match (arr.value_type(), element.data_type()) {
+    let res = match (arr.value_type(), element.data_type()) {
                 (DataType::Utf8, DataType::Utf8) => prepend!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => prepend!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => prepend!(arr, element, BooleanArray),
@@ -294,7 +370,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
     };
 
-    Ok(array(scalars.as_slice())?.into_array(1))
+    Ok(res)
 }
 
 /// Array_concat/Array_cat SQL function
@@ -420,74 +496,58 @@ pub fn array_fill(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 macro_rules! position {
     ($ARRAY:expr, $ELEMENT:expr, $INDEX:expr, $ARRAY_TYPE:ident) => {{
-        let child_array =
-            downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE).value(0);
-
-        match child_array
+        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
+        $ARRAY
             .iter()
-            .skip($INDEX)
-            .position(|x| x == Some(element))
-        {
-            Some(value) => Ok(ColumnarValue::Scalar(ScalarValue::UInt8(Some(
-                (value + $INDEX + 1) as u8,
-            )))),
-            None => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
-        }
+            .zip(element.iter())
+            .zip($INDEX.iter())
+            .map(|((arr, el), i)| {
+                let index = match i {
+                    Some(i) => {
+                        if i <= 0 {
+                            0
+                        } else {
+                            i - 1
+                        }
+                    }
+                    None => {
+                        return Err(DataFusionError::Execution(
+                            "initial position must not be null".to_string(),
+                        ))
+                    }
+                };
+
+                match arr {
+                    Some(arr) => {
+                        let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+
+                        match child_array
+                            .iter()
+                            .skip(index as usize)
+                            .position(|x| x == el)
+                        {
+                            Some(value) => Ok(Some(value as u64 + index as u64 + 1u64)),
+                            None => Ok(None),
+                        }
+                    }
+                    None => Ok(None),
+                }
+            })
+            .collect::<Result<UInt64Array>>()?
     }};
 }
 
 /// Array_position SQL function
-pub fn array_position(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arr = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
+pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let arr = as_list_array(&args[0])?;
+    let element = &args[1];
 
-    let element = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Array_position function requires scalar element".to_string(),
-            ))
-        }
-    };
-
-    let mut index: usize = 0;
+    let mut index = Int64Array::from_value(0, arr.len());
     if args.len() == 3 {
-        let scalar =
-            match &args[2] {
-                ColumnarValue::Scalar(scalar) => scalar.clone(),
-                _ => return Err(DataFusionError::Internal(
-                    "Array_position function requires positive integer scalar element"
-                        .to_string(),
-                )),
-            };
-
-        index =
-            match scalar {
-                ScalarValue::Int8(Some(value)) => value as usize,
-                ScalarValue::Int16(Some(value)) => value as usize,
-                ScalarValue::Int32(Some(value)) => value as usize,
-                ScalarValue::Int64(Some(value)) => value as usize,
-                ScalarValue::UInt8(Some(value)) => value as usize,
-                ScalarValue::UInt16(Some(value)) => value as usize,
-                ScalarValue::UInt32(Some(value)) => value as usize,
-                ScalarValue::UInt64(Some(value)) => value as usize,
-                _ => return Err(DataFusionError::Internal(
-                    "Array_position function requires positive integer scalar element"
-                        .to_string(),
-                )),
-            };
-
-        if index == 0 {
-            index = 0;
-        } else {
-            index -= 1;
-        }
+        index = as_int64_array(&args[2])?.clone();
     }
 
-    match arr.data_type() {
+    let res = match arr.data_type() {
         DataType::List(field) => match field.data_type() {
             DataType::Utf8 => position!(arr, element, index, StringArray),
             DataType::LargeUtf8 => position!(arr, element, index, LargeStringArray),
@@ -502,50 +562,75 @@ pub fn array_position(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             DataType::UInt16 => position!(arr, element, index, UInt16Array),
             DataType::UInt32 => position!(arr, element, index, UInt32Array),
             DataType::UInt64 => position!(arr, element, index, UInt64Array),
-            data_type => Err(DataFusionError::NotImplemented(format!(
-                "Array_position is not implemented for types '{data_type:?}'."
-            ))),
+            data_type => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Array_position is not implemented for types '{data_type:?}'."
+                )))
+            }
         },
-        data_type => Err(DataFusionError::NotImplemented(format!(
-            "Array is not type '{data_type:?}'."
-        ))),
-    }
+        data_type => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Array is not type '{data_type:?}'."
+            )))
+        }
+    };
+
+    Ok(Arc::new(res))
 }
 
 macro_rules! positions {
     ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let child_array =
-            downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE).value(0);
+        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array(&DataType::UInt64), UInt64Array).clone();
+        for comp in $ARRAY
+            .iter()
+            .zip(element.iter())
+            .map(|(arr, el)| match arr {
+                Some(arr) => {
+                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+                    let res = child_array
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| *x == el)
+                        .flat_map(|(i, _)| Some((i + 1) as u64))
+                        .collect::<UInt64Array>();
 
-        let mut res = vec![];
-        for (i, x) in child_array.iter().enumerate() {
-            if x == Some(element) {
-                res.push(ColumnarValue::Array(Arc::new(UInt8Array::from(vec![
-                    Some((i + 1) as u8),
-                ]))));
-            }
+                    Ok(res)
+                }
+                None => Ok(downcast_arg!(
+                    new_empty_array(&DataType::UInt64),
+                    UInt64Array
+                )
+                .clone()),
+            })
+            .collect::<Result<Vec<UInt64Array>>>()?
+        {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty",))
+            })?;
+            values =
+                downcast_arg!(compute::concat(&[&values, &comp,])?.clone(), UInt64Array)
+                    .clone();
+            offsets.push(last_offset + comp.len() as i32);
         }
 
-        res
+        let field = Arc::new(Field::new("item", DataType::UInt64, true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
     }};
 }
 
 /// Array_positions SQL function
-pub fn array_positions(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arr = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
-
-    let element = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Array_positions function requires scalar element".to_string(),
-            ))
-        }
-    };
+pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let arr = as_list_array(&args[0])?;
+    let element = &args[1];
 
     let res = match arr.data_type() {
         DataType::List(field) => match field.data_type() {
@@ -575,7 +660,7 @@ pub fn array_positions(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     };
 
-    array(res.as_slice())
+    Ok(res)
 }
 
 macro_rules! remove {
@@ -1465,29 +1550,22 @@ mod tests {
     #[test]
     fn test_array_position() {
         // array_position([1, 2, 3, 4], 3) = 3
-        let list_array = return_array();
-        let array = array_position(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-        ])
-        .expect("failed to initialize function array_position")
-        .into_array(1);
-        let result =
-            as_uint8_array(&array).expect("failed to initialize function array_position");
+        let list_array = return_array().into_array(1);
+        let array = array_position(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
+            .expect("failed to initialize function array_position");
+        let result = as_uint64_array(&array)
+            .expect("failed to initialize function array_position");
 
-        assert_eq!(result, &UInt8Array::from(vec![3]));
+        assert_eq!(result, &UInt64Array::from(vec![3]));
     }
 
     #[test]
     fn test_array_positions() {
         // array_positions([1, 2, 3, 4], 3) = [3]
-        let list_array = return_array();
-        let array = array_positions(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-        ])
-        .expect("failed to initialize function array_position")
-        .into_array(1);
+        let list_array = return_array().into_array(1);
+        let array =
+            array_positions(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
+                .expect("failed to initialize function array_position");
         let result =
             as_list_array(&array).expect("failed to initialize function array_position");
 
@@ -1497,7 +1575,7 @@ mod tests {
             result
                 .value(0)
                 .as_any()
-                .downcast_ref::<UInt8Array>()
+                .downcast_ref::<UInt64Array>()
                 .unwrap()
                 .values()
         );
