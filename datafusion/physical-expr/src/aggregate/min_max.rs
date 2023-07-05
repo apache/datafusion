@@ -1259,13 +1259,16 @@ where
             |group_index, new_value| {
                 let val: &mut <T as ArrowPrimitiveType>::Native =
                     &mut self.min_max[group_index];
-                if MIN {
-                    if new_value < *val {
-                        *val = new_value;
+                match MIN {
+                    true => {
+                        if new_value < *val {
+                            *val = new_value;
+                        }
                     }
-                } else {
-                    if new_value > *val {
-                        *val = new_value;
+                    false => {
+                        if new_value > *val {
+                            *val = new_value;
+                        }
                     }
                 }
             },
