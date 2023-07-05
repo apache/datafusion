@@ -1302,7 +1302,7 @@ where
         let nulls = self.null_state.build();
 
         let min_max = std::mem::take(&mut self.min_max);
-        let min_max = Arc::new(PrimitiveArray::<T>::new(min_max.into(), nulls.clone())); // zero copy
+        let min_max = Arc::new(PrimitiveArray::<T>::new(min_max.into(), nulls)); // zero copy
 
         let sums = adjust_output_array(&self.min_max_data_type, min_max)?;
 
