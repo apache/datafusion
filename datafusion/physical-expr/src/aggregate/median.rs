@@ -66,7 +66,7 @@ impl AggregateExpr for Median {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(MedianAccumulator {
             data_type: self.data_type.clone(),
-            batches: vec![],
+            arrays: vec![],
             all_values: vec![],
         }))
     }
@@ -109,29 +109,19 @@ impl PartialEq<dyn Any> for Median {
 /// The median accumulator accumulates the raw input values
 /// as `ScalarValue`s
 ///
-/// The intermediate state is represented as a List of those scalars
+/// The intermediate state is represented as a List of scalar values updated by
+/// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
+/// in the final evaluation step so that we avoid expensive conversions and
+/// allocations during `update_batch`.
 struct MedianAccumulator {
     data_type: DataType,
-    batches: Vec<ArrayRef>,
+    arrays: Vec<ArrayRef>,
     all_values: Vec<ScalarValue>,
-}
-
-fn to_scalar_values(arrays: &[ArrayRef]) -> Result<Vec<ScalarValue>> {
-    let num_values: usize = arrays.iter().map(|a| a.len()).sum();
-    let mut all_values = Vec::with_capacity(num_values);
-
-    for array in arrays {
-        for index in 0..array.len() {
-            all_values.push(ScalarValue::try_from_array(&array, index)?);
-        }
-    }
-
-    Ok(all_values)
 }
 
 impl Accumulator for MedianAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let all_values = to_scalar_values(&self.batches)?;
+        let all_values = to_scalar_values(&self.arrays)?;
         let state = ScalarValue::new_list(Some(all_values), self.data_type.clone());
 
         Ok(vec![state])
@@ -141,8 +131,9 @@ impl Accumulator for MedianAccumulator {
         assert_eq!(values.len(), 1);
         let array = &values[0];
 
+        // Defer conversions to scalar values to final evaluation.
         assert_eq!(array.data_type(), &self.data_type);
-        self.batches.push(array.clone());
+        self.arrays.push(array.clone());
 
         Ok(())
     }
@@ -169,7 +160,7 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let batch_values = to_scalar_values(&self.batches)?;
+        let batch_values = to_scalar_values(&self.arrays)?;
 
         if !self
             .all_values
@@ -234,7 +225,7 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn size(&self) -> usize {
-        let batches_size: usize = self.batches.iter().map(|a| a.len()).sum();
+        let batches_size: usize = self.arrays.iter().map(|a| a.len()).sum();
 
         std::mem::size_of_val(self)
             + ScalarValue::size_of_vec(&self.all_values)
@@ -243,6 +234,19 @@ impl Accumulator for MedianAccumulator {
             + self.data_type.size()
             - std::mem::size_of_val(&self.data_type)
     }
+}
+
+fn to_scalar_values(arrays: &[ArrayRef]) -> Result<Vec<ScalarValue>> {
+    let num_values: usize = arrays.iter().map(|a| a.len()).sum();
+    let mut all_values = Vec::with_capacity(num_values);
+
+    for array in arrays {
+        for index in 0..array.len() {
+            all_values.push(ScalarValue::try_from_array(&array, index)?);
+        }
+    }
+
+    Ok(all_values)
 }
 
 /// Given a returns `array[indicies[indicie_index]]` as a `ScalarValue`
