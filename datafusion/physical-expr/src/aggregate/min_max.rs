@@ -21,7 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow::{
@@ -35,9 +35,15 @@ use arrow::{
     },
     datatypes::Field,
 };
+use arrow_array::cast::AsArray;
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, UInt32Type, UInt64Type,
+};
+use arrow_array::{ArrowNumericType, PrimitiveArray};
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
 use datafusion_expr::Accumulator;
+use log::debug;
 
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
@@ -48,7 +54,9 @@ use arrow::array::Array;
 use arrow::array::Decimal128Array;
 use datafusion_row::accessor::RowAccessor;
 
+use super::groups_accumulator::accumulate::NullState;
 use super::moving_min_max;
+use super::utils::adjust_output_array;
 
 // Min/max aggregation can take Dictionary encode input but always produces unpacked
 // (aka non Dictionary) output. We need to adjust the output data type to reflect this.
@@ -125,6 +133,10 @@ impl AggregateExpr for Max {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
+    fn groups_accumulator_supported(&self) -> bool {
+        self.data_type.is_primitive()
+    }
+
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -133,6 +145,47 @@ impl AggregateExpr for Max {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        match self.data_type {
+            DataType::UInt32 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                UInt32Type,
+                false,
+            >::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::UInt64 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                UInt64Type,
+                false,
+            >::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Float32 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                Float32Type,
+                false,
+            >::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Float64 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                Float64Type,
+                false,
+            >::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Decimal128(_, _) => {
+                Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                    Decimal128Type,
+                    false,
+                >::new(
+                    &self.data_type, &self.data_type
+                )))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "MinMaxGroupsPrimitiveAccumulator not supported for {}",
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -835,6 +888,55 @@ impl AggregateExpr for Min {
         )))
     }
 
+    fn groups_accumulator_supported(&self) -> bool {
+        Max::groups_accumulator_supported(&Max::new(
+            self.expr.clone(),
+            self.name.clone(),
+            self.data_type.clone(),
+        ))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        match self.data_type {
+            DataType::UInt32 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                UInt32Type,
+                true,
+            >::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::UInt64 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                UInt64Type,
+                true,
+            >::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Float32 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                Float32Type,
+                true,
+            >::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Float64 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                Float64Type,
+                true,
+            >::new(
+                &self.data_type, &self.data_type
+            ))),
+            DataType::Decimal128(_, _) => {
+                Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                    Decimal128Type,
+                    true,
+                >::new(
+                    &self.data_type, &self.data_type
+                )))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "MinMaxGroupsPrimitiveAccumulator not supported for {}",
+                self.data_type
+            ))),
+        }
+    }
+
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
     }
@@ -1019,6 +1121,195 @@ impl RowAccumulator for MinRowAccumulator {
     #[inline(always)]
     fn state_index(&self) -> usize {
         self.index
+    }
+}
+
+trait MinMax {
+    fn min() -> Self;
+    fn max() -> Self;
+}
+
+impl MinMax for u32 {
+    fn min() -> Self {
+        u32::MIN
+    }
+    fn max() -> Self {
+        u32::MAX
+    }
+}
+impl MinMax for i32 {
+    fn min() -> Self {
+        i32::MIN
+    }
+    fn max() -> Self {
+        i32::MAX
+    }
+}
+impl MinMax for i64 {
+    fn min() -> Self {
+        i64::MIN
+    }
+    fn max() -> Self {
+        i64::MAX
+    }
+}
+impl MinMax for u64 {
+    fn min() -> Self {
+        u64::MIN
+    }
+    fn max() -> Self {
+        u64::MAX
+    }
+}
+impl MinMax for f32 {
+    fn min() -> Self {
+        f32::MIN
+    }
+    fn max() -> Self {
+        f32::MAX
+    }
+}
+impl MinMax for f64 {
+    fn min() -> Self {
+        f64::MIN
+    }
+    fn max() -> Self {
+        f64::MAX
+    }
+}
+impl MinMax for i128 {
+    fn min() -> Self {
+        i128::MIN
+    }
+    fn max() -> Self {
+        i128::MAX
+    }
+}
+
+/// An accumulator to compute the min or max of PrimitiveArray<T>.
+/// Stores values as native/primitive type
+#[derive(Debug)]
+struct MinMaxGroupsPrimitiveAccumulator<T, const MIN: bool>
+where
+    T: ArrowNumericType + Send,
+    T::Native: MinMax,
+{
+    /// The type of the computed min/max
+    min_max_data_type: DataType,
+
+    /// The type of the returned min/max
+    return_data_type: DataType,
+
+    /// Min/max per group, stored as the native type
+    min_max: Vec<T::Native>,
+
+    /// Track nulls in the input / filters
+    null_state: NullState,
+}
+
+impl<T, const MIN: bool> MinMaxGroupsPrimitiveAccumulator<T, MIN>
+where
+    T: ArrowNumericType + Send,
+    T::Native: MinMax,
+{
+    pub fn new(min_max_data_type: &DataType, return_data_type: &DataType) -> Self {
+        debug!(
+            "MinMaxGroupsPrimitiveAccumulator ({}, min/max type: {min_max_data_type:?}) --> {return_data_type:?}",
+            std::any::type_name::<T>()
+        );
+
+        Self {
+            return_data_type: return_data_type.clone(),
+            min_max_data_type: min_max_data_type.clone(),
+            min_max: vec![],
+            null_state: NullState::new(),
+        }
+    }
+}
+
+impl<T, const MIN: bool> GroupsAccumulator for MinMaxGroupsPrimitiveAccumulator<T, MIN>
+where
+    T: ArrowNumericType + Send,
+    T::Native: MinMax,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values.get(0).unwrap().as_primitive::<T>();
+
+        self.min_max.resize_with(total_num_groups, || {
+            if MIN {
+                T::Native::max()
+            } else {
+                T::Native::min()
+            }
+        });
+
+        // NullState dispatches / handles tracking nulls and groups that saw no values
+        self.null_state.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                let val = &mut self.min_max[group_index];
+                match MIN {
+                    true => {
+                        if new_value < *val {
+                            *val = new_value;
+                        }
+                    }
+                    false => {
+                        if new_value > *val {
+                            *val = new_value;
+                        }
+                    }
+                }
+            },
+        );
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        Self::update_batch(self, values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn evaluate(&mut self) -> Result<ArrayRef> {
+        let min_max = std::mem::take(&mut self.min_max);
+        let nulls = self.null_state.build();
+
+        let min_max = PrimitiveArray::<T>::new(min_max.into(), nulls); // no copy
+        let min_max = adjust_output_array(&self.return_data_type, Arc::new(min_max))?;
+
+        Ok(Arc::new(min_max))
+    }
+
+    // return arrays for min/max values
+    fn state(&mut self) -> Result<Vec<ArrayRef>> {
+        let nulls = self.null_state.build();
+
+        let min_max = std::mem::take(&mut self.min_max);
+        let min_max = Arc::new(PrimitiveArray::<T>::new(min_max.into(), nulls)); // zero copy
+
+        let min_max = adjust_output_array(&self.min_max_data_type, min_max)?;
+
+        Ok(vec![min_max])
+    }
+
+    fn size(&self) -> usize {
+        self.min_max.capacity() * std::mem::size_of::<usize>()
     }
 }
 
