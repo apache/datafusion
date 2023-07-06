@@ -117,6 +117,7 @@ impl TryFrom<&Field> for protobuf::Field {
             arrow_type: Some(Box::new(arrow_type)),
             nullable: field.is_nullable(),
             children: Vec::new(),
+            metadata: field.metadata().clone(),
         })
     }
 }
@@ -266,6 +267,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
                 .iter()
                 .map(|f| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, Error>>()?,
+            metadata: schema.metadata.clone(),
         })
     }
 }
@@ -280,6 +282,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
                 .iter()
                 .map(|f| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, Error>>()?,
+            metadata: schema.metadata.clone(),
         })
     }
 }
