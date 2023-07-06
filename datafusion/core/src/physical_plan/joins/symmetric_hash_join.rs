@@ -57,6 +57,7 @@ use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalB
 
 use crate::physical_plan::common::SharedMemoryReservation;
 use crate::physical_plan::joins::hash_join_utils::convert_sort_expr_with_filter_schema;
+use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     expressions::Column,
     expressions::PhysicalSortExpr,
@@ -385,6 +386,30 @@ impl SymmetricHashJoinExec {
     }
 }
 
+impl DisplayAs for SymmetricHashJoinExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let display_filter = self.filter.as_ref().map_or_else(
+                    || "".to_string(),
+                    |f| format!(", filter={}", f.expression()),
+                );
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "SymmetricHashJoinExec: join_type={:?}, on=[{}]{}",
+                    self.join_type, on, display_filter
+                )
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for SymmetricHashJoinExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -458,28 +483,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             &self.join_type,
             self.null_equals_null,
         )?))
-    }
-
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let display_filter = self.filter.as_ref().map_or_else(
-                    || "".to_string(),
-                    |f| format!(", filter={}", f.expression()),
-                );
-                let on = self
-                    .on
-                    .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                write!(
-                    f,
-                    "SymmetricHashJoinExec: join_type={:?}, on=[{}]{}",
-                    self.join_type, on, display_filter
-                )
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

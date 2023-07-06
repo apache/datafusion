@@ -68,6 +68,17 @@ impl ArrowExec {
     }
 }
 
+impl DisplayAs for ArrowExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "ArrowExec: ")?;
+        self.base_config.fmt_as(t, f)
+    }
+}
+
 impl ExecutionPlan for ArrowExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -130,15 +141,6 @@ impl ExecutionPlan for ArrowExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "ArrowExec: ")?;
-        self.base_config.fmt_as(t, f)
     }
 
     fn statistics(&self) -> Statistics {
