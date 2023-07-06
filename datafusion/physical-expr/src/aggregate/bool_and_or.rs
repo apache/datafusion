@@ -160,7 +160,7 @@ impl AggregateExpr for BoolAnd {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolAndAccumulator::try_new(&self.data_type)?))
+        Ok(Box::<BoolAndAccumulator>::default())
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -198,7 +198,7 @@ impl AggregateExpr for BoolAnd {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolAndAccumulator::try_new(&self.data_type)?))
+        Ok(Box::<BoolAndAccumulator>::default())
     }
 }
 
@@ -216,17 +216,9 @@ impl PartialEq<dyn Any> for BoolAnd {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct BoolAndAccumulator {
     acc: Option<bool>,
-}
-
-impl BoolAndAccumulator {
-    /// new bool_and accumulator
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
-        assert_eq!(data_type, &DataType::Boolean);
-        Ok(Self { acc: None })
-    }
 }
 
 impl Accumulator for BoolAndAccumulator {
@@ -356,7 +348,7 @@ impl AggregateExpr for BoolOr {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolOrAccumulator::try_new(&self.data_type)?))
+        Ok(Box::<BoolOrAccumulator>::default())
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -394,7 +386,7 @@ impl AggregateExpr for BoolOr {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolOrAccumulator::try_new(&self.data_type)?))
+        Ok(Box::<BoolOrAccumulator>::default())
     }
 }
 
@@ -412,17 +404,9 @@ impl PartialEq<dyn Any> for BoolOr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct BoolOrAccumulator {
     acc: Option<bool>,
-}
-
-impl BoolOrAccumulator {
-    /// new bool_or accumulator
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
-        assert_eq!(data_type, &DataType::Boolean);
-        Ok(Self { acc: None })
-    }
 }
 
 impl Accumulator for BoolOrAccumulator {
