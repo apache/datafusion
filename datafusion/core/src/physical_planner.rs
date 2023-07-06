@@ -2438,7 +2438,6 @@ mod tests {
     }
 
     struct ErrorExtensionPlanner {}
-
     #[async_trait]
     impl ExtensionPlanner for ErrorExtensionPlanner {
         /// Create a physical plan for an extension node

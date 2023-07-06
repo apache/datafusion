@@ -1104,7 +1104,9 @@ pub fn build_join_schema(
 
     let mut left_primary_keys = left.primary_keys().clone();
 
-    // After join, primary key may be cloned. reset is_unique flag.
+    // After join, primary key may no longer be unique
+    // (However, it still defines unique set of column values, just same values may be replicated).
+    // reset is_unique flag to false.
     left_primary_keys
         .iter_mut()
         .for_each(|pk_group| pk_group.is_unique = false);
@@ -1279,8 +1281,8 @@ fn update_elements_with_matching_indices(
 pub fn project_primary_key_indices(
     primary_key_groups: &PrimaryKeyGroups,
     proj_indices: &[usize],
-    // If is_unique flag of primary key group is true. Association covers whole table. This
-    // number stores table size to be able to correctly associate with whole table.
+    // If is_unique flag of primary key group is true. Association covers whole table. `n_out`
+    // stores schema field length to be able to correctly associate with whole table.
     n_out: usize,
 ) -> PrimaryKeyGroups {
     let mut updated_primary_groups = vec![];
@@ -1292,11 +1294,11 @@ pub fn project_primary_key_indices(
     {
         let new_pk_indices =
             update_elements_with_matching_indices(primary_key_indices, proj_indices);
-        // Do mapping for associations
         let new_association_indices = if *is_unique {
+            // Associate with all of the fields in the schema
             (0..n_out).collect()
         } else {
-            // new_associations
+            // Update associations according to projection
             update_elements_with_matching_indices(associated_indices, proj_indices)
         };
         if !new_pk_indices.is_empty() {
@@ -1309,11 +1311,12 @@ pub fn project_primary_key_indices(
     updated_primary_groups
 }
 
+/// This function projects primary key of the
+/// `input`, according to projection expressions `exprs`
 pub(crate) fn project_primary_keys(
     exprs: &[Expr],
     input: &LogicalPlan,
 ) -> Result<PrimaryKeyGroups> {
-    // look for exact match in plan's output schema
     let input_fields = input.schema().fields();
     // Calculate expression indices (if found) in the input schema.
     let proj_indices = exprs
@@ -1363,6 +1366,7 @@ pub fn project(
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
+    // Update input primary keys according to projection.
     let primary_keys = project_primary_keys(&projected_expr, &plan)?;
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
@@ -1533,6 +1537,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
     let schema = Arc::new(
         DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
+            // we can use existing primary key,
             .with_primary_keys(input_schema.primary_keys().clone()),
     );
 

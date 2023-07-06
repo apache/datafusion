@@ -452,15 +452,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .collect::<Vec<_>>();
             for group_by_expr in &group_by_exprs {
                 let expr_name = format!("{}", group_by_expr);
+                // group by expression is primary key
                 if field_pk_names.contains(&expr_name.as_str()) {
                     let associated_field_names = associated_indices
                         .iter()
-                        .map(|idx| field_names[*idx].clone())
+                        .map(|idx| field_names[*idx].as_str())
                         .collect::<Vec<_>>();
+                    // Expand group by exprs with select_exprs
+                    // If one of the expressions inside group by is primary key and
+                    // select expression is associated with that primary key.
                     for expr in select_exprs {
                         let expr_name = format!("{}", expr);
                         if !new_group_by_exprs.contains(expr)
-                            && associated_field_names.contains(&expr_name)
+                            && associated_field_names.contains(&expr_name.as_str())
                         {
                             new_group_by_exprs.push(expr.clone());
                         }
@@ -474,6 +478,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
             .build()?;
+
         // in this next section of code we are re-writing the projection to refer to columns
         // output by the aggregate plan. For example, if the projection contains the expression
         // `SUM(a)` then we replace that with a reference to a column `SUM(a)` produced by
