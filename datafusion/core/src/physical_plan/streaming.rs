@@ -115,11 +115,7 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if let Some(ordering) = &self.projected_output_ordering {
-            Some(ordering)
-        } else {
-            None
-        }
+        self.projected_output_ordering.as_deref()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -174,16 +170,19 @@ impl ExecutionPlan for StreamingTableExec {
                 if self.infinite {
                     write!(f, ", infinite_source=true")?;
                 }
-                if let Some(ordering) = &self.projected_output_ordering {
-                    if !ordering.is_empty() {
-                        write!(
-                            f,
-                            ", output_ordering={}",
-                            OutputOrderingDisplay(ordering)
-                        )?;
-                    }
-                }
-                Ok(())
+
+                self.projected_output_ordering
+                    .as_deref()
+                    .map_or(Ok(()), |ordering| {
+                        if !ordering.is_empty() {
+                            write!(
+                                f,
+                                ", output_ordering={}",
+                                OutputOrderingDisplay(ordering)
+                            )?;
+                        }
+                        Ok(())
+                    })
             }
         }
     }
