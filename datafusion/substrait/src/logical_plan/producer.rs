@@ -300,7 +300,8 @@ pub fn to_substrait_rel(
                 join.left.schema(),
                 join.right.schema(),
                 extension_info,
-            )?.map(Box::new);
+            )?
+            .map(Box::new);
 
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Join(Box::new(JoinRel {
