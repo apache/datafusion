@@ -36,7 +36,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue,
+    OwnedTableReference, PrimaryKeysAndAssociations, Result, ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1423,10 +1423,15 @@ impl Window {
         let n_window_expr = window_expr.len();
         let new_associated_fields: Vec<usize> =
             (n_input_fields..n_input_fields + n_window_expr).collect();
-        for (_pk, (is_unique, associations)) in primary_keys.iter_mut() {
+        for PrimaryKeysAndAssociations {
+            is_unique,
+            associated_indices,
+            ..
+        } in primary_keys.iter_mut()
+        {
             // if unique extend associations with new fields
             if *is_unique {
-                associations.extend(&new_associated_fields);
+                associated_indices.extend(&new_associated_fields);
             }
         }
         // let primary_keys = exprlist_to_primary_keys(window_expr.iter(), &input)?;
@@ -1625,12 +1630,11 @@ impl Aggregate {
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
         // let primary_keys = exprlist_to_primary_keys(all_expr.clone(), &input)?;
         // TODO: Add handling for aggregate primary key
-        let primary_keys = HashMap::new();
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
         )?
-        .with_primary_keys(primary_keys);
+        .with_primary_keys(vec![]);
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 

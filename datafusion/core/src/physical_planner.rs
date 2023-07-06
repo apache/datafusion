@@ -63,7 +63,8 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{
-    add_offset_to_primary_key, DFSchema, PrimaryKeysToAssociations, ScalarValue,
+    add_offset_to_primary_key, DFSchema, PrimaryKeysAndAssociations, PrimaryKeysGroups,
+    ScalarValue,
 };
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
@@ -1034,9 +1035,7 @@ impl DefaultPhysicalPlanner {
                             // after join, indices from the right table will increase with the size of the left table. hence add offset
                             let right_primary_keys = add_offset_to_primary_key(&right_primary_keys, left_field_indices.len());
 
-                            let mut primary_keys = HashMap::new();
-                            primary_keys.extend(left_primary_keys);
-                            primary_keys.extend(right_primary_keys);
+                            let primary_keys = left_primary_keys.into_iter().chain(right_primary_keys).collect();
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
@@ -1319,12 +1318,17 @@ impl DefaultPhysicalPlanner {
 fn get_updated_primary_keys(
     df_schema: &DFSchema,
     field_indices: &[usize],
-) -> PrimaryKeysToAssociations {
-    let mut primary_keys = HashMap::new();
+) -> PrimaryKeysGroups {
+    let mut updated_primary_keys = vec![];
     let existing_primary_keys = df_schema.primary_keys();
-    for (pk_indices, (is_unique, associations)) in existing_primary_keys {
+    for PrimaryKeysAndAssociations {
+        primary_keys,
+        is_unique,
+        associated_indices,
+    } in existing_primary_keys
+    {
         let mut new_pk_indices = vec![];
-        for pk_idx in pk_indices {
+        for pk_idx in primary_keys {
             if let Some(new_pk_idx) = field_indices
                 .iter()
                 .position(|field_idx| field_idx == pk_idx)
@@ -1333,7 +1337,7 @@ fn get_updated_primary_keys(
             }
         }
         let mut new_association_indices = vec![];
-        for assoc_idx in associations {
+        for assoc_idx in associated_indices {
             if let Some(new_assoc_idx) = field_indices
                 .iter()
                 .position(|field_idx| field_idx == assoc_idx)
@@ -1342,10 +1346,13 @@ fn get_updated_primary_keys(
             }
         }
         if !new_pk_indices.is_empty() {
-            primary_keys.insert(new_pk_indices, (*is_unique, new_association_indices));
+            let new_pk_group =
+                PrimaryKeysAndAssociations::new(new_pk_indices, new_association_indices)
+                    .with_is_unique(*is_unique);
+            updated_primary_keys.push(new_pk_group);
         }
     }
-    primary_keys
+    updated_primary_keys
 }
 
 /// Expand and align a GROUPING SET expression.
@@ -2481,12 +2488,10 @@ mod tests {
     async fn test_get_updated_primary_keys() {
         let mut schema = get_test_dfschema().unwrap();
 
-        let mut primary_keys = HashMap::new();
-        primary_keys.insert(vec![1], (true, vec![0, 1, 2]));
+        let primary_keys = vec![PrimaryKeysAndAssociations::new(vec![1], vec![0, 1, 2])];
         schema = schema.with_primary_keys(primary_keys);
         let res = get_updated_primary_keys(&schema, &[1, 2]);
-        let mut expected = HashMap::new();
-        expected.insert(vec![0], (true, vec![0, 1]));
+        let expected = vec![PrimaryKeysAndAssociations::new(vec![0], vec![0, 1])];
         assert_eq!(res, expected);
     }
 

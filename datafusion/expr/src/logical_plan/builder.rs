@@ -42,8 +42,8 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
     add_offset_to_primary_key, display::ToStringifiedPlan, Column, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, OwnedTableReference, PrimaryKeysToAssociations, Result,
-    ScalarValue, TableReference, ToDFSchema,
+    DFSchemaRef, DataFusionError, OwnedTableReference, PrimaryKeysAndAssociations,
+    PrimaryKeysGroups, Result, ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -264,16 +264,16 @@ impl LogicalPlanBuilder {
         }
 
         let schema = table_source.schema();
-        let mut primary_keys = HashMap::new();
+        let mut primary_keys = vec![];
         let pks = table_source.primary_keys();
         if !pks.is_empty() {
             let n_field = schema.fields.len();
             // All the field indices are associated, since it is source,
             let associated_indices = (0..n_field).collect::<Vec<_>>();
-            primary_keys.insert(
+            primary_keys.push(PrimaryKeysAndAssociations::new(
                 pks.to_vec(),
-                (true, associated_indices),
-            );
+                associated_indices,
+            ));
         }
 
         let projected_schema = projection
@@ -1101,7 +1101,6 @@ pub fn build_join_schema(
         }
     };
 
-    // TODO: Update is_unique flag
     let mut right_primary_keys =
         add_offset_to_primary_key(right.primary_keys(), left_fields.len());
 
@@ -1110,29 +1109,31 @@ pub fn build_join_schema(
     // After join, primary key may be cloned. reset is_unique flag.
     left_primary_keys
         .iter_mut()
-        .for_each(|(_pk, (is_unique, _))| *is_unique = false);
+        .for_each(|pk_group| pk_group.is_unique = false);
     right_primary_keys
         .iter_mut()
-        .for_each(|(_pk, (is_unique, _))| *is_unique = false);
-    let mut primary_keys = HashMap::new();
-    match join_type {
+        .for_each(|pk_group| pk_group.is_unique = false);
+    let primary_keys = match join_type {
         JoinType::Inner => {
             // left then right
-            primary_keys.extend(left_primary_keys);
-            primary_keys.extend(right_primary_keys);
+            left_primary_keys
+                .into_iter()
+                .chain(right_primary_keys.into_iter())
+                .collect()
         }
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            primary_keys.extend(left_primary_keys);
+            left_primary_keys
         }
         JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            primary_keys.extend(right_primary_keys);
+            right_primary_keys
         }
         JoinType::Full => {
             // primary key is not preserved
+            vec![]
         }
-    }
+    };
 
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
@@ -1264,19 +1265,14 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
 pub(crate) fn project_primary_keys(
     exprs: &[Expr],
     input: &LogicalPlan,
-) -> Result<PrimaryKeysToAssociations> {
-    let mut updated_primary_key = HashMap::new();
+) -> Result<PrimaryKeysGroups> {
+    let mut updated_primary_key = vec![];
     let mut input_to_proj_mapping: HashMap<usize, usize> = HashMap::new();
 
     let input_schema = &input.schema();
-    // println!("exprs: {:?}", exprs);
-    // println!("plan schema: {:?}", input_schema);
-    // println!("existing primary keys: {:?}", input_schema.primary_keys());
     // look for exact match in plan's output schema
     let input_fields = input_schema.fields();
     for (idx, expr) in exprs.iter().enumerate() {
-        // println!("{}", format!("{:?}", expr));
-        // println!("{}", format!("{}", expr));
         let expr_name = format!("{}", expr);
         if let Some(match_idx) = input_fields
             .iter()
@@ -1284,11 +1280,15 @@ pub(crate) fn project_primary_keys(
         {
             input_to_proj_mapping.insert(match_idx, idx);
         }
-        // expr.to_field(input_schema)
     }
-    for (pk_indices, (is_unique, associations)) in input_schema.primary_keys() {
+    for PrimaryKeysAndAssociations {
+        primary_keys,
+        is_unique,
+        associated_indices,
+    } in input_schema.primary_keys()
+    {
         let mut target_pk_indices = vec![];
-        for pk_idx in pk_indices {
+        for pk_idx in primary_keys {
             if let Some(target_pk_idx) = input_to_proj_mapping.get(pk_idx) {
                 target_pk_indices.push(*target_pk_idx);
             }
@@ -1298,9 +1298,8 @@ pub(crate) fn project_primary_keys(
             let updated_associations = if *is_unique {
                 (0..exprs.len()).collect()
             } else {
-                // println!("not unique, associations: {:?}", associations);
                 let mut new_associations = vec![];
-                for assoc_idx in associations {
+                for assoc_idx in associated_indices {
                     if let Some(target_assoc_idx) = input_to_proj_mapping.get(assoc_idx) {
                         new_associations.push(*target_assoc_idx);
                     }
@@ -1308,13 +1307,15 @@ pub(crate) fn project_primary_keys(
                 new_associations
             };
             if !updated_associations.is_empty() {
-                updated_primary_key
-                    .insert(target_pk_indices, (*is_unique, updated_associations));
+                let new_pk_group = PrimaryKeysAndAssociations::new(
+                    target_pk_indices,
+                    updated_associations,
+                )
+                .with_is_unique(*is_unique);
+                updated_primary_key.push(new_pk_group);
             }
         }
     }
-    // println!("input_to_proj_mapping:{:?}", input_to_proj_mapping);
-    // println!("updated_primary_key:{:?}", updated_primary_key);
     Ok(updated_primary_key)
 }
 

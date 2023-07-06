@@ -33,7 +33,37 @@ use std::fmt::{Display, Formatter};
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
 
-pub type PrimaryKeysToAssociations = HashMap<Vec<usize>, (bool, Vec<usize>)>;
+/// Stores primary keys and their associated indices
+/// (where primary key property holds, this changes during intermediate
+/// schemas)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrimaryKeysAndAssociations {
+    pub primary_keys: Vec<usize>,
+    /// Flag indicating whether primary_key is exactly unique
+    /// if `false` it means that primary key isn't necessarily unique.
+    /// When primary_key is non-unique, all the associated fields at `associated_indices`
+    /// are same also. Primary key still refers to the unique set of associated fields, however same result
+    /// may occur replicated.
+    pub is_unique: bool,
+    pub associated_indices: Vec<usize>,
+}
+
+impl PrimaryKeysAndAssociations {
+    pub fn new(primary_keys: Vec<usize>, associated_indices: Vec<usize>) -> Self {
+        Self {
+            primary_keys,
+            is_unique: true,
+            associated_indices,
+        }
+    }
+
+    pub fn with_is_unique(mut self, is_unique: bool) -> Self {
+        self.is_unique = is_unique;
+        self
+    }
+}
+
+pub type PrimaryKeysGroups = Vec<PrimaryKeysAndAssociations>;
 
 /// DFSchema wraps an Arrow schema and adds relation names
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,8 +72,8 @@ pub struct DFSchema {
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
-    /// primary key index and its associated fields indices
-    primary_keys: PrimaryKeysToAssociations,
+    /// Stores distinct primary key groups
+    primary_keys: PrimaryKeysGroups,
 }
 
 impl DFSchema {
@@ -52,7 +82,7 @@ impl DFSchema {
         Self {
             fields: vec![],
             metadata: HashMap::new(),
-            primary_keys: HashMap::new(),
+            primary_keys: vec![],
         }
     }
 
@@ -105,7 +135,7 @@ impl DFSchema {
         Ok(Self {
             fields,
             metadata,
-            primary_keys: HashMap::new(),
+            primary_keys: vec![],
         })
     }
 
@@ -126,7 +156,7 @@ impl DFSchema {
     }
 
     /// Assing primary key
-    pub fn with_primary_keys(mut self, primary_keys: PrimaryKeysToAssociations) -> Self {
+    pub fn with_primary_keys(mut self, primary_keys: PrimaryKeysGroups) -> Self {
         self.primary_keys = primary_keys;
         self
     }
@@ -496,7 +526,7 @@ impl DFSchema {
     }
 
     /// Get primary keys
-    pub fn primary_keys(&self) -> &PrimaryKeysToAssociations {
+    pub fn primary_keys(&self) -> &PrimaryKeysGroups {
         &self.primary_keys
     }
 }
@@ -783,24 +813,31 @@ impl SchemaExt for Schema {
 
 /// Add offset value to primary_keys and its associated indices
 pub fn add_offset_to_primary_key(
-    primary_keys: &PrimaryKeysToAssociations,
+    primary_keys: &PrimaryKeysGroups,
     offset: usize,
-) -> PrimaryKeysToAssociations {
+) -> PrimaryKeysGroups {
     primary_keys
         .iter()
-        .map(|(pk_indices, (is_unique, associated_indices))| {
-            (
-                pk_indices.iter().map(|pk_idx| pk_idx + offset).collect(),
-                (
-                    *is_unique,
-                    associated_indices
+        .map(
+            |PrimaryKeysAndAssociations {
+                 primary_keys,
+                 is_unique,
+                 associated_indices,
+             }| {
+                PrimaryKeysAndAssociations {
+                    primary_keys: primary_keys
+                        .iter()
+                        .map(|pk_idx| pk_idx + offset)
+                        .collect(),
+                    is_unique: *is_unique,
+                    associated_indices: associated_indices
                         .iter()
                         .map(|item| item + offset)
                         .collect(),
-                ),
-            )
-        })
-        .collect::<PrimaryKeysToAssociations>()
+                }
+            },
+        )
+        .collect::<PrimaryKeysGroups>()
 }
 
 #[cfg(test)]
