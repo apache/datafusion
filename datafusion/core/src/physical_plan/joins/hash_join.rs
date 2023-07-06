@@ -315,11 +315,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if let Some(order) = &self.output_order {
-            Some(order)
-        } else {
-            None
-        }
+        self.output_order.as_deref()
     }
 
     // For [JoinType::Inner] and [JoinType::RightSemi] in hash joins, the probe phase initiates by
