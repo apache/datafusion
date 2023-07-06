@@ -377,6 +377,7 @@ impl GroupedHashAggregateStream2 {
         allocated: &mut usize,
     ) -> Result<()> {
         // Convert the group keys into the row format
+        // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
         let group_rows = self.row_converter.convert_columns(group_values)?;
         let n_rows = group_rows.num_rows();
 
