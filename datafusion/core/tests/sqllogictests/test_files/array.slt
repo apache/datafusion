@@ -19,107 +19,293 @@
 ## Array expressions Tests
 #############
 
+
+### Tables
+
+
+statement ok
+CREATE TABLE values(
+  a INT,
+  b INT,
+  c INT,
+  d FLOAT,
+  e VARCHAR
+) AS VALUES
+  (1, 1, 2, 1.1, 'Lorem'),
+  (2, 3, 4, 2.2, 'ipsum'),
+  (3, 5, 6, 3.3, 'dolor'),
+  (4, 7, 8, 4.4, 'sit'),
+  (NULL, 9, 10, 5.5, 'amet'),
+  (5, NULL, 12, 6.6, ','),
+  (6, 11, NULL, 7.7, 'consectetur'),
+  (7, 13, 14, NULL, 'adipiscing'),
+  (8, 15, 16, 8.8, NULL)
+;
+
+statement ok
+CREATE TABLE arrays
+AS VALUES
+  (make_array(make_array(NULL, 2),make_array(3, NULL)), make_array(1.1, 2.2, 3.3), make_array('L', 'o', 'r', 'e', 'm')),
+  (make_array(make_array(3, 4),make_array(5, 6)), make_array(NULL, 5.5, 6.6), make_array('i', 'p', NULL, 'u', 'm')),
+  (make_array(make_array(5, 6),make_array(7, 8)), make_array(7.7, 8.8, 9.9), make_array('d', NULL, 'l', 'o', 'r')),
+  (make_array(make_array(7, NULL),make_array(9, 10)), make_array(10.1, NULL, 12.2), make_array('s', 'i', 't')),
+  (NULL, make_array(13.3, 14.4, 15.5), make_array('a', 'm', 'e', 't')),
+  (make_array(make_array(11, 12),make_array(13, 14)), NULL, make_array(',')),
+  (make_array(make_array(15, 16),make_array(NULL, 18)), make_array(16.6, 17.7, 18.8), NULL)
+;
+
+statement ok
+CREATE TABLE arrays_values
+AS VALUES
+  (make_array(NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ','),
+  (make_array(11, 12, 13, 14, 15, 16, 17, 18, NULL, 20), 12, 2, '.'),
+  (make_array(21, 22, 23, NULL, 25, 26, 27, 28, 29, 30), 23, 3, '-'),
+  (make_array(31, 32, 33, 34, 35, NULL, 37, 38, 39, 40), 34, 4, 'ok'),
+  (NULL, 44, 5, '@'),
+  (make_array(41, 42, 43, 44, 45, 46, 47, 48, 49, 50), NULL, 6, '$'),
+  (make_array(51, 52, NULL, 54, 55, 56, 57, 58, 59, 60), 55, NULL, '^'),
+  (make_array(61, 62, 63, 64, 65, 66, 67, 68, 69, 70), 66, 7, NULL)
+;
+
+statement ok
+CREATE TABLE arrays_values_without_nulls
+AS VALUES
+  (make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ','),
+  (make_array(11, 12, 13, 14, 15, 16, 17, 18, 19, 20), 12, 2, '.'),
+  (make_array(21, 22, 23, 24, 25, 26, 27, 28, 29, 30), 23, 3, '-'),
+  (make_array(31, 32, 33, 34, 35, 26, 37, 38, 39, 40), 34, 4, 'ok')
+;
+
+# arrays table
+query ???
+select column1, column2, column3 from arrays;
+----
+[[, 2], [3, ]] [1.1, 2.2, 3.3] [L, o, r, e, m]
+[[3, 4], [5, 6]] [, 5.5, 6.6] [i, p, , u, m]
+[[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, , l, o, r]
+[[7, ], [9, 10]] [10.1, , 12.2] [s, i, t]
+NULL [13.3, 14.4, 15.5] [a, m, e, t]
+[[11, 12], [13, 14]] NULL [,]
+[[15, 16], [, 18]] [16.6, 17.7, 18.8] NULL
+
+# values table
+query IIIRT
+select a, b, c, d, e from values;
+----
+1 1 2 1.1 Lorem
+2 3 4 2.2 ipsum
+3 5 6 3.3 dolor
+4 7 8 4.4 sit
+NULL 9 10 5.5 amet
+5 NULL 12 6.6 ,
+6 11 NULL 7.7 consectetur
+7 13 14 NULL adipiscing
+8 15 16 8.8 NULL
+
+# arrays_values table
+query ?IIT
+select column1, column2, column3, column4 from arrays_values;
+----
+[, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1 ,
+[11, 12, 13, 14, 15, 16, 17, 18, , 20] 12 2 .
+[21, 22, 23, , 25, 26, 27, 28, 29, 30] 23 3 -
+[31, 32, 33, 34, 35, , 37, 38, 39, 40] 34 4 ok
+NULL 44 5 @
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50] NULL 6 $
+[51, 52, , 54, 55, 56, 57, 58, 59, 60] 55 NULL ^
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70] 66 7 NULL
+
+# arrays_values_without_nulls table
+query ?II
+select column1, column2, column3 from arrays_values_without_nulls;
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1
+[11, 12, 13, 14, 15, 16, 17, 18, 19, 20] 12 2
+[21, 22, 23, 24, 25, 26, 27, 28, 29, 30] 23 3
+[31, 32, 33, 34, 35, 26, 37, 38, 39, 40] 34 4
+
+### Array function tests
+
+
 ## make_array
 
-# array scalar function #1
-query ??? rowsort
+# make_array scalar function #1
+query ???
 select make_array(1, 2, 3), make_array(1.0, 2.0, 3.0), make_array('h', 'e', 'l', 'l', 'o');
 ----
 [1, 2, 3] [1.0, 2.0, 3.0] [h, e, l, l, o]
 
-# array scalar function #2
-query ??? rowsort
+# make_array scalar function #2
+query ???
 select make_array(1, 2, 3), make_array(make_array(1, 2), make_array(3, 4)), make_array([[[[1], [2]]]]);
 ----
 [1, 2, 3] [[1, 2], [3, 4]] [[[[[1], [2]]]]]
 
-# array scalar function #3
-query ?? rowsort
+# make_array scalar function #3
+query ??
 select make_array([1, 2, 3], [4, 5, 6], [7, 8, 9]), make_array([[1, 2], [3, 4]], [[5, 6], [7, 8]]);
 ----
 [[1, 2, 3], [4, 5, 6], [7, 8, 9]] [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
 
-# array scalar function #4
-query ?? rowsort
+# make_array scalar function #4
+query ??
 select make_array([1.0, 2.0], [3.0, 4.0]), make_array('h', 'e', 'l', 'l', 'o');
 ----
 [[1.0, 2.0], [3.0, 4.0]] [h, e, l, l, o]
 
-# array scalar function #5
-query ? rowsort
+# make_array scalar function #5
+query ?
 select make_array(make_array(make_array(make_array(1, 2, 3), make_array(4, 5, 6)), make_array(make_array(7, 8, 9), make_array(10, 11, 12))))
 ----
 [[[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]]]
 
-# array scalar function #6
-query ? rowsort
+# make_array scalar function #6
+query ?
 select make_array()
 ----
 []
 
-# array scalar function #7
-query ?? rowsort
+# make_array scalar function #7
+query ??
 select make_array(make_array()), make_array(make_array(make_array()))
 ----
 [[]] [[[]]]
 
-# array scalar function with nulls
-query ??? rowsort
+# make_array scalar function with nulls
+query ???
 select make_array(1, NULL, 3), make_array(NULL, 2.0, NULL), make_array('h', NULL, 'l', NULL, 'o');
 ----
 [1, , 3] [, 2.0, ] [h, , l, , o]
 
-# array scalar function with nulls #2
-query ?? rowsort
+# make_array scalar function with nulls #2
+query ??
 select make_array(1, 2, NULL), make_array(make_array(NULL, 2), make_array(NULL, 3));
 ----
 [1, 2, ] [[, 2], [, 3]]
 
-# array scalar function with nulls #3
-query ??? rowsort
+# make_array scalar function with nulls #3
+query ???
 select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NULL, NULL), make_array(NULL, NULL));
 ----
 [] [] [[], []]
 
+# make_array with columns #1
+query ????
+select make_array(a), make_array(b, c), make_array(d), make_array(e) from values;
+----
+[1] [1, 2] [1.1] [Lorem]
+[2] [3, 4] [2.2] [ipsum]
+[3] [5, 6] [3.3] [dolor]
+[4] [7, 8] [4.4] [sit]
+[0] [9, 10] [5.5] [amet]
+[5] [0, 12] [6.6] [,]
+[6] [11, 0] [7.7] [consectetur]
+[7] [13, 14] [0.0] [adipiscing]
+[8] [15, 16] [8.8] []
+
+# make_array with columns #2
+query ?
+select make_array(a, b, c, d) from values;
+----
+[1.0, 1.0, 2.0, 1.1]
+[2.0, 3.0, 4.0, 2.2]
+[3.0, 5.0, 6.0, 3.3]
+[4.0, 7.0, 8.0, 4.4]
+[0.0, 9.0, 10.0, 5.5]
+[5.0, 0.0, 12.0, 6.6]
+[6.0, 11.0, 0.0, 7.7]
+[7.0, 13.0, 14.0, 0.0]
+[8.0, 15.0, 16.0, 8.8]
+
 ## array_append
 
 # array_append scalar function #2
-query ? rowsort
+query ?
 select array_append(make_array(), 4);
 ----
 [4]
 
 # array_append scalar function #2
-query ?? rowsort
+query ??
 select array_append(make_array(), make_array()), array_append(make_array(), make_array(4));
 ----
 [[]] [[4]]
 
 # array_append scalar function #3
-query ??? rowsort
+query ???
 select array_append(make_array(1, 2, 3), 4), array_append(make_array(1.0, 2.0, 3.0), 4.0), array_append(make_array('h', 'e', 'l', 'l'), 'o');
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
+# array_append with columns
+query ?
+select array_append(column1, column2) from arrays_values;
+----
+[, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+[11, 12, 13, 14, 15, 16, 17, 18, , 20, 12]
+[21, 22, 23, , 25, 26, 27, 28, 29, 30, 23]
+[31, 32, 33, 34, 35, , 37, 38, 39, 40, 34]
+[44]
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, ]
+[51, 52, , 54, 55, 56, 57, 58, 59, 60, 55]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
+
+# array_append with columns and scalars
+query ??
+select array_append(column2, 100.1), array_append(column3, '.') from arrays;
+----
+[1.1, 2.2, 3.3, 100.1] [L, o, r, e, m, .]
+[, 5.5, 6.6, 100.1] [i, p, , u, m, .]
+[7.7, 8.8, 9.9, 100.1] [d, , l, o, r, .]
+[10.1, , 12.2, 100.1] [s, i, t, .]
+[13.3, 14.4, 15.5, 100.1] [a, m, e, t, .]
+[100.1] [,, .]
+[16.6, 17.7, 18.8, 100.1] [.]
+
 ## array_prepend
 
 # array_prepend scalar function #1
-query ? rowsort
+query ?
 select array_prepend(4, make_array());
 ----
 [4]
 
 # array_prepend scalar function #2
-query ?? rowsort
+query ??
 select array_prepend(make_array(), make_array()), array_prepend(make_array(4), make_array());
 ----
 [[]] [[4]]
 
 # array_prepend scalar function #3
-query ??? rowsort
+query ???
 select array_prepend(1, make_array(2, 3, 4)), array_prepend(1.0, make_array(2.0, 3.0, 4.0)), array_prepend('h', make_array('e', 'l', 'l', 'o'));
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_prepend with columns
+query ?
+select array_prepend(column2, column1) from arrays_values;
+----
+[1, , 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[12, 11, 12, 13, 14, 15, 16, 17, 18, , 20]
+[23, 21, 22, 23, , 25, 26, 27, 28, 29, 30]
+[34, 31, 32, 33, 34, 35, , 37, 38, 39, 40]
+[44]
+[, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+[55, 51, 52, , 54, 55, 56, 57, 58, 59, 60]
+[66, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
+
+# array_prepend with columns and scalars
+query ??
+select array_prepend(100.1, column2), array_prepend('.', column3) from arrays;
+----
+[100.1, 1.1, 2.2, 3.3] [., L, o, r, e, m]
+[100.1, , 5.5, 6.6] [., i, p, , u, m]
+[100.1, 7.7, 8.8, 9.9] [., d, , l, o, r]
+[100.1, 10.1, , 12.2] [., s, i, t]
+[100.1, 13.3, 14.4, 15.5] [., a, m, e, t]
+[100.1] [., ,]
+[100.1, 16.6, 17.7, 18.8] [.]
 
 ## array_fill
 
@@ -144,37 +330,37 @@ select array_fill(1, make_array())
 ## array_concat
 
 # array_concat scalar function #1
-query ?? rowsort
+query ??
 select array_concat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), array_concat(make_array([1], [2]), make_array([3], [4]));
 ----
 [1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
 
 # array_concat scalar function #2
-query ? rowsort
+query ?
 select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(make_array(5, 6), make_array(7, 8)));
 ----
 [[1, 2], [3, 4], [5, 6], [7, 8]]
 
 # array_concat scalar function #3
-query ? rowsort
+query ?
 select array_concat(make_array([1], [2], [3]), make_array([4], [5], [6]), make_array([7], [8], [9]));
 ----
 [[1], [2], [3], [4], [5], [6], [7], [8], [9]]
 
 # array_concat scalar function #4
-query ? rowsort
+query ?
 select array_concat(make_array([[1]]), make_array([[2]]));
 ----
 [[[1]], [[2]]]
 
 # array_concat scalar function #5
-query ? rowsort
+query ?
 select array_concat(make_array(2, 3), make_array());
 ----
 [2, 3]
 
 # array_concat scalar function #6
-query ? rowsort
+query ?
 select array_concat(make_array(), make_array(2, 3));
 ----
 [2, 3]
@@ -193,11 +379,49 @@ select array_position(['h', 'e', 'l', 'l', 'o'], 'l', 4), array_position([1, 2, 
 ----
 4 5 2
 
+# array_position with columns
+query II
+select array_position(column1, column2), array_position(column1, column2, column3) from arrays_values_without_nulls;
+----
+1 1
+2 2
+3 3
+4 4
+
+# array_position with columns and scalars
+query II
+select array_position(column1, 3), array_position(column1, 3, 5) from arrays_values_without_nulls;
+----
+3 NULL
+NULL NULL
+NULL NULL
+NULL NULL
+
+## array_positions
+
 # array_positions scalar function
-query ??? rowsort
+query ???
 select array_positions(['h', 'e', 'l', 'l', 'o'], 'l'), array_positions([1, 2, 3, 4, 5], 5), array_positions([1, 1, 1], 1);
 ----
 [3, 4] [5] [1, 2, 3]
+
+# array_positions with columns
+query ?
+select array_positions(column1, column2) from arrays_values_without_nulls;
+----
+[1]
+[2]
+[3]
+[4]
+
+# array_positions with columns and scalars
+query ??
+select array_positions(column1, 4), array_positions(array[1, 2, 23, 13, 33, 45], column2) from arrays_values_without_nulls;
+----
+[4] [1]
+[] []
+[] [3]
+[] []
 
 ## array_replace
 
@@ -210,7 +434,7 @@ select array_replace(make_array(1, 2, 3, 4), 2, 3), array_replace(make_array(1, 
 ## array_to_string
 
 # array_to_string scalar function
-query TTT rowsort
+query TTT
 select array_to_string(['h', 'e', 'l', 'l', 'o'], ','), array_to_string([1, 2, 3, 4, 5], '-'), array_to_string([1.0, 2.0, 3.0], '|');
 ----
 h,e,l,l,o 1-2-3-4-5 1|2|3
@@ -228,13 +452,13 @@ Error during planning: Cannot automatically convert Utf8 to List\(Field \{ name:
 select array_to_string(make_array(), ',')
 
 # array_to_string scalar function with nulls #1
-query TTT rowsort
+query TTT
 select array_to_string(make_array('h', NULL, 'l', NULL, 'o'), ','), array_to_string(make_array(1, NULL, 3, NULL, 5), '-'), array_to_string(make_array(NULL, 2.0, 3.0), '|');
 ----
 h,l,o 1-3-5 2|3
 
 # array_to_string scalar function with nulls #2
-query TTT rowsort
+query TTT
 select array_to_string(make_array('h', NULL, NULL, NULL, 'o'), ',', '-'), array_to_string(make_array(NULL, 2, NULL, 4, 5), '-', 'nil'), array_to_string(make_array(1.0, NULL, 3.0), '|', '0');
 ----
 h,-,-,-,o nil-2-nil-4-5 1|0|3
@@ -293,19 +517,19 @@ select trim_array(make_array(), 0), trim_array(make_array(), 1)
 ## array_length
 
 # array_length scalar function
-query III rowsort
+query III
 select array_length(make_array(1, 2, 3, 4, 5)), array_length(make_array(1, 2, 3)), array_length(make_array([1, 2], [3, 4], [5, 6]));
 ----
 5 3 3
 
 # array_length scalar function #2
-query III rowsort
+query III
 select array_length(make_array(1, 2, 3, 4, 5), 1), array_length(make_array(1, 2, 3), 1), array_length(make_array([1, 2], [3, 4], [5, 6]), 1);
 ----
 5 3 3
 
 # array_length scalar function #3
-query III rowsort
+query III
 select array_length(make_array(1, 2, 3, 4, 5), 2), array_length(make_array(1, 2, 3), 2), array_length(make_array([1, 2], [3, 4], [5, 6]), 2);
 ----
 NULL NULL 2
@@ -317,7 +541,7 @@ Error during planning: Cannot automatically convert List\(Field \{ name: "item",
 select array_length(array_fill(3, [3, 2, 5]), 1), array_length(array_fill(3, [3, 2, 5]), 2), array_length(array_fill(3, [3, 2, 5]), 3), array_length(array_fill(3, [3, 2, 5]), 4);
 
 # array_length scalar function #5
-query III rowsort
+query III
 select array_length(make_array()), array_length(make_array(), 1), array_length(make_array(), 2)
 ----
 0 0 NULL
@@ -357,13 +581,13 @@ query I
 select array_dims(column1), array_dims(column2), array_dims(column3) from arrays;
 ----
 
+## array_ndims
+
 # array_ndims scalar function
-query III rowsort
+query III
 select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4])), array_ndims(make_array([[[[1], [2]]]]));
 ----
 1 2 5
-
-## array_ndims
 
 # array_ndims scalar function #2
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
@@ -372,7 +596,7 @@ Error during planning: Cannot automatically convert List\(Field \{ name: "item",
 select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
 
 # array_ndims scalar function #3
-query II rowsort
+query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
 1 2
@@ -382,177 +606,151 @@ query II
 select array_ndims(column1), array_ndims(column2), array_ndims(column3) from arrays;
 ----
 
-## array concatenate opeartor
-
-# array concatenate operator #1 (like array_concat scalar function)
-query ?? rowsort
-select make_array(1, 2, 3) || make_array(4, 5, 6) || make_array(7, 8, 9), make_array([1], [2]) || make_array([3], [4]);
-----
-[1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
-
-# array concatenate operator #2 (like array_append scalar function)
-query ??? rowsort
-select make_array(1, 2, 3) || 4, make_array(1.0, 2.0, 3.0) || 4.0, make_array('h', 'e', 'l', 'l') || 'o';
-----
-[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
-
-# array concatenate operator #3 (like array_prepend scalar function)
-query ??? rowsort
-select 1 || make_array(2, 3, 4), 1.0 || make_array(2.0, 3.0, 4.0), 'h' || make_array('e', 'l', 'l', 'o');
-----
-[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
-
-# make_array
-
-query ?
-select make_array(1, 2.0)
-----
-[1.0, 2.0]
-
-query ?
-select make_array(null, 1.0)
-----
-[, 1.0]
-
-query ?
-select make_array(1, 2.0, null, 3)
-----
-[1.0, 2.0, , 3.0]
-
-query ?
-select make_array(1.0, '2', null)
-----
-[1.0, 2, ]
-
-statement ok
-create table foo1 (x int, y double) as values (1, 2.0);
-
-query ?
-select make_array(x, y) from foo1;
-----
-[1.0, 2.0]
-
-statement ok
-create table foo2 (x float, y varchar) as values (1.0, '1');
-
-query ?
-select make_array(x, y) from foo2;
-----
-[1.0, 1]
-
-# array_contains
-
-
+## array_contains
 
 # array_contains scalar function #1
-query BBB rowsort
+query BBB
 select array_contains(make_array(1, 2, 3), make_array(1, 1, 2, 3)), array_contains([1, 2, 3], [1, 1, 2]), array_contains([1, 2, 3], [2, 1, 3, 1]);
 ----
 true true true
 
 # array_contains scalar function #2
-query BB rowsort
+query BB
 select array_contains([[1, 2], [3, 4]], [[1, 2], [3, 4], [1, 3]]), array_contains([[[1], [2]], [[3], [4]]], [1, 2, 2, 3, 4]);
 ----
 true true
 
 # array_contains scalar function #3
-query BBB rowsort
+query BBB
 select array_contains(make_array(1, 2, 3), make_array(1, 2, 3, 4)), array_contains([1, 2, 3], [1, 1, 4]), array_contains([1, 2, 3], [2, 1, 3, 4]);
 ----
 false false false
 
 # array_contains scalar function #4
-query BB rowsort
+query BB
 select array_contains([[1, 2], [3, 4]], [[1, 2], [3, 4], [1, 5]]), array_contains([[[1], [2]], [[3], [4]]], [1, 2, 2, 3, 5]);
 ----
 false false
 
 # array_contains scalar function #5
-query BB rowsort
+query BB
 select array_contains([true, true, false, true, false], [true, false, false]), array_contains([true, false, true], [true, true]);
 ----
 true true
 
 # array_contains scalar function #6
-query BB rowsort
+query BB
 select array_contains(make_array(true, true, true), make_array(false, false)), array_contains([false, false, false], [true, true]);
 ----
 false false
 
-## array_contains array
+
+### Array operators tests
 
 
-statement ok
-CREATE TABLE t
-AS VALUES
-(make_array(1,2,3), make_array(1,2,3)),
-(make_array(1,2,3), make_array(2,3)),
-(make_array(2,3),   make_array(1,2,3)),
-(null,              make_array(1,2,3)),
-(make_array(2,3),   null)
-;
+## array concatenate operator
 
-
+# array concatenate operator with scalars #1 (like array_concat scalar function)
 query ??
-SELECT
-  column1,
-  column2
-FROM t
+select make_array(1, 2, 3) || make_array(4, 5, 6) || make_array(7, 8, 9), make_array([1], [2]) || make_array([3], [4]);
 ----
-[1, 2, 3] [1, 2, 3]
-[1, 2, 3] [2, 3]
-[2, 3] [1, 2, 3]
-NULL [1, 2, 3]
-[2, 3] NULL
+[1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
 
-
-# incorrect answer (one row) to https://github.com/apache/arrow-datafusion/issues/6709
-
-query BB
-SELECT
-  array_contains(column1, column2) as c12,
-  array_contains(column1, column2) as c21
-FROM t
+# array concatenate operator with scalars #2 (like array_append scalar function)
+query ???
+select make_array(1, 2, 3) || 4, make_array(1.0, 2.0, 3.0) || 4.0, make_array('h', 'e', 'l', 'l') || 'o';
 ----
-true true
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array concatenate operator with scalars #3 (like array_prepend scalar function)
+query ???
+select 1 || make_array(2, 3, 4), 1.0 || make_array(2.0, 3.0, 4.0), 'h' || make_array('e', 'l', 'l', 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+
+### Array casting tests
+
+
+## make_array
+
+# make_array scalar function #1
+query ?
+select make_array(1, 2.0)
+----
+[1.0, 2.0]
+
+# make_array scalar function #2
+query ?
+select make_array(null, 1.0)
+----
+[, 1.0]
+
+# make_array scalar function #3
+query ?
+select make_array(1, 2.0, null, 3)
+----
+[1.0, 2.0, , 3.0]
+
+# make_array scalar function #4
+query ?
+select make_array(1.0, '2', null)
+----
+[1.0, 2, ]
+
+
+### FixedSizeListArray
 
 
 statement ok
-drop table t
+CREATE EXTERNAL TABLE fixed_size_list_array STORED AS PARQUET LOCATION 'tests/data/fixed_size_list_array.parquet';
+
+query T
+select arrow_typeof(f0) from fixed_size_list_array;
+----
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+
+query ?
+select * from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select f0 from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select arrow_cast(f0, 'List(Int64)') from fixed_size_list_array;
+----
+[1, 2]
+[3, 4]
+
+query ?
+select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
+----
+[[1, 2], [3, 4]]
+
+query ?
+select make_array(f0) from fixed_size_list_array
+----
+[[1, 2], [3, 4]]
 
 
-## array_contains array (nested)
+### Delete tables
 
 
 statement ok
-CREATE TABLE t
-AS VALUES
-(make_array(make_array(2),make_array(3,4)),   make_array(3,4)),
-(make_array(make_array(2),make_array(3,4)),   make_array(4,3)),
-(make_array(make_array(2),make_array(3,4)),   make_array(3)),
-(make_array(make_array(2),make_array(3,4)),   make_array(2))
-;
+drop table values;
 
+statement ok
+drop table arrays;
 
-query ??
-SELECT
-  column1,
-  column2
-FROM t
-----
-[[2], [3, 4]] [3, 4]
-[[2], [3, 4]] [4, 3]
-[[2], [3, 4]] [3]
-[[2], [3, 4]] [2]
+statement ok
+drop table arrays_values;
 
-
-# incorrect answer (one row) to https://github.com/apache/arrow-datafusion/issues/6709
-
-query BB
-SELECT
-  array_contains(column1, column2) as c12,
-  array_contains(column1, column2) as c21
-FROM t
-----
-true true
+statement ok
+drop table arrays_values_without_nulls;

@@ -1068,6 +1068,10 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
+            ScalarValue::Fixedsizelist(..) => Err(Error::General(
+                "Proto serialization error: ScalarValue::Fixedsizelist not supported"
+                    .to_string(),
+            )),
             ScalarValue::List(values, boxed_field) => {
                 let is_null = values.is_none();
 
@@ -1394,6 +1398,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::SHA384 => Self::Sha384,
             BuiltinScalarFunction::SHA512 => Self::Sha512,
             BuiltinScalarFunction::Digest => Self::Digest,
+            BuiltinScalarFunction::Decode => Self::Decode,
+            BuiltinScalarFunction::Encode => Self::Encode,
             BuiltinScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             BuiltinScalarFunction::Log2 => Self::Log2,
             BuiltinScalarFunction::Signum => Self::Signum,
