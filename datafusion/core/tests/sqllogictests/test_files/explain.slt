@@ -70,7 +70,7 @@ CREATE EXTERNAL TABLE aggregate_test_100_with_order (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (c1 ASC)
-LOCATION 'tests/data/aggregate_test_100_with_order.csv';
+LOCATION 'tests/data/aggregate_test_100_order_by_c1_asc.csv';
 
 query TT
 explain SELECT c1 FROM aggregate_test_100_with_order order by c1 ASC limit 10
@@ -81,7 +81,7 @@ Limit: skip=0, fetch=10
 ----TableScan: aggregate_test_100_with_order projection=[c1]
 physical_plan
 GlobalLimitExec: skip=0, fetch=10
---CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_test_100_with_order.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_test_100_order_by_c1_asc.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
 
 
 ## explain_physical_plan_only
