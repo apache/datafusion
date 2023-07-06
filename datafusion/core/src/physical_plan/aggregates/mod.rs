@@ -1785,10 +1785,10 @@ mod tests {
                     assert!(matches!(stream, StreamType::AggregateStream(_)));
                 }
                 1 => {
-                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
+                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream2(_)));
                 }
                 2 => {
-                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
+                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream2(_)));
                 }
                 _ => panic!("Unknown version: {version}"),
             }

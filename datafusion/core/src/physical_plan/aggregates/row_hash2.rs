@@ -43,7 +43,7 @@ use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::Result;
-use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::proxy::RawTableAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use hashbrown::raw::RawTable;
@@ -239,7 +239,7 @@ impl GroupedHashAggregateStream2 {
         let name = format!("GroupedHashAggregateStream2[{partition}]");
         let reservation = MemoryConsumer::new(name).register(context.memory_pool());
         let map = RawTable::with_capacity(0);
-        let group_by_values = row_converter.empty_rows(0, 0);
+        let group_values = row_converter.empty_rows(0, 0);
         let current_group_indices = vec![];
 
         timer.done();
@@ -257,7 +257,7 @@ impl GroupedHashAggregateStream2 {
             group_by: agg_group_by,
             reservation,
             map,
-            group_values: group_by_values,
+            group_values,
             current_group_indices,
             exec_state,
             baseline_metrics,
@@ -302,9 +302,13 @@ impl Stream for GroupedHashAggregateStream2 {
                             let result = self.group_aggregate_batch(batch);
                             timer.done();
 
-                            // allocate memory
-                            // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
-                            // overshooting a bit. Also this means we either store the whole record batch or not.
+                            // allocate memory AFTER we actually used
+                            // the memory, which simplifies the whole
+                            // accounting and we are OK with
+                            // overshooting a bit.
+                            //
+                            // Also this means we either store the
+                            // whole record batch or not.
                             let result = result.and_then(|allocated| {
                                 self.reservation.try_grow(allocated)
                             });
@@ -364,8 +368,8 @@ impl GroupedHashAggregateStream2 {
     /// `group_values`.
     ///
     /// At the return of this function,
-    /// [`Self::current_group_indices`] has the same number of
-    /// entries as each array in `group_values` and holds the correct
+    /// [`Self::current_group_indices`] has the same number of entries
+    /// as each array in `group_values` and holds the correct
     /// group_index for that row.
     fn update_group_state(
         &mut self,
@@ -376,12 +380,11 @@ impl GroupedHashAggregateStream2 {
         let group_rows = self.row_converter.convert_columns(group_values)?;
         let n_rows = group_rows.num_rows();
 
-        // 1.1 construct the key from the group values
-        // 1.2 construct the mapping key if it does not exist
-
         // tracks to which group each of the input rows belongs
         let group_indices = &mut self.current_group_indices;
         group_indices.clear();
+
+        let group_values_size_pre = self.group_values.size();
 
         // 1.1 Calculate the group keys for the group values
         let mut batch_hashes = vec![0; n_rows];
@@ -392,10 +395,6 @@ impl GroupedHashAggregateStream2 {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-
-                // TODO update *allocated based on size of the row
-                // that was just pushed into
-                // aggr_state.group_by_values
                 group_rows.row(row) == self.group_values.row(*group_idx)
             });
 
@@ -417,8 +416,15 @@ impl GroupedHashAggregateStream2 {
                     group_idx
                 }
             };
-            group_indices.push_accounted(group_idx, allocated);
+            group_indices.push(group_idx);
         }
+
+        // account for any memory increase used to store group_values
+        *allocated += self
+            .group_values
+            .size()
+            .saturating_sub(group_values_size_pre);
+
         Ok(())
     }
 

@@ -49,6 +49,10 @@ pub struct Count {
     name: String,
     data_type: DataType,
     nullable: bool,
+    /// Input exprs
+    ///
+    /// For `COUNT(c1)` this is `[c1]`
+    /// For `COUNT(c1, c2)` this is `[c1, c2]`
     exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
@@ -89,7 +93,7 @@ impl Count {
 /// accumulator has no additional null or seen filter tracking.
 #[derive(Debug)]
 struct CountGroupsAccumulator {
-    /// Count per group (use u64 to make Int64Array)
+    /// Count per group (use i64 to make Int64Array)
     counts: Vec<i64>,
 }
 
@@ -242,7 +246,10 @@ impl AggregateExpr for Count {
     }
 
     fn groups_accumulator_supported(&self) -> bool {
-        true
+        // groups accumulator only supports `COUNT(c1)`, not
+        // `COUNT(c1, c2)`, etc
+        // TODO file a ticket to optimize
+        self.exprs.len() == 1
     }
 
     fn create_row_accumulator(
