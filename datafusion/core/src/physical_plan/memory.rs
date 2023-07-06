@@ -19,7 +19,7 @@
 
 use super::expressions::PhysicalSortExpr;
 use super::{
-    common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
+    common, project_schema, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
@@ -53,6 +53,27 @@ impl fmt::Debug for MemoryExec {
         write!(f, "partitions: [...]")?;
         write!(f, "schema: {:?}", self.projected_schema)?;
         write!(f, "projection: {:?}", self.projection)
+    }
+}
+
+impl DisplayAs for MemoryExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let partitions: Vec<_> =
+                    self.partitions.iter().map(|b| b.len()).collect();
+                write!(
+                    f,
+                    "MemoryExec: partitions={}, partition_sizes={:?}",
+                    partitions.len(),
+                    partitions
+                )
+            }
+        }
     }
 }
 
@@ -100,25 +121,6 @@ impl ExecutionPlan for MemoryExec {
             self.projected_schema.clone(),
             self.projection.clone(),
         )?))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let partitions: Vec<_> =
-                    self.partitions.iter().map(|b| b.len()).collect();
-                write!(
-                    f,
-                    "MemoryExec: partitions={}, partition_sizes={:?}",
-                    partitions.len(),
-                    partitions
-                )
-            }
-        }
     }
 
     /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so

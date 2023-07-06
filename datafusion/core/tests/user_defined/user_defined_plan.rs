@@ -80,8 +80,9 @@ use datafusion::{
     },
     optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
-        expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
-        Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
+        expressions::PhysicalSortExpr, DisplayAs, DisplayFormatType, Distribution,
+        ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
+        Statistics,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
@@ -421,6 +422,20 @@ impl Debug for TopKExec {
     }
 }
 
+impl DisplayAs for TopKExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "TopKExec: k={}", self.k)
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl ExecutionPlan for TopKExec {
     /// Return a reference to Any that can be used for downcasting
@@ -476,18 +491,6 @@ impl ExecutionPlan for TopKExec {
             done: false,
             state: BTreeMap::new(),
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "TopKExec: k={}", self.k)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

@@ -60,6 +60,7 @@ use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
 };
+use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
@@ -201,6 +202,30 @@ impl HashJoinExec {
     /// Get null_equals_null
     pub fn null_equals_null(&self) -> bool {
         self.null_equals_null
+    }
+}
+
+impl DisplayAs for HashJoinExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let display_filter = self.filter.as_ref().map_or_else(
+                    || "".to_string(),
+                    |f| format!(", filter={}", f.expression()),
+                );
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}",
+                    self.mode, self.join_type, on, display_filter
+                )
+            }
+        }
     }
 }
 
@@ -418,28 +443,6 @@ impl ExecutionPlan for HashJoinExec {
             is_exhausted: false,
             reservation,
         }))
-    }
-
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let display_filter = self.filter.as_ref().map_or_else(
-                    || "".to_string(),
-                    |f| format!(", filter={}", f.expression()),
-                );
-                let on = self
-                    .on
-                    .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                write!(
-                    f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}",
-                    self.mode, self.join_type, on, display_filter
-                )
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

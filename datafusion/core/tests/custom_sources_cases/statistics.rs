@@ -25,7 +25,7 @@ use datafusion::{
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        expressions::PhysicalSortExpr, project_schema, ColumnStatistics,
+        expressions::PhysicalSortExpr, project_schema, ColumnStatistics, DisplayAs,
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
         Statistics,
     },
@@ -111,6 +111,25 @@ impl TableProvider for StatisticsValidation {
     }
 }
 
+impl DisplayAs for StatisticsValidation {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "StatisticsValidation: col_count={}, row_count={:?}",
+                    self.schema.fields().len(),
+                    self.stats.num_rows,
+                )
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for StatisticsValidation {
     fn as_any(&self) -> &dyn Any {
         self
@@ -149,23 +168,6 @@ impl ExecutionPlan for StatisticsValidation {
 
     fn statistics(&self) -> Statistics {
         self.stats.clone()
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "StatisticsValidation: col_count={}, row_count={:?}",
-                    self.schema.fields().len(),
-                    self.stats.num_rows,
-                )
-            }
-        }
     }
 }
 

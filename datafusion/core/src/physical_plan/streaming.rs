@@ -32,6 +32,8 @@ use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use datafusion_execution::TaskContext;
 
+use super::{DisplayAs, DisplayFormatType};
+
 /// A partition that can be converted into a [`SendableRecordBatchStream`]
 pub trait PartitionStream: Send + Sync {
     /// Returns the schema of this partition
@@ -87,6 +89,20 @@ impl StreamingTableExec {
 impl std::fmt::Debug for StreamingTableExec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LazyMemTableExec").finish_non_exhaustive()
+    }
+}
+
+impl DisplayAs for StreamingTableExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "StreamingTableExec")
+            }
+        }
     }
 }
 
