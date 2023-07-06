@@ -293,16 +293,13 @@ pub fn to_substrait_rel(
                 Operator::Eq
             };
 
-            let join_expr = match to_substrait_join_expr(
+            let join_expr = to_substrait_join_expr(
                 &join.on,
                 eq_op,
                 join.left.schema(),
                 join.right.schema(),
                 extension_info,
-            )? {
-                Some(expr) => Some(Box::new(expr)),
-                None => None,
-            };
+            )?.map(Box::new);
 
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Join(Box::new(JoinRel {

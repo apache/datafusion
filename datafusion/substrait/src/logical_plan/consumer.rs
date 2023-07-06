@@ -410,7 +410,7 @@ pub async fn from_substrait_rel(
                         )?
                         .build(),
                     None => {
-                        return Err(DataFusionError::Plan(
+                        Err(DataFusionError::Plan(
                             "Join without join keys require a valid filter".to_string(),
                         ))
                     }
