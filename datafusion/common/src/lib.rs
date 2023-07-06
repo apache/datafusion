@@ -38,7 +38,7 @@ pub mod utils;
 pub use column::Column;
 pub use dfschema::{
     add_offset_to_primary_key, DFField, DFSchema, DFSchemaRef, ExprSchema,
-    PrimaryKeyToAssociations, SchemaExt, ToDFSchema,
+    PrimaryKeysToAssociations, SchemaExt, ToDFSchema,
 };
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,

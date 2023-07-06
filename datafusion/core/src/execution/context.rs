@@ -517,10 +517,9 @@ impl SessionContext {
 
                 // all of the primary keys are associated with all of the fields (since it is source).
                 let association_indices = (0..fields.len()).collect::<Vec<_>>();
-                let primary_keys_with_associations = primary_keys
-                    .iter()
-                    .map(|idx| (*idx, (true, association_indices.clone())))
-                    .collect();
+                let mut primary_keys_with_associations = HashMap::new();
+                primary_keys_with_associations
+                    .insert(primary_keys.clone(), (true, association_indices));
                 let updated_schema =
                     DFSchema::new_with_metadata(fields, df_schema.metadata().clone())?
                         .with_primary_keys(primary_keys_with_associations);

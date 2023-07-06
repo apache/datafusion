@@ -42,7 +42,7 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
     add_offset_to_primary_key, display::ToStringifiedPlan, Column, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, OwnedTableReference, PrimaryKeyToAssociations, Result,
+    DFSchemaRef, DataFusionError, OwnedTableReference, PrimaryKeysToAssociations, Result,
     ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
@@ -265,11 +265,15 @@ impl LogicalPlanBuilder {
 
         let schema = table_source.schema();
         let mut primary_keys = HashMap::new();
-        let n_field = schema.fields.len();
-        // All the field indices are associated, since it is source,
-        let associated_indices = (0..n_field).collect::<Vec<_>>();
-        for pk in table_source.primary_keys() {
-            primary_keys.insert(*pk, (true, associated_indices.clone()));
+        let pks = table_source.primary_keys();
+        if !pks.is_empty() {
+            let n_field = schema.fields.len();
+            // All the field indices are associated, since it is source,
+            let associated_indices = (0..n_field).collect::<Vec<_>>();
+            primary_keys.insert(
+                pks.to_vec(),
+                (true, associated_indices),
+            );
         }
 
         let projected_schema = projection
@@ -1260,7 +1264,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
 pub(crate) fn project_primary_keys(
     exprs: &[Expr],
     input: &LogicalPlan,
-) -> Result<PrimaryKeyToAssociations> {
+) -> Result<PrimaryKeysToAssociations> {
     let mut updated_primary_key = HashMap::new();
     let mut input_to_proj_mapping: HashMap<usize, usize> = HashMap::new();
 
@@ -1282,8 +1286,14 @@ pub(crate) fn project_primary_keys(
         }
         // expr.to_field(input_schema)
     }
-    for (idx, (is_unique, associations)) in input_schema.primary_keys() {
-        if let Some(target) = input_to_proj_mapping.get(idx) {
+    for (pk_indices, (is_unique, associations)) in input_schema.primary_keys() {
+        let mut target_pk_indices = vec![];
+        for pk_idx in pk_indices {
+            if let Some(target_pk_idx) = input_to_proj_mapping.get(pk_idx) {
+                target_pk_indices.push(*target_pk_idx);
+            }
+        }
+        if !target_pk_indices.is_empty() {
             // Do mapping for associations
             let updated_associations = if *is_unique {
                 (0..exprs.len()).collect()
@@ -1298,7 +1308,8 @@ pub(crate) fn project_primary_keys(
                 new_associations
             };
             if !updated_associations.is_empty() {
-                updated_primary_key.insert(*target, (*is_unique, updated_associations));
+                updated_primary_key
+                    .insert(target_pk_indices, (*is_unique, updated_associations));
             }
         }
     }

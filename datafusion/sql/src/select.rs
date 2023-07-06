@@ -440,10 +440,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|elem| elem.qualified_name())
             .collect::<Vec<_>>();
         let mut new_group_by_exprs = group_by_exprs.clone();
-        for (pk, (_is_unique, associations)) in primary_keys {
+        for (pk_indices, (_is_unique, associations)) in primary_keys {
+            let field_pk_names = pk_indices
+                .iter()
+                .map(|pk_idx| field_names[*pk_idx].as_str())
+                .collect::<Vec<_>>();
             for group_by_expr in &group_by_exprs {
                 let expr_name = format!("{}", group_by_expr);
-                if field_names[*pk] == expr_name {
+                if field_pk_names.contains(&expr_name.as_str()) {
                     let associated_field_names = associations
                         .iter()
                         .map(|idx| field_names[*idx].clone())

@@ -33,7 +33,7 @@ use std::fmt::{Display, Formatter};
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
 
-pub type PrimaryKeyToAssociations = HashMap<usize, (bool, Vec<usize>)>;
+pub type PrimaryKeysToAssociations = HashMap<Vec<usize>, (bool, Vec<usize>)>;
 
 /// DFSchema wraps an Arrow schema and adds relation names
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub struct DFSchema {
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
     /// primary key index and its associated fields indices
-    primary_keys: PrimaryKeyToAssociations,
+    primary_keys: PrimaryKeysToAssociations,
 }
 
 impl DFSchema {
@@ -126,7 +126,7 @@ impl DFSchema {
     }
 
     /// Assing primary key
-    pub fn with_primary_keys(mut self, primary_keys: PrimaryKeyToAssociations) -> Self {
+    pub fn with_primary_keys(mut self, primary_keys: PrimaryKeysToAssociations) -> Self {
         self.primary_keys = primary_keys;
         self
     }
@@ -496,7 +496,7 @@ impl DFSchema {
     }
 
     /// Get primary keys
-    pub fn primary_keys(&self) -> &PrimaryKeyToAssociations {
+    pub fn primary_keys(&self) -> &PrimaryKeysToAssociations {
         &self.primary_keys
     }
 }
@@ -783,24 +783,24 @@ impl SchemaExt for Schema {
 
 /// Add offset value to primary_keys and its associated indices
 pub fn add_offset_to_primary_key(
-    primary_keys: &PrimaryKeyToAssociations,
+    primary_keys: &PrimaryKeysToAssociations,
     offset: usize,
-) -> PrimaryKeyToAssociations {
+) -> PrimaryKeysToAssociations {
     primary_keys
         .iter()
-        .map(|(idx, (is_unique, associated_indices))| {
+        .map(|(pk_indices, (is_unique, associated_indices))| {
             (
-                idx + offset,
+                pk_indices.iter().map(|pk_idx| pk_idx + offset).collect(),
                 (
                     *is_unique,
                     associated_indices
                         .iter()
                         .map(|item| item + offset)
-                        .collect::<Vec<_>>(),
+                        .collect(),
                 ),
             )
         })
-        .collect::<PrimaryKeyToAssociations>()
+        .collect::<PrimaryKeysToAssociations>()
 }
 
 #[cfg(test)]
