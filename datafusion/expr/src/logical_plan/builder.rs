@@ -42,8 +42,8 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
     add_offset_to_primary_key, display::ToStringifiedPlan, Column, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, OwnedTableReference, PrimaryKeysAndAssociations,
-    PrimaryKeysGroups, Result, ScalarValue, TableReference, ToDFSchema,
+    DFSchemaRef, DataFusionError, OwnedTableReference, PrimaryKeyGroup, PrimaryKeyGroups,
+    Result, ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -265,20 +265,18 @@ impl LogicalPlanBuilder {
 
         let schema = table_source.schema();
         let mut primary_keys = vec![];
-        let pks = table_source.primary_keys();
-        if !pks.is_empty() {
+        if let Some(pks) = table_source.primary_keys() {
             let n_field = schema.fields.len();
             // All the field indices are associated, since it is source,
             let associated_indices = (0..n_field).collect::<Vec<_>>();
-            primary_keys.push(PrimaryKeysAndAssociations::new(
-                pks.to_vec(),
-                associated_indices,
-            ));
+            primary_keys.push(PrimaryKeyGroup::new(pks.to_vec(), associated_indices));
         }
 
         let projected_schema = projection
             .as_ref()
             .map(|p| {
+                let projected_primary_keys =
+                    project_primary_key_indices(&primary_keys, p, p.len());
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
@@ -290,7 +288,7 @@ impl LogicalPlanBuilder {
                         .collect(),
                     schema.metadata().clone(),
                 )
-                .map(|df_schema| df_schema.with_primary_keys(primary_keys.clone()))
+                .map(|df_schema| df_schema.with_primary_keys(projected_primary_keys))
             })
             .unwrap_or_else(|| {
                 DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
@@ -1262,61 +1260,81 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }))
 }
 
+// Update entries inside the `entries` vector, with their corresponding index, inside `proj_indices` vector.
+fn update_elements_with_matching_indices(
+    entries: &[usize],
+    proj_indices: &[usize],
+) -> Vec<usize> {
+    entries
+        .iter()
+        .filter_map(|val| proj_indices.iter().position(|proj_idx| proj_idx == val))
+        .collect()
+}
+
+/// Update primary key indices, with index of the number in `field_indices`
+/// If `proj_indices` is \[2, 5, 8\], primary key groups is \[5\] -> \[5, 8\] in the `df_schema`.
+/// return value will be \[1\] -> \[1, 2\]. This means that 1st index of the `field_indices`(5) is primary key,
+/// and this primary key is associated with columns at indices 1 and 2 (in the updated schema).
+/// In the updated schema, fields at the indices \[2, 5, 8\] will be at \[0, 1, 2\].
+pub fn project_primary_key_indices(
+    primary_key_groups: &PrimaryKeyGroups,
+    proj_indices: &[usize],
+    // If is_unique flag of primary key group is true. Association covers whole table. This
+    // number stores table size to be able to correctly associate with whole table.
+    n_out: usize,
+) -> PrimaryKeyGroups {
+    let mut updated_primary_groups = vec![];
+    for PrimaryKeyGroup {
+        primary_key_indices,
+        is_unique,
+        associated_indices,
+    } in primary_key_groups
+    {
+        let new_pk_indices =
+            update_elements_with_matching_indices(primary_key_indices, proj_indices);
+        // Do mapping for associations
+        let new_association_indices = if *is_unique {
+            (0..n_out).collect()
+        } else {
+            // new_associations
+            update_elements_with_matching_indices(associated_indices, proj_indices)
+        };
+        if !new_pk_indices.is_empty() {
+            let new_pk_group =
+                PrimaryKeyGroup::new(new_pk_indices, new_association_indices)
+                    .with_is_unique(*is_unique);
+            updated_primary_groups.push(new_pk_group);
+        }
+    }
+    updated_primary_groups
+}
+
 pub(crate) fn project_primary_keys(
     exprs: &[Expr],
     input: &LogicalPlan,
-) -> Result<PrimaryKeysGroups> {
-    let mut updated_primary_key = vec![];
-    let mut input_to_proj_mapping: HashMap<usize, usize> = HashMap::new();
-
-    let input_schema = &input.schema();
+) -> Result<PrimaryKeyGroups> {
     // look for exact match in plan's output schema
-    let input_fields = input_schema.fields();
-    for (idx, expr) in exprs.iter().enumerate() {
-        let expr_name = format!("{}", expr);
-        if let Some(match_idx) = input_fields
-            .iter()
-            .position(|item| item.qualified_name() == expr_name)
-        {
-            input_to_proj_mapping.insert(match_idx, idx);
-        }
-    }
-    for PrimaryKeysAndAssociations {
-        primary_keys,
-        is_unique,
-        associated_indices,
-    } in input_schema.primary_keys()
-    {
-        let mut target_pk_indices = vec![];
-        for pk_idx in primary_keys {
-            if let Some(target_pk_idx) = input_to_proj_mapping.get(pk_idx) {
-                target_pk_indices.push(*target_pk_idx);
-            }
-        }
-        if !target_pk_indices.is_empty() {
-            // Do mapping for associations
-            let updated_associations = if *is_unique {
-                (0..exprs.len()).collect()
-            } else {
-                let mut new_associations = vec![];
-                for assoc_idx in associated_indices {
-                    if let Some(target_assoc_idx) = input_to_proj_mapping.get(assoc_idx) {
-                        new_associations.push(*target_assoc_idx);
-                    }
+    let input_fields = input.schema().fields();
+    // Calculate expression indices (if found) in the input schema.
+    let proj_indices = exprs
+        .iter()
+        .filter_map(|expr| {
+            let expr_name = match expr {
+                Expr::Alias(alias) => {
+                    format!("{}", alias.expr)
                 }
-                new_associations
+                _ => format!("{}", expr),
             };
-            if !updated_associations.is_empty() {
-                let new_pk_group = PrimaryKeysAndAssociations::new(
-                    target_pk_indices,
-                    updated_associations,
-                )
-                .with_is_unique(*is_unique);
-                updated_primary_key.push(new_pk_group);
-            }
-        }
-    }
-    Ok(updated_primary_key)
+            input_fields
+                .iter()
+                .position(|item| item.qualified_name() == expr_name)
+        })
+        .collect::<Vec<_>>();
+    Ok(project_primary_key_indices(
+        input.schema().primary_keys(),
+        &proj_indices,
+        exprs.len(),
+    ))
 }
 
 /// Create Projection
@@ -1345,19 +1363,7 @@ pub fn project(
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
-    // println!("projected exprs");
-    // for item in &projected_expr {
-    //     println!("item:{:?}", item);
-    // }
-    // println!("projected exprs");
-
     let primary_keys = project_primary_keys(&projected_expr, &plan)?;
-    // let primary_keys = exprlist_to_primary_keys(&projected_expr, &plan)?;
-
-    // println!("---------------PROJECTION--------------");
-    // print_primary_key(&plan);
-    // println!("projection primary_keys: {:?}", primary_keys);
-    // println!("---------------PROJECTION--------------");
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
@@ -2046,5 +2052,13 @@ mod tests {
             .build()?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_get_updated_primary_keys() {
+        let primary_keys = vec![PrimaryKeyGroup::new(vec![1], vec![0, 1, 2])];
+        let res = project_primary_key_indices(&primary_keys, &[1, 2], 2);
+        let expected = vec![PrimaryKeyGroup::new(vec![0], vec![0, 1])];
+        assert_eq!(res, expected);
     }
 }

@@ -53,7 +53,7 @@ impl TableSource for DefaultTableSource {
     }
 
     /// Get a reference to the primary key indices
-    fn primary_keys(&self) -> &[usize] {
+    fn primary_keys(&self) -> Option<&[usize]> {
         self.table_provider.primary_keys()
     }
 

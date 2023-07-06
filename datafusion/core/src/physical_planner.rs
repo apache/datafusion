@@ -62,10 +62,8 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{
-    add_offset_to_primary_key, DFSchema, PrimaryKeysAndAssociations, PrimaryKeysGroups,
-    ScalarValue,
-};
+use datafusion_common::{add_offset_to_primary_key, DFSchema, ScalarValue};
+use datafusion_expr::builder::project_primary_key_indices;
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
@@ -1029,8 +1027,8 @@ impl DefaultPhysicalPlanner {
                                 )
                                 .unzip();
                             // Update indices of the fields according to filter schema (the index seen in the filter schema).
-                            let left_primary_keys = get_updated_primary_keys(left_df_schema, &left_field_indices);
-                            let right_primary_keys = get_updated_primary_keys(right_df_schema, &right_field_indices);
+                            let left_primary_keys = project_primary_key_indices(left_df_schema.primary_keys(), &left_field_indices, left_field_indices.len());
+                            let right_primary_keys = project_primary_key_indices(right_df_schema.primary_keys(), &right_field_indices, right_field_indices.len());
 
                             // after join, indices from the right table will increase with the size of the left table. hence add offset
                             let right_primary_keys = add_offset_to_primary_key(&right_primary_keys, left_field_indices.len());
@@ -1308,51 +1306,6 @@ impl DefaultPhysicalPlanner {
             ))
         }
     }
-}
-
-/// Update primary key indices, with index of the number in `field_indices`
-/// If `field_indices` is [2, 5, 8], primary keys are 5 -> [5, 8] in the `df_schema`.
-/// return value will be 1 -> [1, 2]. This means that 1st index of the `field_indices`(5) is primary key,
-/// and this primary key is associated with columns at indices 1 and 2 (in the updated schema).
-/// In the updated schema, fields at the indices [2, 5, 8] will be at [0, 1, 2].
-fn get_updated_primary_keys(
-    df_schema: &DFSchema,
-    field_indices: &[usize],
-) -> PrimaryKeysGroups {
-    let mut updated_primary_keys = vec![];
-    let existing_primary_keys = df_schema.primary_keys();
-    for PrimaryKeysAndAssociations {
-        primary_keys,
-        is_unique,
-        associated_indices,
-    } in existing_primary_keys
-    {
-        let mut new_pk_indices = vec![];
-        for pk_idx in primary_keys {
-            if let Some(new_pk_idx) = field_indices
-                .iter()
-                .position(|field_idx| field_idx == pk_idx)
-            {
-                new_pk_indices.push(new_pk_idx);
-            }
-        }
-        let mut new_association_indices = vec![];
-        for assoc_idx in associated_indices {
-            if let Some(new_assoc_idx) = field_indices
-                .iter()
-                .position(|field_idx| field_idx == assoc_idx)
-            {
-                new_association_indices.push(new_assoc_idx);
-            }
-        }
-        if !new_pk_indices.is_empty() {
-            let new_pk_group =
-                PrimaryKeysAndAssociations::new(new_pk_indices, new_association_indices)
-                    .with_is_unique(*is_unique);
-            updated_primary_keys.push(new_pk_group);
-        }
-    }
-    updated_primary_keys
 }
 
 /// Expand and align a GROUPING SET expression.
@@ -2259,7 +2212,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {}, primary_keys: {} }, \
+        ], metadata: {}, primary_keys: [] }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
@@ -2482,26 +2435,6 @@ mod tests {
                 displayable(plan.as_ref()).indent(true)
             );
         }
-    }
-
-    #[tokio::test]
-    async fn test_get_updated_primary_keys() {
-        let mut schema = get_test_dfschema().unwrap();
-
-        let primary_keys = vec![PrimaryKeysAndAssociations::new(vec![1], vec![0, 1, 2])];
-        schema = schema.with_primary_keys(primary_keys);
-        let res = get_updated_primary_keys(&schema, &[1, 2]);
-        let expected = vec![PrimaryKeysAndAssociations::new(vec![0], vec![0, 1])];
-        assert_eq!(res, expected);
-    }
-
-    fn get_test_dfschema() -> Result<DFSchema> {
-        let fields = vec![
-            DFField::new_unqualified("a", DataType::Int64, false),
-            DFField::new_unqualified("b", DataType::Int64, false),
-            DFField::new_unqualified("c", DataType::Int64, false),
-        ];
-        DFSchema::new_with_metadata(fields, HashMap::new())
     }
 
     struct ErrorExtensionPlanner {}

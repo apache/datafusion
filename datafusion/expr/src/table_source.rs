@@ -65,9 +65,9 @@ pub trait TableSource: Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Get primary key index if any
-    fn primary_keys(&self) -> &[usize] {
-        // By default, return empty reference
-        &[]
+    fn primary_keys(&self) -> Option<&[usize]> {
+        // By default return None.
+        None
     }
 
     /// Get the type of this table for metadata/catalog purposes.

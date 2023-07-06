@@ -52,7 +52,7 @@ pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 pub struct MemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<PartitionData>,
-    primary_keys: Vec<usize>,
+    primary_keys: Option<Vec<usize>>,
 }
 
 impl MemTable {
@@ -77,13 +77,15 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
-            primary_keys: vec![],
+            primary_keys: None,
         })
     }
 
     /// Assign primary keys
     pub fn with_primary_keys(mut self, primary_keys: Vec<usize>) -> Self {
-        self.primary_keys = primary_keys;
+        if !primary_keys.is_empty() {
+            self.primary_keys = Some(primary_keys);
+        }
         self
     }
 
@@ -156,8 +158,8 @@ impl TableProvider for MemTable {
         self.schema.clone()
     }
 
-    fn primary_keys(&self) -> &[usize] {
-        &self.primary_keys
+    fn primary_keys(&self) -> Option<&[usize]> {
+        self.primary_keys.as_deref()
     }
 
     fn table_type(&self) -> TableType {

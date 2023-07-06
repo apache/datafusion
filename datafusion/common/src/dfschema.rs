@@ -37,8 +37,8 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// (where primary key property holds, this changes during intermediate
 /// schemas)
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrimaryKeysAndAssociations {
-    pub primary_keys: Vec<usize>,
+pub struct PrimaryKeyGroup {
+    pub primary_key_indices: Vec<usize>,
     /// Flag indicating whether primary_key is exactly unique
     /// if `false` it means that primary key isn't necessarily unique.
     /// When primary_key is non-unique, all the associated fields at `associated_indices`
@@ -48,10 +48,10 @@ pub struct PrimaryKeysAndAssociations {
     pub associated_indices: Vec<usize>,
 }
 
-impl PrimaryKeysAndAssociations {
-    pub fn new(primary_keys: Vec<usize>, associated_indices: Vec<usize>) -> Self {
+impl PrimaryKeyGroup {
+    pub fn new(primary_key_indices: Vec<usize>, associated_indices: Vec<usize>) -> Self {
         Self {
-            primary_keys,
+            primary_key_indices,
             is_unique: true,
             associated_indices,
         }
@@ -63,7 +63,7 @@ impl PrimaryKeysAndAssociations {
     }
 }
 
-pub type PrimaryKeysGroups = Vec<PrimaryKeysAndAssociations>;
+pub type PrimaryKeyGroups = Vec<PrimaryKeyGroup>;
 
 /// DFSchema wraps an Arrow schema and adds relation names
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +73,7 @@ pub struct DFSchema {
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
     /// Stores distinct primary key groups
-    primary_keys: PrimaryKeysGroups,
+    primary_keys: PrimaryKeyGroups,
 }
 
 impl DFSchema {
@@ -156,7 +156,7 @@ impl DFSchema {
     }
 
     /// Assing primary key
-    pub fn with_primary_keys(mut self, primary_keys: PrimaryKeysGroups) -> Self {
+    pub fn with_primary_keys(mut self, primary_keys: PrimaryKeyGroups) -> Self {
         self.primary_keys = primary_keys;
         self
     }
@@ -169,8 +169,18 @@ impl DFSchema {
         fields.extend_from_slice(schema.fields().as_slice());
         metadata.extend(schema.metadata.clone());
         let mut primary_keys = self.primary_keys.clone();
-        let other_primary_keys =
+        primary_keys
+            .iter_mut()
+            .for_each(|PrimaryKeyGroup { is_unique, .. }| {
+                *is_unique = false;
+            });
+        let mut other_primary_keys =
             add_offset_to_primary_key(schema.primary_keys(), self.fields.len());
+        other_primary_keys.iter_mut().for_each(
+            |PrimaryKeyGroup { is_unique, .. }| {
+                *is_unique = false;
+            },
+        );
         primary_keys.extend(other_primary_keys);
         Ok(Self::new_with_metadata(fields, metadata)?.with_primary_keys(primary_keys))
     }
@@ -526,7 +536,7 @@ impl DFSchema {
     }
 
     /// Get primary keys
-    pub fn primary_keys(&self) -> &PrimaryKeysGroups {
+    pub fn primary_keys(&self) -> &PrimaryKeyGroups {
         &self.primary_keys
     }
 }
@@ -813,19 +823,19 @@ impl SchemaExt for Schema {
 
 /// Add offset value to primary_keys and its associated indices
 pub fn add_offset_to_primary_key(
-    primary_keys: &PrimaryKeysGroups,
+    primary_keys: &PrimaryKeyGroups,
     offset: usize,
-) -> PrimaryKeysGroups {
+) -> PrimaryKeyGroups {
     primary_keys
         .iter()
         .map(
-            |PrimaryKeysAndAssociations {
-                 primary_keys,
+            |PrimaryKeyGroup {
+                 primary_key_indices,
                  is_unique,
                  associated_indices,
              }| {
-                PrimaryKeysAndAssociations {
-                    primary_keys: primary_keys
+                PrimaryKeyGroup {
+                    primary_key_indices: primary_key_indices
                         .iter()
                         .map(|pk_idx| pk_idx + offset)
                         .collect(),
@@ -837,7 +847,7 @@ pub fn add_offset_to_primary_key(
                 }
             },
         )
-        .collect::<PrimaryKeysGroups>()
+        .collect::<PrimaryKeyGroups>()
 }
 
 #[cfg(test)]

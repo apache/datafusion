@@ -20,7 +20,7 @@ use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs,
 };
-use datafusion_common::{DataFusionError, PrimaryKeysAndAssociations, Result};
+use datafusion_common::{DataFusionError, PrimaryKeyGroup, Result};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
@@ -440,13 +440,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|elem| elem.qualified_name())
             .collect::<Vec<_>>();
         let mut new_group_by_exprs = group_by_exprs.clone();
-        for PrimaryKeysAndAssociations {
-            primary_keys,
+        for PrimaryKeyGroup {
+            primary_key_indices,
             associated_indices,
             ..
         } in primary_keys
         {
-            let field_pk_names = primary_keys
+            let field_pk_names = primary_key_indices
                 .iter()
                 .map(|pk_idx| field_names[*pk_idx].as_str())
                 .collect::<Vec<_>>();

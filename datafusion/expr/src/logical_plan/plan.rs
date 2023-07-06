@@ -36,7 +36,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, PrimaryKeysAndAssociations, Result, ScalarValue,
+    OwnedTableReference, PrimaryKeyGroup, Result, ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1423,7 +1423,7 @@ impl Window {
         let n_window_expr = window_expr.len();
         let new_associated_fields: Vec<usize> =
             (n_input_fields..n_input_fields + n_window_expr).collect();
-        for PrimaryKeysAndAssociations {
+        for PrimaryKeyGroup {
             is_unique,
             associated_indices,
             ..

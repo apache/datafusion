@@ -42,9 +42,9 @@ pub trait TableProvider: Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Get a reference to the primary_key indices
-    fn primary_keys(&self) -> &[usize] {
-        // By default return empty reference
-        &[]
+    fn primary_keys(&self) -> Option<&[usize]> {
+        // By default return None
+        None
     }
 
     /// Get the type of this table for metadata/catalog purposes.
