@@ -259,6 +259,11 @@ select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
 0 0
 
+# cardinality with columns
+query I
+select cardinality(column1), cardinality(column2), cardinality(column3) from arrays;
+----
+
 ## trim_array
 
 # trim_array scalar function #1
@@ -317,6 +322,16 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 ----
 0 0 NULL
 
+# array_length with columns
+query ?
+select array_length(column1, column3) from arrays_values;
+----
+
+# array_length with columns and scalars
+query ???
+select array_length(array[array[1, 2], array[3, 4]], column3), array_length(column1, 1) from arrays_values;
+----
+
 ## array_dims
 
 # array_dims scalar function
@@ -337,6 +352,11 @@ caused by
 Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
 select array_dims(make_array()), array_dims(make_array(make_array()))
 
+# array_dims with columns
+query I
+select array_dims(column1), array_dims(column2), array_dims(column3) from arrays;
+----
+
 # array_ndims scalar function
 query III rowsort
 select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4])), array_ndims(make_array([[[[1], [2]]]]));
@@ -356,6 +376,11 @@ query II rowsort
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
 1 2
+
+# array_ndims with columns
+query II
+select array_ndims(column1), array_ndims(column2), array_ndims(column3) from arrays;
+----
 
 ## array concatenate opeartor
 
