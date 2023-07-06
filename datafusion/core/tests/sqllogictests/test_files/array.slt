@@ -481,12 +481,19 @@ select cardinality(make_array([1, 2], [3, 4], [5, 6])), cardinality(array_fill(3
 query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
-0 0
+NULL 0
 
 # cardinality with columns
-query I
+query III
 select cardinality(column1), cardinality(column2), cardinality(column3) from arrays;
 ----
+4 3 5
+4 3 5
+4 3 5
+4 3 3
+NULL 3 4
+4 NULL 1
+4 3 NULL
 
 ## trim_array
 
@@ -547,22 +554,38 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 0 0 NULL
 
 # array_length with columns
-query ?
+query I
 select array_length(column1, column3) from arrays_values;
 ----
+10
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
 
 # array_length with columns and scalars
-query ???
+query II
 select array_length(array[array[1, 2], array[3, 4]], column3), array_length(column1, 1) from arrays_values;
 ----
+2 10
+2 10
+NULL 10
+NULL 10
+NULL NULL
+NULL 10
+NULL 10
+NULL 10
 
 ## array_dims
 
 # array_dims scalar function
-query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
+query ???
 select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
 
 # array_dims scalar function #2
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
@@ -571,15 +594,22 @@ Error during planning: Cannot automatically convert List\(Field \{ name: "item",
 select array_dims(array_fill(2, [1, 2, 3])), array_dims(array_fill(3, [2, 5, 4]));
 
 # array_dims scalar function #3
-query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
+query ??
 select array_dims(make_array()), array_dims(make_array(make_array()))
+----
+NULL [1, 0]
 
 # array_dims with columns
-query I
+query ???
 select array_dims(column1), array_dims(column2), array_dims(column3) from arrays;
 ----
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [3]
+NULL [3] [4]
+[2, 2] NULL [1]
+[2, 2] [3] NULL
 
 ## array_ndims
 
@@ -599,12 +629,19 @@ select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-1 2
+NULL 2
 
 # array_ndims with columns
-query II
+query III
 select array_ndims(column1), array_ndims(column2), array_ndims(column3) from arrays;
 ----
+2 1 1
+2 1 1
+2 1 1
+2 1 1
+NULL 1 1
+2 NULL 1
+2 1 NULL
 
 ## array_contains
 

@@ -100,7 +100,10 @@ macro_rules! array {
 }
 
 /// Returns the length of a concrete array dimension
-fn compute_array_length(arr: Option<ArrayRef>, dimension: Option<i64>) -> Result<Option<u64>> {
+fn compute_array_length(
+    arr: Option<ArrayRef>,
+    dimension: Option<i64>,
+) -> Result<Option<u64>> {
     let mut current_dimension: i64 = 1;
     let mut value = match arr {
         Some(arr) => arr,
@@ -619,10 +622,11 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
-    let mut index = Int64Array::from_value(0, arr.len());
-    if args.len() == 3 {
-        index = as_int64_array(&args[2])?.clone();
-    }
+    let index = if args.len() == 3 {
+        as_int64_array(&args[2])?.clone()
+    } else {
+        Int64Array::from_value(0, arr.len())
+    };
 
     let res = match arr.data_type() {
         DataType::List(field) => match field.data_type() {
@@ -1124,10 +1128,13 @@ pub fn trim_array(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?.clone();
 
-    let result = list_array.iter().map(|arr| match compute_array_dims(arr)? {
-            Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>() as u64)),
+    let result = list_array
+        .iter()
+        .map(|arr| match compute_array_dims(arr)? {
+            Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
             None => Ok(None),
-    }).collect::<Result<UInt64Array>>()?;
+        })
+        .collect::<Result<UInt64Array>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -1135,14 +1142,17 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Array_length SQL function
 pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    let dimension;
-    if args.len() == 2 {
-        dimension = as_int64_array(&args[1])?.clone();
+    let dimension = if args.len() == 2 {
+        as_int64_array(&args[1])?.clone()
     } else {
-        dimension = Int64Array::from_value(1, list_array.len());
-    }
+        Int64Array::from_value(1, list_array.len())
+    };
 
-    let result = list_array.iter().zip(dimension.iter()).map(|(arr, dim)| compute_array_length(arr, dim)).collect::<Result<UInt64Array>>()?;
+    let result = list_array
+        .iter()
+        .zip(dimension.iter())
+        .map(|(arr, dim)| compute_array_length(arr, dim))
+        .collect::<Result<UInt64Array>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -1151,7 +1161,10 @@ pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
 
-    let data = list_array.iter().map(|arr| compute_array_dims(arr)).collect::<Result<Vec<_>>>()?;
+    let data = list_array
+        .iter()
+        .map(compute_array_dims)
+        .collect::<Result<Vec<_>>>()?;
     let result = ListArray::from_iter_primitive::<UInt64Type, _, _>(data);
 
     Ok(Arc::new(result) as ArrayRef)
@@ -1160,8 +1173,11 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Array_ndims SQL function
 pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;
-    
-    let result = list_array.iter().map(|arr| compute_array_ndims(arr)).collect::<Result<UInt64Array>>()?;
+
+    let result = list_array
+        .iter()
+        .map(compute_array_ndims)
+        .collect::<Result<UInt64Array>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -1233,10 +1249,9 @@ pub fn array_contains(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::UInt8Array;
     use arrow::datatypes::Int64Type;
     use datafusion_common::cast::{
-        as_generic_string_array, as_list_array, as_uint64_array, as_uint8_array,
+        as_generic_string_array, as_list_array, as_uint64_array,
     };
     use datafusion_common::scalar::ScalarValue;
 
@@ -1704,11 +1719,8 @@ mod tests {
         assert_eq!(result, &UInt64Array::from_value(4, 1));
 
         // array_length([1, 2, 3, 4], 1) = 4
-        let array = array_length(&[
-            list_array,
-            Arc::new(Int64Array::from_value(1, 1)),
-        ])
-        .expect("failed to initialize function array_ndims");
+        let array = array_length(&[list_array, Arc::new(Int64Array::from_value(1, 1))])
+            .expect("failed to initialize function array_ndims");
         let result =
             as_uint64_array(&array).expect("failed to initialize function array_ndims");
 
@@ -1720,43 +1732,34 @@ mod tests {
         let list_array = return_nested_array().into_array(1);
 
         // array_length([[1, 2, 3, 4], [5, 6, 7, 8]]) = 2
-        let arr = array_length(&[
-            list_array.clone(),
-        ])
-        .expect("failed to initialize function array_length");
+        let arr = array_length(&[list_array.clone()])
+            .expect("failed to initialize function array_length");
         let result =
             as_uint64_array(&arr).expect("failed to initialize function array_length");
 
         assert_eq!(result, &UInt64Array::from_value(2, 1));
 
         // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 1) = 2
-        let arr = array_length(&[
-            list_array.clone(),
-            Arc::new(Int64Array::from_value(1, 1)),
-        ])
-        .expect("failed to initialize function array_length");
+        let arr =
+            array_length(&[list_array.clone(), Arc::new(Int64Array::from_value(1, 1))])
+                .expect("failed to initialize function array_length");
         let result =
             as_uint64_array(&arr).expect("failed to initialize function array_length");
 
         assert_eq!(result, &UInt64Array::from_value(2, 1));
 
         // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 2) = 4
-        let arr = array_length(&[
-            list_array.clone(),
-            Arc::new(Int64Array::from_value(2, 1)),
-        ])
-        .expect("failed to initialize function array_length");
+        let arr =
+            array_length(&[list_array.clone(), Arc::new(Int64Array::from_value(2, 1))])
+                .expect("failed to initialize function array_length");
         let result =
             as_uint64_array(&arr).expect("failed to initialize function array_length");
 
         assert_eq!(result, &UInt64Array::from_value(4, 1));
 
         // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 3) = NULL
-        let arr = array_length(&[
-            list_array,
-            Arc::new(Int64Array::from_value(3, 1)),
-        ])
-        .expect("failed to initialize function array_length");
+        let arr = array_length(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
+            .expect("failed to initialize function array_length");
         let result =
             as_uint64_array(&arr).expect("failed to initialize function array_length");
 
@@ -1826,7 +1829,7 @@ mod tests {
         let array = array_ndims(&[list_array])
             .expect("failed to initialize function array_ndims");
         let result =
-        as_uint64_array(&array).expect("failed to initialize function array_ndims");
+            as_uint64_array(&array).expect("failed to initialize function array_ndims");
 
         assert_eq!(result, &UInt64Array::from_value(2, 1));
     }
