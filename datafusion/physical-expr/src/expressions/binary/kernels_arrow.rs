@@ -20,8 +20,8 @@
 
 use arrow::compute::{
     add_dyn, add_scalar_dyn, divide_dyn_checked, divide_scalar_dyn, modulus_dyn,
-    modulus_scalar_dyn, multiply_fixed_point, multiply_scalar_dyn, subtract_dyn,
-    subtract_scalar_dyn, try_unary,
+    modulus_scalar_dyn, multiply_fixed_point, multiply_scalar_checked_dyn,
+    multiply_scalar_dyn, subtract_dyn, subtract_scalar_dyn, try_unary,
 };
 use arrow::datatypes::{Date32Type, Date64Type, Decimal128Type};
 use arrow::{array::*, datatypes::ArrowNumericType};
@@ -662,7 +662,7 @@ pub(crate) fn divide_decimal_dyn_scalar(
     let (precision, scale) = get_precision_scale(result_type)?;
 
     let mul = 10_i128.pow(scale as u32);
-    let array = multiply_scalar_dyn::<Decimal128Type>(left, mul)?;
+    let array = multiply_scalar_checked_dyn::<Decimal128Type>(left, mul)?;
 
     let array = divide_scalar_dyn::<Decimal128Type>(&array, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
@@ -719,7 +719,7 @@ pub(crate) fn divide_dyn_checked_decimal(
     let (precision, scale) = get_precision_scale(result_type)?;
 
     let mul = 10_i128.pow(scale as u32);
-    let array = multiply_scalar_dyn::<Decimal128Type>(left, mul)?;
+    let array = multiply_scalar_checked_dyn::<Decimal128Type>(left, mul)?;
 
     // Restore to original precision and scale (metadata only)
     let (org_precision, org_scale) = get_precision_scale(right.data_type())?;
