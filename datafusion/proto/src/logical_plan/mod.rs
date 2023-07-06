@@ -2342,6 +2342,37 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_field() {
+        let field =
+            Field::new("f", DataType::Int32, true).with_metadata(HashMap::from([
+                (String::from("k1"), String::from("v1")),
+                (String::from("k2"), String::from("v2")),
+            ]));
+        let proto_field: super::protobuf::Field = (&field).try_into().unwrap();
+        let returned_field: Field = (&proto_field).try_into().unwrap();
+        assert_eq!(field, returned_field);
+    }
+
+    #[test]
+    fn roundtrip_schema() {
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", DataType::Decimal128(15, 2), true).with_metadata(
+                    HashMap::from([(String::from("k1"), String::from("v1"))]),
+                ),
+            ],
+            HashMap::from([
+                (String::from("k2"), String::from("v2")),
+                (String::from("k3"), String::from("v3")),
+            ]),
+        );
+        let proto_schema: super::protobuf::Schema = (&schema).try_into().unwrap();
+        let returned_schema: Schema = (&proto_schema).try_into().unwrap();
+        assert_eq!(schema, returned_schema);
+    }
+
+    #[test]
     fn roundtrip_not() {
         let test_expr = Expr::Not(Box::new(lit(1.0_f32)));
 
