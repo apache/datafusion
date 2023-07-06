@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::sync::Arc;
 
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -279,7 +280,7 @@ pub fn to_substrait_rel(
             let join_filter = match &join.filter {
                 Some(filter) => Some(Box::new(to_substrait_rex(
                     filter,
-                    &std::sync::Arc::new(in_join_schema),
+                    &Arc::new(in_join_schema),
                     0,
                     extension_info,
                 )?)),
