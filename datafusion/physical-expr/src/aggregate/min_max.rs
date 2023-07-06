@@ -1186,7 +1186,7 @@ impl MinMax for i128 {
     }
 }
 
-/// An accumulator to compute the min or max of PrimitiveArray<T>.
+/// An accumulator to compute the min or max of [`PrimitiveArray<T>`].
 /// Stores values as native/primitive type
 #[derive(Debug)]
 struct MinMaxGroupsPrimitiveAccumulator<T, const MIN: bool>
