@@ -266,17 +266,25 @@ pub fn to_substrait_rel(
             let right = to_substrait_rel(join.right.as_ref(), ctx, extension_info)?;
             let join_type = to_substrait_jointype(join.join_type);
             // we only support basic joins so return an error for anything not yet supported
-            if join.filter.is_some() {
-                return Err(DataFusionError::NotImplemented("join filter".to_string()));
-            }
             match join.join_constraint {
                 JoinConstraint::On => {}
-                _ => {
+                JoinConstraint::Using => {
                     return Err(DataFusionError::NotImplemented(
-                        "join constraint".to_string(),
+                        "join constraint: `using`".to_string(),
                     ))
                 }
             }
+            // parse filter if exists
+            let in_join_schema = join.left.schema().join(join.right.schema())?;
+            let join_filter = match &join.filter {
+                Some(filter) => Some(Box::new(to_substrait_rex(
+                    filter,
+                    &std::sync::Arc::new(in_join_schema),
+                    0,
+                    extension_info,
+                )?)),
+                None => None,
+            };
             // map the left and right columns to binary expressions in the form `l = r`
             // build a single expression for the ON condition, such as `l.a = r.a AND l.b = r.b`
             let eq_op = if join.null_equals_null {
@@ -285,20 +293,25 @@ pub fn to_substrait_rel(
                 Operator::Eq
             };
 
+            let join_expr = match to_substrait_join_expr(
+                &join.on,
+                eq_op,
+                join.left.schema(),
+                join.right.schema(),
+                extension_info,
+            )? {
+                Some(expr) => Some(Box::new(expr)),
+                None => None,
+            };
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Join(Box::new(JoinRel {
                     common: None,
                     left: Some(left),
                     right: Some(right),
                     r#type: join_type as i32,
-                    expression: Some(Box::new(to_substrait_join_expr(
-                        &join.on,
-                        eq_op,
-                        join.left.schema(),
-                        join.right.schema(),
-                        extension_info,
-                    )?)),
-                    post_join_filter: None,
+                    expression: join_expr,
+                    post_join_filter: join_filter,
                     advanced_extension: None,
                 }))),
             }))
@@ -395,7 +408,7 @@ fn to_substrait_join_expr(
         Vec<extensions::SimpleExtensionDeclaration>,
         HashMap<String, u32>,
     ),
-) -> Result<Expression> {
+) -> Result<Option<Expression>> {
     // Only support AND conjunction for each binary expression in join conditions
     let mut exprs: Vec<Expression> = vec![];
     for (left, right) in join_conditions {
@@ -411,12 +424,10 @@ fn to_substrait_join_expr(
         // AND with existing expression
         exprs.push(make_binary_op_scalar_func(&l, &r, eq_op, extension_info));
     }
-    let join_expr: Expression = exprs
-        .into_iter()
-        .reduce(|acc: Expression, e: Expression| {
+    let join_expr: Option<Expression> =
+        exprs.into_iter().reduce(|acc: Expression, e: Expression| {
             make_binary_op_scalar_func(&acc, &e, Operator::And, extension_info)
-        })
-        .unwrap();
+        });
     Ok(join_expr)
 }
 
