@@ -151,23 +151,6 @@ impl MemoryExec {
         })
     }
 
-    /// Create a new execution plan for reading in-memory record batches
-    /// The provided `schema` should not have the projection applied.
-    pub fn try_new_owned_data(
-        partitions: Vec<Vec<RecordBatch>>,
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
-        let projected_schema = project_schema(&schema, projection.as_ref())?;
-        Ok(Self {
-            partitions,
-            schema,
-            projected_schema,
-            projection,
-            sort_information: None,
-        })
-    }
-
     /// Set sort information
     pub fn with_sort_information(
         mut self,
