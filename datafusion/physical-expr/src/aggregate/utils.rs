@@ -151,12 +151,12 @@ pub fn calculate_result_decimal_for_avg(
 ///
 /// Since `Decimal128Arrays` created from `Vec<NativeType>` have
 /// default precision and scale, this function adjusts the output to
-/// match `sum_data_type`.
+/// match `data_type`.
 pub fn adjust_output_array(
-    sum_data_type: &DataType,
+    data_type: &DataType,
     array: ArrayRef,
 ) -> Result<ArrayRef, DataFusionError> {
-    let array = match sum_data_type {
+    let array = match data_type {
         DataType::Decimal128(p, s) => Arc::new(
             array
                 .as_primitive::<Decimal128Type>()

@@ -37,7 +37,8 @@ use arrow::{
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, UInt32Type, UInt64Type,
+    Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_array::{ArrowNumericType, PrimitiveArray};
 use datafusion_common::ScalarValue;
@@ -95,6 +96,15 @@ impl Max {
     }
 }
 
+macro_rules! instantiate_min_max_accumulator {
+    ($SELF:expr, $NUMERICTYPE:ident, $MIN:expr) => {{
+        Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+            $NUMERICTYPE,
+            $MIN,
+        >::new(&$SELF.data_type)))
+    }};
+}
+
 impl AggregateExpr for Max {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -149,37 +159,26 @@ impl AggregateExpr for Max {
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         match self.data_type {
-            DataType::UInt32 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                UInt32Type,
-                false,
-            >::new(
-                &self.data_type, &self.data_type
-            ))),
-            DataType::UInt64 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                UInt64Type,
-                false,
-            >::new(
-                &self.data_type, &self.data_type
-            ))),
-            DataType::Float32 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                Float32Type,
-                false,
-            >::new(
-                &self.data_type, &self.data_type
-            ))),
-            DataType::Float64 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                Float64Type,
-                false,
-            >::new(
-                &self.data_type, &self.data_type
-            ))),
+            DataType::Int8 => instantiate_min_max_accumulator!(self, Int8Type, false),
+            DataType::Int16 => instantiate_min_max_accumulator!(self, Int16Type, false),
+            DataType::Int32 => instantiate_min_max_accumulator!(self, Int32Type, false),
+            DataType::Int64 => instantiate_min_max_accumulator!(self, Int64Type, false),
+            DataType::UInt8 => instantiate_min_max_accumulator!(self, UInt8Type, false),
+            DataType::UInt16 => instantiate_min_max_accumulator!(self, UInt16Type, false),
+            DataType::UInt32 => instantiate_min_max_accumulator!(self, UInt32Type, false),
+            DataType::UInt64 => instantiate_min_max_accumulator!(self, UInt64Type, false),
+            DataType::Float32 => {
+                instantiate_min_max_accumulator!(self, Float32Type, false)
+            }
+            DataType::Float64 => {
+                instantiate_min_max_accumulator!(self, Float64Type, false)
+            }
+
             DataType::Decimal128(_, _) => {
                 Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
                     Decimal128Type,
                     false,
-                >::new(
-                    &self.data_type, &self.data_type
-                )))
+                >::new(&self.data_type)))
             }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "MinMaxGroupsPrimitiveAccumulator not supported for {}",
@@ -898,37 +897,26 @@ impl AggregateExpr for Min {
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         match self.data_type {
-            DataType::UInt32 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                UInt32Type,
-                true,
-            >::new(
-                &self.data_type, &self.data_type
-            ))),
-            DataType::UInt64 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                UInt64Type,
-                true,
-            >::new(
-                &self.data_type, &self.data_type
-            ))),
-            DataType::Float32 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                Float32Type,
-                true,
-            >::new(
-                &self.data_type, &self.data_type
-            ))),
-            DataType::Float64 => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                Float64Type,
-                true,
-            >::new(
-                &self.data_type, &self.data_type
-            ))),
+            DataType::Int8 => instantiate_min_max_accumulator!(self, Int8Type, true),
+            DataType::Int16 => instantiate_min_max_accumulator!(self, Int16Type, true),
+            DataType::Int32 => instantiate_min_max_accumulator!(self, Int32Type, true),
+            DataType::Int64 => instantiate_min_max_accumulator!(self, Int64Type, true),
+            DataType::UInt8 => instantiate_min_max_accumulator!(self, UInt8Type, true),
+            DataType::UInt16 => instantiate_min_max_accumulator!(self, UInt16Type, true),
+            DataType::UInt32 => instantiate_min_max_accumulator!(self, UInt32Type, true),
+            DataType::UInt64 => instantiate_min_max_accumulator!(self, UInt64Type, true),
+            DataType::Float32 => {
+                instantiate_min_max_accumulator!(self, Float32Type, true)
+            }
+            DataType::Float64 => {
+                instantiate_min_max_accumulator!(self, Float64Type, true)
+            }
+
             DataType::Decimal128(_, _) => {
                 Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
                     Decimal128Type,
                     true,
-                >::new(
-                    &self.data_type, &self.data_type
-                )))
+                >::new(&self.data_type)))
             }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "MinMaxGroupsPrimitiveAccumulator not supported for {}",
@@ -1129,6 +1117,38 @@ trait MinMax {
     fn max() -> Self;
 }
 
+impl MinMax for u8 {
+    fn min() -> Self {
+        u8::MIN
+    }
+    fn max() -> Self {
+        u8::MAX
+    }
+}
+impl MinMax for i8 {
+    fn min() -> Self {
+        i8::MIN
+    }
+    fn max() -> Self {
+        i8::MAX
+    }
+}
+impl MinMax for u16 {
+    fn min() -> Self {
+        u16::MIN
+    }
+    fn max() -> Self {
+        u16::MAX
+    }
+}
+impl MinMax for i16 {
+    fn min() -> Self {
+        i16::MIN
+    }
+    fn max() -> Self {
+        i16::MAX
+    }
+}
 impl MinMax for u32 {
     fn min() -> Self {
         u32::MIN
@@ -1194,17 +1214,14 @@ where
     T: ArrowNumericType + Send,
     T::Native: MinMax,
 {
-    /// The type of the computed min/max
-    min_max_data_type: DataType,
-
-    /// The type of the returned min/max
-    return_data_type: DataType,
-
     /// Min/max per group, stored as the native type
     min_max: Vec<T::Native>,
 
     /// Track nulls in the input / filters
     null_state: NullState,
+
+    /// The output datatype (needed for decimal precision/scale)
+    data_type: DataType,
 }
 
 impl<T, const MIN: bool> MinMaxGroupsPrimitiveAccumulator<T, MIN>
@@ -1212,17 +1229,17 @@ where
     T: ArrowNumericType + Send,
     T::Native: MinMax,
 {
-    pub fn new(min_max_data_type: &DataType, return_data_type: &DataType) -> Self {
+    pub fn new(data_type: &DataType) -> Self {
         debug!(
-            "MinMaxGroupsPrimitiveAccumulator ({}, min/max type: {min_max_data_type:?}) --> {return_data_type:?}",
-            std::any::type_name::<T>()
+            "MinMaxGroupsPrimitiveAccumulator ({}, {})",
+            std::any::type_name::<T>(),
+            MIN,
         );
 
         Self {
-            return_data_type: return_data_type.clone(),
-            min_max_data_type: min_max_data_type.clone(),
             min_max: vec![],
             null_state: NullState::new(),
+            data_type: data_type.clone(),
         }
     }
 }
@@ -1291,7 +1308,7 @@ where
         let nulls = self.null_state.build();
 
         let min_max = PrimitiveArray::<T>::new(min_max.into(), nulls); // no copy
-        let min_max = adjust_output_array(&self.return_data_type, Arc::new(min_max))?;
+        let min_max = adjust_output_array(&self.data_type, Arc::new(min_max))?;
 
         Ok(Arc::new(min_max))
     }
@@ -1301,9 +1318,9 @@ where
         let nulls = self.null_state.build();
 
         let min_max = std::mem::take(&mut self.min_max);
-        let min_max = Arc::new(PrimitiveArray::<T>::new(min_max.into(), nulls)); // zero copy
+        let min_max = PrimitiveArray::<T>::new(min_max.into(), nulls); // zero copy
 
-        let min_max = adjust_output_array(&self.min_max_data_type, min_max)?;
+        let min_max = adjust_output_array(&self.data_type, Arc::new(min_max))?;
 
         Ok(vec![min_max])
     }

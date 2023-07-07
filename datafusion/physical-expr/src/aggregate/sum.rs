@@ -608,6 +608,7 @@ where
         // TODO File a ticket: Sum expects sum/count array, but count
         // is only needed for retractable aggregates. We could improve
         // performance by only including it when needed.
+        // https://github.com/apache/arrow-datafusion/issues/6878
         let counts = vec![0_u64; sums.len()];
         let all_nulls = Some(make_all_nulls(sums.len()));
         let counts =
