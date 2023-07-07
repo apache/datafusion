@@ -17884,6 +17884,8 @@ impl serde::Serialize for ScalarFunction {
             Self::Cardinality => "Cardinality",
             Self::TrimArray => "TrimArray",
             Self::ArrayContains => "ArrayContains",
+            Self::Encode => "Encode",
+            Self::Decode => "Decode",
         };
         serializer.serialize_str(variant)
     }
@@ -17996,6 +17998,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cardinality",
             "TrimArray",
             "ArrayContains",
+            "Encode",
+            "Decode",
         ];
 
         struct GeneratedVisitor;
@@ -18139,6 +18143,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cardinality" => Ok(ScalarFunction::Cardinality),
                     "TrimArray" => Ok(ScalarFunction::TrimArray),
                     "ArrayContains" => Ok(ScalarFunction::ArrayContains),
+                    "Encode" => Ok(ScalarFunction::Encode),
+                    "Decode" => Ok(ScalarFunction::Decode),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -18938,6 +18944,18 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::IntervalDaytimeValue(v) => {
                     struct_ser.serialize_field("intervalDaytimeValue", ToString::to_string(&v).as_str())?;
                 }
+                scalar_value::Value::DurationSecondValue(v) => {
+                    struct_ser.serialize_field("durationSecondValue", ToString::to_string(&v).as_str())?;
+                }
+                scalar_value::Value::DurationMillisecondValue(v) => {
+                    struct_ser.serialize_field("durationMillisecondValue", ToString::to_string(&v).as_str())?;
+                }
+                scalar_value::Value::DurationMicrosecondValue(v) => {
+                    struct_ser.serialize_field("durationMicrosecondValue", ToString::to_string(&v).as_str())?;
+                }
+                scalar_value::Value::DurationNanosecondValue(v) => {
+                    struct_ser.serialize_field("durationNanosecondValue", ToString::to_string(&v).as_str())?;
+                }
                 scalar_value::Value::TimestampValue(v) => {
                     struct_ser.serialize_field("timestampValue", v)?;
                 }
@@ -19016,6 +19034,14 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "intervalYearmonthValue",
             "interval_daytime_value",
             "intervalDaytimeValue",
+            "duration_second_value",
+            "durationSecondValue",
+            "duration_millisecond_value",
+            "durationMillisecondValue",
+            "duration_microsecond_value",
+            "durationMicrosecondValue",
+            "duration_nanosecond_value",
+            "durationNanosecondValue",
             "timestamp_value",
             "timestampValue",
             "dictionary_value",
@@ -19057,6 +19083,10 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             Date64Value,
             IntervalYearmonthValue,
             IntervalDaytimeValue,
+            DurationSecondValue,
+            DurationMillisecondValue,
+            DurationMicrosecondValue,
+            DurationNanosecondValue,
             TimestampValue,
             DictionaryValue,
             BinaryValue,
@@ -19107,6 +19137,10 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "date64Value" | "date_64_value" => Ok(GeneratedField::Date64Value),
                             "intervalYearmonthValue" | "interval_yearmonth_value" => Ok(GeneratedField::IntervalYearmonthValue),
                             "intervalDaytimeValue" | "interval_daytime_value" => Ok(GeneratedField::IntervalDaytimeValue),
+                            "durationSecondValue" | "duration_second_value" => Ok(GeneratedField::DurationSecondValue),
+                            "durationMillisecondValue" | "duration_millisecond_value" => Ok(GeneratedField::DurationMillisecondValue),
+                            "durationMicrosecondValue" | "duration_microsecond_value" => Ok(GeneratedField::DurationMicrosecondValue),
+                            "durationNanosecondValue" | "duration_nanosecond_value" => Ok(GeneratedField::DurationNanosecondValue),
                             "timestampValue" | "timestamp_value" => Ok(GeneratedField::TimestampValue),
                             "dictionaryValue" | "dictionary_value" => Ok(GeneratedField::DictionaryValue),
                             "binaryValue" | "binary_value" => Ok(GeneratedField::BinaryValue),
@@ -19266,6 +19300,30 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("intervalDaytimeValue"));
                             }
                             value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::IntervalDaytimeValue(x.0));
+                        }
+                        GeneratedField::DurationSecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationSecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::DurationSecondValue(x.0));
+                        }
+                        GeneratedField::DurationMillisecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationMillisecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::DurationMillisecondValue(x.0));
+                        }
+                        GeneratedField::DurationMicrosecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationMicrosecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::DurationMicrosecondValue(x.0));
+                        }
+                        GeneratedField::DurationNanosecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationNanosecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::DurationNanosecondValue(x.0));
                         }
                         GeneratedField::TimestampValue => {
                             if value__.is_some() {
@@ -20269,12 +20327,18 @@ impl serde::Serialize for SortPreservingMergeExecNode {
         if !self.expr.is_empty() {
             len += 1;
         }
+        if self.fetch != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.SortPreservingMergeExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
         if !self.expr.is_empty() {
             struct_ser.serialize_field("expr", &self.expr)?;
+        }
+        if self.fetch != 0 {
+            struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
     }
@@ -20288,12 +20352,14 @@ impl<'de> serde::Deserialize<'de> for SortPreservingMergeExecNode {
         const FIELDS: &[&str] = &[
             "input",
             "expr",
+            "fetch",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             Expr,
+            Fetch,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20317,6 +20383,7 @@ impl<'de> serde::Deserialize<'de> for SortPreservingMergeExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "expr" => Ok(GeneratedField::Expr),
+                            "fetch" => Ok(GeneratedField::Fetch),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20338,6 +20405,7 @@ impl<'de> serde::Deserialize<'de> for SortPreservingMergeExecNode {
             {
                 let mut input__ = None;
                 let mut expr__ = None;
+                let mut fetch__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -20352,11 +20420,20 @@ impl<'de> serde::Deserialize<'de> for SortPreservingMergeExecNode {
                             }
                             expr__ = Some(map.next_value()?);
                         }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(SortPreservingMergeExecNode {
                     input: input__,
                     expr: expr__.unwrap_or_default(),
+                    fetch: fetch__.unwrap_or_default(),
                 })
             }
         }

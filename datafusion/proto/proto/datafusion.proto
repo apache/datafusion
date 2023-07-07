@@ -564,6 +564,8 @@ enum ScalarFunction {
   Cardinality = 98;
   TrimArray = 99;
   ArrayContains = 100;
+  Encode = 101;
+  Decode = 102;
 }
 
 message ScalarFunctionNode {
@@ -904,6 +906,12 @@ message ScalarValue{
     int64 date_64_value = 21;
     int32 interval_yearmonth_value = 24;
     int64 interval_daytime_value = 25;
+
+    int64 duration_second_value = 35;
+    int64 duration_millisecond_value = 36;
+    int64 duration_microsecond_value = 37;
+    int64 duration_nanosecond_value = 38;
+
     ScalarTimestampValue timestamp_value = 26;
     ScalarDictionaryValue dictionary_value = 27;
     bytes binary_value = 28;
@@ -1366,6 +1374,8 @@ message SortExecNode {
 message SortPreservingMergeExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode expr = 2;
+  // Maximum number of highest/lowest rows to fetch; negative means no limit
+  int64 fetch = 3;
 }
 
 message CoalesceBatchesExecNode {

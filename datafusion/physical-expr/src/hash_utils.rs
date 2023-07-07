@@ -96,6 +96,12 @@ fn hash_array_primitive<T>(
     T: ArrowPrimitiveType,
     <T as arrow_array::ArrowPrimitiveType>::Native: HashValue,
 {
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
     if array.null_count() == 0 {
         if rehash {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {

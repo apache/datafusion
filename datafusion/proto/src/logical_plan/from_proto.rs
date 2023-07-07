@@ -40,8 +40,8 @@ use datafusion_expr::{
     array_fill, array_length, array_ndims, array_position, array_positions,
     array_prepend, array_remove, array_replace, array_to_string, ascii, asin, asinh,
     atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
-    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, date_bin, date_part,
-    date_trunc, degrees, digest, exp,
+    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, current_date, current_time,
+    date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -474,6 +474,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha384 => Self::SHA384,
             ScalarFunction::Sha512 => Self::SHA512,
             ScalarFunction::Digest => Self::Digest,
+            ScalarFunction::Encode => Self::Encode,
+            ScalarFunction::Decode => Self::Decode,
             ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
@@ -680,6 +682,10 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
+            Value::DurationSecondValue(v) => Self::DurationSecond(Some(*v)),
+            Value::DurationMillisecondValue(v) => Self::DurationMillisecond(Some(*v)),
+            Value::DurationMicrosecondValue(v) => Self::DurationMicrosecond(Some(*v)),
+            Value::DurationNanosecondValue(v) => Self::DurationNanosecond(Some(*v)),
             Value::TimestampValue(v) => {
                 let timezone = if v.timezone.is_empty() {
                     None
@@ -1475,6 +1481,8 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::CurrentDate => Ok(current_date()),
+                ScalarFunction::CurrentTime => Ok(current_time()),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),

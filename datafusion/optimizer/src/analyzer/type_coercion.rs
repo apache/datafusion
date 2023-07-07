@@ -43,7 +43,7 @@ use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, AggregateFunction, BuiltinScalarFunction, Expr, LogicalPlan, Operator,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
@@ -109,7 +109,14 @@ fn analyze_internal(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    from_plan(plan, &new_expr, &new_inputs)
+    // TODO: from_plan can't change the schema, so we need to do this here
+    match &plan {
+        LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
+            new_expr,
+            Arc::new(new_inputs[0].clone()),
+        )?)),
+        _ => from_plan(plan, &new_expr, &new_inputs),
+    }
 }
 
 pub(crate) struct TypeCoercionRewriter {
@@ -323,8 +330,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     &self.schema,
                     &fun.signature,
                 )?;
-                let expr = Expr::ScalarUDF(ScalarUDF::new(fun, new_expr));
-                Ok(expr)
+                Ok(Expr::ScalarUDF(ScalarUDF::new(fun, new_expr)))
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let new_args = coerce_arguments_for_signature(
@@ -513,7 +519,7 @@ fn coerce_window_frame(
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
     get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
-    expr.clone().cast_to(&DataType::Boolean, schema)
+    cast_expr(expr, &DataType::Boolean, schema)
 }
 
 /// Returns `expressions` coerced to types compatible with
@@ -552,6 +558,25 @@ fn coerce_arguments_for_fun(
         return Ok(vec![]);
     }
 
+    let mut expressions: Vec<Expr> = expressions.to_vec();
+
+    // Cast Fixedsizelist to List for array functions
+    if *fun == BuiltinScalarFunction::MakeArray {
+        expressions = expressions
+            .into_iter()
+            .map(|expr| {
+                let data_type = expr.get_type(schema).unwrap();
+                if let DataType::FixedSizeList(field, _) = data_type {
+                    let field = field.as_ref().clone();
+                    let to_type = DataType::List(Arc::new(field));
+                    expr.cast_to(&to_type, schema)
+                } else {
+                    Ok(expr)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+    }
+
     if *fun == BuiltinScalarFunction::MakeArray {
         // Find the final data type for the function arguments
         let current_types = expressions
@@ -572,8 +597,7 @@ fn coerce_arguments_for_fun(
             .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
             .collect();
     }
-
-    Ok(expressions.to_vec())
+    Ok(expressions)
 }
 
 /// Cast `expr` to the specified type, if possible
@@ -591,7 +615,7 @@ fn cast_array_expr(
     if from_type.equals_datatype(&DataType::Null) {
         Ok(expr.clone())
     } else {
-        expr.clone().cast_to(to_type, schema)
+        cast_expr(expr, to_type, schema)
     }
 }
 
@@ -618,7 +642,7 @@ fn coerce_agg_exprs_for_signature(
     input_exprs
         .iter()
         .enumerate()
-        .map(|(i, expr)| expr.clone().cast_to(&coerced_types[i], schema))
+        .map(|(i, expr)| cast_expr(expr, &coerced_types[i], schema))
         .collect::<Result<Vec<_>>>()
 }
 
@@ -739,6 +763,7 @@ mod test {
 
     use arrow::datatypes::{DataType, TimeUnit};
 
+    use arrow::datatypes::Field;
     use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
@@ -756,7 +781,7 @@ mod test {
     use datafusion_physical_expr::expressions::AvgAccumulator;
 
     use crate::analyzer::type_coercion::{
-        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
+        cast_expr, coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
     use crate::test::assert_analyzed_plan_eq;
 
@@ -1210,6 +1235,58 @@ mod test {
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_casting_for_fixed_size_list() -> Result<()> {
+        let val = lit(ScalarValue::Fixedsizelist(
+            Some(vec![
+                ScalarValue::from(1i32),
+                ScalarValue::from(2i32),
+                ScalarValue::from(3i32),
+            ]),
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            3,
+        ));
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            fun: BuiltinScalarFunction::MakeArray,
+            args: vec![val.clone()],
+        });
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            vec![DFField::new_unqualified(
+                "item",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("a", DataType::Int32, true)),
+                    3,
+                ),
+                true,
+            )],
+            std::collections::HashMap::new(),
+        )?);
+        let mut rewriter = TypeCoercionRewriter { schema };
+        let result = expr.rewrite(&mut rewriter)?;
+
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            vec![DFField::new_unqualified(
+                "item",
+                DataType::List(Arc::new(Field::new("a", DataType::Int32, true))),
+                true,
+            )],
+            std::collections::HashMap::new(),
+        )?);
+        let expected_casted_expr = cast_expr(
+            &val,
+            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            &schema,
+        )?;
+
+        let expected = Expr::ScalarFunction(ScalarFunction {
+            fun: BuiltinScalarFunction::MakeArray,
+            args: vec![expected_casted_expr],
+        });
+
+        assert_eq!(result, expected);
         Ok(())
     }
 

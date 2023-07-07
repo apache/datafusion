@@ -726,16 +726,22 @@ where
 /// // create new plan using rewritten_exprs in same position
 /// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
 /// ```
+///
+/// Notice: sometimes [from_plan] will use schema of original plan, it don't change schema!
+/// Such as `Projection/Aggregate/Window`
 pub fn from_plan(
     plan: &LogicalPlan,
     expr: &[Expr],
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
-            expr.to_vec(),
-            Arc::new(inputs[0].clone()),
-        )?)),
+        LogicalPlan::Projection(Projection { schema, .. }) => {
+            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                expr.to_vec(),
+                Arc::new(inputs[0].clone()),
+                schema.clone(),
+            )?))
+        }
         LogicalPlan::Dml(DmlStatement {
             table_name,
             table_schema,
@@ -820,19 +826,23 @@ pub fn from_plan(
                 input: Arc::new(inputs[0].clone()),
             })),
         },
-        LogicalPlan::Window(Window { window_expr, .. }) => {
-            Ok(LogicalPlan::Window(Window::try_new(
-                expr[0..window_expr.len()].to_vec(),
-                Arc::new(inputs[0].clone()),
-            )?))
-        }
-        LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
-            Ok(LogicalPlan::Aggregate(Aggregate::try_new(
-                Arc::new(inputs[0].clone()),
-                expr[0..group_expr.len()].to_vec(),
-                expr[group_expr.len()..].to_vec(),
-            )?))
-        }
+        LogicalPlan::Window(Window {
+            window_expr,
+            schema,
+            ..
+        }) => Ok(LogicalPlan::Window(Window {
+            input: Arc::new(inputs[0].clone()),
+            window_expr: expr[0..window_expr.len()].to_vec(),
+            schema: schema.clone(),
+        })),
+        LogicalPlan::Aggregate(Aggregate {
+            group_expr, schema, ..
+        }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+            Arc::new(inputs[0].clone()),
+            expr[0..group_expr.len()].to_vec(),
+            expr[group_expr.len()..].to_vec(),
+            schema.clone(),
+        )?)),
         LogicalPlan::Sort(SortPlan { fetch, .. }) => Ok(LogicalPlan::Sort(SortPlan {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),

@@ -1087,7 +1087,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1142,6 +1142,14 @@ pub mod scalar_value {
         IntervalYearmonthValue(i32),
         #[prost(int64, tag = "25")]
         IntervalDaytimeValue(i64),
+        #[prost(int64, tag = "35")]
+        DurationSecondValue(i64),
+        #[prost(int64, tag = "36")]
+        DurationMillisecondValue(i64),
+        #[prost(int64, tag = "37")]
+        DurationMicrosecondValue(i64),
+        #[prost(int64, tag = "38")]
+        DurationNanosecondValue(i64),
         #[prost(message, tag = "26")]
         TimestampValue(super::ScalarTimestampValue),
         #[prost(message, tag = "27")]
@@ -1926,6 +1934,9 @@ pub struct SortPreservingMergeExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Maximum number of highest/lowest rows to fetch; negative means no limit
+    #[prost(int64, tag = "3")]
+    pub fetch: i64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2228,6 +2239,8 @@ pub enum ScalarFunction {
     Cardinality = 98,
     TrimArray = 99,
     ArrayContains = 100,
+    Encode = 101,
+    Decode = 102,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2337,6 +2350,8 @@ impl ScalarFunction {
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::TrimArray => "TrimArray",
             ScalarFunction::ArrayContains => "ArrayContains",
+            ScalarFunction::Encode => "Encode",
+            ScalarFunction::Decode => "Decode",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2443,6 +2458,8 @@ impl ScalarFunction {
             "Cardinality" => Some(Self::Cardinality),
             "TrimArray" => Some(Self::TrimArray),
             "ArrayContains" => Some(Self::ArrayContains),
+            "Encode" => Some(Self::Encode),
+            "Decode" => Some(Self::Decode),
             _ => None,
         }
     }
