@@ -17,14 +17,13 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
-use crate::equivalence::OrderingEquivalenceBuilder;
 use crate::expressions::Column;
 use crate::window::window_expr::NumRowsState;
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::SortOptions;
+use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
@@ -64,14 +63,9 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         &self.name
     }
 
-    fn add_equal_orderings(
-        &self,
-        builder: &mut OrderingEquivalenceBuilder,
-        prefix: Option<LexOrdering>,
-    ) {
+    fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
         // The built-in RowNumber window function introduces a new
         // ordering:
-        let schema = builder.schema();
         if let Some((idx, field)) = schema.column_with_name(self.name()) {
             let column = Column::new(field.name(), idx);
             let options = SortOptions {
@@ -82,13 +76,9 @@ impl BuiltInWindowFunctionExpr for RowNumber {
                 expr: Arc::new(column) as _,
                 options,
             };
-            let new_ordering = if let Some(mut prefix) = prefix {
-                prefix.push(rhs);
-                prefix.clone()
-            } else {
-                vec![rhs]
-            };
-            builder.add_equal_conditions(new_ordering);
+            Some(rhs)
+        } else {
+            None
         }
     }
 
