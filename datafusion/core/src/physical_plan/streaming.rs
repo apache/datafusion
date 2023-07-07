@@ -28,14 +28,13 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use log::debug;
 
-use crate::datasource::physical_plan::{OutputOrderingDisplay, ProjectSchemaDisplay};
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
 };
 use datafusion_execution::TaskContext;
 
-use super::{DisplayAs, DisplayFormatType};
+use super::DisplayAs;
 
 /// A partition that can be converted into a [`SendableRecordBatchStream`]
 pub trait PartitionStream: Send + Sync {
@@ -162,45 +161,6 @@ impl ExecutionPlan for StreamingTableExec {
             )),
             None => stream,
         })
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "StreamingTableExec: partition_sizes={:?}",
-                    self.partitions.len(),
-                )?;
-                if !self.projected_schema.fields().is_empty() {
-                    write!(
-                        f,
-                        ", projection={}",
-                        ProjectSchemaDisplay(&self.projected_schema)
-                    )?;
-                }
-                if self.infinite {
-                    write!(f, ", infinite_source=true")?;
-                }
-
-                self.projected_output_ordering
-                    .as_deref()
-                    .map_or(Ok(()), |ordering| {
-                        if !ordering.is_empty() {
-                            write!(
-                                f,
-                                ", output_ordering={}",
-                                OutputOrderingDisplay(ordering)
-                            )?;
-                        }
-                        Ok(())
-                    })
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {
