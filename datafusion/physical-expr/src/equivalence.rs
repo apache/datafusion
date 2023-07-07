@@ -246,7 +246,7 @@ impl OrderingEquivalentClass {
                     if item.expr.eq(&col_expr) {
                         for col in columns {
                             let col_expr = Arc::new(col.clone()) as Arc<dyn PhysicalExpr>;
-                            let mut normalized = self.head.clone();
+                            let mut normalized = ordering.clone();
                             // Change the corresponding entry in the head with the alias column:
                             let entry = &mut normalized[idx];
                             (entry.expr, entry.options) = (col_expr, item.options);

@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::equivalence::OrderingEquivalenceBuilder;
-use crate::PhysicalExpr;
+use crate::{LexOrdering, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
@@ -84,5 +84,11 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// to `builder`.
     ///
     /// The default implementation does nothing
-    fn add_equal_orderings(&self, _builder: &mut OrderingEquivalenceBuilder) {}
+    /// If `prefix` is given newly introduced ordering is prepended by `prefix`.
+    fn add_equal_orderings(
+        &self,
+        _builder: &mut OrderingEquivalenceBuilder,
+        _prefix: Option<LexOrdering>,
+    ) {
+    }
 }

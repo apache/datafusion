@@ -3110,6 +3110,23 @@ SELECT a, d, rn1 FROM (SELECT a, d,
        ORDER BY rn1, a ASC
        LIMIT 5
 
+# when partition by expressions match with existing ordering
+# row number can be appended to existing ordering
+# below query should work, without breaking pipeline.
+query III
+SELECT a, d, rn1 FROM (SELECT a, b, c, d,
+                       ROW_NUMBER() OVER(PARTITION BY b, c, a) as rn1
+                       FROM annotated_data_infinite2
+                       ORDER BY a ASC)
+       ORDER BY a,b,c,rn1
+       LIMIT 5
+----
+0 0 1
+0 2 1
+0 0 1
+0 0 1
+0 1 1
+
 statement ok
 drop table annotated_data_finite2
 

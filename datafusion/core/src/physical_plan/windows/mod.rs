@@ -353,7 +353,29 @@ pub(crate) fn window_ordering_equivalence(
             if expr.partition_by().is_empty() {
                 builtin_window_expr
                     .get_built_in_func_expr()
-                    .add_equal_orderings(&mut builder);
+                    .add_equal_orderings(&mut builder, None);
+            } else {
+                let existing_ordering = input.output_ordering().unwrap_or(&[]);
+                let existing_ordering_exprs = convert_to_expr(existing_ordering);
+                // indices of the partition by expressions among input ordering expressions
+                let pb_indices = get_indices_of_matching_exprs(
+                    expr.partition_by(),
+                    &existing_ordering_exprs,
+                    || input.equivalence_properties(),
+                );
+                // Existing ordering should match exactly with partition by expressions
+                // there shouldn't be missing entry or additional entry in the existing ordering
+                // otherwise prefix wouldn't work
+                if pb_indices.len() == expr.partition_by().len()
+                    && pb_indices.len() == existing_ordering.len()
+                {
+                    builtin_window_expr
+                        .get_built_in_func_expr()
+                        .add_equal_orderings(
+                            &mut builder,
+                            Some(existing_ordering.to_vec()),
+                        );
+                }
             }
         }
     }
