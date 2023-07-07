@@ -35,10 +35,7 @@ use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::{
-    DataType, Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
+use arrow::datatypes::{DataType, Decimal128Type, Float64Type, UInt64Type};
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
@@ -98,18 +95,6 @@ impl Avg {
             pre_cast_to_sum_type: cast_to_sum_type,
         }
     }
-}
-
-// Instantiates a [`AvgGroupsAccumulator`] for a given [`ArrowNativeType`]
-macro_rules! instantiate_accumulator {
-    ($SELF:expr, $NUMERICTYPE:ident) => {{
-        Ok(Box::new(AvgGroupsAccumulator::<$NUMERICTYPE, _>::new(
-            &$SELF.sum_data_type,
-            &$SELF.rt_data_type,
-            // TODO handle overflow (e.g. count as u8 can overflow for 400)
-            |sum, count| Ok(sum / count as <$NUMERICTYPE as ArrowPrimitiveType>::Native),
-        )))
-    }};
 }
 
 impl AggregateExpr for Avg {
@@ -182,35 +167,20 @@ impl AggregateExpr for Avg {
     fn groups_accumulator_supported(&self) -> bool {
         use DataType::*;
 
-        matches!(
-            &self.sum_data_type,
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-                | Float64
-                | Decimal128(_, _)
-        )
+        matches!(&self.rt_data_type, Float64 | Decimal128(_, _))
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         use DataType::*;
         // instantiate specialized accumulator based for the type
         match (&self.sum_data_type, &self.rt_data_type) {
-            (Int8, Int8) => instantiate_accumulator!(self, Int8Type),
-            (Int16, Int16) => instantiate_accumulator!(self, Int16Type),
-            (Int32, Int32) => instantiate_accumulator!(self, Int32Type),
-            (Int64, Int64) => instantiate_accumulator!(self, Int64Type),
-            (UInt8, UInt8) => instantiate_accumulator!(self, UInt8Type),
-            (UInt16, UInt16) => instantiate_accumulator!(self, UInt16Type),
-            (UInt32, UInt32) => instantiate_accumulator!(self, UInt32Type),
-            (UInt64, UInt64) => instantiate_accumulator!(self, UInt64Type),
-            (Float32, Float32) => instantiate_accumulator!(self, Float32Type),
-            (Float64, Float64) => instantiate_accumulator!(self, Float64Type),
+            (Float64, Float64) => {
+                Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
+                    &self.sum_data_type,
+                    &self.rt_data_type,
+                    |sum: f64, count: u64| Ok(sum / count as f64),
+                )))
+            }
             (
                 Decimal128(_sum_precision, sum_scale),
                 Decimal128(target_precision, target_scale),
