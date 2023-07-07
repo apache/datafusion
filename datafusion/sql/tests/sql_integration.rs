@@ -1115,6 +1115,22 @@ fn select_binary_expr_nested() {
 }
 
 #[test]
+fn select_at_arrow_operator() {
+    let sql = "SELECT left @> right from array";
+    let expected = "Projection: array.left @> array.right\
+                        \n  TableScan: array";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_arrow_at_operator() {
+    let sql = "SELECT left <@ right from array";
+    let expected = "Projection: array.left <@ array.right\
+                        \n  TableScan: array";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn select_wildcard_with_groupby() {
     quick_test(
             r#"SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date, "😀""#,
@@ -2650,6 +2666,10 @@ impl ContextProvider for MockContextProvider {
                 Field::new("qty", DataType::Int32, false),
                 Field::new("price", DataType::Float64, false),
                 Field::new("delivered", DataType::Boolean, false),
+            ])),
+            "array" => Ok(Schema::new(vec![
+                Field::new("left", DataType::List(Arc::new(Field::new("item", DataType::Int64, true))), false),
+                Field::new("right", DataType::List(Arc::new(Field::new("item", DataType::Int64, true))), false),
             ])),
             "lineitem" => Ok(Schema::new(vec![
                 Field::new("l_item_id", DataType::UInt32, false),

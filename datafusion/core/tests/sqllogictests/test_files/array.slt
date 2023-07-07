@@ -643,6 +643,20 @@ select 1 || make_array(2, 3, 4), 1.0 || make_array(2.0, 3.0, 4.0), 'h' || make_a
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
+## array containment operator
+
+# array containment operator with scalars #1 (like array_concat scalar function)
+query BB
+select make_array(1, 2, 3) @> make_array(1, 1, 2, 3), make_array(1, 2, 3) @> make_array(1, 2, 3, 4);
+----
+true false
+
+# array containment operator with scalars #1 (like array_concat scalar function)
+query BB
+select make_array(1, 1, 2, 3) <@ make_array(1, 2, 3), make_array(1, 2, 3, 4) <@ make_array(1, 2, 3);
+----
+true false
+
 
 ### Array casting tests
 
