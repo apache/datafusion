@@ -34,6 +34,7 @@ use datafusion_common::{DataFusionError, Result};
 
 use super::SendableRecordBatchStream;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -105,6 +106,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(

@@ -49,7 +49,7 @@ use crate::physical_plan::common::transpose;
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::streaming_merge;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalExpr};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
@@ -395,6 +395,10 @@ impl ExecutionPlan for RepartitionExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn execute(

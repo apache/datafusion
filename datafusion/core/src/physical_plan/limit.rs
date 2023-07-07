@@ -41,6 +41,7 @@ use super::{
 };
 
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 /// Limit execution plan
 #[derive(Debug)]
@@ -138,6 +139,10 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(
@@ -315,6 +320,10 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(

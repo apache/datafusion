@@ -39,7 +39,9 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::{split_conjunction, AnalysisContext};
+use datafusion_physical_expr::{
+    split_conjunction, AnalysisContext, OrderingEquivalenceProperties,
+};
 
 use log::trace;
 
@@ -146,6 +148,10 @@ impl ExecutionPlan for FilterExec {
             input_properties.add_equal_conditions(new_condition)
         }
         input_properties
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(

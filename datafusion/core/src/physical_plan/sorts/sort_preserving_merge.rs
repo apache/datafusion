@@ -35,7 +35,9 @@ use crate::physical_plan::{
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::{
+    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
+};
 
 /// Sort preserving merge execution plan
 ///
@@ -161,6 +163,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

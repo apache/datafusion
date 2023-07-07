@@ -2956,3 +2956,123 @@ mod tests {
         Arc::new(CoalesceBatchesExec::new(input, 128))
     }
 }
+
+mod tmp_tests {
+    use crate::assert_batches_eq;
+    use crate::physical_plan::{collect, displayable, ExecutionPlan};
+    use crate::prelude::SessionContext;
+    use arrow::util::pretty::print_batches;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use std::sync::Arc;
+
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+    }
+
+    #[tokio::test]
+    async fn test_first_value() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+        // ctx.sql(
+        //     "CREATE EXTERNAL TABLE annotated_data_infinite (
+        //       ts INTEGER,
+        //       inc_col INTEGER,
+        //       desc_col INTEGER,
+        //     )
+        //     STORED AS CSV
+        //     WITH HEADER ROW
+        //     WITH ORDER (ts ASC)
+        //     LOCATION 'tests/data/window_1.csv'",
+        // )
+        //     .await?;
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE annotated_data_finite2 (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION 'tests/data/window_2.csv'",
+        )
+        .await?;
+
+        ctx.sql(
+            "CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION 'tests/data/window_2.csv'",
+        )
+        .await?;
+
+        //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first
+        // FROM annotated_data_infinite";
+        //  let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
+        // FROM annotated_data_infinite";
+
+        //  let sql = "SELECT SUM(inc_col ORDER BY ts DESC) OVER() as last
+        // FROM annotated_data_infinite";
+
+        let sql = "SELECT * FROM (SELECT *, ROW_NUMBER() OVER(ORDER BY a ASC) as rn1
+  FROM annotated_data_finite2
+  ORDER BY rn1 ASC
+  LIMIT 5) ORDER BY rn1 ASC";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+        let actual = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&actual)?;
+        assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_subquery() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(2);
+        let ctx = SessionContext::with_config(config);
+        ctx.sql(
+            "CREATE TABLE sales_global (zip_code INT,
+          country VARCHAR(3),
+          sn INT,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
+          (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)",
+        )
+        .await?;
+
+        let sql = "SELECT *, ROW_NUMBER() OVER()
+  FROM sales_global";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+        assert_eq!(0, 1);
+        Ok(())
+    }
+}
