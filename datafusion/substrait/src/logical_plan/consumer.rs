@@ -69,9 +69,9 @@ enum ScalarFunctionType {
     Op(Operator),
     /// [Expr::Not]
     Not,
-    /// [Expr::Like]
+    /// [Expr::Like] Used for filtering rows based on the given wildcard pattern. Case sensitive
     Like,
-    /// [Expr::ILike]
+    /// [Expr::ILike] Case insensitive operator counterpart of `Like`
     ILike,
 }
 
@@ -1287,7 +1287,7 @@ async fn make_datafusion_like(
 
     let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
         return Err(DataFusionError::NotImplemented(
-            "Invalid arguments type for `Like` expr".to_string()
+            format!("Invalid arguments type for `{}` expr", fn_name)
         ))
     };
     let expr = from_substrait_rex(expr_substrait, input_schema, extensions)
