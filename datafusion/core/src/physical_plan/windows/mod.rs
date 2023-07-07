@@ -346,7 +346,7 @@ pub(crate) fn window_ordering_equivalence(
         .extend(input.ordering_equivalence_properties());
 
     for expr in window_expr {
-        if let Some(builtin_window_expr) =
+        if let Some(builtin_window_expr)  =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
             builtin_window_expr
