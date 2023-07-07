@@ -43,7 +43,7 @@ use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::Result;
-use datafusion_execution::memory_pool::proxy::RawTableAllocExt;
+use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use hashbrown::raw::RawTable;
@@ -383,11 +383,11 @@ impl GroupedHashAggregateStream2 {
 
         // tracks to which group each of the input rows belongs
         let group_indices = &mut self.current_group_indices;
-        group_indices.clear();
-
+        let group_indices_size_pre = group_indices.allocated_size();
         let group_values_size_pre = self.group_values.size();
 
         // 1.1 Calculate the group keys for the group values
+        group_indices.clear();
         let mut batch_hashes = vec![0; n_rows];
         create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
 
@@ -419,6 +419,10 @@ impl GroupedHashAggregateStream2 {
             };
             group_indices.push(group_idx);
         }
+
+        // memory growth in group_indieces
+        *allocated += group_indices.allocated_size();
+        *allocated -= group_indices_size_pre; // subtract after adding to avoid underflow
 
         // account for any memory increase used to store group_values
         *allocated += self
