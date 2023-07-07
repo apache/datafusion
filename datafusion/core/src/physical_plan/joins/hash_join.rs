@@ -58,7 +58,8 @@ use datafusion_execution::memory_pool::MemoryReservation;
 
 use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
+    calculate_hash_join_output_order, get_final_indices_from_bit_map,
+    need_produce_result_in_final, JoinSide,
 };
 use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
@@ -115,6 +116,8 @@ pub struct HashJoinExec {
     left_fut: OnceAsync<JoinLeftData>,
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
+    /// Output order
+    output_order: Option<Vec<PhysicalSortExpr>>,
     /// Partitioning mode to use
     pub(crate) mode: PartitionMode,
     /// Execution metrics
@@ -153,6 +156,13 @@ impl HashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
+        let output_order = calculate_hash_join_output_order(
+            join_type,
+            left.output_ordering(),
+            right.output_ordering(),
+            left.schema().fields().len(),
+        )?;
+
         Ok(HashJoinExec {
             left,
             right,
@@ -166,6 +176,7 @@ impl HashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
+            output_order,
         })
     }
 
@@ -328,10 +339,34 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
-    // TODO Output ordering might be kept for some cases.
-    // For example if it is inner join then the stream side order can be kept
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        self.output_order.as_deref()
+    }
+
+    // For [JoinType::Inner] and [JoinType::RightSemi] in hash joins, the probe phase initiates by
+    // applying the hash function to convert the join key(s) in each row into a hash value from the
+    // probe side table in the order they're arranged. The hash value is used to look up corresponding
+    // entries in the hash table that was constructed from the build side table during the build phase.
+    //
+    // Because of the immediate generation of result rows once a match is found,
+    // the output of the join tends to follow the order in which the rows were read from
+    // the probe side table. This is simply due to the sequence in which the rows were processed.
+    // Hence, it appears that the hash join is preserving the order of the probe side.
+    //
+    // Meanwhile, in the case of a [JoinType::RightAnti] hash join,
+    // the unmatched rows from the probe side are also kept in order.
+    // This is because the **`RightAnti`** join is designed to return rows from the right
+    // (probe side) table that have no match in the left (build side) table. Because the rows
+    // are processed sequentially in the probe phase, and unmatched rows are directly output
+    // as results, these results tend to retain the order of the probe side table.
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![
+            false,
+            matches!(
+                self.join_type,
+                JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
+            ),
+        ]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
