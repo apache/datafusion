@@ -38,6 +38,7 @@ use arrow_array::types::{
     UInt64Type,
 };
 use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use log::debug;
@@ -516,6 +517,13 @@ where
     }
 }
 
+/// Create a buffer of len elements, representing all NULL values
+fn make_all_nulls(len: usize) -> NullBuffer {
+    let mut nulls = BooleanBufferBuilder::new(len);
+    nulls.append_n(len, false);
+    NullBuffer::new(nulls.finish())
+}
+
 impl<T> GroupsAccumulator for SumGroupsAccumulator<T>
 where
     T: ArrowNumericType + Send,
@@ -593,14 +601,18 @@ where
         let nulls = self.null_state.build();
 
         let sums = std::mem::take(&mut self.sums);
-        let sums = Arc::new(PrimitiveArray::<T>::new(sums.into(), nulls.clone())); // zero copy
+        let sums = Arc::new(PrimitiveArray::<T>::new(sums.into(), nulls));
 
         let sums = adjust_output_array(&self.sum_data_type, sums)?;
 
+        // TODO File a ticket: Sum expects sum/count array, but count
+        // is only needed for retractable aggregates. We could improve
+        // performance by only including it when needed.
         let counts = vec![0_u64; sums.len()];
-        let counts = Arc::new(PrimitiveArray::<UInt64Type>::new(counts.into(), nulls));
+        let all_nulls = Some(make_all_nulls(sums.len()));
+        let counts =
+            Arc::new(PrimitiveArray::<UInt64Type>::new(counts.into(), all_nulls));
 
-        // TODO: Sum expects sum/count array, but count is not needed
         Ok(vec![sums.clone() as ArrayRef, counts as ArrayRef])
     }
 
