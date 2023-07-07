@@ -19,8 +19,10 @@
 
 pub(crate) mod accumulate;
 mod adapter;
-
 pub use adapter::GroupsAccumulatorAdapter;
+
+pub(crate) mod bool_op;
+pub(crate) mod prim_op;
 
 use arrow_array::{ArrayRef, BooleanArray};
 use datafusion_common::Result;

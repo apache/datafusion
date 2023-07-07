@@ -20,7 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::{
+    instantiate_boolean_accumulator, AggregateExpr, GroupsAccumulator, PhysicalExpr,
+};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{ArrayRef, BooleanArray},
@@ -191,6 +193,23 @@ impl AggregateExpr for BoolAnd {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        match self.data_type {
+            DataType::Boolean => {
+                instantiate_boolean_accumulator!(|x, y| x && y)
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
