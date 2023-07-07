@@ -834,6 +834,14 @@ select make_array(f0) from fixed_size_list_array
 ----
 [[1, 2], [3, 4]]
 
+query ?
+select array_concat(column1, make_array(0)) from arrays_values_without_nulls;
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0]
+[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 0]
+[21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 0]
+[31, 32, 33, 34, 35, 26, 37, 38, 39, 40, 0]
+
 
 ### Delete tables
 
