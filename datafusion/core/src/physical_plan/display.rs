@@ -20,9 +20,10 @@
 //! format
 
 use std::fmt;
-use std::fmt::Formatter;
 
+use arrow_schema::SchemaRef;
 use datafusion_common::display::StringifiedPlan;
+use datafusion_physical_expr::PhysicalSortExpr;
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 use datafusion_common::display::GraphvizBuilder;
@@ -255,7 +256,7 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
 }
 
 struct GraphvizVisitor<'a, 'b> {
-    f: &'a mut Formatter<'b>,
+    f: &'a mut fmt::Formatter<'b>,
     /// How to format each node
     t: DisplayFormatType,
     /// How to show metrics
@@ -287,7 +288,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         struct Wrapper<'a>(&'a dyn ExecutionPlan, DisplayFormatType);
 
         impl<'a> std::fmt::Display for Wrapper<'a> {
-            fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 self.0.fmt_as(self.1, f)
             }
         }
@@ -360,5 +361,38 @@ pub struct VerboseDisplay<T>(pub T);
 impl<T: DisplayAs> fmt::Display for VerboseDisplay<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt_as(DisplayFormatType::Verbose, f)
+    }
+}
+
+/// A wrapper to customize partitioned file display
+#[derive(Debug)]
+pub struct ProjectSchemaDisplay<'a>(pub &'a SchemaRef);
+
+impl<'a> fmt::Display for ProjectSchemaDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let parts: Vec<_> = self
+            .0
+            .fields()
+            .iter()
+            .map(|x| x.name().to_owned())
+            .collect::<Vec<String>>();
+        write!(f, "[{}]", parts.join(", "))
+    }
+}
+
+/// A wrapper to customize output ordering display.
+#[derive(Debug)]
+pub struct OutputOrderingDisplay<'a>(pub &'a [PhysicalSortExpr]);
+
+impl<'a> fmt::Display for OutputOrderingDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[")?;
+        for (i, e) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?
+            }
+            write!(f, "{e}")?;
+        }
+        write!(f, "]")
     }
 }
