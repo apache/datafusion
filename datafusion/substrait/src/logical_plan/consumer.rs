@@ -1279,9 +1279,10 @@ async fn make_datafusion_like(
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
 ) -> Result<Arc<Expr>> {
+    let fn_name = if case_insensitive {"ILIKE"} else {"LIKE"};
     if f.arguments.len() != 3 {
         return Err(DataFusionError::NotImplemented(
-            "Expect three arguments for `LIKE` expr".to_string(),
+            format!("Expect three arguments for `{fn_name}` expr")
         ));
     }
 
