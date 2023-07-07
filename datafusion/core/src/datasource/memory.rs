@@ -183,8 +183,8 @@ impl TableProvider for MemTable {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
         }
-        Ok(Arc::new(MemoryExec::try_new_owned_data(
-            partitions,
+        Ok(Arc::new(MemoryExec::try_new(
+            &partitions,
             self.schema(),
             projection.cloned(),
         )?))

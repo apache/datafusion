@@ -138,6 +138,21 @@ impl InsertExec {
     }
 }
 
+impl DisplayAs for InsertExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "InsertExec: sink=")?;
+                self.sink.fmt_as(t, f)
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for InsertExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -230,19 +245,6 @@ impl ExecutionPlan for InsertExec {
             count_schema,
             stream,
         )))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "InsertExec: sink=")?;
-                self.sink.fmt_as(t, f)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {
