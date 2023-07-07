@@ -30,7 +30,7 @@ use futures::StreamExt;
 
 use super::expressions::PhysicalSortExpr;
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
-use super::{Distribution, SendableRecordBatchStream};
+use super::{DisplayAs, Distribution, SendableRecordBatchStream};
 use datafusion_execution::TaskContext;
 
 /// `EXPLAIN ANALYZE` execution plan operator. This operator runs its input,
@@ -52,6 +52,20 @@ impl AnalyzeExec {
             verbose,
             input,
             schema,
+        }
+    }
+}
+
+impl DisplayAs for AnalyzeExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "AnalyzeExec verbose={}", self.verbose)
+            }
         }
     }
 }
@@ -156,18 +170,6 @@ impl ExecutionPlan for AnalyzeExec {
             self.schema.clone(),
             futures::stream::once(output),
         )))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "AnalyzeExec verbose={}", self.verbose)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

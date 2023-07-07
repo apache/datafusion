@@ -564,7 +564,9 @@ enum ScalarFunction {
   Cardinality = 98;
   TrimArray = 99;
   ArrayContains = 100;
-  CurrentTimestamp = 101;
+  Encode = 101;
+  Decode = 102;
+  CurrentTimestamp = 103;
 }
 
 message ScalarFunctionNode {
@@ -739,6 +741,7 @@ message WindowFrameBound {
 
 message Schema {
   repeated Field columns = 1;
+  map<string, string> metadata = 2;
 }
 
 message Field {
@@ -748,6 +751,7 @@ message Field {
   bool nullable = 3;
   // for complex data types like structs, unions
   repeated Field children = 4;
+  map<string, string> metadata = 5;
 }
 
 message FixedSizeBinary{

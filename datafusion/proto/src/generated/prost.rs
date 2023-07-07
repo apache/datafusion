@@ -893,6 +893,11 @@ pub struct WindowFrameBound {
 pub struct Schema {
     #[prost(message, repeated, tag = "1")]
     pub columns: ::prost::alloc::vec::Vec<Field>,
+    #[prost(map = "string, string", tag = "2")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -907,6 +912,11 @@ pub struct Field {
     /// for complex data types like structs, unions
     #[prost(message, repeated, tag = "4")]
     pub children: ::prost::alloc::vec::Vec<Field>,
+    #[prost(map = "string, string", tag = "5")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2239,7 +2249,9 @@ pub enum ScalarFunction {
     Cardinality = 98,
     TrimArray = 99,
     ArrayContains = 100,
-    CurrentTimestamp = 101,
+    Encode = 101,
+    Decode = 102,
+    CurrentTimestamp = 103,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2349,6 +2361,8 @@ impl ScalarFunction {
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::TrimArray => "TrimArray",
             ScalarFunction::ArrayContains => "ArrayContains",
+            ScalarFunction::Encode => "Encode",
+            ScalarFunction::Decode => "Decode",
             ScalarFunction::CurrentTimestamp => "CurrentTimestamp",
         }
     }
@@ -2456,6 +2470,8 @@ impl ScalarFunction {
             "Cardinality" => Some(Self::Cardinality),
             "TrimArray" => Some(Self::TrimArray),
             "ArrayContains" => Some(Self::ArrayContains),
+            "Encode" => Some(Self::Encode),
+            "Decode" => Some(Self::Decode),
             "CurrentTimestamp" => Some(Self::CurrentTimestamp),
             _ => None,
         }
