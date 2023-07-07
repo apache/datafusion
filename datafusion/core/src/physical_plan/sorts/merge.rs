@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Merge that deals with an arbitrary size of streaming inputs.
+//! This is an order-preserving merge.
+
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
@@ -51,7 +54,9 @@ macro_rules! merge_helper {
     }};
 }
 
-/// Perform a streaming merge of [`SendableRecordBatchStream`]
+/// Perform a streaming merge of [`SendableRecordBatchStream`] based on provided sort expressions
+/// while preserving order. This is a convenience wrapper for [`SortPreservingMergeStream`] and
+/// chooses a right cursor for the expressions and the data type
 pub fn streaming_merge(
     streams: Vec<SendableRecordBatchStream>,
     schema: SchemaRef,
