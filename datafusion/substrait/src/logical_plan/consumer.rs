@@ -108,7 +108,7 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
     }
 }
 
-fn scalar_function_or_expr(name: &str) -> Result<ScalarFunctionType> {
+fn scalar_function_type_from_str(name: &str) -> Result<ScalarFunctionType> {
     if let Ok(op) = name_to_op(name) {
         return Ok(ScalarFunctionType::Op(op));
     }
@@ -779,7 +779,7 @@ pub async fn from_substrait_rex(
                     f.function_reference
                 ))
             })?;
-            let fn_type = scalar_function_or_expr(fn_name)?;
+            let fn_type = scalar_function_type_from_str(fn_name)?;
             match fn_type {
                 ScalarFunctionType::Builtin(fun) => {
                     let mut args = Vec::with_capacity(f.arguments.len());
@@ -1279,11 +1279,11 @@ async fn make_datafusion_like(
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
 ) -> Result<Arc<Expr>> {
-    let fn_name = if case_insensitive {"ILIKE"} else {"LIKE"};
+    let fn_name = if case_insensitive { "ILIKE" } else { "LIKE" };
     if f.arguments.len() != 3 {
-        return Err(DataFusionError::NotImplemented(
-            format!("Expect three arguments for `{fn_name}` expr")
-        ));
+        return Err(DataFusionError::NotImplemented(format!(
+            "Expect three arguments for `{fn_name}` expr"
+        )));
     }
 
     let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
