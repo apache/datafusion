@@ -346,12 +346,15 @@ pub(crate) fn window_ordering_equivalence(
         .extend(input.ordering_equivalence_properties());
 
     for expr in window_expr {
-        if let Some(builtin_window_expr)  =
+        if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            builtin_window_expr
-                .get_built_in_func_expr()
-                .add_equal_orderings(&mut builder);
+            // if expr contains partition by, ROW_NUMBER cannot introduce global ordering.
+            if expr.partition_by().is_empty() {
+                builtin_window_expr
+                    .get_built_in_func_expr()
+                    .add_equal_orderings(&mut builder);
+            }
         }
     }
     builder.build()

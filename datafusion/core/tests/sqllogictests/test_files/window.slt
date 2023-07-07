@@ -3081,42 +3081,34 @@ statement error DataFusion error: Error during planning: Aggregate ORDER BY is n
 EXPLAIN SELECT a, b, LAST_VALUE(c ORDER BY a ASC) OVER (order by a ASC) as last_c
        FROM annotated_data_infinite2
 
-# Query below shouldn't contain any SortExec
+# Query below should work when its input is unbounded
 # because ROW_NUMBER ordering is added to the ordering equivalence
-query TT
-EXPLAIN SELECT a, d FROM (SELECT a, d,
+# and final plan doesn't contain SortExec.
+query III
+SELECT a, d, rn1 FROM (SELECT a, d,
                        ROW_NUMBER() OVER(ORDER BY a ASC) as rn1
                        FROM annotated_data_infinite2
                        ORDER BY a ASC)
        ORDER BY rn1, a ASC
        LIMIT 5
 ----
-logical_plan
-Projection: annotated_data_infinite2.a, annotated_data_infinite2.d
---Limit: skip=0, fetch=5
-----Sort: rn1 ASC NULLS LAST, annotated_data_infinite2.a ASC NULLS LAST, fetch=5
-------Sort: annotated_data_infinite2.a ASC NULLS LAST
---------Projection: annotated_data_infinite2.a, annotated_data_infinite2.d, ROW_NUMBER() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn1
-----------WindowAggr: windowExpr=[[ROW_NUMBER() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-------------TableScan: annotated_data_infinite2 projection=[a, d]
-physical_plan
-ProjectionExec: expr=[a@0 as a, d@1 as d]
---GlobalLimitExec: skip=0, fetch=5
-----ProjectionExec: expr=[a@0 as a, d@1 as d, ROW_NUMBER() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn1]
-------BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true
+0 0 1
+0 2 2
+0 0 3
+0 0 4
+0 1 5
 
 # this is a negative test for asserting that ROW_NUMBER is not
 # added to the ordering equivalence when it contains partition by.
-# physical plan should contain SortExec.
-query TT
-EXPLAIN SELECT a, d FROM (SELECT a, d,
+# physical plan should contain SortExec. Since source is unbounded
+# pipeline checker should raise error, when plan contains SortExec.
+statement error DataFusion error: PipelineChecker
+SELECT a, d, rn1 FROM (SELECT a, d,
                        ROW_NUMBER() OVER(PARTITION BY d ORDER BY a ASC) as rn1
                        FROM annotated_data_infinite2
                        ORDER BY a ASC)
        ORDER BY rn1, a ASC
        LIMIT 5
-----
 
 statement ok
 drop table annotated_data_finite2
