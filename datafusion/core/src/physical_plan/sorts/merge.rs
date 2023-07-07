@@ -55,8 +55,7 @@ macro_rules! merge_helper {
 }
 
 /// Perform a streaming merge of [`SendableRecordBatchStream`] based on provided sort expressions
-/// while preserving order. This is a convenience wrapper for [`SortPreservingMergeStream`] and
-/// chooses a right cursor for the expressions and the data type
+/// while preserving order.
 pub fn streaming_merge(
     streams: Vec<SendableRecordBatchStream>,
     schema: SchemaRef,
