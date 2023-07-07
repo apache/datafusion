@@ -373,20 +373,84 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(res)
 }
 
+fn compute_array_ndims(arg: u8, arr: ArrayRef) -> Result<u8> {
+    match arr.data_type() {
+        DataType::List(..) => {
+            let list_array = downcast_arg!(arr, ListArray);
+            compute_array_ndims(arg + 1, list_array.value(0))
+        }
+        DataType::Null
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Boolean
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => Ok(arg),
+        data_type => Err(DataFusionError::NotImplemented(format!(
+            "Array is not implemented for type '{data_type:?}'."
+        ))),
+    }
+}
+
+fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
+    // Compute the number of dimensions for each array
+    let args_ndim: Result<Vec<u8>> = args
+        .iter()
+        .map(|arr| compute_array_ndims(0, arr.clone()))
+        .collect();
+    let args_ndim = args_ndim?;
+
+    // Find the maximum number of dimensions
+    let max_ndim = *args_ndim.iter().max().unwrap();
+
+    // Align the dimensions of the arrays
+    let aligned_args: Result<Vec<ArrayRef>> = args
+        .into_iter()
+        .map(|array| {
+            let ndim = compute_array_ndims(0, array.clone())?;
+            if ndim < max_ndim {
+                let mut aligned_array = array.clone();
+                for _ in 0..(max_ndim - ndim) {
+                    let data_type = aligned_array.as_ref().data_type().clone();
+                    aligned_array = array_array(&[aligned_array], data_type)?;
+                }
+                Ok(aligned_array)
+            } else {
+                Ok(array.clone())
+            }
+        })
+        .collect();
+
+    aligned_args
+}
+
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::List(field) => match field.data_type() {
             DataType::Null => array_concat(&args[1..]),
             _ => {
+                let args = align_array_dimensions(args.to_vec())?;
+
                 let list_arrays = downcast_vec!(args, ListArray)
                     .collect::<Result<Vec<&ListArray>>>()?;
+
                 let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
+
                 let capacity =
                     Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
                 let array_data: Vec<_> =
                     list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+
                 let array_data = array_data.iter().collect();
+
                 let mut mutable =
                     MutableArrayData::with_capacities(array_data, false, capacity);
 
@@ -1217,31 +1281,6 @@ pub fn array_dims(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_ndims SQL function
 pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
-    fn compute_array_ndims(arg: u8, arr: ArrayRef) -> Result<u8> {
-        match arr.data_type() {
-            DataType::List(..) => {
-                let list_array = downcast_arg!(arr, ListArray);
-                compute_array_ndims(arg + 1, list_array.value(0))
-            }
-            DataType::Null
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Boolean
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => Ok(arg),
-            data_type => Err(DataFusionError::NotImplemented(format!(
-                "Array is not implemented for type '{data_type:?}'."
-            ))),
-        }
-    }
     let arg: u8 = 0;
     Ok(Arc::new(UInt8Array::from(vec![compute_array_ndims(
         arg,
