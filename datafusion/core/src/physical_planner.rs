@@ -2610,4 +2610,34 @@ mod tests {
             ctx.read_csv(path, options).await?.into_optimized_plan()?,
         ))
     }
+
+    #[tokio::test]
+    async fn test_display_plan_in_graphviz_format() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .project(vec![col("id") + lit(2)])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).await.unwrap();
+
+        let expected_graph = r###"
+// Begin DataFusion GraphViz Plan,
+// display it online here: https://dreampuf.github.io/GraphvizOnline
+
+digraph {
+    1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
+    2[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
+    1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
+}
+// End DataFusion GraphViz Plan
+"###;
+
+        let generated_graph = format!("{}", displayable(&*plan).graphviz());
+
+        assert_eq!(expected_graph, generated_graph);
+    }
 }
