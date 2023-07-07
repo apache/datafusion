@@ -113,7 +113,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     }
 
     /// Returns a `format`able structure that produces graphviz format for execution plan, which can
-    /// be directly visualized [here](http://magjac.com/graphviz-visual-editor/).
+    /// be directly visualized [here](https://dreampuf.github.io/GraphvizOnline).
     ///
     /// An example is
     /// ```dot
