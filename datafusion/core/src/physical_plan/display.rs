@@ -20,10 +20,12 @@
 //! format
 
 use std::fmt;
+use std::fmt::Formatter;
 
 use datafusion_common::display::StringifiedPlan;
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
+use datafusion_common::display::GraphvizBuilder;
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +107,49 @@ impl<'a> DisplayableExecutionPlan<'a> {
         }
         Wrapper {
             format_type,
+            plan: self.inner,
+            show_metrics: self.show_metrics,
+        }
+    }
+
+    /// Returns a `format`able structure that produces graphviz format for execution plan, which can
+    /// be directly visualized [here](https://dreampuf.github.io/GraphvizOnline).
+    ///
+    /// An example is
+    /// ```dot
+    /// strict digraph dot_plan {
+    //     0[label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]",tooltip=""]
+    //     1[label="EmptyExec: produce_one_row=false",tooltip=""]
+    //     0 -> 1
+    // }
+    /// ```
+    pub fn graphviz(&self) -> impl fmt::Display + 'a {
+        struct Wrapper<'a> {
+            plan: &'a dyn ExecutionPlan,
+            show_metrics: ShowMetrics,
+        }
+        impl<'a> fmt::Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                let t = DisplayFormatType::Default;
+
+                let mut visitor = GraphvizVisitor {
+                    f,
+                    t,
+                    show_metrics: self.show_metrics,
+                    graphviz_builder: GraphvizBuilder::default(),
+                    parents: Vec::new(),
+                };
+
+                visitor.start_graph()?;
+
+                accept(self.plan, &mut visitor)?;
+
+                visitor.end_graph()?;
+                Ok(())
+            }
+        }
+
+        Wrapper {
             plan: self.inner,
             show_metrics: self.show_metrics,
         }
@@ -205,6 +250,88 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
 
     fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         self.indent -= 1;
+        Ok(true)
+    }
+}
+
+struct GraphvizVisitor<'a, 'b> {
+    f: &'a mut Formatter<'b>,
+    /// How to format each node
+    t: DisplayFormatType,
+    /// How to show metrics
+    show_metrics: ShowMetrics,
+    graphviz_builder: GraphvizBuilder,
+    /// Used to record parent node ids when visiting a plan.
+    parents: Vec<usize>,
+}
+
+impl GraphvizVisitor<'_, '_> {
+    fn start_graph(&mut self) -> fmt::Result {
+        self.graphviz_builder.start_graph(self.f)
+    }
+
+    fn end_graph(&mut self) -> fmt::Result {
+        self.graphviz_builder.end_graph(self.f)
+    }
+}
+
+impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
+    type Error = fmt::Error;
+
+    fn pre_visit(
+        &mut self,
+        plan: &dyn ExecutionPlan,
+    ) -> datafusion_common::Result<bool, Self::Error> {
+        let id = self.graphviz_builder.next_id();
+
+        struct Wrapper<'a>(&'a dyn ExecutionPlan, DisplayFormatType);
+
+        impl<'a> std::fmt::Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+                self.0.fmt_as(self.1, f)
+            }
+        }
+
+        let label = { format!("{}", Wrapper(plan, self.t)) };
+
+        let metrics = match self.show_metrics {
+            ShowMetrics::None => "".to_string(),
+            ShowMetrics::Aggregated => {
+                if let Some(metrics) = plan.metrics() {
+                    let metrics = metrics
+                        .aggregate_by_name()
+                        .sorted_for_display()
+                        .timestamps_removed();
+
+                    format!("metrics=[{metrics}]")
+                } else {
+                    "metrics=[]".to_string()
+                }
+            }
+            ShowMetrics::Full => {
+                if let Some(metrics) = plan.metrics() {
+                    format!("metrics=[{metrics}]")
+                } else {
+                    "metrics=[]".to_string()
+                }
+            }
+        };
+
+        self.graphviz_builder
+            .add_node(self.f, id, &label, Some(&metrics))?;
+
+        if let Some(parent_node_id) = self.parents.last() {
+            self.graphviz_builder
+                .add_edge(self.f, *parent_node_id, id)?;
+        }
+
+        self.parents.push(id);
+
+        Ok(true)
+    }
+
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+        self.parents.pop();
         Ok(true)
     }
 }
