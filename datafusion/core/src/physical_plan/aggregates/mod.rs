@@ -60,6 +60,7 @@ use datafusion_physical_expr::utils::{
 };
 
 use self::row_hash2::GroupedHashAggregateStream2;
+use super::DisplayAs;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -735,6 +736,80 @@ impl AggregateExec {
     }
 }
 
+impl DisplayAs for AggregateExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "AggregateExec: mode={:?}", self.mode)?;
+                let g: Vec<String> = if self.group_by.groups.len() == 1 {
+                    self.group_by
+                        .expr
+                        .iter()
+                        .map(|(e, alias)| {
+                            let e = e.to_string();
+                            if &e != alias {
+                                format!("{e} as {alias}")
+                            } else {
+                                e
+                            }
+                        })
+                        .collect()
+                } else {
+                    self.group_by
+                        .groups
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, is_null)| {
+                                    if *is_null {
+                                        let (e, alias) = &self.group_by.null_expr[idx];
+                                        let e = e.to_string();
+                                        if &e != alias {
+                                            format!("{e} as {alias}")
+                                        } else {
+                                            e
+                                        }
+                                    } else {
+                                        let (e, alias) = &self.group_by.expr[idx];
+                                        let e = e.to_string();
+                                        if &e != alias {
+                                            format!("{e} as {alias}")
+                                        } else {
+                                            e
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({terms})")
+                        })
+                        .collect()
+                };
+
+                write!(f, ", gby=[{}]", g.join(", "))?;
+
+                let a: Vec<String> = self
+                    .aggr_expr
+                    .iter()
+                    .map(|agg| agg.name().to_string())
+                    .collect();
+                write!(f, ", aggr=[{}]", a.join(", "))?;
+
+                if let Some(aggregation_ordering) = &self.aggregation_ordering {
+                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl ExecutionPlan for AggregateExec {
     /// Return a reference to Any that can be used for down-casting
     fn as_any(&self) -> &dyn Any {
@@ -852,78 +927,6 @@ impl ExecutionPlan for AggregateExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "AggregateExec: mode={:?}", self.mode)?;
-                let g: Vec<String> = if self.group_by.groups.len() == 1 {
-                    self.group_by
-                        .expr
-                        .iter()
-                        .map(|(e, alias)| {
-                            let e = e.to_string();
-                            if &e != alias {
-                                format!("{e} as {alias}")
-                            } else {
-                                e
-                            }
-                        })
-                        .collect()
-                } else {
-                    self.group_by
-                        .groups
-                        .iter()
-                        .map(|group| {
-                            let terms = group
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, is_null)| {
-                                    if *is_null {
-                                        let (e, alias) = &self.group_by.null_expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
-                                    } else {
-                                        let (e, alias) = &self.group_by.expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
-                                    }
-                                })
-                                .collect::<Vec<String>>()
-                                .join(", ");
-                            format!("({terms})")
-                        })
-                        .collect()
-                };
-
-                write!(f, ", gby=[{}]", g.join(", "))?;
-
-                let a: Vec<String> = self
-                    .aggr_expr
-                    .iter()
-                    .map(|agg| agg.name().to_string())
-                    .collect();
-                write!(f, ", aggr=[{}]", a.join(", "))?;
-
-                if let Some(aggregation_ordering) = &self.aggregation_ordering {
-                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     fn statistics(&self) -> Statistics {
@@ -1261,8 +1264,8 @@ mod tests {
     };
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::{
-        ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
-        Statistics,
+        DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
+        SendableRecordBatchStream, Statistics,
     };
     use crate::prelude::SessionContext;
 
@@ -1593,6 +1596,20 @@ mod tests {
     struct TestYieldingExec {
         /// True if this exec should yield back to runtime the first time it is polled
         pub yield_first: bool,
+    }
+
+    impl DisplayAs for TestYieldingExec {
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "TestYieldingExec")
+                }
+            }
+        }
     }
 
     impl ExecutionPlan for TestYieldingExec {

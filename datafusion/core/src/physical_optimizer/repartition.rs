@@ -338,7 +338,7 @@ mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
-    use crate::physical_plan::{displayable, DisplayFormatType, Statistics};
+    use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
     use datafusion_physical_expr::PhysicalSortRequirement;
 
     fn schema() -> SchemaRef {
@@ -1136,6 +1136,16 @@ mod tests {
         }
     }
 
+    impl DisplayAs for SortRequiredExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            write!(f, "SortRequiredExec")
+        }
+    }
+
     impl ExecutionPlan for SortRequiredExec {
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -1183,14 +1193,6 @@ mod tests {
 
         fn statistics(&self) -> Statistics {
             self.input.statistics()
-        }
-
-        fn fmt_as(
-            &self,
-            _t: DisplayFormatType,
-            f: &mut std::fmt::Formatter,
-        ) -> std::fmt::Result {
-            write!(f, "SortRequiredExec")
         }
     }
 }

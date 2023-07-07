@@ -26,6 +26,7 @@ use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
     ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
@@ -139,6 +140,20 @@ async fn load_left_input(
     Ok((merged_batch, reservation))
 }
 
+impl DisplayAs for CrossJoinExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CrossJoinExec")
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for CrossJoinExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -241,18 +256,6 @@ impl ExecutionPlan for CrossJoinExec {
             left_index: 0,
             join_metrics,
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CrossJoinExec")
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {
