@@ -262,6 +262,23 @@ impl NullState {
         }
     }
 
+    /// Invokes `value_fn(group_index, value)` for each non null, non
+    /// filtered value, while tracking which groups have seen null
+    /// inputs and which groups have seen any inputs, for
+    /// [`BooleanArray`]s. See [`Self::accumulate`] for more details.
+    pub fn accumulate_boolean<F>(
+        &mut self,
+        group_indices: &[usize],
+        values: &BooleanArray,
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        mut value_fn: F,
+    ) where
+        F: FnMut(usize, bool) + Send,
+    {
+        todo!();
+    }
+
     /// Creates the final NullBuffer representing which group_indices have
     /// null values (if they saw a null input, or because they never saw any values)
     ///

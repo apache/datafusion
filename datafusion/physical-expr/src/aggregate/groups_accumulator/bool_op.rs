@@ -93,15 +93,15 @@ where
         }
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
-        self.null_state.accumulate(
+        self.null_state.accumulate_boolean(
             group_indices,
             values,
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let value = self.values.get_bit(group_index);
-                self.values
-                    .set_bit(group_index, (self.bool_fn)(value, new_value));
+                let current_value = self.values.get_bit(group_index);
+                let value = (self.bool_fn)(current_value, new_value);
+                self.values.set_bit(group_index, value);
             },
         );
 
@@ -109,7 +109,7 @@ where
     }
 
     fn evaluate(&mut self) -> Result<ArrayRef> {
-        let values = self.value.finish();
+        let values = self.values.finish();
         let nulls = self.null_state.build();
         let values = BooleanArray::new(values, nulls);
         Ok(Arc::new(values))
