@@ -21,7 +21,14 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
+use crate::aggregate::utils::down_cast_any_ref;
+use crate::expressions::format_state_name;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use arrow::array::Array;
+use arrow::array::Decimal128Array;
 use arrow::compute;
 use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
@@ -41,16 +48,8 @@ use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
-use log::debug;
-
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
-use arrow::array::Array;
-use arrow::array::Decimal128Array;
 use datafusion_row::accessor::RowAccessor;
+use log::debug;
 
 use super::groups_accumulator::accumulate::NullState;
 use super::utils::adjust_output_array;
@@ -618,7 +617,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.sums.capacity() * std::mem::size_of::<usize>()
+        self.sums.capacity() * std::mem::size_of::<T::Native>()
     }
 }
 

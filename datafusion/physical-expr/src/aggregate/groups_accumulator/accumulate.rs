@@ -38,7 +38,8 @@
 //! handle each input null value specially (e.g. for `SUM` to mark the
 //! corresponding sum as null)
 
-use arrow_array::{Array, ArrowNumericType, BooleanArray, PrimitiveArray};
+use arrow::datatypes::ArrowPrimitiveType;
+use arrow_array::{Array, BooleanArray, PrimitiveArray};
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 
 /// This structure is used to update the accumulator state per row for
@@ -133,7 +134,7 @@ impl NullState {
         total_num_groups: usize,
         mut value_fn: F,
     ) where
-        T: ArrowNumericType + Send,
+        T: ArrowPrimitiveType + Send,
         F: FnMut(usize, T::Native) + Send,
     {
         let data: &[T::Native] = values.values();

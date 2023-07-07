@@ -1,5 +1,5 @@
 // Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
+// or more contributaor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
 // to you under the Apache License, Version 2.0 (the
@@ -18,12 +18,16 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use ahash::RandomState;
+use arrow_array::PrimitiveArray;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
-use arrow::datatypes::DataType;
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use arrow::datatypes::{
+    ArrowPrimitiveType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
+};
 use arrow::{
     array::{
         ArrayRef, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
@@ -40,9 +44,11 @@ use crate::aggregate::row_accumulator::{
 };
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
-use arrow::array::Array;
+use arrow::array::{Array, AsArray};
 use arrow::compute::{bit_and, bit_or, bit_xor};
 use datafusion_row::accessor::RowAccessor;
+
+use super::groups_accumulator::accumulate::NullState;
 
 // returns the new value after bit_and/bit_or/bit_xor with the new values, taking nullability into account
 macro_rules! typed_bit_and_or_xor_batch {
@@ -206,6 +212,14 @@ impl BitAnd {
     }
 }
 
+macro_rules! instantiate_bitop_accumulator {
+    ($NUMERICTYPE:ident, $FN:expr) => {{
+        Ok(Box::new(BitOpGroupsAccumulator::<$NUMERICTYPE, _>::new(
+            $FN,
+        )))
+    }};
+}
+
 impl AggregateExpr for BitAnd {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -252,6 +266,46 @@ impl AggregateExpr for BitAnd {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use std::ops::BitAndAssign;
+        match self.data_type {
+            DataType::Int8 => {
+                instantiate_bitop_accumulator!(Int8Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::Int16 => {
+                instantiate_bitop_accumulator!(Int16Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::Int32 => {
+                instantiate_bitop_accumulator!(Int32Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::Int64 => {
+                instantiate_bitop_accumulator!(Int64Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::UInt8 => {
+                instantiate_bitop_accumulator!(UInt8Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::UInt16 => {
+                instantiate_bitop_accumulator!(UInt16Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::UInt32 => {
+                instantiate_bitop_accumulator!(UInt32Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::UInt64 => {
+                instantiate_bitop_accumulator!(UInt64Type, |x, y| x.bitand_assign(y))
+            }
+
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "BitOpGroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -444,6 +498,46 @@ impl AggregateExpr for BitOr {
         )))
     }
 
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use std::ops::BitOrAssign;
+        match self.data_type {
+            DataType::Int8 => {
+                instantiate_bitop_accumulator!(Int8Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::Int16 => {
+                instantiate_bitop_accumulator!(Int16Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::Int32 => {
+                instantiate_bitop_accumulator!(Int32Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::Int64 => {
+                instantiate_bitop_accumulator!(Int64Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::UInt8 => {
+                instantiate_bitop_accumulator!(UInt8Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::UInt16 => {
+                instantiate_bitop_accumulator!(UInt16Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::UInt32 => {
+                instantiate_bitop_accumulator!(UInt32Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::UInt64 => {
+                instantiate_bitop_accumulator!(UInt64Type, |x, y| x.bitor_assign(y))
+            }
+
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "BitOpGroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
+    }
+
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
     }
@@ -633,6 +727,46 @@ impl AggregateExpr for BitXor {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use std::ops::BitXorAssign;
+        match self.data_type {
+            DataType::Int8 => {
+                instantiate_bitop_accumulator!(Int8Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::Int16 => {
+                instantiate_bitop_accumulator!(Int16Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::Int32 => {
+                instantiate_bitop_accumulator!(Int32Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::Int64 => {
+                instantiate_bitop_accumulator!(Int64Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::UInt8 => {
+                instantiate_bitop_accumulator!(UInt8Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::UInt16 => {
+                instantiate_bitop_accumulator!(UInt16Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::UInt32 => {
+                instantiate_bitop_accumulator!(UInt32Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::UInt64 => {
+                instantiate_bitop_accumulator!(UInt64Type, |x, y| x.bitxor_assign(y))
+            }
+
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "BitOpGroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -914,6 +1048,102 @@ impl Accumulator for DistinctBitXorAccumulator {
             - std::mem::size_of_val(&self.hash_values)
             + self.data_type.size()
             - std::mem::size_of_val(&self.data_type)
+    }
+}
+
+/// An accumulator that implements bitwise operations over native types
+///
+/// F: The bitwise function to apply to two elements. The first
+/// argument is the existing value and should be updated with the
+/// second value (e.g. [`std::ops::BitAndAssign`] style).
+#[derive(Debug)]
+struct BitOpGroupsAccumulator<T, F>
+where
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+{
+    /// values per group, stored as the native type
+    values: Vec<T::Native>,
+
+    /// Track nulls in the input / filters
+    null_state: NullState,
+
+    /// Function that computes the bitwise function
+    bitop_fn: F,
+}
+
+impl<T, F> BitOpGroupsAccumulator<T, F>
+where
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+{
+    pub fn new(bitop_fn: F) -> Self {
+        Self {
+            values: vec![],
+            null_state: NullState::new(),
+            bitop_fn,
+        }
+    }
+}
+
+impl<T, F> GroupsAccumulator for BitOpGroupsAccumulator<T, F>
+where
+    T: ArrowPrimitiveType + Send,
+    F: Fn(&mut T::Native, T::Native) + Send + Sync,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values.get(0).unwrap().as_primitive::<T>();
+
+        // update values
+        self.values
+            .resize_with(total_num_groups, || T::default_value());
+
+        // NullState dispatches / handles tracking nulls and groups that saw no values
+        self.null_state.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                let value = &mut self.values[group_index];
+                (self.bitop_fn)(value, new_value);
+            },
+        );
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ArrayRef> {
+        let values = std::mem::take(&mut self.values);
+        let nulls = self.null_state.build();
+        let values = PrimitiveArray::<T>::new(values.into(), nulls); // no copy
+        Ok(Arc::new(values))
+    }
+
+    fn state(&mut self) -> Result<Vec<ArrayRef>> {
+        self.evaluate().map(|arr| vec![arr])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        // update / merge are the same
+        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn size(&self) -> usize {
+        self.values.capacity() * std::mem::size_of::<T::Native>()
     }
 }
 
