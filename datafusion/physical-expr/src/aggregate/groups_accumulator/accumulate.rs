@@ -15,45 +15,48 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Vectorized accumulate helpers: [`NullState`] and [`accumulate_indices`]
+//! [`GroupsAccumulator`] helpers: [`NullState`] and [`accumulate_indices`]
 //!
 //! These functions are designed to be the performance critical inner
-//! loops of accumlators and thus there are multiple versions, to be
-//! invoked depending on the input.
+//! loops of [`GroupsAccumulator`], so there are multiple type
+//! specific methods, invoked depending on the input.
 //!
-//! There are typically 4 potential combinations of input values that
-//! accumulators need to special case for performance,
-//!
-//! With / Without filter
-//! With / Without nulls
-//!
-//! If there are filters present, the accumulator typically needs to
-//! to track if it has seen *any* value for that group (as some values
-//! may be filtered out). Without a filter, the accumulator is only
-//! invoked for groups that actually had a value to accumulate so they
-//! do not need to track if they have seen values for a particular
-//! group.
-//!
-//! If the input has nulls, then the accumulator must also potentially
-//! handle each input null value specially (e.g. for `SUM` to mark the
-//! corresponding sum as null)
+//! [`GroupsAccumulator`]: crate::GroupsAccumulator
 
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow_array::{Array, BooleanArray, PrimitiveArray};
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 
-/// This structure is used to update the accumulator state per row for
-/// a `PrimitiveArray<T>`, and track if values or nulls have been seen
-/// for each group. Since it is the inner loop for many
-/// GroupsAccumulators, the  performance is critical.
+/// Track the accumulator null state per row: if any values for that
+/// group were null and if any values have been seen at all for that group.
 ///
+/// This is part of the inner loop for many GroupsAccumulators, and
+/// thus the performance is critical.
+///
+/// typically 4 potential combinations of input values that
+/// accumulators need to special case for performance,
+///
+/// GroupsAccumulators need handle all four combinations of:
+///
+/// * With / Without filter
+/// * With / Without nulls in the input
+///
+/// If there are filters present, `NullState` tarcks if it has seen
+/// *any* value for that group (as some values may be filtered
+/// out). Without a filter, the accumulator is only passed groups
+/// that actually had a value to accumulate so they do not need to
+/// track if they have seen values for a particular group.
+///
+/// If the input has nulls, then the accumulator must potentially
+/// handle each input null value specially (e.g. for `SUM` to mark the
+/// corresponding sum as null)
 #[derive(Debug)]
 pub struct NullState {
-    /// Tracks validity (if we we have seen a null input value for
-    /// `group_index`)
+    /// Tracks if a null input value has been seen for `group_index`,
+    /// if there were any nulls in the input.
     ///
     /// If `null_inputs[i]` is true, have not seen any null values for
-    /// that group (also true for no values)
+    /// that group, or have not seen any vaues
     ///
     /// If `null_inputs[i]` is false, saw at least one null value for
     /// that group
@@ -140,8 +143,22 @@ impl NullState {
         let data: &[T::Native] = values.values();
         assert_eq!(data.len(), group_indices.len());
 
-        match (values.nulls(), opt_filter) {
-            (Some(nulls), None) if nulls.null_count() > 0 => {
+        match (values.null_count() > 0, opt_filter) {
+            // no nulls, no filter,
+            (false, None) => {
+                // if we have previously seen nulls, ensure the null
+                // buffer is big enough (start everything at valid)
+                if self.null_inputs.is_some() {
+                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
+                }
+                let iter = group_indices.iter().zip(data.iter());
+                for (&group_index, &new_value) in iter {
+                    value_fn(group_index, new_value)
+                }
+            }
+            // nulls, no filter
+            (true, None) => {
+                let nulls = values.nulls().unwrap();
                 // All groups start as valid (true), and are set to
                 // null if we see a null in the input)
                 let null_inputs =
@@ -149,8 +166,6 @@ impl NullState {
 
                 // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
                 // iterate over in chunks of 64 bits for more efficient null checking
-                let data: &[T::Native] = values.values();
-                assert_eq!(data.len(), group_indices.len());
                 let group_indices_chunks = group_indices.chunks_exact(64);
                 let data_chunks = data.chunks_exact(64);
                 let bit_chunks = nulls.inner().bit_chunks();
@@ -195,20 +210,8 @@ impl NullState {
                         }
                     });
             }
-            // no filter, no nulls
-            (_, None) => {
-                // if we have previously seen nulls, ensure the null
-                // buffer is big enough (start everything at valid)
-                if self.null_inputs.is_some() {
-                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
-                }
-                let iter = group_indices.iter().zip(data.iter());
-                for (&group_index, &new_value) in iter {
-                    value_fn(group_index, new_value)
-                }
-            }
             // no nulls, but a filter
-            (None, Some(filter)) => {
+            (false, Some(filter)) => {
                 assert_eq!(filter.len(), group_indices.len());
 
                 // default seen to false (we fill it in as we go)
@@ -217,27 +220,25 @@ impl NullState {
                 // The performance with a filter could be improved by
                 // iterating over the filter in chunks, rather than a single
                 // iterator. TODO file a ticket
-                let iter = group_indices.iter().zip(data.iter());
-                let iter = iter.zip(filter.iter());
-                for ((&group_index, &new_value), filter_value) in iter {
-                    if let Some(true) = filter_value {
-                        value_fn(group_index, new_value);
-                        // remember we have seen a value for this index
-                        seen_values.set_bit(group_index, true);
-                    }
-                }
+                group_indices
+                    .iter()
+                    .zip(data.iter())
+                    .zip(filter.iter())
+                    .for_each(|((&group_index, &new_value), filter_value)| {
+                        if let Some(true) = filter_value {
+                            value_fn(group_index, new_value);
+                            // remember we have seen a value for this index
+                            seen_values.set_bit(group_index, true);
+                        }
+                    })
             }
             // both null values and filters
-            (
-                Some(_value_nulls /* nulls obtained via values.iters() */),
-                Some(filter),
-            ) => {
+            (true, Some(filter)) => {
                 let null_inputs =
                     initialize_builder(&mut self.null_inputs, total_num_groups, true);
                 let seen_values =
                     initialize_builder(&mut self.seen_values, total_num_groups, false);
 
-                assert_eq!(filter.len(), values.len());
                 assert_eq!(filter.len(), group_indices.len());
                 // The performance with a filter could be improved by
                 // iterating over the filter in chunks, rather than using
@@ -263,9 +264,12 @@ impl NullState {
     }
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
-    /// filtered value, while tracking which groups have seen null
-    /// inputs and which groups have seen any inputs, for
-    /// [`BooleanArray`]s. See [`Self::accumulate`] for more details.
+    /// filtered value in `values`, while tracking which groups have
+    /// seen null inputs and which groups have seen any inputs, for
+    /// [`BooleanArray`]s.
+    ///
+    /// See [`Self::accumulate`], which handles [`PrimitiveArray`]s,
+    /// for more details.
     pub fn accumulate_boolean<F>(
         &mut self,
         group_indices: &[usize],
@@ -276,7 +280,89 @@ impl NullState {
     ) where
         F: FnMut(usize, bool) + Send,
     {
-        todo!();
+        let data = values.values();
+        assert_eq!(data.len(), group_indices.len());
+
+        // These could be made more performant by iterating in chunks of 64 bits at a time
+        match (values.null_count() > 0, opt_filter) {
+            // no nulls, no filter,
+            (false, None) => {
+                // if we have previously seen nulls, ensure the null
+                // buffer is big enough (start everything at valid)
+                if self.null_inputs.is_some() {
+                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
+                }
+                group_indices.iter().zip(data.iter()).for_each(
+                    |(&group_index, new_value)| value_fn(group_index, new_value),
+                )
+            }
+            // nulls, no filter
+            (true, None) => {
+                let nulls = values.nulls().unwrap();
+                // All groups start as valid (true), and are set to
+                // null if we see a null in the input)
+                let null_inputs =
+                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
+
+                group_indices
+                    .iter()
+                    .zip(data.iter())
+                    .zip(nulls.iter())
+                    .for_each(|((&group_index, new_value), is_valid)| {
+                        if is_valid {
+                            value_fn(group_index, new_value);
+                        } else {
+                            // input null means this group is now null
+                            null_inputs.set_bit(group_index, false);
+                        }
+                    })
+            }
+            // no nulls, but a filter
+            (false, Some(filter)) => {
+                assert_eq!(filter.len(), group_indices.len());
+
+                // default seen to false (we fill it in as we go)
+                let seen_values =
+                    initialize_builder(&mut self.seen_values, total_num_groups, false);
+
+                group_indices
+                    .iter()
+                    .zip(data.iter())
+                    .zip(filter.iter())
+                    .for_each(|((&group_index, new_value), filter_value)| {
+                        if let Some(true) = filter_value {
+                            value_fn(group_index, new_value);
+                            // remember we have seen a value for this index
+                            seen_values.set_bit(group_index, true);
+                        }
+                    })
+            }
+            // both null values and filters
+            (true, Some(filter)) => {
+                let null_inputs =
+                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
+                let seen_values =
+                    initialize_builder(&mut self.seen_values, total_num_groups, false);
+
+                assert_eq!(filter.len(), group_indices.len());
+                filter
+                    .iter()
+                    .zip(group_indices.iter())
+                    .zip(values.iter())
+                    .for_each(|((filter_value, group_index), new_value)| {
+                        if let Some(true) = filter_value {
+                            if let Some(new_value) = new_value {
+                                value_fn(*group_index, new_value)
+                            } else {
+                                // input null means this group is now null
+                                null_inputs.set_bit(*group_index, false);
+                            }
+                            // remember we have seen a value for this index
+                            seen_values.set_bit(*group_index, true);
+                        }
+                    })
+            }
+        }
     }
 
     /// Creates the final NullBuffer representing which group_indices have

@@ -15,16 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! Defines BitAnd, BitOr, and BitXor Aggregate accumulators
 
 use ahash::RandomState;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::{
-    instantiate_primitive_accumulator, AggregateExpr, GroupsAccumulator, PhysicalExpr,
-};
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::datatypes::{
     DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
@@ -40,6 +38,7 @@ use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::collections::HashSet;
 
+use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
 };
@@ -48,6 +47,16 @@ use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::compute::{bit_and, bit_or, bit_xor};
 use datafusion_row::accessor::RowAccessor;
+
+/// Creates a [`PrimitiveGroupsAccumulator`] with the specified
+/// [`ArrowPrimitiveType`] which applies `$FN` to each element
+macro_rules! instantiate_primitive_accumulator {
+    ($NUMERICTYPE:ident, $FN:expr) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$NUMERICTYPE, _>::new($FN),
+        ))
+    }};
+}
 
 // returns the new value after bit_and/bit_or/bit_xor with the new values, taking nullability into account
 macro_rules! typed_bit_and_or_xor_batch {

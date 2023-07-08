@@ -26,16 +26,6 @@ use crate::GroupsAccumulator;
 
 use super::accumulate::NullState;
 
-/// Creates a [`BooleanGroupsAccumulator`] that applies `$FN` is
-/// applied to each element
-#[macro_export]
-macro_rules! instantiate_boolean_accumulator {
-    ($FN:expr) => {{
-        use crate::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
-        Ok(Box::new(BooleanGroupsAccumulator::<_>::new($FN)))
-    }};
-}
-
 /// An accumulator that implements a single operation over
 /// Boolean where the accumulated state is the same as the input
 /// type (such as [`BitAndAssign`])

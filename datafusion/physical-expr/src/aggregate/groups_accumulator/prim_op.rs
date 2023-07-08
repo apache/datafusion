@@ -25,18 +25,6 @@ use crate::GroupsAccumulator;
 
 use super::accumulate::NullState;
 
-/// Creates a [`PrimitiveGroupsAccumulator`] with the specified
-/// [`ArrowPrimitiveType`] which applies `$FN` to each element
-#[macro_export]
-macro_rules! instantiate_primitive_accumulator {
-    ($NUMERICTYPE:ident, $FN:expr) => {{
-        use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-        Ok(Box::new(
-            PrimitiveGroupsAccumulator::<$NUMERICTYPE, _>::new($FN),
-        ))
-    }};
-}
-
 /// An accumulator that implements a single operation over
 /// PrimtiveTypes where the accumulated state is the same as the input
 /// type (such as [`BitAndAssign`])
