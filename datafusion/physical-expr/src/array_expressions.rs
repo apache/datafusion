@@ -400,15 +400,14 @@ fn compute_array_ndims(arg: u8, arr: ArrayRef) -> Result<u8> {
 }
 
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
-    // Compute the number of dimensions for each array
-    let args_ndim: Result<Vec<u8>> = args
+    // Find the maximum number of dimensions
+    let max_ndim: u8 = *args
         .iter()
         .map(|arr| compute_array_ndims(0, arr.clone()))
-        .collect();
-    let args_ndim = args_ndim?;
-
-    // Find the maximum number of dimensions
-    let max_ndim = *args_ndim.iter().max().unwrap();
+        .collect::<Result<Vec<u8>>>()?
+        .iter()
+        .max()
+        .unwrap();
 
     // Align the dimensions of the arrays
     let aligned_args: Result<Vec<ArrayRef>> = args
