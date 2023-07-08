@@ -336,7 +336,7 @@ impl GroupedHashAggregateStream {
             map, group_states, ..
         } = &mut self.aggr_state;
 
-        for (row, hash) in batch_hashes.into_iter().enumerate() {
+        for (row, hash) in batch_hashes.iter_mut().enumerate() {
             let entry = map.get_mut(*hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
