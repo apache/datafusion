@@ -1181,10 +1181,13 @@ mod tests {
         let column = batches[0].column(0);
         assert_eq!(&DataType::Decimal128(13, 2), column.data_type());
 
-        // parquet use the fixed length binary as the physical type to store decimal
-        // TODO: arrow-rs don't support convert the physical type of binary to decimal
-        // https://github.com/apache/arrow-rs/pull/2160
-        // let exec = get_exec(&session_ctx, "byte_array_decimal.parquet", None, None).await?;
+        // parquet use the byte array as the physical type to store decimal
+        let exec = get_exec(&state, "byte_array_decimal.parquet", None, None).await?;
+        let batches = collect(exec, task_ctx.clone()).await?;
+        assert_eq!(1, batches.len());
+        assert_eq!(1, batches[0].num_columns());
+        let column = batches[0].column(0);
+        assert_eq!(&DataType::Decimal128(4, 2), column.data_type());
 
         Ok(())
     }
