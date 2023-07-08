@@ -45,7 +45,6 @@ use arrow_array::types::{
     UInt64Type,
 };
 use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
@@ -557,13 +556,6 @@ where
     }
 }
 
-/// Create a buffer of len elements, representing all NULL values
-fn make_all_nulls(len: usize) -> NullBuffer {
-    let mut nulls = BooleanBufferBuilder::new(len);
-    nulls.append_n(len, false);
-    NullBuffer::new(nulls.finish())
-}
-
 impl<T> GroupsAccumulator for SumGroupsAccumulator<T>
 where
     T: ArrowNumericType + Send,
@@ -604,26 +596,7 @@ where
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        assert_eq!(values.len(), 2, "two arguments to merge_batch");
-        // first batch is partial sums
-        let partial_sums: &PrimitiveArray<T> = values.get(0).unwrap().as_primitive::<T>();
-
-        // Sum partial sums
-        self.sums
-            .resize_with(total_num_groups, || T::default_value());
-
-        self.null_state.accumulate(
-            group_indices,
-            partial_sums,
-            opt_filter,
-            total_num_groups,
-            |group_index, new_value| {
-                let sum = &mut self.sums[group_index];
-                *sum = sum.add_wrapping(new_value);
-            },
-        );
-
-        Ok(())
+        self.update_batch(values, group_indices, opt_filter, total_num_groups)
     }
 
     fn evaluate(&mut self) -> Result<ArrayRef> {
@@ -636,7 +609,7 @@ where
         Ok(Arc::new(sums))
     }
 
-    // return arrays for sums and counts
+    // return arrays for sums
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build();
 
@@ -645,16 +618,7 @@ where
 
         let sums = adjust_output_array(&self.sum_data_type, sums)?;
 
-        // TODO File a ticket: Sum expects sum/count array, but count
-        // is only needed for retractable aggregates. We could improve
-        // performance by only including it when needed.
-        // https://github.com/apache/arrow-datafusion/issues/6878
-        let counts = vec![0_u64; sums.len()];
-        let all_nulls = Some(make_all_nulls(sums.len()));
-        let counts =
-            Arc::new(PrimitiveArray::<UInt64Type>::new(counts.into(), all_nulls));
-
-        Ok(vec![sums.clone() as ArrayRef, counts as ArrayRef])
+        Ok(vec![sums.clone() as ArrayRef])
     }
 
     fn size(&self) -> usize {
