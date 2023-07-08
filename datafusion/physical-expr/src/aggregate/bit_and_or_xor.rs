@@ -50,11 +50,13 @@ use datafusion_row::accessor::RowAccessor;
 
 /// Creates a [`PrimitiveGroupsAccumulator`] with the specified
 /// [`ArrowPrimitiveType`] which applies `$FN` to each element
+///
+/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
 macro_rules! instantiate_primitive_accumulator {
-    ($NUMERICTYPE:ident, $FN:expr) => {{
-        Ok(Box::new(
-            PrimitiveGroupsAccumulator::<$NUMERICTYPE, _>::new($FN),
-        ))
+    ($PRIMTYPE:ident, $FN:expr) => {{
+        Ok(Box::new(PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
+            $FN,
+        )))
     }};
 }
 
