@@ -66,6 +66,8 @@ compare:      Comares results from benchmark runs
 all(default): Data/Run/Compare for all benchmarks
 tpch:         TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table
 tpch_mem:     TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
+tpch10:       TPCH inspired benchmark on Scale Factor (SF) 10 (~1GB), single parquet file per table
+tpch10_mem:   TPCH inspired benchmark on Scale Factor (SF) 10 (~1GB), query from memory
 parquet:      Benchmark of parquet reader's filtering speed
 sort:         Benchmark of sorting speed
 
@@ -124,14 +126,22 @@ main() {
             echo "***************************"
             case "$BENCHMARK" in
                 all)
-                    data_tpch
+                    data_tpch "1"
+                    data_tpch "10"
                     ;;
                 tpch)
-                    data_tpch
+                    data_tpch "1"
                     ;;
                 tpch_mem)
-                    # same data for tpch_mem
-                    data_tpch
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
+                tpch10)
+                    data_tpch "10"
+                    ;;
+                tpch_mem10)
+                    # same data as for tpch10
+                    data_tpch "10"
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -162,16 +172,24 @@ main() {
             mkdir -p "${RESULTS_DIR}"
             case "$BENCHMARK" in
                 all)
-                    run_tpch
-                    run_tpch_mem
+                    run_tpch "1"
+                    run_tpch_mem "1"
+                    run_tpch "10"
+                    run_tpch_mem "10"
                     run_parquet
                     run_sort
                     ;;
                 tpch)
-                    run_tpch
+                    run_tpch "1"
                     ;;
                 tpch_mem)
-                    run_tpch_mem
+                    run_tpch_mem "1"
+                    ;;
+                tpch10)
+                    run_tpch "10"
+                    ;;
+                tpch_mem10)
+                    run_tpch_mem "10"
                     ;;
                 parquet)
                     run_parquet
@@ -202,59 +220,80 @@ main() {
 
 
 # Creates TPCH data if it doesn't already exist
+# call like: data_tpch($scale_factor)
 data_tpch() {
-    echo "Creating tpch dataset..."
+    SCALE_FACTOR=$1
+    if [ -z "$SCALE_FACTOR" ] ; then
+        echo "Internal error: Scale factor not specified"
+        exit 1
+    fi
+
+    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+    echo "Creating tpch dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
 
     # Ensure the target data directory exists
-    mkdir -p "${DATA_DIR}"
+    mkdir -p "${TPCH_DIR}"
 
     # Create 'tbl' (CSV format) data into $DATA_DIR if it does not already exist
-    SCALE_FACTOR=1
-    FILE="${DATA_DIR}/supplier.tbl"
+    FILE="${TPCH_DIR}/supplier.tbl"
     if test -f "${FILE}"; then
         echo " tbl files exist ($FILE exists)."
     else
         echo " creating tbl files with tpch_dbgen..."
-        docker run -v "${DATA_DIR}":/data -it --rm ghcr.io/databloom-ai/tpch-docker:main -vf -s ${SCALE_FACTOR}
+        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/databloom-ai/tpch-docker:main -vf -s ${SCALE_FACTOR}
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
-    FILE="${DATA_DIR}/answers/q1.out"
+    FILE="${TPCH_DIR}/answers/q1.out"
     if test -f "${FILE}"; then
         echo " Expected answers exist (${FILE} exists)."
     else
-        echo " Copying answers to ${DATA_DIR}/answers"
-        mkdir -p "${DATA_DIR}/answers"
-        docker run -v "${DATA_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/databloom-ai/tpch-docker:main -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
+        echo " Copying answers to ${TPCH_DIR}/answers"
+        mkdir -p "${TPCH_DIR}/answers"
+        docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/databloom-ai/tpch-docker:main -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
     # Create 'parquet' files from tbl
-    FILE="${DATA_DIR}/supplier"
+    FILE="${TPCH_DIR}/supplier"
     if test -d "${FILE}"; then
         echo " parquet files exist ($FILE exists)."
     else
         echo " creating parquet files using benchmark binary ..."
         pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${DATA_DIR}" --output "${DATA_DIR}" --format parquet
+        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
         popd > /dev/null
     fi
 }
 
 # Runs the tpch benchmark
 run_tpch() {
+    SCALE_FACTOR=$1
+    if [ -z "$SCALE_FACTOR" ] ; then
+        echo "Internal error: Scale factor not specified"
+        exit 1
+    fi
+    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+
     RESULTS_FILE="${RESULTS_DIR}/tpch.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${DATA_DIR}" --format parquet -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --format parquet -o ${RESULTS_FILE}
 }
 
 # Runs the tpch in memory
 run_tpch_mem() {
+    SCALE_FACTOR=$1
+    if [ -z "$SCALE_FACTOR" ] ; then
+        echo "Internal error: Scale factor not specified"
+        exit 1
+    fi
+    TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
+
     RESULTS_FILE="${RESULTS_DIR}/tpch_mem.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${DATA_DIR}" -m --format parquet -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" -m --format parquet -o ${RESULTS_FILE}
 }
 
 # Runs the parquet filter benchmark
