@@ -111,6 +111,8 @@ pub(crate) struct GroupedHashAggregateStream {
     /// first element in the array corresponds to normal accumulators
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
+    // buffer to be reused to store hashes
+    hashes_buffer: Vec<u64>,
 }
 
 impl GroupedHashAggregateStream {
@@ -231,6 +233,7 @@ impl GroupedHashAggregateStream {
             scalar_update_factor,
             row_group_skip_position: 0,
             indices: [normal_agg_indices, row_agg_indices],
+            hashes_buffer: vec![],
         })
     }
 }
@@ -324,15 +327,17 @@ impl GroupedHashAggregateStream {
         let mut groups_with_rows = vec![];
 
         // 1.1 Calculate the group keys for the group values
-        let mut batch_hashes = vec![0; n_rows];
-        create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.resize(n_rows, 0);
+        create_hashes(group_values, &self.random_state, batch_hashes)?;
 
         let AggregationState {
             map, group_states, ..
         } = &mut self.aggr_state;
 
         for (row, hash) in batch_hashes.into_iter().enumerate() {
-            let entry = map.get_mut(hash, |(_hash, group_idx)| {
+            let entry = map.get_mut(*hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
@@ -387,7 +392,7 @@ impl GroupedHashAggregateStream {
 
                     // for hasher function, use precomputed hash value
                     map.insert_accounted(
-                        (hash, group_idx),
+                        (*hash, group_idx),
                         |(hash, _group_index)| *hash,
                         allocated,
                     );
