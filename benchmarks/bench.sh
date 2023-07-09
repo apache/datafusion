@@ -66,8 +66,8 @@ compare:      Comares results from benchmark runs
 all(default): Data/Run/Compare for all benchmarks
 tpch:         TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table
 tpch_mem:     TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
-tpch10:       TPCH inspired benchmark on Scale Factor (SF) 10 (~1GB), single parquet file per table
-tpch10_mem:   TPCH inspired benchmark on Scale Factor (SF) 10 (~1GB), query from memory
+tpch10:       TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table
+tpch10_mem:   TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 parquet:      Benchmark of parquet reader's filtering speed
 sort:         Benchmark of sorting speed
 
@@ -219,8 +219,14 @@ main() {
 
 
 
-# Creates TPCH data if it doesn't already exist
+# Creates TPCH data at a certain scale factor, if it doesn't already
+# exist
+#
 # call like: data_tpch($scale_factor)
+#
+# Creates data in $DATA_DIR/tpch_sf1 for scale factor 1
+# Creates data in $DATA_DIR/tpch_sf10 for scale factor 10
+# etc
 data_tpch() {
     SCALE_FACTOR=$1
     if [ -z "$SCALE_FACTOR" ] ; then
