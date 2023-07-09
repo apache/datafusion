@@ -111,7 +111,7 @@ ff0102 FixedSizeBinary(3)
 
 # Comparison
 # https://github.com/apache/arrow-datafusion/pull/6891
-query error DataFusion error: Internal error: Data type FixedSizeBinary\(3, "0,1,2"\) not supported for scalar operation 'eq' on dyn array\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error DataFusion error: Arrow error: Compute error: eq_dyn_binary_scalar only supports Binary or LargeBinary arrays
 SELECT
   column1,
   column2,
