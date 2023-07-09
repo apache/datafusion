@@ -40,6 +40,11 @@ macro_rules! downcast_arg {
     }};
 }
 
+/// Downcasts multiple arguments into a single concrete type
+/// $ARGS:  &[ArrayRef]
+/// $ARRAY_TYPE: type to downcast to
+///
+/// $returns a Vec<$ARRAY_TYPE>
 macro_rules! downcast_vec {
     ($ARGS:expr, $ARRAY_TYPE:ident) => {{
         $ARGS
@@ -66,18 +71,38 @@ macro_rules! new_builder {
     }};
 }
 
+/// Combines multiple arrays into a single ListArray
+///
+/// $ARGS: slice of arrays, each with $ARRAY_TYPE
+/// $ARRAY_TYPE: the type of the list elements
+/// $BUILDER_TYPE: the type of ArrayBuilder for the list elements
+///
+/// Returns: a ListArray where the elements each have the same type as
+/// $ARRAY_TYPE and each element have a length of $ARGS.len()
 macro_rules! array {
     ($ARGS:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
         let builder = new_builder!($BUILDER_TYPE, $ARGS[0].len());
         let mut builder =
             ListBuilder::<$BUILDER_TYPE>::with_capacity(builder, $ARGS.len());
 
+        let num_rows = $ARGS[0].len();
+        assert!(
+            $ARGS.iter().all(|a| a.len() == num_rows),
+            "all arguments must have the same number of rows"
+        );
+
         // for each entry in the array
-        for index in 0..$ARGS[0].len() {
+        for index in 0..num_rows {
+            // for each column
             for arg in $ARGS {
                 match arg.as_any().downcast_ref::<$ARRAY_TYPE>() {
+                    // Copy the source array value into the target ListArray
                     Some(arr) => {
-                        builder.values().append_value(arr.value(index));
+                        if arr.is_valid(index) {
+                            builder.values().append_value(arr.value(index));
+                        } else {
+                            builder.values().append_null();
+                        }
                     }
                     None => match arg.as_any().downcast_ref::<NullArray>() {
                         Some(arr) => {
@@ -179,6 +204,46 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
     }
 }
 
+/// Convert one or more [`ArrayRef`] of the same type into into a
+/// `ListArray`
+///
+/// # Example (non nested)
+///
+/// Calling `array(col1, col2)` where col1 and col2 are non nested
+/// would return a single new `ListArray`, where each row was a list
+/// of 2 elements:
+///
+/// ```text
+/// ┌─────────┐   ┌─────────┐           ┌──────────────┐
+/// │ ┌─────┐ │   │ ┌─────┐ │           │ ┌──────────┐ │
+/// │ │  A  │ │   │ │  X  │ │           │ │  [A, X]  │ │
+/// │ ├─────┤ │   │ ├─────┤ │           │ ├──────────┤ │
+/// │ │NULL │ │   │ │  Y  │ │──────────▶│ │[NULL, Y] │ │
+/// │ ├─────┤ │   │ ├─────┤ │           │ ├──────────┤ │
+/// │ │  C  │ │   │ │  Z  │ │           │ │  [C, Z]  │ │
+/// │ └─────┘ │   │ └─────┘ │           │ └──────────┘ │
+/// └─────────┘   └─────────┘           └──────────────┘
+///   col1           col2                    output
+/// ```
+///
+/// # Example (nested)
+///
+/// Calling `array(col1, col2)` where col1 and col2 are lists
+/// would return a single new `ListArray`, where each row was a list
+/// of the corresponding elements of col1 and col2 flattened.
+///
+/// ``` text
+/// ┌──────────────┐   ┌──────────────┐        ┌────────────────────────┐
+/// │ ┌──────────┐ │   │ ┌──────────┐ │        │ ┌────────────────────┐ │
+/// │ │  [A, X]  │ │   │ │    []    │ │        │ │       [A, X]       │ │
+/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────┤ │
+/// │ │[NULL, Y] │ │   │ │[Q, R, S] │ │───────▶│ │ [NULL, Y, Q, R, S] │ │
+/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────┤ │
+/// │ │  [C, Z]  │ │   │ │   NULL   │ │        │ │    [C, Z, NULL]    │ │
+/// │ └──────────┘ │   │ └──────────┘ │        │ └────────────────────┘ │
+/// └──────────────┘   └──────────────┘        └────────────────────────┘
+///      col1               col2                         output
+/// ```
 fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
@@ -200,6 +265,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
             let mut mutable =
                 MutableArrayData::with_capacities(array_data, false, capacity);
 
+            // Copy over all the child data
             for (i, a) in arrays.iter().enumerate() {
                 mutable.extend(i, 0, a.len())
             }
@@ -239,8 +305,11 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
     Ok(res)
 }
 
-/// put values in an array.
-pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
+/// Convert one or more [`ColumnarValue`] of the same type into into a
+/// `ListArray`
+///
+/// See [`array_array`] for more details.
+fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays: Vec<ArrayRef> = values
         .iter()
         .map(|x| match x {
