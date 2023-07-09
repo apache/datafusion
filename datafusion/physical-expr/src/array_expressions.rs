@@ -453,47 +453,22 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(res)
 }
 
-fn compute_array_ndims(arg: u8, arr: ArrayRef) -> Result<u8> {
-    match arr.data_type() {
-        DataType::List(..) => {
-            let list_array = downcast_arg!(arr, ListArray);
-            compute_array_ndims(arg + 1, list_array.value(0))
-        }
-        DataType::Null
-        | DataType::Utf8
-        | DataType::LargeUtf8
-        | DataType::Boolean
-        | DataType::Float32
-        | DataType::Float64
-        | DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => Ok(arg),
-        data_type => Err(DataFusionError::NotImplemented(format!(
-            "Array is not implemented for type '{data_type:?}'."
-        ))),
-    }
-}
-
 fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     // Find the maximum number of dimensions
-    let max_ndim: u8 = *args
+    let max_ndim: u64 = (*args
         .iter()
-        .map(|arr| compute_array_ndims(0, arr.clone()))
-        .collect::<Result<Vec<u8>>>()?
+        .map(|arr| compute_array_ndims(Some(arr.clone())))
+        .collect::<Result<Vec<Option<u64>>>>()?
         .iter()
         .max()
-        .unwrap();
+        .unwrap())
+    .unwrap();
 
     // Align the dimensions of the arrays
     let aligned_args: Result<Vec<ArrayRef>> = args
         .into_iter()
         .map(|array| {
-            let ndim = compute_array_ndims(0, array.clone())?;
+            let ndim = compute_array_ndims(Some(array.clone()))?.unwrap();
             if ndim < max_ndim {
                 let mut aligned_array = array.clone();
                 for _ in 0..(max_ndim - ndim) {
