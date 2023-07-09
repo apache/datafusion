@@ -260,7 +260,7 @@ select round(atan2(a, b), 5), round(atan2(c, d), 5), round(atan2(f, e), 5) from 
 ----
 -1.4289 -0.83798 -1.1659
 1.9513 0 1.89255
-2.03444 2.30361 1.3734008
+2.03444 2.30361 1.3734
 NULL NULL NULL
 
 ## cbrt
