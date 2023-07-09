@@ -110,7 +110,7 @@ ff0102 FixedSizeBinary(3)
 000102 FixedSizeBinary(3)
 
 # Comparison
-# https://github.com/apache/arrow-datafusion/pull/6891
+# https://github.com/apache/arrow-rs/pull/4492
 query error DataFusion error: Arrow error: Compute error: eq_dyn_binary_scalar only supports Binary or LargeBinary arrays
 SELECT
   column1,
