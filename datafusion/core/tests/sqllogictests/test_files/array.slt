@@ -365,6 +365,30 @@ select array_concat(make_array(), make_array(2, 3));
 ----
 [2, 3]
 
+# array_concat with different dimensions #1 (2D + 1D)
+query ?
+select array_concat(make_array([1,2], [3,4]), make_array(5, 6))
+----
+[[1, 2], [3, 4], [5, 6]]
+
+# array_concat with different dimensions #2 (1D + 2D)
+query ?
+select array_concat(make_array(5, 6), make_array([1,2], [3,4]))
+----
+[[5, 6], [1, 2], [3, 4]]
+
+# array_concat with different dimensions #3 (2D + 1D + 1D)
+query ?
+select array_concat(make_array([1,2], [3,4]), make_array(5, 6), make_array(7,8))
+----
+[[1, 2], [3, 4], [5, 6], [7, 8]]
+
+# array_concat with different dimensions #4 (1D + 2D + 3D)
+query ?
+select array_concat(make_array(10, 20), make_array([30, 40]), make_array([[50, 60]]))
+----
+[[[10, 20]], [[30, 40]], [[50, 60]]]
+
 ## array_position
 
 # array_position scalar function #1

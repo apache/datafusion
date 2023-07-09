@@ -27,8 +27,8 @@ use crate::physical_plan::metrics::{
 use crate::physical_plan::sorts::merge::streaming_merge;
 use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
-    DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat_batches, lexsort_to_indices, take};
@@ -513,6 +513,26 @@ impl SortExec {
     }
 }
 
+impl DisplayAs for SortExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+                match self.fetch {
+                    Some(fetch) => {
+                        write!(f, "SortExec: fetch={fetch}, expr=[{}]", expr.join(","))
+                    }
+                    None => write!(f, "SortExec: expr=[{}]", expr.join(",")),
+                }
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for SortExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -617,24 +637,6 @@ impl ExecutionPlan for SortExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics_set.clone_inner())
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                match self.fetch {
-                    Some(fetch) => {
-                        write!(f, "SortExec: fetch={fetch}, expr=[{}]", expr.join(","))
-                    }
-                    None => write!(f, "SortExec: expr=[{}]", expr.join(",")),
-                }
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

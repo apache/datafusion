@@ -1934,10 +1934,10 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
+    use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
@@ -2500,6 +2500,16 @@ mod tests {
         schema: SchemaRef,
     }
 
+    impl DisplayAs for NoOpExecutionPlan {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "NoOpExecutionPlan")
+                }
+            }
+        }
+    }
+
     impl ExecutionPlan for NoOpExecutionPlan {
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
@@ -2535,14 +2545,6 @@ mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
-        }
-
-        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-            match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "NoOpExecutionPlan")
-                }
-            }
         }
 
         fn statistics(&self) -> Statistics {
@@ -2607,5 +2609,35 @@ mod tests {
         Ok(LogicalPlanBuilder::from(
             ctx.read_csv(path, options).await?.into_optimized_plan()?,
         ))
+    }
+
+    #[tokio::test]
+    async fn test_display_plan_in_graphviz_format() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .project(vec![col("id") + lit(2)])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).await.unwrap();
+
+        let expected_graph = r###"
+// Begin DataFusion GraphViz Plan,
+// display it online here: https://dreampuf.github.io/GraphvizOnline
+
+digraph {
+    1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
+    2[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
+    1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
+}
+// End DataFusion GraphViz Plan
+"###;
+
+        let generated_graph = format!("{}", displayable(&*plan).graphviz());
+
+        assert_eq!(expected_graph, generated_graph);
     }
 }

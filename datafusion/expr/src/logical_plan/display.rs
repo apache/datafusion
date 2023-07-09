@@ -18,6 +18,7 @@
 
 use crate::LogicalPlan;
 use arrow::datatypes::Schema;
+use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
 use datafusion_common::DataFusionError;
 use std::fmt;
@@ -123,37 +124,6 @@ pub fn display_schema(schema: &Schema) -> impl fmt::Display + '_ {
     Wrapper(schema)
 }
 
-/// Logic related to creating DOT language graphs.
-#[derive(Default)]
-struct GraphvizBuilder {
-    id_gen: usize,
-}
-
-impl GraphvizBuilder {
-    fn next_id(&mut self) -> usize {
-        self.id_gen += 1;
-        self.id_gen
-    }
-
-    // write out the start of the subgraph cluster
-    fn start_cluster(&mut self, f: &mut fmt::Formatter, title: &str) -> fmt::Result {
-        writeln!(f, "  subgraph cluster_{}", self.next_id())?;
-        writeln!(f, "  {{")?;
-        writeln!(f, "    graph[label={}]", Self::quoted(title))
-    }
-
-    // write out the end of the subgraph cluster
-    fn end_cluster(&mut self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "  }}")
-    }
-
-    /// makes a quoted string suitable for inclusion in a graphviz chart
-    fn quoted(label: &str) -> String {
-        let label = label.replace('"', "_");
-        format!("\"{label}\"")
-    }
-}
-
 /// Formats plans for graphical display using the `DOT` language. This
 /// format can be visualized using software from
 /// [`graphviz`](https://graphviz.org/)
@@ -190,6 +160,14 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
     pub fn post_visit_plan(&mut self) -> fmt::Result {
         self.graphviz_builder.end_cluster(self.f)
     }
+
+    pub fn start_graph(&mut self) -> fmt::Result {
+        self.graphviz_builder.start_graph(self.f)
+    }
+
+    pub fn end_graph(&mut self) -> fmt::Result {
+        self.graphviz_builder.end_graph(self.f)
+    }
 }
 
 impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
@@ -213,22 +191,16 @@ impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
             format!("{}", plan.display())
         };
 
-        writeln!(
-            self.f,
-            "    {}[shape=box label={}]",
-            id,
-            GraphvizBuilder::quoted(&label)
-        )
-        .map_err(|_e| DataFusionError::Internal("Fail to format".to_string()))?;
+        self.graphviz_builder
+            .add_node(self.f, id, &label, None)
+            .map_err(|_e| DataFusionError::Internal("Fail to format".to_string()))?;
 
         // Create an edge to our parent node, if any
         //  parent_id -> id
         if let Some(parent_id) = self.parent_ids.last() {
-            writeln!(
-                self.f,
-                "    {parent_id} -> {id} [arrowhead=none, arrowtail=normal, dir=back]"
-            )
-            .map_err(|_e| DataFusionError::Internal("Fail to format".to_string()))?;
+            self.graphviz_builder
+                .add_edge(self.f, *parent_id, id)
+                .map_err(|_e| DataFusionError::Internal("Fail to format".to_string()))?;
         }
 
         self.parent_ids.push(id);

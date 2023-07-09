@@ -365,8 +365,8 @@ impl TryFrom<&protobuf::Field> for Field {
     type Error = Error;
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
-
-        Ok(Self::new(field.name.as_str(), datatype, field.nullable))
+        Ok(Self::new(field.name.as_str(), datatype, field.nullable)
+            .with_metadata(field.metadata.clone()))
     }
 }
 
@@ -581,19 +581,9 @@ impl TryFrom<&protobuf::Schema> for Schema {
         let fields = schema
             .columns
             .iter()
-            .map(|c| {
-                let pb_arrow_type_res = c
-                    .arrow_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: Field message was missing required field 'arrow_type'"));
-                let pb_arrow_type: &protobuf::ArrowType = match pb_arrow_type_res {
-                    Ok(res) => res,
-                    Err(e) => return Err(e),
-                };
-                Ok(Field::new(&c.name, pb_arrow_type.try_into()?, c.nullable))
-            })
+            .map(Field::try_from)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self::new(fields))
+        Ok(Self::new_with_metadata(fields, schema.metadata.clone()))
     }
 }
 
