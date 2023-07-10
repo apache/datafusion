@@ -65,6 +65,17 @@ impl AvroExec {
     }
 }
 
+impl DisplayAs for AvroExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "AvroExec: ")?;
+        self.base_config.fmt_as(t, f)
+    }
+}
+
 impl ExecutionPlan for AvroExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -139,15 +150,6 @@ impl ExecutionPlan for AvroExec {
         let stream =
             FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
         Ok(Box::pin(stream))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "AvroExec: ")?;
-        self.base_config.fmt_as(t, f)
     }
 
     fn statistics(&self) -> Statistics {

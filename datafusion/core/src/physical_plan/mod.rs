@@ -38,6 +38,7 @@ pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use futures::stream::{Stream, TryStreamExt};
 use std::fmt;
 use std::fmt::Debug;
+use tokio::task::JoinSet;
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
@@ -98,7 +99,7 @@ impl Stream for EmptyRecordBatchStream {
 /// [`ExecutionPlan`] can be displayed in a simplified form using the
 /// return value from [`displayable`] in addition to the (normally
 /// quite verbose) `Debug` output.
-pub trait ExecutionPlan: Debug + Send + Sync {
+pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns the execution plan as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -222,16 +223,6 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// `execute()` new metrics may appear in subsequent calls.
     fn metrics(&self) -> Option<MetricsSet> {
         None
-    }
-
-    /// Format this `ExecutionPlan` to `f` in the specified type.
-    ///
-    /// Should not include a newline
-    ///
-    /// Note this function prints a placeholder by default to preserve
-    /// backwards compatibility.
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ExecutionPlan(PlaceHolder)")
     }
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
@@ -445,20 +436,37 @@ pub async fn collect_partitioned(
 ) -> Result<Vec<Vec<RecordBatch>>> {
     let streams = execute_stream_partitioned(plan, context)?;
 
+    let mut join_set = JoinSet::new();
     // Execute the plan and collect the results into batches.
-    let handles = streams
-        .into_iter()
-        .enumerate()
-        .map(|(idx, stream)| async move {
-            let handle = tokio::task::spawn(stream.try_collect());
-            AbortOnDropSingle::new(handle).await.map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "collect_partitioned partition {idx} panicked: {e}"
-                ))
-            })?
+    streams.into_iter().enumerate().for_each(|(idx, stream)| {
+        join_set.spawn(async move {
+            let result: Result<Vec<RecordBatch>> = stream.try_collect().await;
+            (idx, result)
         });
+    });
 
-    futures::future::try_join_all(handles).await
+    let mut batches = vec![];
+    // Note that currently this doesn't identify the thread that panicked
+    //
+    // TODO: Replace with [join_next_with_id](https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html#method.join_next_with_id
+    // once it is stable
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok((idx, res)) => batches.push((idx, res?)),
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
+    }
+
+    batches.sort_by_key(|(idx, _)| *idx);
+    let batches = batches.into_iter().map(|(_, batch)| batch).collect();
+
+    Ok(batches)
 }
 
 /// Execute the [ExecutionPlan] and return a vec with one stream per output partition
@@ -713,7 +721,6 @@ pub mod unnest;
 pub mod values;
 pub mod windows;
 
-use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_execution::TaskContext;

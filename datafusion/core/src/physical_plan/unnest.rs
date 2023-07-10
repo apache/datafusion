@@ -38,6 +38,8 @@ use crate::physical_plan::{
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 
+use super::DisplayAs;
+
 /// Unnest the given column by joining the row with each value in the nested type.
 #[derive(Debug)]
 pub struct UnnestExec {
@@ -56,6 +58,20 @@ impl UnnestExec {
             input,
             schema,
             column,
+        }
+    }
+}
+
+impl DisplayAs for UnnestExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "UnnestExec")
+            }
         }
     }
 }
@@ -124,18 +140,6 @@ impl ExecutionPlan for UnnestExec {
             num_output_rows: 0,
             unnest_time: 0,
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "UnnestExec")
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

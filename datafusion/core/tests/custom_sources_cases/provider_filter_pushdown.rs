@@ -26,7 +26,8 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
@@ -56,6 +57,20 @@ fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
 struct CustomPlan {
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
+}
+
+impl DisplayAs for CustomPlan {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CustomPlan: batch_size={}", self.batches.len(),)
+            }
+        }
+    }
 }
 
 impl ExecutionPlan for CustomPlan {
@@ -95,18 +110,6 @@ impl ExecutionPlan for CustomPlan {
             self.schema(),
             futures::stream::iter(self.batches.clone().into_iter().map(Ok)),
         )))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CustomPlan: batch_size={}", self.batches.len(),)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

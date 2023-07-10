@@ -342,11 +342,11 @@ async fn roundtrip_inlist_2() -> Result<()> {
 // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
 async fn roundtrip_inlist_3() -> Result<()> {
     let inlist = (0..THRESHOLD_INLINE_INLIST + 1)
-        .map(|i| format!("'{}'", i))
+        .map(|i| format!("'{i}'"))
         .collect::<Vec<_>>()
         .join(", ");
 
-    roundtrip(&format!("SELECT * FROM data WHERE f IN ({})", inlist)).await
+    roundtrip(&format!("SELECT * FROM data WHERE f IN ({inlist})")).await
 }
 
 #[tokio::test]
@@ -357,6 +357,30 @@ async fn roundtrip_inlist_4() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_inner_join() -> Result<()> {
     roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
+}
+
+#[tokio::test]
+async fn roundtrip_non_equi_inner_join() -> Result<()> {
+    roundtrip("SELECT data.a FROM data JOIN data2 ON data.a <> data2.a").await
+}
+
+#[tokio::test]
+async fn roundtrip_non_equi_join() -> Result<()> {
+    roundtrip(
+        "SELECT data.a FROM data, data2 WHERE data.a = data2.a AND data.e > data2.a",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_exists_filter() -> Result<()> {
+    assert_expected_plan(
+        "SELECT b FROM data d1 WHERE EXISTS (SELECT * FROM data2 d2 WHERE d2.a = d1.a AND d2.e != d1.e)",
+        "Projection: data.b\
+        \n  LeftSemi Join: data.a = data2.a Filter: data2.e != CAST(data.e AS Int64)\
+        \n    TableScan: data projection=[a, b, e]\
+        \n    TableScan: data2 projection=[a, e]"
+    ).await
 }
 
 #[tokio::test]

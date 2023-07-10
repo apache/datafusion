@@ -46,8 +46,9 @@ use crate::physical_plan::joins::utils::{
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
-    metrics, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
-    Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    metrics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
+    ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::DataFusionError;
 use datafusion_common::JoinType;
@@ -197,6 +198,26 @@ impl SortMergeJoinExec {
     /// Set of common columns used to join on
     pub fn on(&self) -> &[(Column, Column)] {
         &self.on
+    }
+}
+
+impl DisplayAs for SortMergeJoinExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "SortMergeJoin: join_type={:?}, on=[{}]",
+                    self.join_type, on
+                )
+            }
+        }
     }
 }
 
@@ -359,24 +380,6 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let on = self
-                    .on
-                    .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                write!(
-                    f,
-                    "SortMergeJoin: join_type={:?}, on=[{}]",
-                    self.join_type, on
-                )
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

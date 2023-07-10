@@ -97,6 +97,7 @@ impl TableProvider for StreamingTable {
             self.schema.clone(),
             self.partitions.clone(),
             projection,
+            None,
             self.infinite,
         )?))
     }
