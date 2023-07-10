@@ -128,13 +128,12 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         false
     }
 
-    /// Return a specialized [`GroupsAccumulator`] that manages state for all groups
+    /// Return a specialized [`GroupsAccumulator`] that manages state
+    /// for all groups.
     ///
-    /// For maximum performance, [`GroupsAccumulator`] should be
+    /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        // TODO: The default should implement a wrapper over
-        // sef.create_accumulator
         Err(DataFusionError::NotImplemented(format!(
             "GroupsAccumulator hasn't been implemented for {self:?} yet"
         )))

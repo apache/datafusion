@@ -26,9 +26,9 @@ use crate::GroupsAccumulator;
 
 use super::accumulate::NullState;
 
-/// An accumulator that implements a single operation over
-/// Boolean where the accumulated state is the same as the input
-/// type (such as [`BitAndAssign`])
+/// An accumulator that implements a single operation over a
+/// [`BooleanArray`] where the accumulated state is also boolean (such
+/// as [`BitAndAssign`])
 ///
 /// F: The function to apply to two elements. The first argument is
 /// the existing value and should be updated with the second value
@@ -122,6 +122,6 @@ where
 
     fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
-        self.values.capacity() / 8
+        self.values.capacity() / 8 + self.null_state.size()
     }
 }

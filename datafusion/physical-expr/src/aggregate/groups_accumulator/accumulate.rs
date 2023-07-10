@@ -17,10 +17,6 @@
 
 //! [`GroupsAccumulator`] helpers: [`NullState`] and [`accumulate_indices`]
 //!
-//! These functions are designed to be the performance critical inner
-//! loops of [`GroupsAccumulator`], so there are multiple type
-//! specific methods, invoked depending on the input.
-//!
 //! [`GroupsAccumulator`]: crate::GroupsAccumulator
 
 use arrow::datatypes::ArrowPrimitiveType;
@@ -30,46 +26,46 @@ use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
 ///
-/// This is part of the inner loop for many GroupsAccumulators, and
-/// thus the performance is critical.
+/// This is part of the inner loop for many [`GroupsAccumulator`]s,
+/// and thus the performance is critical and so there are multiple
+/// specialized implementations, invoked depending on the specific
+/// combinations of the input.
 ///
-/// typically 4 potential combinations of input values that
-/// accumulators need to special case for performance,
-///
-/// GroupsAccumulators need handle all four combinations of:
+/// Typically there are 4 potential combinations of inputs must be
+/// special caseed for performance:
 ///
 /// * With / Without filter
 /// * With / Without nulls in the input
 ///
-/// If there are filters present, `NullState` tarcks if it has seen
-/// *any* value for that group (as some values may be filtered
-/// out). Without a filter, the accumulator is only passed groups
-/// that actually had a value to accumulate so they do not need to
-/// track if they have seen values for a particular group.
-///
 /// If the input has nulls, then the accumulator must potentially
 /// handle each input null value specially (e.g. for `SUM` to mark the
 /// corresponding sum as null)
+///
+/// If there are filters present, `NullState` tracks if it has seen
+/// *any* value for that group (as some values may be filtered
+/// out). Without a filter, the accumulator is only passed groups that
+/// had at least one value to accumulate so they do not need to track
+/// if they have seen values for a particular group.
 #[derive(Debug)]
 pub struct NullState {
     /// Tracks if a null input value has been seen for `group_index`,
     /// if there were any nulls in the input.
     ///
     /// If `null_inputs[i]` is true, have not seen any null values for
-    /// that group, or have not seen any vaues
+    /// group `i`, or have not seen any vaues
     ///
     /// If `null_inputs[i]` is false, saw at least one null value for
-    /// that group
+    /// group `i`
     null_inputs: Option<BooleanBufferBuilder>,
 
-    /// If there has been a filter value, has it seen any non-filtered
-    /// input values for `group_index`?
+    /// If there has been an `opt_filter`, has it seen any
+    /// non-filtered input values for `group_index`?
     ///
-    /// If `seen_values[i]` is true, it seen at least one non null
-    /// value for this group
+    /// If `seen_values[i]` is true, have seen at least one non null
+    /// value for group `i`
     ///
     /// If `seen_values[i]` is false, have not seen any values that
-    /// pass the filter yet for the group
+    /// pass the filter yet for group `i`
     seen_values: Option<BooleanBufferBuilder>,
 }
 
@@ -81,9 +77,14 @@ impl NullState {
         }
     }
 
+    /// return the size of all buffers allocated by this null state, not including self
+    pub fn size(&self) -> usize {
+        builder_size(self.null_inputs.as_ref()) + builder_size(self.seen_values.as_ref())
+    }
+
     /// Invokes `value_fn(group_index, value)` for each non null, non
-    /// filtered value, while tracking which groups have seen null
-    /// inputs and which groups have seen any inputs
+    /// filtered value of `value`, while tracking which groups have
+    /// seen null inputs and which groups have seen any inputs if necessary
     //
     /// # Arguments:
     ///
@@ -91,9 +92,6 @@ impl NullState {
     /// * `group_indices`:  To which groups do the rows in `values` belong, (aka group_index)
     /// * `opt_filter`: if present, only rows for which is Some(true) are included
     /// * `value_fn`: function invoked for  (group_index, value) where value is non null
-    ///
-    /// `F`: Invoked for each input row like `value_fn(group_index,
-    /// value)` for each non null, non filtered value.
     ///
     /// # Example
     ///
@@ -116,7 +114,7 @@ impl NullState {
     /// ```
     ///
     /// In the example above, `value_fn` is invoked for each (group_index,
-    /// value) pair where `opt_filter[i]` is true
+    /// value) pair where `opt_filter[i]` is true and values is non null
     ///
     /// ```text
     /// value_fn(2, 200)
@@ -268,8 +266,11 @@ impl NullState {
     /// seen null inputs and which groups have seen any inputs, for
     /// [`BooleanArray`]s.
     ///
-    /// See [`Self::accumulate`], which handles [`PrimitiveArray`]s,
-    /// for more details.
+    /// Since `BooleanArray` is not a [`PrimitiveArray`] it must be
+    /// handled specially.
+    ///
+    /// See [`Self::accumulate`], which handles `PrimitiveArray`s, for
+    /// more details on other arguments.
     pub fn accumulate_boolean<F>(
         &mut self,
         group_indices: &[usize],
@@ -365,14 +366,15 @@ impl NullState {
         }
     }
 
-    /// Creates the final NullBuffer representing which group_indices have
-    /// null values (if they saw a null input, or because they never saw any values)
+    /// Creates the final [`NullBuffer`] representing which
+    /// group_indices should have null values (because they saw a null
+    /// input, or because they never saw any values)
     ///
     /// resets the internal state to empty
-    ///
-    /// nulls (validity) set false for any group that saw a null
-    /// seen_values (validtity) set true for any group that saw a value
     pub fn build(&mut self) -> Option<NullBuffer> {
+        // nulls (validity) set false for any group that saw a null
+        //
+        // seen_values (validity) set true for any group that saw a value
         let nulls = self
             .null_inputs
             .as_mut()
@@ -385,7 +387,7 @@ impl NullState {
                 }
             });
 
-        // if we had filters, some groups may never have seen a group
+        // if we had filters, some groups may never have seen a value
         // so they are only non-null if we have seen values
         let seen_values = self
             .seen_values
@@ -409,6 +411,9 @@ impl NullState {
 /// `F`: Invoked like `value_fn(group_index) for all non null values
 /// passing the filter. Note that no tracking is done for null inputs
 /// or which groups have seen any values
+///
+/// See [`NullState::accumulate`], for more details on other
+/// arguments.
 pub fn accumulate_indices<F>(
     group_indices: &[usize],
     nulls: Option<&NullBuffer>,
@@ -510,6 +515,15 @@ fn initialize_builder(
         builder.append_n(new_groups, default_value);
     }
     builder
+}
+
+fn builder_size(builder: Option<&BooleanBufferBuilder>) -> usize {
+    builder
+        .map(|null_inputs| {
+            // capacity is in bits, so convert to bytes
+            null_inputs.capacity() / 8
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -693,6 +707,9 @@ mod test {
                 total_num_groups,
             );
             Self::accumulate_indices_test(group_indices, values.nulls(), opt_filter);
+
+            // Convert values into a boolean array (using anything above the average)
+            //let avg = values.iter().filter_map(|
         }
 
         /// This is effectively a different implementation of

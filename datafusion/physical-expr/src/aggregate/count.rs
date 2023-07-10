@@ -248,7 +248,6 @@ impl AggregateExpr for Count {
     fn groups_accumulator_supported(&self) -> bool {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc
-        // TODO file a ticket to optimize
         self.exprs.len() == 1
     }
 

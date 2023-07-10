@@ -26,8 +26,8 @@ use crate::GroupsAccumulator;
 use super::accumulate::NullState;
 
 /// An accumulator that implements a single operation over
-/// PrimtiveTypes where the accumulated state is the same as the input
-/// type (such as [`BitAndAssign`])
+/// [`ArrowPrimitiveType`] where the accumulated state is the same as
+/// the input type (such as [`Sum`])
 ///
 /// F: The function to apply to two elements. The first argument is
 /// the existing value and should be updated with the second value
@@ -121,6 +121,6 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.capacity() * std::mem::size_of::<T::Native>()
+        self.values.capacity() * std::mem::size_of::<T::Native>() + self.null_state.size()
     }
 }

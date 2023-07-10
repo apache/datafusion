@@ -38,7 +38,7 @@ use datafusion_common::Result;
 /// to store the group states.
 pub trait GroupsAccumulator: Send {
     /// Updates the accumulator's state from its arguments, encoded as
-    /// a vector of arrow [`ArrayRef`]s.
+    /// a vector of [`ArrayRef`]s.
     ///
     /// * `values`: the input arguments to the accumulator
     ///
@@ -49,7 +49,10 @@ pub trait GroupsAccumulator: Send {
     /// `values[i]` if `opt_filter[i]` is true
     ///
     /// * `total_num_groups`: the number of groups (the largest
-    /// group_index is thus `total_num_groups - 1`)
+    /// group_index is thus `total_num_groups - 1`).
+    ///
+    /// Note thats subsequent calls to update_batch may have larger
+    /// total_num_groups as new groups are seen.
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -59,50 +62,47 @@ pub trait GroupsAccumulator: Send {
     ) -> Result<()>;
 
     /// Returns the final aggregate value for each group as a single
-    /// `RecordBatch`.
-    ///
-    /// The rows returned *must* be in group_index order: The value
-    /// for group_index 0, followed by 1, etc.
-    ///
-    /// OPEN QUESTION: Should this method take a "batch_size: usize"
-    /// and produce a `Vec<RecordBatch>` as output to avoid requiring
-    /// a contiguous intermediate buffer?
-    ///
-    /// For example, the `SUM` accumulator maintains a running sum,
-    /// and `evaluate` will produce that running sum as its output for
-    /// all groups, in group_index order
-    ///
-    /// This call should be treated as consuming (takes `self`) as no
-    /// other functions will be called after this. This can not
-    /// actually take `self` otherwise the trait would not be object
-    /// safe). The accumulator is free to release / reset it is
-    /// internal state after this call and error on any subsequent
-    /// call.
-    fn evaluate(&mut self) -> Result<ArrayRef>;
-
-    /// Returns the intermediate aggregate state for this accumulator,
-    /// used for multi-phase grouping.
+    /// `RecordBatch`, resetting the internal state.
     ///
     /// The rows returned *must* be in group_index order: The value
     /// for group_index 0, followed by 1, etc.  Any group_index that
     /// did not have values, should be null.
     ///
-    /// For example, AVG returns two arrays:  `SUM` and `COUNT`.
+    /// For example, a `SUM` accumulator maintains a running sum for
+    /// each group, and `evaluate` will produce that running sum as
+    /// its output for all groups, in group_index order
+    ///
+    /// The accumulator should free to release / reset it is internal
+    /// state after this call to the same as it was after being
+    /// initially created.
+    fn evaluate(&mut self) -> Result<ArrayRef>;
+
+    /// Returns the intermediate aggregate state for this accumulator,
+    /// used for multi-phase grouping, resetting its internal state.
+    ///
+    /// The rows returned *must* be in group_index order: The value
+    /// for group_index 0, followed by 1, etc.  Any group_index that
+    /// did not have values, should be null.
+    ///
+    /// For example, `AVG` might return two arrays: `SUM` and `COUNT`
+    /// but the `MIN` aggregate would just return a single array.
     ///
     /// Note more sophisticated internal state can be passed as
     /// single `StructArray` rather than multiple arrays.
     ///
-    /// This call should be treated as consuming, as described in the
-    /// comments of [`Self::evaluate`].
+    /// The accumulator should free to release / reset it is internal
+    /// state after this call to the same as it was after being
+    /// initially created.
     fn state(&mut self) -> Result<Vec<ArrayRef>>;
 
-    /// Merges intermediate state (from [`Self::state`]) into this
-    /// accumulator's values.
+    /// Merges intermediate state (the output from [`Self::state`])
+    /// into this accumulator's values.
     ///
-    /// For some aggregates (such as `SUM`), merge_batch is the same
-    /// as `update_batch`, but for some aggregrates (such as `COUNT`)
-    /// the operations differ. See [`Self::state`] for more details on how
-    /// state is used and merged.
+    /// For some aggregates (such as `SUM`), `merge_batch` is the same
+    /// as `update_batch`, but for some aggregrates (such as `COUNT`,
+    /// where the partial counts must be summed) the operations
+    /// differ. See [`Self::state`] for more details on how state is
+    /// used and merged.
     ///
     /// * `values`: arrays produced from calling `state` previously to the accumulator
     ///
@@ -115,8 +115,8 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
-    /// Amount of memory used to store the state of this
-    /// accumulator. This function is called once per batch, so it
-    /// should be O(n) to compute
+    /// Amount of memory used to store the state of this accumulator,
+    /// in bytes. This function is called once per batch, so it should
+    /// be `O(n)` to compute, not `O(num_groups)`
     fn size(&self) -> usize;
 }

@@ -174,6 +174,8 @@ impl AggregateExpr for Max {
                 instantiate_min_max_accumulator!(self, Float64Type, false)
             }
 
+            // It would be nice to have a fast implementation for Strings as well
+            // https://github.com/apache/arrow-datafusion/issues/6906
             DataType::Decimal128(_, _) => {
                 Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
                     Decimal128Type,
@@ -1206,8 +1208,15 @@ impl MinMax for i128 {
     }
 }
 
-/// An accumulator to compute the min or max of [`PrimitiveArray<T>`].
+/// An accumulator to compute the min or max of a [`PrimitiveArray<T>`].
+///
 /// Stores values as native/primitive type
+///
+/// Note this doesn't use [`PrimitiveGroupsAccumulator`] because it
+/// needs to control the default accumulator value (which is not
+/// `default::Default()`)
+///
+/// [`PrimitiveGroupsAccumulator`]: crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator
 #[derive(Debug)]
 struct MinMaxGroupsPrimitiveAccumulator<T, const MIN: bool>
 where
@@ -1326,7 +1335,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.min_max.capacity() * std::mem::size_of::<usize>()
+        self.min_max.capacity() * std::mem::size_of::<usize>() + self.null_state.size()
     }
 }
 

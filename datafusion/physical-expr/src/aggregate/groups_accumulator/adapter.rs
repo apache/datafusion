@@ -32,8 +32,10 @@ use datafusion_expr::Accumulator;
 /// An adpater that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
 /// While [`Accumulator`] are simpler to implement and can support
-/// more general calculations (like retractable), but are not as fast
-/// as `GroupsAccumulator`. This interface bridges the gap.
+/// more general calculations (like retractable window functions),
+/// they are not as fast as a specialized `GroupsAccumulator`. This
+/// interface bridges the gap so the group by operator only operates
+/// in terms of [`Accumulator`].
 pub struct GroupsAccumulatorAdapter {
     factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
 
@@ -110,10 +112,10 @@ impl GroupsAccumulatorAdapter {
             self.allocation_bytes += state.size();
             self.states.push(state);
         }
-        let vec_size_post =
-            std::mem::size_of::<AccumulatorState>() * self.states.capacity();
 
-        self.allocation_bytes += vec_size_post.saturating_sub(vec_size_pre);
+        self.allocation_bytes +=
+            std::mem::size_of::<AccumulatorState>() * self.states.capacity();
+        self.allocation_bytes -= vec_size_pre;
         Ok(())
     }
 
@@ -155,23 +157,22 @@ impl GroupsAccumulatorAdapter {
     {
         self.make_accumulators_if_needed(total_num_groups)?;
 
-        // reorderes the input and filter so that values for group_indexes are contiguous.
-        // Then it invokes Accumulator::update / merge for each of those contiguous ranges
         assert_eq!(values[0].len(), group_indices.len());
 
-        // figure out which input rows correspond to which groups Note
-        // that self.state.indices empty for all groups always (it is
-        // cleared out below)
+        // figure out which input rows correspond to which groups.
+        // Note that self.state.indices starts empty for all groups
+        // (it is cleared out below)
         for (idx, group_index) in group_indices.iter().enumerate() {
             self.states[*group_index].indices.push(idx as u32);
         }
 
-        // groups_per_rows holds a list of group indexes that have
-        // any rows that need to be accumulated, stored in order of group_index
+        // groups_with_rows holds a list of group indexes that have
+        // any rows that need to be accumulated, stored in order of
+        // group_index
 
         let mut groups_with_rows = vec![];
 
-        // batch_indices holds indices in values, each group contiguously
+        // batch_indices holds indices into values, each group is contiguous
         let mut batch_indices = UInt32Builder::with_capacity(0);
 
         // offsets[i] is index into batch_indices where the rows for
@@ -211,11 +212,12 @@ impl GroupsAccumulatorAdapter {
                 slice_and_maybe_filter(&values, opt_filter.as_ref(), offsets)?;
             (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
 
-            // clear out the state
+            // clear out the state so they are empty for next
+            // iteration
             state.indices.clear();
 
-            let size_post = state.size();
-            self.allocation_bytes += size_post.saturating_sub(size_pre);
+            self.allocation_bytes += state.size();
+            self.allocation_bytes -= size_pre;
         }
         Ok(())
     }
@@ -244,8 +246,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     fn evaluate(&mut self) -> Result<ArrayRef> {
         let states = std::mem::take(&mut self.states);
 
-        // todo update memory usage
-
         let results: Vec<ScalarValue> = states
             .into_iter()
             .map(|state| state.accumulator.evaluate())
@@ -258,8 +258,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
         let states = std::mem::take(&mut self.states);
-
-        // todo update memory usage
 
         // each accumulator produces a potential vector of values
         // which we need to form into columns
@@ -280,7 +278,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             .collect::<Result<Vec<_>>>()?;
 
         // double check each array has the same length (aka the
-        // accumulator was written correctly
+        // accumulator was implemented correctly
         if let Some(first_col) = arrays.get(0) {
             for arr in &arrays {
                 assert_eq!(arr.len(), first_col.len())
