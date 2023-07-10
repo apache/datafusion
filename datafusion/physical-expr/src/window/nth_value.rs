@@ -145,18 +145,6 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn update_state(
-        &mut self,
-        state: &WindowAggState,
-        _idx: usize,
-        _range_columns: &[ArrayRef],
-        _sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        // If we do not use state, update_state does nothing
-        self.state.range.clone_from(&state.window_frame_range);
-        Ok(())
-    }
-
     /// When the window frame has a fixed beginning (e.g UNBOUNDED
     /// PRECEDING), for some functions such as FIRST_VALUE, LAST_VALUE and
     /// NTH_VALUE we can memoize result.  Once result is calculated it
@@ -194,6 +182,7 @@ impl PartitionEvaluator for NthValueEvaluator {
         &mut self,
         values: &[ArrayRef],
         range: &Range<usize>,
+        _row_idx: usize,
     ) -> Result<ScalarValue> {
         if let Some(ref result) = self.state.finalized_result {
             Ok(result.clone())
@@ -255,7 +244,8 @@ mod tests {
         let values = expr.evaluate_args(&batch)?;
         let result = ranges
             .iter()
-            .map(|range| evaluator.evaluate(&values, range))
+            .enumerate()
+            .map(|(idx, range)| evaluator.evaluate(&values, range, idx))
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;
         let result = as_int32_array(&result)?;

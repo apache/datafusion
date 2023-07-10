@@ -179,17 +179,6 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn update_state(
-        &mut self,
-        _state: &WindowAggState,
-        idx: usize,
-        _range_columns: &[ArrayRef],
-        _sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        self.state.idx = idx;
-        Ok(())
-    }
-
     fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
         if self.shift_offset > 0 {
             let offset = self.shift_offset as usize;
@@ -207,10 +196,11 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         &mut self,
         values: &[ArrayRef],
         _range: &Range<usize>,
+        row_idx: usize,
     ) -> Result<ScalarValue> {
         let array = &values[0];
         let dtype = array.data_type();
-        let idx = self.state.idx as i64 - self.shift_offset;
+        let idx = row_idx as i64 - self.shift_offset;
         if idx < 0 || idx as usize >= array.len() {
             get_default_value(self.default_value.as_ref(), dtype)
         } else {

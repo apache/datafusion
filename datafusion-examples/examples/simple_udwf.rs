@@ -191,6 +191,7 @@ impl PartitionEvaluator for MyPartitionEvaluator {
         &mut self,
         values: &[ArrayRef],
         range: &std::ops::Range<usize>,
+        _row_idx: usize,
     ) -> Result<ScalarValue> {
         // Again, the input argument is an array of floating
         // point numbers to calculate a moving average

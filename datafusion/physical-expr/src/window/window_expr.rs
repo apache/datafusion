@@ -290,6 +290,8 @@ pub struct RankState {
     pub last_rank_data: Vec<ScalarValue>,
     /// The index where last_rank_boundary is started
     pub last_rank_boundary: usize,
+    /// Keep the number of entries in current rank
+    pub current_group_count: usize,
     /// Rank number kept from the start
     pub n_rank: usize,
 }

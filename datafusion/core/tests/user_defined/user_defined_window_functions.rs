@@ -195,7 +195,6 @@ async fn test_stateful_udwf() {
         &execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap()
     );
     assert_eq!(test_state.evaluate_called(), 10);
-    assert_eq!(test_state.update_state_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
 }
 
@@ -229,7 +228,6 @@ async fn test_stateful_udwf_bounded_window() {
     );
     // Evaluate and update_state is called for each input row
     assert_eq!(test_state.evaluate_called(), 10);
-    assert_eq!(test_state.update_state_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
 }
 
@@ -355,8 +353,6 @@ struct TestState {
     evaluate_all_called: AtomicUsize,
     /// How many times was `evaluate` called?
     evaluate_called: AtomicUsize,
-    /// How many times was `update_state` called?
-    update_state_called: AtomicUsize,
     /// How many times was `evaluate_all_with_rank` called?
     evaluate_all_with_rank_called: AtomicUsize,
     /// should the functions say they use the window frame?
@@ -410,16 +406,6 @@ impl TestState {
         self.evaluate_called.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// return the update_state_called counter
-    fn update_state_called(&self) -> usize {
-        self.update_state_called.load(Ordering::SeqCst)
-    }
-
-    /// update the update_state_called counter
-    fn inc_update_state_called(&self) {
-        self.update_state_called.fetch_add(1, Ordering::SeqCst);
-    }
-
     /// return the evaluate_all_with_rank_called counter
     fn evaluate_all_with_rank_called(&self) -> usize {
         self.evaluate_all_with_rank_called.load(Ordering::SeqCst)
@@ -470,6 +456,7 @@ impl PartitionEvaluator for OddCounter {
         &mut self,
         values: &[ArrayRef],
         range: &Range<usize>,
+        _row_idx: usize,
     ) -> Result<ScalarValue> {
         println!("evaluate, values: {values:#?}, range: {range:?}");
 
@@ -510,17 +497,6 @@ impl PartitionEvaluator for OddCounter {
             .map(|v| (num_rows - v) as i64)
             .collect();
         Ok(Arc::new(array))
-    }
-
-    fn update_state(
-        &mut self,
-        _state: &WindowAggState,
-        _idx: usize,
-        _range_columns: &[ArrayRef],
-        _sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        self.test_state.inc_update_state_called();
-        Ok(())
     }
 
     fn supports_bounded_execution(&self) -> bool {

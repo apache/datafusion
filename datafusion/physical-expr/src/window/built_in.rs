@@ -113,7 +113,7 @@ impl WindowExpr for BuiltInWindowExpr {
                     num_rows,
                     idx,
                 )?;
-                let value = evaluator.evaluate(&values, &range)?;
+                let value = evaluator.evaluate(&values, &range, idx)?;
                 row_wise_results.push(value);
                 last_range = range;
             }
@@ -157,8 +157,9 @@ impl WindowExpr for BuiltInWindowExpr {
             };
             let state = &mut window_state.state;
 
-            let (values, order_bys) =
+            let (mut values, order_bys) =
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
+            values.extend(order_bys.clone());
 
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
@@ -197,9 +198,12 @@ impl WindowExpr for BuiltInWindowExpr {
                 }
                 // Update last range
                 state.window_frame_range = frame_range;
-                evaluator.update_state(state, idx, &order_bys, &sort_partition_points)?;
-                row_wise_results
-                    .push(evaluator.evaluate(&values, &state.window_frame_range)?);
+                // evaluator.update_state(state, idx, &order_bys, &sort_partition_points)?;
+                row_wise_results.push(evaluator.evaluate(
+                    &values,
+                    &state.window_frame_range,
+                    idx,
+                )?);
             }
             let out_col = if row_wise_results.is_empty() {
                 new_empty_array(out_type)

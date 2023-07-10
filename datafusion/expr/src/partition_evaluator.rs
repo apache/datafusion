@@ -105,25 +105,6 @@ use crate::window_state::WindowAggState;
 /// [`include_rank`]: Self::include_rank
 /// [`supports_bounded_execution`]: Self::supports_bounded_execution
 pub trait PartitionEvaluator: Debug + Send {
-    /// Updates the internal state for window function
-    ///
-    /// Only used for stateful evaluation
-    ///
-    /// `state`: is useful to update internal state for window function.
-    /// `idx`: is the index of last row for which result is calculated.
-    /// `range_columns`: is the result of order by column values. It is used to calculate rank boundaries
-    /// `sort_partition_points`: is the boundaries of each rank in the range_column. It is used to update rank.
-    fn update_state(
-        &mut self,
-        _state: &WindowAggState,
-        _idx: usize,
-        _range_columns: &[ArrayRef],
-        _sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        // If we do not use state, update_state does nothing
-        Ok(())
-    }
-
     /// When the window frame has a fixed beginning (e.g UNBOUNDED
     /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
     /// NTH_VALUE do not need the (unbounded) input once they have
@@ -200,7 +181,7 @@ pub trait PartitionEvaluator: Debug + Send {
         // Default implementation may behave suboptimally (For instance `NumRowEvaluator` overwrites it)
         if !self.uses_window_frame() && self.supports_bounded_execution() {
             let res = (0..num_rows)
-                .map(|idx| self.evaluate(values, &self.get_range(idx, num_rows)?))
+                .map(|idx| self.evaluate(values, &self.get_range(idx, num_rows)?, idx))
                 .collect::<Result<Vec<_>>>()?;
             ScalarValue::iter_to_array(res.into_iter())
         } else {
@@ -225,6 +206,7 @@ pub trait PartitionEvaluator: Debug + Send {
         &mut self,
         _values: &[ArrayRef],
         _range: &Range<usize>,
+        _row_idx: usize,
     ) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate is not implemented by default".into(),
