@@ -1268,13 +1268,14 @@ where
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values.get(0).unwrap().as_primitive::<T>();
 
-        self.min_max.resize_with(total_num_groups, || {
+        self.min_max.resize(
+            total_num_groups,
             if MIN {
                 T::Native::max()
             } else {
                 T::Native::min()
-            }
-        });
+            },
+        );
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(

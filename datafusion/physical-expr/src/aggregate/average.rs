@@ -545,8 +545,7 @@ where
         );
 
         // update sums
-        self.sums
-            .resize_with(total_num_groups, || T::default_value());
+        self.sums.resize(total_num_groups, T::default_value());
         self.null_state.accumulate(
             group_indices,
             partial_sums,

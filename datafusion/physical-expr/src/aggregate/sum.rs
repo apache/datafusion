@@ -571,8 +571,7 @@ where
         let values = values.get(0).unwrap().as_primitive::<T>();
 
         // update sums
-        self.sums
-            .resize_with(total_num_groups, || T::default_value());
+        self.sums.resize(total_num_groups, T::default_value());
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(

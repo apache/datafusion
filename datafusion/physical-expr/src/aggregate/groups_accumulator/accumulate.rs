@@ -46,6 +46,8 @@ use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 /// out). Without a filter, the accumulator is only passed groups that
 /// had at least one value to accumulate so they do not need to track
 /// if they have seen values for a particular group.
+///
+/// [`GroupsAccumulator`]: crate::GroupsAccumulator
 #[derive(Debug)]
 pub struct NullState {
     /// Tracks if a null input value has been seen for `group_index`,

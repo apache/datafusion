@@ -27,7 +27,7 @@ use super::accumulate::NullState;
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
-/// the input type (such as [`Sum`])
+/// the input type (such as `Sum`)
 ///
 /// F: The function to apply to two elements. The first argument is
 /// the existing value and should be updated with the second value
@@ -80,8 +80,7 @@ where
         let values = values.get(0).unwrap().as_primitive::<T>();
 
         // update values
-        self.values
-            .resize_with(total_num_groups, || T::default_value());
+        self.values.resize(total_num_groups, T::default_value());
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
