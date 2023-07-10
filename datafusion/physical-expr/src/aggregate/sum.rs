@@ -21,8 +21,16 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
+use crate::aggregate::utils::down_cast_any_ref;
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use arrow::array::Array;
+use arrow::array::Decimal128Array;
 use arrow::compute;
+use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use arrow::{
     array::{
@@ -31,18 +39,19 @@ use arrow::{
     },
     datatypes::Field,
 };
+use arrow_array::cast::AsArray;
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type,
+    UInt64Type,
+};
+use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
-
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
-use arrow::array::Array;
-use arrow::array::Decimal128Array;
-use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
+use log::debug;
+
+use super::groups_accumulator::accumulate::NullState;
+use super::utils::adjust_output_array;
 
 /// SUM aggregate expression
 #[derive(Debug, Clone)]
@@ -124,6 +133,10 @@ impl AggregateExpr for Sum {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -132,6 +145,46 @@ impl AggregateExpr for Sum {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        // instantiate specialized accumulator
+        match self.data_type {
+            DataType::UInt64 => Ok(Box::new(SumGroupsAccumulator::<UInt64Type>::new(
+                &self.data_type,
+                &self.data_type,
+            ))),
+            DataType::Int64 => Ok(Box::new(SumGroupsAccumulator::<Int64Type>::new(
+                &self.data_type,
+                &self.data_type,
+            ))),
+            DataType::UInt32 => Ok(Box::new(SumGroupsAccumulator::<UInt32Type>::new(
+                &self.data_type,
+                &self.data_type,
+            ))),
+            DataType::Int32 => Ok(Box::new(SumGroupsAccumulator::<Int32Type>::new(
+                &self.data_type,
+                &self.data_type,
+            ))),
+            DataType::Float32 => Ok(Box::new(SumGroupsAccumulator::<Float32Type>::new(
+                &self.data_type,
+                &self.data_type,
+            ))),
+            DataType::Float64 => Ok(Box::new(SumGroupsAccumulator::<Float64Type>::new(
+                &self.data_type,
+                &self.data_type,
+            ))),
+            DataType::Decimal128(_target_precision, _target_scale) => {
+                Ok(Box::new(SumGroupsAccumulator::<Decimal128Type>::new(
+                    &self.data_type,
+                    &self.data_type,
+                )))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "SumGroupsAccumulator not supported for {}",
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -462,6 +515,114 @@ impl RowAccumulator for SumRowAccumulator {
     #[inline(always)]
     fn state_index(&self) -> usize {
         self.index
+    }
+}
+
+/// An accumulator to compute the sum of values in [`PrimitiveArray<T>`]
+#[derive(Debug)]
+struct SumGroupsAccumulator<T>
+where
+    T: ArrowNumericType + Send,
+{
+    /// The type of the computed sum
+    sum_data_type: DataType,
+
+    /// The type of the returned sum
+    return_data_type: DataType,
+
+    /// Sums per group, stored as the native type
+    sums: Vec<T::Native>,
+
+    /// Track nulls in the input / filters
+    null_state: NullState,
+}
+
+impl<T> SumGroupsAccumulator<T>
+where
+    T: ArrowNumericType + Send,
+{
+    pub fn new(sum_data_type: &DataType, return_data_type: &DataType) -> Self {
+        debug!(
+            "SumGroupsAccumulator ({}, sum type: {sum_data_type:?}) --> {return_data_type:?}",
+            std::any::type_name::<T>()
+        );
+
+        Self {
+            return_data_type: sum_data_type.clone(),
+            sum_data_type: sum_data_type.clone(),
+            sums: vec![],
+            null_state: NullState::new(),
+        }
+    }
+}
+
+impl<T> GroupsAccumulator for SumGroupsAccumulator<T>
+where
+    T: ArrowNumericType + Send,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values.get(0).unwrap().as_primitive::<T>();
+
+        // update sums
+        self.sums
+            .resize_with(total_num_groups, || T::default_value());
+
+        // NullState dispatches / handles tracking nulls and groups that saw no values
+        self.null_state.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                let sum = &mut self.sums[group_index];
+                *sum = sum.add_wrapping(new_value);
+            },
+        );
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn evaluate(&mut self) -> Result<ArrayRef> {
+        let sums = std::mem::take(&mut self.sums);
+        let nulls = self.null_state.build();
+
+        let sums = PrimitiveArray::<T>::new(sums.into(), nulls); // no copy
+        let sums = adjust_output_array(&self.return_data_type, Arc::new(sums))?;
+
+        Ok(Arc::new(sums))
+    }
+
+    // return arrays for sums
+    fn state(&mut self) -> Result<Vec<ArrayRef>> {
+        let nulls = self.null_state.build();
+
+        let sums = std::mem::take(&mut self.sums);
+        let sums = Arc::new(PrimitiveArray::<T>::new(sums.into(), nulls));
+
+        let sums = adjust_output_array(&self.sum_data_type, sums)?;
+
+        Ok(vec![sums.clone() as ArrayRef])
+    }
+
+    fn size(&self) -> usize {
+        self.sums.capacity() * std::mem::size_of::<T::Native>()
     }
 }
 
