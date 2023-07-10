@@ -246,7 +246,7 @@ impl OrderingEquivalentClass {
                     if item.expr.eq(&col_expr) {
                         for col in columns {
                             let col_expr = Arc::new(col.clone()) as Arc<dyn PhysicalExpr>;
-                            let mut normalized = self.head.clone();
+                            let mut normalized = ordering.clone();
                             // Change the corresponding entry in the head with the alias column:
                             let entry = &mut normalized[idx];
                             (entry.expr, entry.options) = (col_expr, item.options);
@@ -403,10 +403,11 @@ pub fn project_ordering_equivalence_properties(
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
     let mut eq_classes = input_eq.classes().to_vec();
+    println!("eq_classes at the start: {:?}", eq_classes);
     for class in eq_classes.iter_mut() {
         class.update_with_aliases(columns_map);
     }
-
+    println!("eq_classes after alias update: {:?}", eq_classes);
     // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
     let schema = output_eq.schema();
     let fields = schema.fields();
@@ -431,6 +432,7 @@ pub fn project_ordering_equivalence_properties(
     }
     eq_classes.retain(|props| props.len() > 1);
 
+    println!("eq_classes at the end: {:?}", eq_classes);
     output_eq.extend(eq_classes);
 }
 
