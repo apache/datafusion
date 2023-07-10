@@ -316,15 +316,21 @@ where
 ///
 /// Given the nested array:
 ///
-///   [1], null, [2, 3, 4], null, [5, 6]
+/// ```ignore
+/// [1], null, [2, 3, 4], null, [5, 6]
+/// ```
 ///
 /// the `list_lengths` array contains the length of each list value:
 ///
-///   1, null,  3, null, 2
+/// ```ignore
+/// 1, null,  3, null, 2
+/// ```
 ///
 /// the result indices array is:
 ///
-///   0, 1, 2, 2, 2, 3, 4, 4
+/// ```ignore
+/// 0, 1, 2, 2, 2, 3, 4, 4
+/// ```
 ///
 /// where a null value count as one element.
 fn create_take_indices<T>(
