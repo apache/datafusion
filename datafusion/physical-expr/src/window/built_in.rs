@@ -101,14 +101,20 @@ impl WindowExpr for BuiltInWindowExpr {
                 self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results = vec![];
 
-            let (values, order_bys) = self.get_values_orderbys(batch)?;
+            let mut values = self.evaluate_args(batch)?;
+            let order_bys = self.get_orderby_values(batch)?;
+            let n_args = values.len();
+            values.extend(order_bys);
+            let order_bys_ref = &values[n_args..];
+
+            // let (values, order_bys) = self.get_values_orderbys(batch)?;
             let mut window_frame_ctx =
                 WindowFrameContext::new(self.window_frame.clone(), sort_options);
             let mut last_range = Range { start: 0, end: 0 };
             // We iterate on each row to calculate window frame range and and window function result
             for idx in 0..num_rows {
                 let range = window_frame_ctx.calculate_range(
-                    &order_bys,
+                    order_bys_ref,
                     &last_range,
                     num_rows,
                     idx,
@@ -123,7 +129,7 @@ impl WindowExpr for BuiltInWindowExpr {
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
             evaluator.evaluate_all_with_rank(num_rows, &sort_partition_points)
         } else {
-            let (values, _) = self.get_values_orderbys(batch)?;
+            let values = self.evaluate_args(batch)?;
             evaluator.evaluate_all(&values, num_rows)
         }
     }
@@ -157,9 +163,16 @@ impl WindowExpr for BuiltInWindowExpr {
             };
             let state = &mut window_state.state;
 
-            let (mut values, order_bys) =
-                self.get_values_orderbys(&partition_batch_state.record_batch)?;
-            values.extend(order_bys.clone());
+            let batch_ref = &partition_batch_state.record_batch;
+            let mut values = self.evaluate_args(batch_ref)?;
+            let order_bys = if evaluator.uses_window_frame() | evaluator.include_rank() {
+                self.get_orderby_values(batch_ref)?
+            } else {
+                vec![]
+            };
+            let n_args = values.len();
+            values.extend(order_bys);
+            let order_bys_ref = &values[n_args..];
 
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
@@ -176,7 +189,7 @@ impl WindowExpr for BuiltInWindowExpr {
                             )
                         })
                         .calculate_range(
-                            &order_bys,
+                            order_bys_ref,
                             // Start search from the last range
                             &state.window_frame_range,
                             num_rows,
@@ -192,7 +205,6 @@ impl WindowExpr for BuiltInWindowExpr {
                 }
                 // Update last range
                 state.window_frame_range = frame_range;
-                // evaluator.update_state(state, idx, &order_bys, &sort_partition_points)?;
                 row_wise_results.push(evaluator.evaluate(
                     &values,
                     &state.window_frame_range,

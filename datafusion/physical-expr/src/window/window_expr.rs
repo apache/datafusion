@@ -123,17 +123,12 @@ pub trait WindowExpr: Send + Sync + Debug {
         Ok(order_by_columns)
     }
 
-    /// Get values columns (argument of Window Function)
-    /// and order by columns (columns of the ORDER BY expression) used in evaluators
-    fn get_values_orderbys(
-        &self,
-        record_batch: &RecordBatch,
-    ) -> Result<(Vec<ArrayRef>, Vec<ArrayRef>)> {
-        let values = self.evaluate_args(record_batch)?;
+    /// Get order by columns (columns of the ORDER BY expression) used in evaluators
+    fn get_orderby_values(&self, record_batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
         let order_by_columns = self.order_by_columns(record_batch)?;
         let order_bys: Vec<ArrayRef> =
             order_by_columns.iter().map(|s| s.values.clone()).collect();
-        Ok((values, order_bys))
+        Ok(order_bys)
     }
 
     /// Get the window frame of this [WindowExpr].
@@ -244,7 +239,8 @@ pub trait AggregateWindowExpr: WindowExpr {
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        let (values, order_bys) = self.get_values_orderbys(record_batch)?;
+        let values = self.evaluate_args(record_batch)?;
+        let order_bys = self.get_orderby_values(record_batch)?;
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
