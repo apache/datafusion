@@ -118,6 +118,26 @@ impl NestedLoopJoinExec {
             metrics: Default::default(),
         })
     }
+
+    /// left (build) side which gets hashed
+    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.left
+    }
+
+    /// right (probe) side which are filtered by the hash table
+    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.right
+    }
+
+    /// Filters applied before join output
+    pub fn filter(&self) -> Option<&JoinFilter> {
+        self.filter.as_ref()
+    }
+
+    /// How the join is performed
+    pub fn join_type(&self) -> &JoinType {
+        &self.join_type
+    }
 }
 
 impl DisplayAs for NestedLoopJoinExec {
