@@ -26,7 +26,7 @@ use arrow_schema::{DataType, Schema};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-use crate::{physical_expr::down_cast_any_ref, AnalysisContext, PhysicalExpr};
+use crate::{physical_expr::down_cast_any_ref, PhysicalExpr};
 
 use arrow::compute::kernels::comparison::{
     ilike_utf8, like_utf8, nilike_utf8, nlike_utf8,

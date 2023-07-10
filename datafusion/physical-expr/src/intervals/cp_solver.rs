@@ -119,7 +119,7 @@ use super::IntervalBound;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ExprIntervalGraph {
     graph: StableGraph<ExprIntervalGraphNode, usize>,
     root: NodeIndex,

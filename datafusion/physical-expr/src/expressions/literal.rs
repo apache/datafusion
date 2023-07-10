@@ -26,11 +26,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::{
-    intervals::{Interval, IntervalBound},
-    physical_expr::down_cast_any_ref,
-};
-use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use crate::physical_expr::down_cast_any_ref;
+use crate::PhysicalExpr;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, Expr};

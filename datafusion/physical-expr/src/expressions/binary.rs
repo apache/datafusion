@@ -19,7 +19,6 @@ mod adapter;
 mod kernels;
 mod kernels_arrow;
 
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
@@ -57,7 +56,6 @@ use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 
 use datafusion_expr::type_coercion::{is_decimal, is_timestamp, is_utf8_or_large_utf8};
-use itertools::Itertools;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -83,18 +81,12 @@ use self::kernels_arrow::{
     subtract_dyn_temporal_left_scalar, subtract_dyn_temporal_right_scalar,
 };
 
-use super::column::Column;
-use super::{lit, Literal};
 use crate::array_expressions::{array_append, array_concat, array_prepend};
 use crate::expressions::cast_column;
-use crate::intervals::cp_solver::{
-    propagate_arithmetic, propagate_comparison, PropagationResult,
-};
-use crate::intervals::{
-    apply_operator, is_operator_supported, ExprIntervalGraph, Interval, IntervalBound,
-};
+use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
-use crate::{analysis_expect, AnalysisContext, ExprBoundaries, PhysicalExpr};
+use crate::PhysicalExpr;
 use datafusion_common::cast::as_boolean_array;
 
 use datafusion_common::ScalarValue;
@@ -1177,12 +1169,11 @@ mod tests {
     use super::*;
     use crate::expressions::{col, lit};
     use crate::expressions::{try_cast, Literal};
-    use crate::physical_expr::analyze;
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
     use arrow_schema::ArrowError;
-    use datafusion_common::{ColumnStatistics, Result, Statistics};
+    use datafusion_common::Result;
     use datafusion_expr::type_coercion::binary::get_input_types;
 
     /// Performs a binary operation, applying any type coercion necessary
@@ -4317,27 +4308,6 @@ mod tests {
         result = bitwise_shift_right_dyn_scalar(&result, module).unwrap()?;
         assert_eq!(result.as_ref(), &input);
         Ok(())
-    }
-
-    /// Return a pair of (schema, statistics) for a table with a single column (called "a") with
-    /// the same type as the `min_value`/`max_value`.
-    fn get_test_table_stats(
-        min_value: ScalarValue,
-        max_value: ScalarValue,
-    ) -> (Schema, Statistics) {
-        assert_eq!(min_value.get_datatype(), max_value.get_datatype());
-        let schema = Schema::new(vec![Field::new("a", min_value.get_datatype(), false)]);
-        let columns = vec![ColumnStatistics {
-            min_value: Some(min_value),
-            max_value: Some(max_value),
-            null_count: None,
-            distinct_count: None,
-        }];
-        let statistics = Statistics {
-            column_statistics: Some(columns),
-            ..Default::default()
-        };
-        (schema, statistics)
     }
 
     #[test]

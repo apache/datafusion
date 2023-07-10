@@ -187,7 +187,7 @@ impl ExecutionPlan for FilterExec {
         let columns = get_columns(predicate.clone());
 
         if let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() {
-            if !is_operator_supported(&binary.op()) || !columns.is_empty() {
+            if !is_operator_supported(binary.op()) || columns.is_empty() {
                 return Statistics::default();
             }
         }

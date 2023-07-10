@@ -20,9 +20,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{
-    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
-};
+use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 use std::fmt::{Debug, Display};
@@ -157,23 +155,13 @@ pub fn analyze(
         .collect();
 
     let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
-    let root = graph.gather_node_indices(&[expr]);
-    let root_expr_and_index = match root.first() {
-        Some(root) => root,
-        None => {
-            return Err(DataFusionError::Internal(
-                "Error in constructing predicate graph".to_string(),
-            ))
-        }
-    };
 
     let mut target_indices_and_boundaries: Vec<(usize, Interval)> = Vec::new();
     for (expr, i) in &target_expr_and_indices {
         for bound in target_boundaries.clone() {
             if let Some(expr_column) = expr.as_any().downcast_ref::<Column>() {
                 if bound.column.eq(expr_column) {
-                    target_indices_and_boundaries
-                        .push((i.clone(), bound.interval.clone()))
+                    target_indices_and_boundaries.push((*i, bound.interval.clone()))
                 }
             }
         }
@@ -186,13 +174,22 @@ pub fn analyze(
                 for bound in target_boundaries.iter_mut() {
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                         if bound.column.eq(column) {
-                            bound.update_interval(graph.get_interval(i.clone()));
+                            bound.update_interval(graph.get_interval(*i));
                         }
                     } else {
                         break;
                     }
                 }
             }
+            let root = graph.gather_node_indices(&[expr]);
+            let root_expr_and_index = match root.first() {
+                Some(root) => root,
+                None => {
+                    return Err(DataFusionError::Internal(
+                        "Error in constructing predicate graph".to_string(),
+                    ))
+                }
+            };
             let final_result = graph.get_interval(root_expr_and_index.1);
 
             let selectivity = match (final_result.lower.value, final_result.upper.value) {
@@ -216,7 +213,7 @@ pub fn analyze(
                     {
                         let temp = calculate_selectivity(
                             &initial_boundaries[i].interval,
-                            &interval,
+                            interval,
                         )?;
                         if min_selectivity < temp {
                             min_selectivity = temp;
@@ -225,7 +222,7 @@ pub fn analyze(
                     min_selectivity
                 }
             };
-            if selectivity > 1.0 || selectivity < 0.0 {
+            if !(0.0..=1.0).contains(&selectivity) {
                 return Err(DataFusionError::Internal(format!(
                     "Selectivity is out of limit: {}",
                     selectivity
@@ -286,7 +283,7 @@ impl AnalysisContext {
     /// Create a new analysis context from column statistics.
     pub fn from_statistics(
         input_schema: &Schema,
-        statistics: &Vec<ColumnStatistics>,
+        statistics: &[ColumnStatistics],
     ) -> Option<Self> {
         let mut column_boundaries = vec![];
         for (i, stats) in statistics.iter().enumerate() {

@@ -27,7 +27,7 @@ use arrow::{
 };
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::{AnalysisContext, PhysicalExpr};
+use crate::PhysicalExpr;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -214,13 +214,11 @@ pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
 #[cfg(test)]
 mod test {
     use crate::expressions::Column;
-    use crate::intervals::Interval;
-    use crate::intervals::IntervalBound;
-    use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+    use crate::PhysicalExpr;
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics};
+    use datafusion_common::Result;
     use std::sync::Arc;
 
     #[test]
@@ -257,40 +255,5 @@ mod test {
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
                    &format!("{error}"));
         Ok(())
-    }
-
-    /// Returns a pair of (schema, statistics) for a table of:
-    /// - a => Stats(range=[1, 100], distinct=15)
-    /// - b => unknown
-    /// - c => Stats(range=[1, 100], distinct=unknown)
-    fn get_test_table_stats() -> (Schema, Statistics) {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-            Field::new("c", DataType::Int32, true),
-        ]);
-
-        let columns = vec![
-            ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(1))),
-                max_value: Some(ScalarValue::Int32(Some(100))),
-                distinct_count: Some(15),
-                ..Default::default()
-            },
-            ColumnStatistics::default(),
-            ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(1))),
-                max_value: Some(ScalarValue::Int32(Some(75))),
-                distinct_count: None,
-                ..Default::default()
-            },
-        ];
-
-        let statistics = Statistics {
-            column_statistics: Some(columns),
-            ..Default::default()
-        };
-
-        (schema, statistics)
     }
 }
