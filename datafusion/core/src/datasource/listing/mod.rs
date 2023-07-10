@@ -101,6 +101,12 @@ impl PartitionedFile {
             extensions: None,
         }
     }
+
+    /// Return a file reference from the given path
+    pub fn from_path(path: String) -> Result<Self> {
+        let size = std::fs::metadata(path.clone())?.len();
+        Ok(Self::new(path, size))
+    }
 }
 
 impl From<ObjectMeta> for PartitionedFile {
