@@ -95,7 +95,7 @@ pub enum GroupByOrderMode {
     /// expressions in the GROUP BY clause.
     None,
     /// The input is known to be ordered by a preset (prefix but
-    /// possibly reorderd) of the expressions in the `GROUP BY` clause.
+    /// possibly reordered) of the expressions in the `GROUP BY` clause.
     ///
     /// For example, if the input is ordered by `a, b, c` and we group
     /// by `b, a, d`, `PartiallyOrdered` means a subset of group `b,
