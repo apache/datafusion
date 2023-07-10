@@ -232,33 +232,35 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
 /// For this case, we say that `vec![a ASC, b ASC]`, and `vec![c DESC, d ASC]` are ordering equivalent.
 pub type OrderingEquivalentClass = EquivalentClass<LexOrdering>;
 
+fn update_with_alias(
+    mut ordering: LexOrdering,
+    columns_map: &HashMap<Column, Vec<Column>>,
+) -> LexOrdering {
+    for (column, columns) in columns_map {
+        let col_expr = Arc::new(column.clone()) as Arc<dyn PhysicalExpr>;
+        for item in ordering.iter_mut() {
+            if item.expr.eq(&col_expr) {
+                let col_expr = Arc::new(columns[0].clone()) as Arc<dyn PhysicalExpr>;
+                // Change the corresponding entry with alias expression
+                item.expr = col_expr;
+            }
+        }
+    }
+    ordering
+}
+
 impl OrderingEquivalentClass {
     /// This function extends ordering equivalences with alias information.
     /// For instance, assume column a and b are aliases,
     /// and column (a ASC), (c DESC) are ordering equivalent. We append (b ASC) to ordering equivalence,
     /// since b is alias of colum a. After this function (a ASC), (c DESC), (b ASC) would be ordering equivalent.
     fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
-        for (column, columns) in columns_map {
-            let col_expr = Arc::new(column.clone()) as Arc<dyn PhysicalExpr>;
-            let mut to_insert = vec![];
-            for ordering in std::iter::once(&self.head).chain(self.others.iter()) {
-                for (idx, item) in ordering.iter().enumerate() {
-                    if item.expr.eq(&col_expr) {
-                        for col in columns {
-                            let col_expr = Arc::new(col.clone()) as Arc<dyn PhysicalExpr>;
-                            let mut normalized = ordering.clone();
-                            // Change the corresponding entry in the head with the alias column:
-                            let entry = &mut normalized[idx];
-                            (entry.expr, entry.options) = (col_expr, item.options);
-                            to_insert.push(normalized);
-                        }
-                    }
-                }
-            }
-            for items in to_insert {
-                self.insert(items);
-            }
-        }
+        self.head = update_with_alias(self.head.clone(), columns_map);
+        self.others = self
+            .others
+            .iter()
+            .map(|item| update_with_alias(item.clone(), columns_map))
+            .collect::<HashSet<_>>();
     }
 }
 
@@ -403,11 +405,9 @@ pub fn project_ordering_equivalence_properties(
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
     let mut eq_classes = input_eq.classes().to_vec();
-    println!("eq_classes at the start: {:?}", eq_classes);
     for class in eq_classes.iter_mut() {
         class.update_with_aliases(columns_map);
     }
-    println!("eq_classes after alias update: {:?}", eq_classes);
     // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
     let schema = output_eq.schema();
     let fields = schema.fields();
@@ -432,7 +432,6 @@ pub fn project_ordering_equivalence_properties(
     }
     eq_classes.retain(|props| props.len() > 1);
 
-    println!("eq_classes at the end: {:?}", eq_classes);
     output_eq.extend(eq_classes);
 }
 
