@@ -18,12 +18,14 @@
 //! Defines physical expression for `rank`, `dense_rank`, and `percent_rank` that can evaluated
 //! at runtime during query execution
 
+use crate::expressions::Column;
 use crate::window::window_expr::RankState;
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::PhysicalExpr;
+use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::WindowAggState;
@@ -106,6 +108,25 @@ impl BuiltInWindowFunctionExpr for Rank {
             state: RankState::default(),
             rank_type: self.rank_type,
         }))
+    }
+
+    fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+        // The built-in RANK window function (all of the modes) introduces a new
+        // ordering:
+        if let Some((idx, field)) = schema.column_with_name(self.name()) {
+            let column = Column::new(field.name(), idx);
+            let options = SortOptions {
+                descending: false,
+                nulls_first: false,
+            }; // ASC, NULLS LAST
+            let rhs = PhysicalSortExpr {
+                expr: Arc::new(column) as _,
+                options,
+            };
+            Some(rhs)
+        } else {
+            None
+        }
     }
 }
 

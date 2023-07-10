@@ -3082,21 +3082,22 @@ EXPLAIN SELECT a, b, LAST_VALUE(c ORDER BY a ASC) OVER (order by a ASC) as last_
        FROM annotated_data_infinite2
 
 # Query below should work when its input is unbounded
-# because ROW_NUMBER ordering is added to the ordering equivalence
+# because ordering of ROW_NUMBER, RANK result is added to the ordering equivalence
 # and final plan doesn't contain SortExec.
-query III
-SELECT a, d, rn1 FROM (SELECT a, d,
-                       ROW_NUMBER() OVER(ORDER BY a ASC) as rn1
+query IIII
+SELECT a, d, rn1, rank1 FROM (SELECT a, d,
+                       ROW_NUMBER() OVER(ORDER BY a ASC) as rn1,
+                       RANK() OVER(ORDER BY a ASC) as rank1
                        FROM annotated_data_infinite2
                        ORDER BY a ASC)
-       ORDER BY rn1, a ASC
+       ORDER BY rn1, rank1, a ASC
        LIMIT 5
 ----
-0 0 1
-0 2 2
-0 0 3
-0 0 4
-0 1 5
+0 0 1 1
+0 2 2 1
+0 0 3 1
+0 0 4 1
+0 1 5 1
 
 # this is a negative test for asserting that ROW_NUMBER is not
 # added to the ordering equivalence when it contains partition by.
@@ -3118,7 +3119,7 @@ SELECT a, d, rn1 FROM (SELECT a, b, c, d,
                        ROW_NUMBER() OVER(PARTITION BY b, c, a) as rn1
                        FROM annotated_data_infinite2
                        ORDER BY a ASC)
-       ORDER BY a,b,c,rn1
+       ORDER BY a, b, c, rn1
        LIMIT 5
 ----
 0 0 1
@@ -3126,6 +3127,22 @@ SELECT a, d, rn1 FROM (SELECT a, b, c, d,
 0 0 1
 0 0 1
 0 1 1
+
+# projection should propagate ordering equivalence successfully
+# when expression contains alias
+query III
+SELECT a_new, d, rn1 FROM (SELECT d, a as a_new,
+                       ROW_NUMBER() OVER(ORDER BY a ASC) as rn1
+                       FROM annotated_data_infinite2
+                       ORDER BY a_new ASC)
+       ORDER BY a_new ASC, rn1
+       LIMIT 5
+----
+0 0 1
+0 2 2
+0 0 3
+0 0 4
+0 1 5
 
 statement ok
 drop table annotated_data_finite2
