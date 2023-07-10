@@ -204,7 +204,7 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
     }
 }
 
-/// Convert one or more [`ArrayRef`] of the same type into into a
+/// Convert one or more [`ArrayRef`] of the same type into a
 /// `ListArray`
 ///
 /// # Example (non nested)
@@ -305,7 +305,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
     Ok(res)
 }
 
-/// Convert one or more [`ColumnarValue`] of the same type into into a
+/// Convert one or more [`ColumnarValue`] of the same type into a
 /// `ListArray`
 ///
 /// See [`array_array`] for more details.
