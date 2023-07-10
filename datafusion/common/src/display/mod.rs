@@ -17,6 +17,9 @@
 
 //! Types for plan display
 
+mod graphviz;
+pub use graphviz::*;
+
 use std::{
     fmt::{self, Display, Formatter},
     sync::Arc,

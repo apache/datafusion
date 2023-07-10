@@ -28,7 +28,7 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use log::debug;
 
-use crate::datasource::physical_plan::{OutputOrderingDisplay, ProjectSchemaDisplay};
+use crate::physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay};
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use datafusion_execution::TaskContext;
