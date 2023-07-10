@@ -531,6 +531,7 @@ mod test {
     use super::*;
 
     use arrow_array::UInt32Array;
+    use arrow_buffer::BooleanBuffer;
     use hashbrown::HashSet;
     use rand::{rngs::ThreadRng, Rng};
 
@@ -708,8 +709,17 @@ mod test {
             );
             Self::accumulate_indices_test(group_indices, values.nulls(), opt_filter);
 
-            // Convert values into a boolean array (using anything above the average)
-            //let avg = values.iter().filter_map(|
+            // Convert values into a boolean array (anything above the
+            // average is true, otherwise false)
+            let avg: usize = values.iter().filter_map(|v| v.map(|v| v as usize)).sum();
+            let boolean_values: BooleanArray =
+                values.iter().map(|v| v.map(|v| v as usize > avg)).collect();
+            Self::accumulate_boolean_test(
+                group_indices,
+                &boolean_values,
+                opt_filter,
+                total_num_groups,
+            );
         }
 
         /// This is effectively a different implementation of
@@ -735,17 +745,16 @@ mod test {
 
             // Figure out the expected values
             let mut expected_values = vec![];
-            let mut expected_null_input = HashSet::new();
-            let mut expected_seen_values = HashSet::new();
+            let mut mock = MockNullState::new();
 
             match opt_filter {
                 None => group_indices.iter().zip(values.iter()).for_each(
                     |(&group_index, value)| {
-                        expected_seen_values.insert(group_index);
+                        mock.saw_value(group_index);
                         if let Some(value) = value {
                             expected_values.push((group_index, value));
                         } else {
-                            expected_null_input.insert(group_index);
+                            mock.saw_null_input(group_index);
                         }
                     },
                 ),
@@ -757,11 +766,11 @@ mod test {
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
                             if let Some(true) = is_included {
-                                expected_seen_values.insert(group_index);
+                                mock.saw_value(group_index);
                                 if let Some(value) = value {
                                     expected_values.push((group_index, value));
                                 } else {
-                                    expected_null_input.insert(group_index);
+                                    mock.saw_null_input(group_index);
                                 }
                             }
                         });
@@ -771,70 +780,24 @@ mod test {
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
 
-            // validate null state
             if values.null_count() > 0 {
                 let null_inputs =
                     null_state.null_inputs.as_ref().unwrap().finish_cloned();
-                for (group_index, is_valid) in null_inputs.iter().enumerate() {
-                    let expected_valid = !expected_null_input.contains(&group_index);
-                    assert_eq!(
-                        expected_valid, is_valid,
-                        "mismatch at for group {group_index}"
-                    );
-                }
+                mock.validate_null_inputs(&null_inputs)
             }
-
-            // validate seen_values
 
             if opt_filter.is_some() {
                 let seen_values =
                     null_state.seen_values.as_ref().unwrap().finish_cloned();
-                for (group_index, is_seen) in seen_values.iter().enumerate() {
-                    let expected_seen = expected_seen_values.contains(&group_index);
-                    assert_eq!(
-                        expected_seen, is_seen,
-                        "mismatch at for group {group_index}"
-                    );
-                }
+                mock.validate_seen_values(&seen_values)
             }
 
             // Validate the final buffer (one value per group)
-            let expected_null_buffer =
-                match (values.null_count() > 0, opt_filter.is_some()) {
-                    (false, false) => None,
-                    // only nulls
-                    (true, false) => {
-                        let null_buffer: NullBuffer = (0..total_num_groups)
-                            .map(|group_index| {
-                                // there was and no null inputs
-                                !expected_null_input.contains(&group_index)
-                            })
-                            .collect();
-                        Some(null_buffer)
-                    }
-                    // only filter
-                    (false, true) => {
-                        let null_buffer: NullBuffer = (0..total_num_groups)
-                            .map(|group_index| {
-                                // we saw a value
-                                expected_seen_values.contains(&group_index)
-                            })
-                            .collect();
-                        Some(null_buffer)
-                    }
-                    // nulls and filter
-                    (true, true) => {
-                        let null_buffer: NullBuffer = (0..total_num_groups)
-                            .map(|group_index| {
-                                // output is valid if there was at least one
-                                // input value and no null inputs
-                                expected_seen_values.contains(&group_index)
-                                    && !expected_null_input.contains(&group_index)
-                            })
-                            .collect();
-                        Some(null_buffer)
-                    }
-                };
+            let expected_null_buffer = mock.expected_null_buffer(
+                values.null_count() > 0,
+                opt_filter.is_some(),
+                total_num_groups,
+            );
 
             let null_buffer = null_state.build();
 
@@ -891,6 +854,187 @@ mod test {
 
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+        }
+
+        /// This is effectively a different implementation of
+        /// accumulate_boolean that we compare with the above implementation
+        fn accumulate_boolean_test(
+            group_indices: &[usize],
+            values: &BooleanArray,
+            opt_filter: Option<&BooleanArray>,
+            total_num_groups: usize,
+        ) {
+            let mut accumulated_values = vec![];
+            let mut null_state = NullState::new();
+
+            null_state.accumulate_boolean(
+                group_indices,
+                values,
+                opt_filter,
+                total_num_groups,
+                |group_index, value| {
+                    accumulated_values.push((group_index, value));
+                },
+            );
+
+            // Figure out the expected values
+            let mut expected_values = vec![];
+            let mut mock = MockNullState::new();
+
+            match opt_filter {
+                None => group_indices.iter().zip(values.iter()).for_each(
+                    |(&group_index, value)| {
+                        mock.saw_value(group_index);
+                        if let Some(value) = value {
+                            expected_values.push((group_index, value));
+                        } else {
+                            mock.saw_null_input(group_index);
+                        }
+                    },
+                ),
+                Some(filter) => {
+                    group_indices
+                        .iter()
+                        .zip(values.iter())
+                        .zip(filter.iter())
+                        .for_each(|((&group_index, value), is_included)| {
+                            // if value passed filter
+                            if let Some(true) = is_included {
+                                mock.saw_value(group_index);
+                                if let Some(value) = value {
+                                    expected_values.push((group_index, value));
+                                } else {
+                                    mock.saw_null_input(group_index);
+                                }
+                            }
+                        });
+                }
+            }
+
+            assert_eq!(accumulated_values, expected_values,
+                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+
+            if values.null_count() > 0 {
+                let null_inputs =
+                    null_state.null_inputs.as_ref().unwrap().finish_cloned();
+                mock.validate_null_inputs(&null_inputs)
+            }
+
+            if opt_filter.is_some() {
+                let seen_values =
+                    null_state.seen_values.as_ref().unwrap().finish_cloned();
+                mock.validate_seen_values(&seen_values)
+            }
+
+            // Validate the final buffer (one value per group)
+            let expected_null_buffer = mock.expected_null_buffer(
+                values.null_count() > 0,
+                opt_filter.is_some(),
+                total_num_groups,
+            );
+
+            let null_buffer = null_state.build();
+
+            assert_eq!(null_buffer, expected_null_buffer);
+        }
+    }
+
+    /// Parallel implementaiton of NullState to check expected values
+    #[derive(Debug, Default)]
+    struct MockNullState {
+        /// group_indices that have seen null values
+        null_input: HashSet<usize>,
+        /// group indices that had values that passed the filter
+        seen_values: HashSet<usize>,
+    }
+
+    impl MockNullState {
+        fn new() -> Self {
+            Default::default()
+        }
+
+        fn saw_null_input(&mut self, group_index: usize) {
+            self.null_input.insert(group_index);
+        }
+
+        fn saw_value(&mut self, group_index: usize) {
+            self.seen_values.insert(group_index);
+        }
+
+        /// did this group index see a null input
+        fn expected_null(&self, group_index: usize) -> bool {
+            self.null_input.contains(&group_index)
+        }
+
+        /// did this group index see any input?
+        fn expected_seen(&self, group_index: usize) -> bool {
+            self.seen_values.contains(&group_index)
+        }
+
+        /// Validate that the null state matches self.null_input
+        fn validate_null_inputs(&self, null_inputs: &BooleanBuffer) {
+            for (group_index, is_valid) in null_inputs.iter().enumerate() {
+                let expected_valid = !self.expected_null(group_index);
+                assert_eq!(
+                    expected_valid, is_valid,
+                    "mismatch at for group {group_index}"
+                );
+            }
+        }
+
+        /// Validate that the seen_values matches self.seen_values
+        fn validate_seen_values(&self, seen_values: &BooleanBuffer) {
+            for (group_index, is_seen) in seen_values.iter().enumerate() {
+                let expected_seen = self.expected_seen(group_index);
+                assert_eq!(
+                    expected_seen, is_seen,
+                    "mismatch at for group {group_index}"
+                );
+            }
+        }
+
+        /// Create the expected null buffer based on if the input had nulls and a filter
+        fn expected_null_buffer(
+            &self,
+            had_nulls: bool,
+            had_filter: bool,
+            total_num_groups: usize,
+        ) -> Option<NullBuffer> {
+            match (had_nulls, had_filter) {
+                (false, false) => None,
+                // only nulls
+                (true, false) => {
+                    let null_buffer: NullBuffer = (0..total_num_groups)
+                        .map(|group_index| {
+                            // there was and no null inputs
+                            !self.expected_null(group_index)
+                        })
+                        .collect();
+                    Some(null_buffer)
+                }
+                // only filter
+                (false, true) => {
+                    let null_buffer: NullBuffer = (0..total_num_groups)
+                        .map(|group_index| {
+                            // we saw a value
+                            self.expected_seen(group_index)
+                        })
+                        .collect();
+                    Some(null_buffer)
+                }
+                // nulls and filter
+                (true, true) => {
+                    let null_buffer: NullBuffer = (0..total_num_groups)
+                        .map(|group_index| {
+                            // output is valid if there was at least one
+                            // input value and no null inputs
+                            self.expected_seen(group_index)
+                                && !self.expected_null(group_index)
+                        })
+                        .collect();
+                    Some(null_buffer)
+                }
+            }
         }
     }
 }
