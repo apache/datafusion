@@ -28,8 +28,8 @@ use datafusion::physical_plan::aggregates::{
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_physical_expr::expressions::{col, Sum};
 use datafusion_physical_expr::{AggregateExpr, PhysicalSortExpr};
@@ -107,10 +107,6 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         .map(|elem| (col(elem, &schema).unwrap(), elem.to_string()))
         .collect::<Vec<_>>();
     let group_by = PhysicalGroupBy::new_single(expr);
-
-    println!("aggregate_expr: {aggregate_expr:?}");
-    println!("group_by: {group_by:?}");
-
     let aggregate_exec_running = Arc::new(
         AggregateExec::try_new(
             AggregateMode::Partial,
@@ -122,7 +118,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             schema.clone(),
         )
         .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    ) as _;
 
     let aggregate_exec_usual = Arc::new(
         AggregateExec::try_new(
@@ -135,14 +131,14 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             schema.clone(),
         )
         .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
+    ) as _;
 
     let task_ctx = ctx.task_ctx();
-    let collected_usual = collect(aggregate_exec_usual.clone(), task_ctx.clone())
+    let collected_usual = collect(aggregate_exec_usual, task_ctx.clone())
         .await
         .unwrap();
 
-    let collected_running = collect(aggregate_exec_running.clone(), task_ctx.clone())
+    let collected_running = collect(aggregate_exec_running, task_ctx.clone())
         .await
         .unwrap();
     assert!(collected_running.len() > 2);
@@ -166,23 +162,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         .zip(&running_formatted_sorted)
         .enumerate()
     {
-        assert_eq!(
-            (i, usual_line),
-            (i, running_line),
-            "Inconsistent result\n\n\
-             Left Plan:\n{}\n\
-             Right Plan:\n{}\n\
-             schema:\n{schema}\n\
-             Left Ouptut:\n{}\n\
-             Right Output:\n{}\n\
-             input:\n{}\n\
-             ",
-            displayable(aggregate_exec_usual.as_ref()).indent(false),
-            displayable(aggregate_exec_running.as_ref()).indent(false),
-            usual_formatted,
-            running_formatted,
-            pretty_format_batches(&input1).unwrap(),
-        );
+        assert_eq!((i, usual_line), (i, running_line), "Inconsistent result");
     }
 }
 
