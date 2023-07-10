@@ -513,6 +513,13 @@ impl Interval {
     }
 }
 
+pub fn calculate_selectivity(
+    initial_interval: &Interval,
+    final_interval: &Interval,
+) -> Result<f64> {
+    Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
+}
+
 /// Indicates whether interval arithmetic is supported for the given operator.
 pub fn is_operator_supported(op: &Operator) -> bool {
     matches!(

@@ -768,106 +768,6 @@ impl PhysicalExpr for BinaryExpr {
         )))
     }
 
-    /// Return the boundaries of this binary expression's result.
-    fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
-        let mut graph = ExprIntervalGraph::try_new(Arc::new(self.clone()))?;
-        let target_column = match &context.target_column {
-            Some(col) => col.clone(),
-            None => {
-                return Err(DataFusionError::Internal(
-                    "Target column must be defined in AnalysisContext".to_string(),
-                ))
-            }
-        };
-        let target_index = graph.gather_node_indices(&[Arc::new(target_column.clone())]);
-        let expr = target_index.iter().find(|e| {
-            if let Some(col) = e.0.as_any().downcast_ref::<Column>() {
-                col.name().eq(target_column.name())
-            } else {
-                false
-            }
-        });
-        let (target_boundaries, ind) =
-            match (&context.column_boundaries[target_column.index()], expr) {
-                (Some(val), Some(expr)) => (val.interval.clone(), expr.1),
-                _ => {
-                    return Err(DataFusionError::Internal(
-                        "Interval of target column must be set before analysis"
-                            .to_string(),
-                    ))
-                }
-            };
-
-        let target_interval = (ind, target_boundaries);
-        match graph.update_ranges(&mut [target_interval.clone()])? {
-            PropagationResult::Success => {
-                let predicate = graph.gather_node_indices(&[Arc::new(self.clone())]);
-                let expr = predicate.iter().find(|e| {
-                    if let Some(bin) = e.0.as_any().downcast_ref::<BinaryExpr>() {
-                        bin.eq(self)
-                    } else {
-                        false
-                    }
-                });
-                let ind = match expr {
-                    Some(i) => i.1,
-                    _ => {
-                        return Err(DataFusionError::Internal(
-                            "Undefined predicate".to_string(),
-                        ))
-                    }
-                };
-                let final_result = graph.get_interval(ind);
-
-                let target_updated_interval =
-                    graph.get_interval(target_interval.0.clone());
-                let new_context = context.with_column_update(
-                    target_column.index(),
-                    ExprBoundaries {
-                        interval: target_updated_interval.clone(),
-                        distinct_count: None,
-                        selectivity: None,
-                    },
-                );
-                let pred_distinct =
-                    if final_result.lower.value == final_result.upper.value {
-                        1
-                    } else {
-                        2
-                    };
-                let selectivity =
-                    match (final_result.lower.value, final_result.upper.value) {
-                        (
-                            ScalarValue::Boolean(Some(true)),
-                            ScalarValue::Boolean(Some(true)),
-                        ) => 1.0,
-                        (
-                            ScalarValue::Boolean(Some(false)),
-                            ScalarValue::Boolean(Some(false)),
-                        ) => 0.0,
-                        _ => calculate_selectivity(
-                            &target_interval.1,
-                            &target_updated_interval,
-                        )?,
-                    };
-                if selectivity > 1.0 || selectivity < 0.0 {
-                    return Err(DataFusionError::Internal(format!(
-                        "Selectivity is out of limit: {}",
-                        selectivity
-                    )));
-                }
-
-                let result_boundaries = Some(ExprBoundaries::new_with_selectivity(
-                    target_updated_interval,
-                    Some(pred_distinct),
-                    Some(selectivity),
-                ));
-                Ok(new_context.with_boundaries(result_boundaries))
-            }
-            _ => Ok(context.with_boundaries(None)),
-        }
-    }
-
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Get children intervals:
         let left_interval = children[0];
@@ -920,13 +820,6 @@ impl PartialEq<dyn Any> for BinaryExpr {
             .map(|x| self.left.eq(&x.left) && self.op == x.op && self.right.eq(&x.right))
             .unwrap_or(false)
     }
-}
-
-fn calculate_selectivity(
-    initial_interval: &Interval,
-    final_interval: &Interval,
-) -> Result<f64> {
-    Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
 }
 
 /// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
@@ -1283,6 +1176,7 @@ mod tests {
     use super::*;
     use crate::expressions::{col, lit};
     use crate::expressions::{try_cast, Literal};
+    use crate::physical_expr::analyze;
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
@@ -4446,60 +4340,6 @@ mod tests {
     }
 
     #[test]
-    fn test_binary_expression_boundaries() -> Result<()> {
-        // A table where the column 'a' has a min of 1, a max of 100.
-        let (schema, statistics) =
-            get_test_table_stats(ScalarValue::from(1), ScalarValue::from(100));
-
-        // expression: "a >= 25"
-        let a = col("a", &schema).unwrap();
-        let gt = binary(
-            a.clone(),
-            Operator::GtEq,
-            lit(ScalarValue::from(25)),
-            &schema,
-        )?;
-
-        let context = AnalysisContext::from_statistics(&schema, &statistics, None);
-        let predicate_boundaries = gt
-            .analyze(context)?
-            .boundaries
-            .expect("boundaries should not be None");
-        assert_eq!(predicate_boundaries.selectivity, Some(0.76));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_binary_expression_boundaries_rhs() -> Result<()> {
-        // This test is about the column rewriting feature in the boundary provider
-        // (e.g. if the lhs is a literal and rhs is the column, then we swap them when
-        // doing the computation).
-
-        // A table where the column 'a' has a min of 1, a max of 100.
-        let (schema, statistics) =
-            get_test_table_stats(ScalarValue::from(1), ScalarValue::from(100));
-
-        // expression: "50 >= a"
-        let a = col("a", &schema).unwrap();
-        let gt = binary(
-            lit(ScalarValue::from(50)),
-            Operator::GtEq,
-            a.clone(),
-            &schema,
-        )?;
-
-        let context = AnalysisContext::from_statistics(&schema, &statistics, None);
-        let predicate_boundaries = gt
-            .analyze(context)?
-            .boundaries
-            .expect("boundaries should not be None");
-        assert_eq!(predicate_boundaries.selectivity, Some(0.5));
-
-        Ok(())
-    }
-
-    #[test]
     fn test_display_and_or_combo() {
         let expr = BinaryExpr::new(
             Arc::new(BinaryExpr::new(
@@ -4594,71 +4434,4 @@ mod tests {
                 .unwrap();
         assert_eq!(&casted, &dictionary);
     }
-}
-
-#[test]
-fn test_01() {
-    let bin = BinaryExpr::new(
-        lit(ScalarValue::from(1)),
-        Operator::Lt,
-        Arc::new(Column::new("a", 2)),
-    );
-    let field = [
-        Field::new("c", DataType::Int32, false),
-        Field::new("b", DataType::Int32, false),
-        Field::new("a", DataType::Int32, false),
-    ]
-    .into_iter();
-    let analysis = AnalysisContext::new(
-        &Schema {
-            fields: Fields::from_iter(field),
-            metadata: HashMap::new(),
-        },
-        vec![
-            Some(ExprBoundaries {
-                interval: Interval::new(
-                    IntervalBound {
-                        value: ScalarValue::from(10),
-                        open: false,
-                    },
-                    IntervalBound {
-                        value: ScalarValue::from(25),
-                        open: false,
-                    },
-                ),
-                selectivity: None,
-                distinct_count: None,
-            }),
-            Some(ExprBoundaries {
-                interval: Interval::new(
-                    IntervalBound {
-                        value: ScalarValue::from(0),
-                        open: false,
-                    },
-                    IntervalBound {
-                        value: ScalarValue::from(50),
-                        open: false,
-                    },
-                ),
-                selectivity: None,
-                distinct_count: None,
-            }),
-            Some(ExprBoundaries {
-                interval: Interval::new(
-                    IntervalBound {
-                        value: ScalarValue::from(0),
-                        open: false,
-                    },
-                    IntervalBound {
-                        value: ScalarValue::from(100),
-                        open: false,
-                    },
-                ),
-                selectivity: None,
-                distinct_count: None,
-            }),
-        ],
-        Some(Column::new("a", 2)),
-    );
-    let _ = bin.analyze(analysis);
 }

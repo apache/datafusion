@@ -88,18 +88,6 @@ impl PhysicalExpr for Literal {
         Ok(self)
     }
 
-    /// Return the boundaries of this literal expression (which is the same as
-    /// the value it represents).
-    fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
-        Ok(context.with_boundaries(Some(ExprBoundaries::new(
-            Interval::new(
-                IntervalBound::new(self.value().clone(), false),
-                IntervalBound::new(self.value().clone(), false),
-            ),
-            Some(1),
-        ))))
-    }
-
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.hash(&mut s);
@@ -150,28 +138,6 @@ mod tests {
         for i in 0..literal_array.len() {
             assert_eq!(literal_array.value(i), 42);
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn literal_bounds_analysis() -> Result<()> {
-        let schema = Schema::empty();
-        let context = AnalysisContext::new(&schema, vec![], None);
-
-        let literal_expr = lit(42i32);
-        let result_ctx = literal_expr.analyze(context)?;
-        let boundaries = result_ctx.boundaries.unwrap();
-        assert_eq!(
-            boundaries.interval.lower.value,
-            ScalarValue::Int32(Some(42))
-        );
-        assert_eq!(
-            boundaries.interval.upper.value,
-            ScalarValue::Int32(Some(42))
-        );
-        assert_eq!(boundaries.distinct_count, Some(1));
-        assert_eq!(boundaries.selectivity, None);
 
         Ok(())
     }

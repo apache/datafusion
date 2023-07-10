@@ -28,7 +28,6 @@ use super::{ColumnStatistics, RecordBatchStream, SendableRecordBatchStream, Stat
 use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
-    PhysicalExpr,
 };
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
@@ -38,7 +37,10 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::is_operator_supported;
-use datafusion_physical_expr::{split_conjunction, AnalysisContext};
+use datafusion_physical_expr::{
+    analyze, get_columns, split_conjunction, AnalysisContext, ExprBoundaries,
+    PhysicalExpr,
+};
 
 use log::trace;
 
@@ -177,77 +179,74 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
-        // We currently only support comparisons with one column, and without
-        // a logical operator such AND, OR, etc.
-        let mut columns = vec![];
-        get_columns(self.predicate(), &mut columns);
-        if let Some(binary) = self.predicate().as_any().downcast_ref::<BinaryExpr>() {
-            if !is_operator_supported(&binary.op())
-                || binary.op().ne(&Operator::And)
-                || columns.len() > 1
-            {
+        let predicate = self.predicate().clone();
+        let columns = get_columns(predicate.clone());
+
+        if let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() {
+            if !is_operator_supported(&binary.op()) || !columns.is_empty() {
                 return Statistics::default();
             }
         }
 
         let input_stats = self.input.statistics();
-        let starter_ctx = AnalysisContext::from_statistics(
-            self.input.schema().as_ref(),
-            &input_stats,
-            Some(columns[0].clone()),
-        );
 
-        let analysis_ctx = match self.predicate.analyze(starter_ctx) {
-            Ok(analysis_ctx) => analysis_ctx,
+        let input_column_stats = match input_stats.column_statistics {
+            Some(stats) => stats,
+            None => return Statistics::default(),
+        };
+
+        let starter_ctx = match AnalysisContext::from_statistics(
+            &self.input.schema(),
+            &input_column_stats,
+        ) {
+            Some(ctx) => ctx,
+            None => return Statistics::default(),
+        };
+
+        let analysis_ctx = match analyze(predicate.clone(), starter_ctx) {
+            Ok(ctx) => ctx,
             Err(_) => return Statistics::default(),
         };
 
-        match analysis_ctx.boundaries {
-            Some(boundaries) => {
-                // Build back the column level statistics from the boundaries inside the
-                // analysis context. Since we can only support filters with one column,
-                // we could update only its column boundaries; however, to be future-proof,
-                // all boundaries are updated.
-                let column_statistics = analysis_ctx
-                    .column_boundaries
-                    .iter()
-                    .map(|boundary| match boundary {
-                        Some(boundary) => ColumnStatistics {
-                            min_value: Some(boundary.interval.lower.value.clone()),
-                            max_value: Some(boundary.interval.upper.value.clone()),
-                            ..Default::default()
-                        },
-                        None => ColumnStatistics::default(),
-                    })
-                    .collect();
+        let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
 
-                Statistics {
-                    num_rows: input_stats.num_rows.zip(boundaries.selectivity).map(
-                        |(num_rows, selectivity)| {
-                            (num_rows as f64 * selectivity).ceil() as usize
-                        },
-                    ),
-                    total_byte_size: input_stats
-                        .total_byte_size
-                        .zip(boundaries.selectivity)
-                        .map(|(num_rows, selectivity)| {
-                            (num_rows as f64 * selectivity).ceil() as usize
-                        }),
-                    column_statistics: Some(column_statistics),
-                    ..Default::default()
-                }
+        let num_rows = input_stats
+            .num_rows
+            .map(|num| (num as f64 * selectivity).ceil() as usize);
+
+        let total_byte_size = input_stats
+            .total_byte_size
+            .map(|size| (size as f64 * selectivity).ceil() as usize);
+
+        let column_statistics = if let Some(new_boundaries) = analysis_ctx.boundaries {
+            let mut res = Vec::with_capacity(new_boundaries.len());
+            for (
+                i,
+                ExprBoundaries {
+                    column: _,
+                    interval,
+                    distinct_count,
+                },
+            ) in new_boundaries.into_iter().enumerate()
+            {
+                res.push(ColumnStatistics {
+                    null_count: input_column_stats[i].null_count,
+                    max_value: Some(interval.lower.value),
+                    min_value: Some(interval.upper.value),
+                    distinct_count,
+                });
             }
-            None => Statistics::default(),
-        }
-    }
-}
+            Some(res)
+        } else {
+            Some(input_column_stats)
+        };
 
-fn get_columns(expr: &Arc<dyn PhysicalExpr>, columns: &mut Vec<Column>) {
-    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        get_columns(binary.left(), columns);
-        get_columns(binary.right(), columns);
-    } else if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-        columns.push(col.clone())
+        Statistics {
+            num_rows,
+            total_byte_size,
+            column_statistics,
+            is_exact: Default::default(),
+        }
     }
 }
 

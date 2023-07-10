@@ -104,19 +104,6 @@ impl PhysicalExpr for Column {
         Ok(self)
     }
 
-    /// Return the boundaries of this column, if known.
-    fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
-        if self.index >= context.column_boundaries.len() {
-            return Err(DataFusionError::Internal(format!(
-                "Column index is :{}, but AnalysisContext has {} columns",
-                self.index,
-                context.column_boundaries.len()
-            )));
-        }
-        let col_bounds = context.column_boundaries[self.index].clone();
-        Ok(context.with_boundaries(col_bounds))
-    }
-
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.hash(&mut s);
@@ -305,56 +292,5 @@ mod test {
         };
 
         (schema, statistics)
-    }
-
-    #[test]
-    fn stats_bounds_analysis() -> Result<()> {
-        let (schema, statistics) = get_test_table_stats();
-        let context = AnalysisContext::from_statistics(&schema, &statistics, None);
-        use ScalarValue::*;
-        let cases = [
-            // (name, index, expected boundaries)
-            (
-                "a",
-                0,
-                Some(ExprBoundaries::new(
-                    Interval::new(
-                        IntervalBound::new(Int32(Some(1)), false),
-                        IntervalBound::new(Int32(Some(100)), false),
-                    ),
-                    Some(15),
-                )),
-            ),
-            (
-                "b",
-                1,
-                Some(ExprBoundaries::new(
-                    Interval::new(
-                        IntervalBound::new(Null, false),
-                        IntervalBound::new(Null, false),
-                    ),
-                    None,
-                )),
-            ),
-            (
-                "c",
-                2,
-                Some(ExprBoundaries::new(
-                    Interval::new(
-                        IntervalBound::new(Int32(Some(1)), false),
-                        IntervalBound::new(Int32(Some(75)), false),
-                    ),
-                    None,
-                )),
-            ),
-        ];
-
-        for (name, index, expected) in cases {
-            let col = Column::new(name, index);
-            let test_ctx = col.analyze(context.clone())?;
-            assert_eq!(test_ctx.boundaries, expected);
-        }
-
-        Ok(())
     }
 }
