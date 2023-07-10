@@ -613,7 +613,8 @@ where
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * std::mem::size_of::<usize>()
+        self.counts.capacity() * std::mem::size_of::<u64>() +
+            self.sums.capacity() * std::mem::size_of::<T>()
     }
 }
 
