@@ -342,7 +342,7 @@ where
             list_lengths.value(row)
         };
 
-        // Both `repeat` and
+        // Both `repeat` and `index` are positive intergers.
         let repeat = repeat.to_usize().unwrap();
         let index = T::Native::from_usize(row).unwrap();
         (0..repeat).for_each(|_| builder.append_value(index));
