@@ -32,8 +32,8 @@ use arrow_schema::DataType;
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    function::PartitionEvaluatorFactory, window_state::WindowAggState,
-    PartitionEvaluator, ReturnTypeFunction, Signature, Volatility, WindowUDF,
+    function::PartitionEvaluatorFactory, PartitionEvaluator, ReturnTypeFunction,
+    Signature, Volatility, WindowUDF,
 };
 
 /// A query with a window function evaluated over the entire partition

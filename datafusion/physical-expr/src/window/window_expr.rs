@@ -325,11 +325,6 @@ pub struct NthValueState {
     pub kind: NthValueKind,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct LeadLagState {
-    pub idx: usize,
-}
-
 /// Key for IndexMap for each unique partition
 ///
 /// For instance, if window frame is `OVER(PARTITION BY a,b)`,

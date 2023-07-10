@@ -164,12 +164,6 @@ impl WindowExpr for BuiltInWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let sort_partition_points = if evaluator.include_rank() {
-                let columns = self.sort_columns(record_batch)?;
-                evaluate_partition_ranges(num_rows, &columns)?
-            } else {
-                vec![]
-            };
             let mut row_wise_results: Vec<ScalarValue> = vec![];
             for idx in state.last_calculated_index..num_rows {
                 let frame_range = if evaluator.uses_window_frame() {

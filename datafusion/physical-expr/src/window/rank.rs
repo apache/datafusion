@@ -26,7 +26,6 @@ use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::iter;
