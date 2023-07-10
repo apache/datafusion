@@ -20,12 +20,12 @@
 //! determined by the [`JoinType`].
 
 use crate::physical_plan::joins::utils::{
-    append_right_indices, apply_join_filter_to_indices,
-    build_batch_from_indices, build_join_schema, check_join_is_valid,
-    combine_join_equivalence_properties, estimate_join_statistics, get_anti_indices,
-    get_anti_u64_indices, get_final_indices_from_bit_map, get_semi_indices,
-    get_semi_u64_indices, partitioned_join_output_partitioning, BuildProbeJoinMetrics,
-    ColumnIndex, JoinFilter, JoinSide, OnceAsync, OnceFut,
+    append_right_indices, apply_join_filter_to_indices, build_batch_from_indices,
+    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
+    estimate_join_statistics, get_anti_indices, get_anti_u64_indices,
+    get_final_indices_from_bit_map, get_semi_indices, get_semi_u64_indices,
+    partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
+    JoinSide, OnceAsync, OnceFut,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
