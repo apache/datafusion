@@ -20,12 +20,12 @@
 //! determined by the [`JoinType`].
 
 use crate::physical_plan::joins::utils::{
-    adjust_right_output_partitioning, append_right_indices, apply_join_filter_to_indices,
+    append_right_indices, apply_join_filter_to_indices,
     build_batch_from_indices, build_join_schema, check_join_is_valid,
     combine_join_equivalence_properties, estimate_join_statistics, get_anti_indices,
     get_anti_u64_indices, get_final_indices_from_bit_map, get_semi_indices,
-    get_semi_u64_indices, partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinSide,
-    OnceAsync, OnceFut,
+    get_semi_u64_indices, partitioned_join_output_partitioning, BuildProbeJoinMetrics,
+    ColumnIndex, JoinFilter, JoinSide, OnceAsync, OnceFut,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -149,14 +149,15 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn output_partitioning(&self) -> Partitioning {
         // the partition of output is determined by the rule of `required_input_distribution`
-        return if self.join_type == JoinType::Full {
+        if self.join_type == JoinType::Full {
             self.left.output_partitioning()
         } else {
             partitioned_join_output_partitioning(
                 self.join_type,
                 self.left.output_partitioning(),
                 self.right.output_partitioning(),
-                self.left.schema().fields.len())
+                self.left.schema().fields.len(),
+            )
         }
     }
 
