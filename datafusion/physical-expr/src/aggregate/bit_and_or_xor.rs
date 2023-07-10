@@ -53,8 +53,9 @@ use datafusion_row::accessor::RowAccessor;
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
 macro_rules! instantiate_primitive_accumulator {
-    ($PRIMTYPE:ident, $FN:expr) => {{
+    ($SELF:expr, $PRIMTYPE:ident, $FN:expr) => {{
         Ok(Box::new(PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
+            &$SELF.data_type,
             $FN,
         )))
     }};
@@ -278,28 +279,36 @@ impl AggregateExpr for BitAnd {
         use std::ops::BitAndAssign;
         match self.data_type {
             DataType::Int8 => {
-                instantiate_primitive_accumulator!(Int8Type, |x, y| x.bitand_assign(y))
+                instantiate_primitive_accumulator!(self, Int8Type, |x, y| x
+                    .bitand_assign(y))
             }
             DataType::Int16 => {
-                instantiate_primitive_accumulator!(Int16Type, |x, y| x.bitand_assign(y))
+                instantiate_primitive_accumulator!(self, Int16Type, |x, y| x
+                    .bitand_assign(y))
             }
             DataType::Int32 => {
-                instantiate_primitive_accumulator!(Int32Type, |x, y| x.bitand_assign(y))
+                instantiate_primitive_accumulator!(self, Int32Type, |x, y| x
+                    .bitand_assign(y))
             }
             DataType::Int64 => {
-                instantiate_primitive_accumulator!(Int64Type, |x, y| x.bitand_assign(y))
+                instantiate_primitive_accumulator!(self, Int64Type, |x, y| x
+                    .bitand_assign(y))
             }
             DataType::UInt8 => {
-                instantiate_primitive_accumulator!(UInt8Type, |x, y| x.bitand_assign(y))
+                instantiate_primitive_accumulator!(self, UInt8Type, |x, y| x
+                    .bitand_assign(y))
             }
             DataType::UInt16 => {
-                instantiate_primitive_accumulator!(UInt16Type, |x, y| x.bitand_assign(y))
+                instantiate_primitive_accumulator!(self, UInt16Type, |x, y| x
+                    .bitand_assign(y))
             }
             DataType::UInt32 => {
-                instantiate_primitive_accumulator!(UInt32Type, |x, y| x.bitand_assign(y))
+                instantiate_primitive_accumulator!(self, UInt32Type, |x, y| x
+                    .bitand_assign(y))
             }
             DataType::UInt64 => {
-                instantiate_primitive_accumulator!(UInt64Type, |x, y| x.bitand_assign(y))
+                instantiate_primitive_accumulator!(self, UInt64Type, |x, y| x
+                    .bitand_assign(y))
             }
 
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -508,28 +517,36 @@ impl AggregateExpr for BitOr {
         use std::ops::BitOrAssign;
         match self.data_type {
             DataType::Int8 => {
-                instantiate_primitive_accumulator!(Int8Type, |x, y| x.bitor_assign(y))
+                instantiate_primitive_accumulator!(self, Int8Type, |x, y| x
+                    .bitor_assign(y))
             }
             DataType::Int16 => {
-                instantiate_primitive_accumulator!(Int16Type, |x, y| x.bitor_assign(y))
+                instantiate_primitive_accumulator!(self, Int16Type, |x, y| x
+                    .bitor_assign(y))
             }
             DataType::Int32 => {
-                instantiate_primitive_accumulator!(Int32Type, |x, y| x.bitor_assign(y))
+                instantiate_primitive_accumulator!(self, Int32Type, |x, y| x
+                    .bitor_assign(y))
             }
             DataType::Int64 => {
-                instantiate_primitive_accumulator!(Int64Type, |x, y| x.bitor_assign(y))
+                instantiate_primitive_accumulator!(self, Int64Type, |x, y| x
+                    .bitor_assign(y))
             }
             DataType::UInt8 => {
-                instantiate_primitive_accumulator!(UInt8Type, |x, y| x.bitor_assign(y))
+                instantiate_primitive_accumulator!(self, UInt8Type, |x, y| x
+                    .bitor_assign(y))
             }
             DataType::UInt16 => {
-                instantiate_primitive_accumulator!(UInt16Type, |x, y| x.bitor_assign(y))
+                instantiate_primitive_accumulator!(self, UInt16Type, |x, y| x
+                    .bitor_assign(y))
             }
             DataType::UInt32 => {
-                instantiate_primitive_accumulator!(UInt32Type, |x, y| x.bitor_assign(y))
+                instantiate_primitive_accumulator!(self, UInt32Type, |x, y| x
+                    .bitor_assign(y))
             }
             DataType::UInt64 => {
-                instantiate_primitive_accumulator!(UInt64Type, |x, y| x.bitor_assign(y))
+                instantiate_primitive_accumulator!(self, UInt64Type, |x, y| x
+                    .bitor_assign(y))
             }
 
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -739,28 +756,36 @@ impl AggregateExpr for BitXor {
         use std::ops::BitXorAssign;
         match self.data_type {
             DataType::Int8 => {
-                instantiate_primitive_accumulator!(Int8Type, |x, y| x.bitxor_assign(y))
+                instantiate_primitive_accumulator!(self, Int8Type, |x, y| x
+                    .bitxor_assign(y))
             }
             DataType::Int16 => {
-                instantiate_primitive_accumulator!(Int16Type, |x, y| x.bitxor_assign(y))
+                instantiate_primitive_accumulator!(self, Int16Type, |x, y| x
+                    .bitxor_assign(y))
             }
             DataType::Int32 => {
-                instantiate_primitive_accumulator!(Int32Type, |x, y| x.bitxor_assign(y))
+                instantiate_primitive_accumulator!(self, Int32Type, |x, y| x
+                    .bitxor_assign(y))
             }
             DataType::Int64 => {
-                instantiate_primitive_accumulator!(Int64Type, |x, y| x.bitxor_assign(y))
+                instantiate_primitive_accumulator!(self, Int64Type, |x, y| x
+                    .bitxor_assign(y))
             }
             DataType::UInt8 => {
-                instantiate_primitive_accumulator!(UInt8Type, |x, y| x.bitxor_assign(y))
+                instantiate_primitive_accumulator!(self, UInt8Type, |x, y| x
+                    .bitxor_assign(y))
             }
             DataType::UInt16 => {
-                instantiate_primitive_accumulator!(UInt16Type, |x, y| x.bitxor_assign(y))
+                instantiate_primitive_accumulator!(self, UInt16Type, |x, y| x
+                    .bitxor_assign(y))
             }
             DataType::UInt32 => {
-                instantiate_primitive_accumulator!(UInt32Type, |x, y| x.bitxor_assign(y))
+                instantiate_primitive_accumulator!(self, UInt32Type, |x, y| x
+                    .bitxor_assign(y))
             }
             DataType::UInt64 => {
-                instantiate_primitive_accumulator!(UInt64Type, |x, y| x.bitxor_assign(y))
+                instantiate_primitive_accumulator!(self, UInt64Type, |x, y| x
+                    .bitxor_assign(y))
             }
 
             _ => Err(DataFusionError::NotImplemented(format!(

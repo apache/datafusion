@@ -19,9 +19,10 @@ use std::sync::Arc;
 
 use arrow::{array::AsArray, datatypes::ArrowPrimitiveType};
 use arrow_array::{ArrayRef, BooleanArray, PrimitiveArray};
+use arrow_schema::DataType;
 use datafusion_common::Result;
 
-use crate::GroupsAccumulator;
+use crate::{aggregate::utils::adjust_output_array, GroupsAccumulator};
 
 use super::accumulate::NullState;
 
@@ -43,11 +44,14 @@ where
     /// values per group, stored as the native type
     values: Vec<T::Native>,
 
+    /// The output type (needed for Decimal precision and scale)
+    data_type: DataType,
+
     /// Track nulls in the input / filters
     null_state: NullState,
 
-    /// Function that computes the bitwise function
-    bitop_fn: F,
+    /// Function that computes the primitive result
+    prim_fn: F,
 }
 
 impl<T, F> PrimitiveGroupsAccumulator<T, F>
@@ -55,11 +59,12 @@ where
     T: ArrowPrimitiveType + Send,
     F: Fn(&mut T::Native, T::Native) + Send + Sync,
 {
-    pub fn new(bitop_fn: F) -> Self {
+    pub fn new(data_type: &DataType, prim_fn: F) -> Self {
         Self {
             values: vec![],
+            data_type: data_type.clone(),
             null_state: NullState::new(),
-            bitop_fn,
+            prim_fn,
         }
     }
 }
@@ -90,7 +95,7 @@ where
             total_num_groups,
             |group_index, new_value| {
                 let value = &mut self.values[group_index];
-                (self.bitop_fn)(value, new_value);
+                (self.prim_fn)(value, new_value);
             },
         );
 
@@ -101,7 +106,8 @@ where
         let values = std::mem::take(&mut self.values);
         let nulls = self.null_state.build();
         let values = PrimitiveArray::<T>::new(values.into(), nulls); // no copy
-        Ok(Arc::new(values))
+
+        adjust_output_array(&self.data_type, Arc::new(values))
     }
 
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
