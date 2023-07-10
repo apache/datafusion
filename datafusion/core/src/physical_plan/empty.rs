@@ -30,7 +30,7 @@ use datafusion_common::{DataFusionError, Result};
 use log::trace;
 
 use super::expressions::PhysicalSortExpr;
-use super::{common, SendableRecordBatchStream, Statistics};
+use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
 
 use datafusion_execution::TaskContext;
 
@@ -94,6 +94,20 @@ impl EmptyExec {
     }
 }
 
+impl DisplayAs for EmptyExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "EmptyExec: produce_one_row={}", self.produce_one_row)
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for EmptyExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -146,18 +160,6 @@ impl ExecutionPlan for EmptyExec {
             self.schema.clone(),
             None,
         )?))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "EmptyExec: produce_one_row={}", self.produce_one_row)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

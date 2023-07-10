@@ -1070,6 +1070,45 @@ Returns UUID v4 string value which is unique per row.
 uuid()
 ```
 
+## Binary String Functions
+
+- [decode](#decode)
+- [encode](#encode)
+
+### `encode`
+
+Encode binary data into a textual representation.
+
+```
+encode(expression, format)
+```
+
+#### Arguments
+
+- **expression**: Expression containing string or binary data
+
+- **format**: Supported formats are: `base64`, `hex`
+
+**Related functions**:
+[decode](#decode)
+
+### `decode`
+
+Decode binary data from textual representation in string.
+
+```
+decode(expression, format)
+```
+
+#### Arguments
+
+- **expression**: Expression containing encoded string data
+
+- **format**: Same arguments as [encode](#encode)
+
+**Related functions**:
+[encode](#encode)
+
 ## Regular Expression Functions
 
 Apache DataFusion uses the POSIX regular expression syntax and

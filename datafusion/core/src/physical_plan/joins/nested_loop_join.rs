@@ -29,8 +29,8 @@ use crate::physical_plan::joins::utils::{
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 use arrow::array::{
     BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
@@ -117,6 +117,24 @@ impl NestedLoopJoinExec {
             column_indices,
             metrics: Default::default(),
         })
+    }
+}
+
+impl DisplayAs for NestedLoopJoinExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let display_filter = self.filter.as_ref().map_or_else(
+                    || "".to_string(),
+                    |f| format!(", filter={}", f.expression()),
+                );
+                write!(
+                    f,
+                    "NestedLoopJoinExec: join_type={:?}{}",
+                    self.join_type, display_filter
+                )
+            }
+        }
     }
 }
 
@@ -247,22 +265,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
             join_metrics,
             reservation,
         }))
-    }
-
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let display_filter = self.filter.as_ref().map_or_else(
-                    || "".to_string(),
-                    |f| format!(", filter={}", f.expression()),
-                );
-                write!(
-                    f,
-                    "NestedLoopJoinExec: join_type={:?}{}",
-                    self.join_type, display_filter
-                )
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

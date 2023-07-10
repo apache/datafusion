@@ -28,6 +28,7 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::sorts::streaming_merge;
+use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
@@ -104,6 +105,26 @@ impl SortPreservingMergeExec {
     /// Fetch
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+}
+
+impl DisplayAs for SortPreservingMergeExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))?;
+                if let Some(fetch) = self.fetch {
+                    write!(f, ", fetch={fetch}")?;
+                };
+
+                Ok(())
+            }
+        }
     }
 }
 
@@ -211,24 +232,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
                 Ok(result)
-            }
-        }
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))?;
-                if let Some(fetch) = self.fetch {
-                    write!(f, ", fetch={fetch}")?;
-                };
-
-                Ok(())
             }
         }
     }

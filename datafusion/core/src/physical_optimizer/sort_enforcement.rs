@@ -973,8 +973,8 @@ mod tests {
     use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::joins::utils::JoinOn;
-    use crate::physical_plan::joins::SortMergeJoinExec;
+    use crate::physical_plan::joins::utils::{JoinFilter, JoinOn};
+    use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::repartition::RepartitionExec;
@@ -1694,6 +1694,37 @@ mod tests {
             "          MemoryExec: partitions=0, partition_sizes=[]",
             "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
             "          MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort5() -> Result<()> {
+        let left_schema = create_test_schema2()?;
+        let right_schema = create_test_schema3()?;
+        let left_input = memory_exec(&left_schema);
+        let parquet_sort_exprs = vec![sort_expr("a", &right_schema)];
+        let right_input = parquet_exec_sorted(&right_schema, parquet_sort_exprs);
+
+        let on = vec![(
+            Column::new_with_schema("col_a", &left_schema)?,
+            Column::new_with_schema("c", &right_schema)?,
+        )];
+        let join = hash_join_exec(left_input, right_input, on, None, &JoinType::Inner)?;
+        let physical_plan = sort_exec(vec![sort_expr("a", &join.schema())], join);
+
+        let expected_input = vec![
+            "SortExec: expr=[a@2 ASC]",
+            "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
+            "    MemoryExec: partitions=0, partition_sizes=[]",
+            "    ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        ];
+
+        let expected_optimized = vec![
+            "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
+            "  MemoryExec: partitions=0, partition_sizes=[]",
+            "  ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
@@ -2757,6 +2788,24 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let sort_exprs = sort_exprs.into_iter().collect();
         Arc::new(SortExec::new(sort_exprs, input))
+    }
+
+    fn hash_join_exec(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: JoinOn,
+        filter: Option<JoinFilter>,
+        join_type: &JoinType,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            PartitionMode::Partitioned,
+            true,
+        )?))
     }
 
     fn sort_preserving_merge_exec(
