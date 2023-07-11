@@ -41,10 +41,9 @@ use futures::{Stream, StreamExt};
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
-    add_offset_to_expr, add_offset_to_lex_ordering,
-    add_offset_to_ordering_equivalence_classes, build_join_schema, check_join_is_valid,
-    combine_join_equivalence_properties, estimate_join_statistics,
-    partitioned_join_output_partitioning, JoinOn,
+    add_offset_to_lex_ordering, add_offset_to_ordering_equivalence_classes,
+    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
+    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
@@ -57,8 +56,6 @@ use datafusion_common::JoinType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-
-use datafusion_common::tree_node::{Transformed, TreeNode};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -282,13 +279,29 @@ impl ExecutionPlan for SortMergeJoinExec {
         let right_oeq_properties = self.right.ordering_equivalence_properties();
         match self.join_type {
             JoinType::Inner => {
+                // Ordering equivalence left side is preserved. Since stream side is left
+                // Global ordering of the left table is preserved. Hence left table ordering
+                // equivalences are still valid.
                 new_properties.extend(left_oeq_properties.classes().to_vec());
-                let new_right_properties = add_offset_to_ordering_equivalence_classes(
-                    right_oeq_properties.classes(),
-                    left_columns_len,
-                )
-                .unwrap();
-                new_properties.extend(new_right_properties);
+                if let Some(output_ordering) = &self.output_ordering {
+                    let updated_right_oeq_classes =
+                        add_offset_to_ordering_equivalence_classes(
+                            right_oeq_properties.classes(),
+                            left_columns_len,
+                        )
+                        .unwrap();
+                    for oeq_class in updated_right_oeq_classes {
+                        for ordering in oeq_class.others() {
+                            let mut new_oeq_ordering = output_ordering.clone();
+                            // Append right table ordering as lexicographical ordering.
+                            new_oeq_ordering.extend(ordering.clone());
+                            new_properties.add_equal_conditions((
+                                output_ordering,
+                                &new_oeq_ordering,
+                            ));
+                        }
+                    }
+                }
             }
             JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
                 new_properties.extend(left_oeq_properties.classes().to_vec());

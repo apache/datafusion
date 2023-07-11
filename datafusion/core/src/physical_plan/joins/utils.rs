@@ -41,8 +41,8 @@ use datafusion_common::{ScalarValue, SharedResult};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::{
-    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalenceProperties,
-    OrderingEquivalentClass, PhysicalExpr, PhysicalSortExpr,
+    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalentClass, PhysicalExpr,
+    PhysicalSortExpr,
 };
 
 use datafusion_common::JoinType;
