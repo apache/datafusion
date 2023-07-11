@@ -87,6 +87,7 @@ use datafusion_common::Result;
 // | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
 // ---------------------
 
+#[cfg(not(test))]
 const MIN_JOIN_HASH_MAP_LEN: usize = 1024;
 
 pub struct JoinHashMap {
@@ -99,8 +100,9 @@ pub struct JoinHashMap {
 }
 
 impl JoinHashMap {
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        let mut bucket_capacity = capacity.next_power_of_two();
+    #[cfg(not(test))]
+    pub(crate) fn with_capacity(bucket_capacity: usize, capacity: usize) -> Self {
+        let mut bucket_capacity = bucket_capacity.next_power_of_two();
         if bucket_capacity < MIN_JOIN_HASH_MAP_LEN {
             bucket_capacity = MIN_JOIN_HASH_MAP_LEN;
         }
@@ -112,8 +114,8 @@ impl JoinHashMap {
         }
     }
 
-    /// Only used for testing
-    pub(crate) fn with_bucket_capacity(bucket_capacity: usize, capacity: usize) -> Self {
+    #[cfg(test)]
+    pub(crate) fn with_capacity(bucket_capacity: usize, capacity: usize) -> Self {
         assert!(bucket_capacity > 0);
         let bucket_capacity = bucket_capacity.next_power_of_two();
         let bucket_mask = bucket_capacity - 1;

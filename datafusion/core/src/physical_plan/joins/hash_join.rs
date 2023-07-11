@@ -570,7 +570,7 @@ async fn collect_left_input(
     // can directly index into the arrays
     let single_batch = concat_batches(&schema, &batches, num_rows)?;
 
-    let mut hashmap = JoinHashMap::with_capacity(num_rows);
+    let mut hashmap = JoinHashMap::with_capacity(estimated_buckets, num_rows);
     let mut hashes_buffer = vec![0; num_rows];
     update_hash(
         &on_left,
@@ -2673,7 +2673,7 @@ mod tests {
         let hashes =
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
-        let mut join_hash_map = JoinHashMap::with_bucket_capacity(2, left.num_rows());
+        let mut join_hash_map = JoinHashMap::with_capacity(2, left.num_rows());
         for (row, hash_value) in hashes.iter().enumerate() {
             join_hash_map.insert(*hash_value, row);
         }
