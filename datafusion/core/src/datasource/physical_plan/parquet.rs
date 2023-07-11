@@ -754,7 +754,6 @@ mod tests {
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use futures::StreamExt;
-    use itertools::Itertools;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
