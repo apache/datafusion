@@ -479,11 +479,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_expr_metadata() {
+        let mut meta = HashMap::new();
+        meta.insert("bar".to_string(), "buzz".to_string());
+        let expr = col("foo");
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_metadata(meta.clone());
+
+        // col and alias should be metadata-preserving
+        assert_eq!(meta, expr.metadata(&schema).unwrap());
+        assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
+
+        // cast should drop input metadata since the type has changed
+        assert_eq!(
+            HashMap::new(),
+            expr.clone()
+                .cast_to(&DataType::Int64, &schema)
+                .unwrap()
+                .metadata(&schema)
+                .unwrap()
+        );
+
+        let schema = DFSchema::new_with_metadata(
+            vec![DFField::new_unqualified("foo", DataType::Int32, true)
+                .with_metadata(meta.clone())],
+            HashMap::new(),
+        )
+        .unwrap();
+
+        // verify to_field method populates metadata
+        assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());
+    }
+
     #[derive(Debug)]
     struct MockExprSchema {
         nullable: bool,
         data_type: DataType,
         error_on_nullable: bool,
+        metadata: HashMap<String, String>,
     }
 
     impl MockExprSchema {
@@ -492,6 +527,7 @@ mod tests {
                 nullable: false,
                 data_type: DataType::Null,
                 error_on_nullable: false,
+                metadata: HashMap::new(),
             }
         }
 
@@ -509,6 +545,11 @@ mod tests {
             self.error_on_nullable = error_on_nullable;
             self
         }
+
+        fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+            self.metadata = metadata;
+            self
+        }
     }
 
     impl ExprSchema for MockExprSchema {
@@ -522,6 +563,10 @@ mod tests {
 
         fn data_type(&self, _col: &Column) -> Result<&DataType> {
             Ok(&self.data_type)
+        }
+
+        fn metadata(&self, _col: &Column) -> Result<&HashMap<String, String>> {
+            Ok(&self.metadata)
         }
     }
 }
