@@ -122,7 +122,6 @@ impl PartitionEvaluator for RankEvaluator {
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
         let row_idx = range.start;
-        // println!("self.state: {:?}, row_idx:{:?}", self.state, row_idx);
         // There is no argument, values are order by column values (where rank is calculated)
         let range_columns = values;
         let last_rank_data = get_row_at_idx(range_columns, row_idx)?;
@@ -131,9 +130,9 @@ impl PartitionEvaluator for RankEvaluator {
             self.state.last_rank_data = last_rank_data;
             self.state.last_rank_boundary += self.state.current_group_count;
             self.state.current_group_count = 1;
-            // self.state.n_rank = 1 + if empty { chunk_idx } else { self.state.n_rank };
             self.state.n_rank += 1;
         } else {
+            // data is still in the same rank
             self.state.current_group_count += 1;
         }
         match self.rank_type {

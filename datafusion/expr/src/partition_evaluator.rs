@@ -202,6 +202,9 @@ pub trait PartitionEvaluator: Debug + Send {
     ///
     /// Returns a [`ScalarValue`] that is the value of the window
     /// function within `range` for the entire partition
+    /// `values` contains evaluation result of function arguments and
+    /// evaluation results of order by expressions. If function has a
+    /// single argument values[1..] will contain order by expression results.
     fn evaluate(
         &mut self,
         _values: &[ArrayRef],

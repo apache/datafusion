@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
-use crate::window::window_expr::WindowFn;
+use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 use arrow::array::{new_empty_array, ArrayRef};
@@ -102,12 +102,11 @@ impl WindowExpr for BuiltInWindowExpr {
             let mut row_wise_results = vec![];
 
             let mut values = self.evaluate_args(batch)?;
-            let order_bys = self.get_orderby_values(batch)?;
+            let order_bys = get_orderby_values(self.order_by_columns(batch)?);
             let n_args = values.len();
             values.extend(order_bys);
             let order_bys_ref = &values[n_args..];
 
-            // let (values, order_bys) = self.get_values_orderbys(batch)?;
             let mut window_frame_ctx =
                 WindowFrameContext::new(self.window_frame.clone(), sort_options);
             let mut last_range = Range { start: 0, end: 0 };
@@ -125,7 +124,7 @@ impl WindowExpr for BuiltInWindowExpr {
             }
             ScalarValue::iter_to_array(row_wise_results.into_iter())
         } else if evaluator.include_rank() {
-            let columns = self.sort_columns(batch)?;
+            let columns = self.order_by_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
             evaluator.evaluate_all_with_rank(num_rows, &sort_partition_points)
         } else {
@@ -166,7 +165,7 @@ impl WindowExpr for BuiltInWindowExpr {
             let batch_ref = &partition_batch_state.record_batch;
             let mut values = self.evaluate_args(batch_ref)?;
             let order_bys = if evaluator.uses_window_frame() | evaluator.include_rank() {
-                self.get_orderby_values(batch_ref)?
+                get_orderby_values(self.order_by_columns(batch_ref)?)
             } else {
                 vec![]
             };
