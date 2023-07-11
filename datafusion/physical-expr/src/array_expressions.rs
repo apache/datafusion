@@ -21,6 +21,7 @@ use arrow::array::*;
 use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
 use datafusion_common::ScalarValue;
@@ -679,20 +680,44 @@ fn old_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let list_arrays =
         downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+
+    println!("list_arrays: {:?}", list_arrays);
+
     let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
     let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-    let array_data = array_data.iter().collect();
-    let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
+    let array_data: Vec<&ArrayData> = array_data.iter().collect();
+    
+    let mut mutable = MutableArrayData::with_capacities(array_data, true, capacity);
+
 
     // Assume number of rows is the same for all arrays
     let row_count = list_arrays[0].len();
     let mut array_lens = vec![0; row_count];
+    let mut null_bit_map: Vec<bool> = vec![];
     for i in 0..row_count {
+        let null_count = mutable.null_count();
         for (j, a) in list_arrays.iter().enumerate() {
             mutable.extend(j, i, i + 1);
             array_lens[i] += a.value_length(i);
         }
+
+        // This means all arrays are null
+        if mutable.null_count() == null_count + list_arrays.len() {
+            null_bit_map.push(false);
+        } else {
+            null_bit_map.push(true);
+        }
+
+        let mutable_len = mutable.len();
+        println!("row({}) mutable_len: {:?}", i, mutable_len);
+        println!("row({}) null_count: {:?}", i, mutable.null_count());
     }
+
+    println!("null_bit_map: {:?}", null_bit_map);
+    let mut buffer = BooleanBufferBuilder::new(4);
+    buffer.append_slice(null_bit_map.as_slice());
+    let nulls = Some(NullBuffer::from(buffer.finish()));
+
 
     let offsets: Vec<i32> = std::iter::once(0)
         .chain(array_lens.iter().scan(0, |state, &x| {
@@ -706,8 +731,13 @@ fn old_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list = builder
         .len(row_count)
         .buffers(vec![Buffer::from_vec(offsets)])
-        .build()
-        .unwrap();
+        .nulls(nulls)
+        .build()?;
+        // .unwrap();
+    
+    let nulls = list.nulls();
+    println!("nulls: {:?}", nulls);
+
     let list = arrow::array::make_array(list);
     Ok(Arc::new(list))
 }

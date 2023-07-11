@@ -69,6 +69,15 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE arrays_values_2
+AS VALUES
+  (make_array(NULL, 2, 3), make_array(4, 5, NULL)),
+  (NULL, make_array(7, NULL, 8)),
+  (make_array(9, NULL, 10), NULL),
+  (NULL, NULL)
+;
+
+statement ok
 CREATE TABLE arrays_values_without_nulls
 AS VALUES
   (make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ','),
@@ -115,6 +124,14 @@ NULL 44 5 @
 [41, 42, 43, 44, 45, 46, 47, 48, 49, 50] NULL 6 $
 [51, 52, , 54, 55, 56, 57, 58, 59, 60] 55 NULL ^
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70] 66 7 NULL
+
+query ??
+select column1, column2 from arrays_values_2;
+----
+[, 2, 3] [4, 5, ]
+NULL [7, , 8]
+[9, , 10] NULL
+NULL NULL
 
 # arrays_values_without_nulls table
 query ?II
@@ -448,6 +465,8 @@ select array_concat(make_array(column2), make_array(column3)) from arrays_values
 [12, 2]
 [23, 3]
 [34, 4]
+
+
 
 ## array_position
 
@@ -861,6 +880,13 @@ select make_array(f0) from fixed_size_list_array
 [[1, 2], [3, 4]]
 
 
+query ?
+select array_concat(column1, column2) from arrays_values_2;
+----
+[, 2, 3, 4, 5, ]
+[7, , 8]
+[9, , 10]
+NULL
 
 ### Delete tables
 
