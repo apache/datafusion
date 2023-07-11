@@ -458,6 +458,7 @@ select array_concat(column1, column1) from arrays_values_without_nulls;
 [21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
 [31, 32, 33, 34, 35, 26, 37, 38, 39, 40, 31, 32, 33, 34, 35, 26, 37, 38, 39, 40]
 
+# array_concat column-wise #3
 query ?
 select array_concat(make_array(column2), make_array(column3)) from arrays_values_without_nulls;
 ----
@@ -466,7 +467,87 @@ select array_concat(make_array(column2), make_array(column3)) from arrays_values
 [23, 3]
 [34, 4]
 
+# array_concat column-wise #4
+# TODO: concat with null should be empty not 0, this only fails when rhs is null.
+# query ?
+# select array_concat(column1, column2) from arrays_values;
+# ----
+# [, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+# [11, 12, 13, 14, 15, 16, 17, 18, , 20, 12]
+# [21, 22, 23, , 25, 26, 27, 28, 29, 30, 23]
+# [31, 32, 33, 34, 35, , 37, 38, 39, 40, 34]
+# [44]
+# [41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 0]
+# [51, 52, , 54, 55, 56, 57, 58, 59, 60, 55]
+# [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
+#
+# query ?I
+# select column1, column2 from arrays_values;
+# ----
+# [, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1
+# [11, 12, 13, 14, 15, 16, 17, 18, , 20] 12
+# [21, 22, 23, , 25, 26, 27, 28, 29, 30] 23
+# [31, 32, 33, 34, 35, , 37, 38, 39, 40] 34
+# NULL 44
+# [41, 42, 43, 44, 45, 46, 47, 48, 49, 50] NULL
+# [51, 52, , 54, 55, 56, 57, 58, 59, 60] 55
+# [61, 62, 63, 64, 65, 66, 67, 68, 69, 70] 66
 
+# TODO: NULL should be empty not 0
+# query ?
+# select array_concat(make_array(column2), make_array(0)) from arrays_values;
+# ----
+# [1, 0]
+# [12, 0]
+# [23, 0]
+# [34, 0]
+# [44, 0]
+# [0, 0]
+# [55, 0]
+# [66, 0]
+
+# TODO: " is missing
+# query ???
+# select array_concat(column1, column1), array_concat(column2, column2), array_concat(column3, column3) from arrays;
+# ----
+# [[, 2], [3, ], [, 2], [3, ]] [1.1, 2.2, 3.3, 1.1, 2.2, 3.3] [L, o, r, e, m, L, o, r, e, m]
+# [[3, 4], [5, 6], [3, 4], [5, 6]] [, 5.5, 6.6, , 5.5, 6.6] [i, p, , u, m, i, p, , u, m]
+# [[5, 6], [7, 8], [5, 6], [7, 8]] [7.7, 8.8, 9.9, 7.7, 8.8, 9.9] [d, , l, o, r, d, , l, o, r]
+# [[7, ], [9, 10], [7, ], [9, 10]] [10.1, , 12.2, 10.1, , 12.2] [s, i, t, s, i, t]
+# NULL [13.3, 14.4, 15.5, 13.3, 14.4, 15.5] [a, m, e, t, a, m, e, t]
+# [[11, 12], [13, 14], [11, 12], [13, 14]] NULL [,, ,]
+# [[15, 16], [, 18], [15, 16], [, 18]] [16.6, 17.7, 18.8, 16.6, 17.7, 18.8] NULL
+
+query ??
+select array_concat(column1, make_array(make_array(1, 2), make_array(3, 4))), array_concat(column2, make_array(1.1, 2.2, 3.3)) from arrays;
+----
+[[, 2], [3, ], [1, 2], [3, 4]] [1.1, 2.2, 3.3, 1.1, 2.2, 3.3]
+[[3, 4], [5, 6], [1, 2], [3, 4]] [, 5.5, 6.6, 1.1, 2.2, 3.3]
+[[5, 6], [7, 8], [1, 2], [3, 4]] [7.7, 8.8, 9.9, 1.1, 2.2, 3.3]
+[[7, ], [9, 10], [1, 2], [3, 4]] [10.1, , 12.2, 1.1, 2.2, 3.3]
+[[1, 2], [3, 4]] [13.3, 14.4, 15.5, 1.1, 2.2, 3.3]
+[[11, 12], [13, 14], [1, 2], [3, 4]] [1.1, 2.2, 3.3]
+[[15, 16], [, 18], [1, 2], [3, 4]] [16.6, 17.7, 18.8, 1.1, 2.2, 3.3]
+
+# TODO: " is missing
+# query ?
+# select array_concat(column3, make_array('.', '.', '.')) from arrays;
+# ----
+# [L, o, r, e, m, ., ., .]
+# [i, p, , u, m, ., ., .]
+# [d, , l, o, r, ., ., .]
+# [s, i, t, ., ., .]
+# [a, m, e, t, ., ., .]
+# [,, ., ., .]
+# [., ., .]
+
+query ?
+select array_concat(column1, column2) from arrays_values_2;
+----
+[, 2, 3, 4, 5, ]
+[7, , 8]
+[9, , 10]
+NULL
 
 ## array_position
 
@@ -880,13 +961,6 @@ select make_array(f0) from fixed_size_list_array
 [[1, 2], [3, 4]]
 
 
-query ?
-select array_concat(column1, column2) from arrays_values_2;
-----
-[, 2, 3, 4, 5, ]
-[7, , 8]
-[9, , 10]
-NULL
 
 ### Delete tables
 

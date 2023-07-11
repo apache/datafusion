@@ -709,8 +709,6 @@ fn old_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
 
         let mutable_len = mutable.len();
-        println!("row({}) mutable_len: {:?}", i, mutable_len);
-        println!("row({}) null_count: {:?}", i, mutable.null_count());
     }
 
     println!("null_bit_map: {:?}", null_bit_map);
