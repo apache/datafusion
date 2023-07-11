@@ -258,8 +258,7 @@ fn optimize_partitions(
     }
 
     if let Some(csv_exec) = new_plan.as_any().downcast_ref::<CsvExec>() {
-        // The underlying CsvOpener will only fetch certain part of csv file from the object store, which can't be decompressed separately
-        if repartition_file_scans && !csv_exec.file_compression_type.is_compressed() {
+        if repartition_file_scans {
             let repartitioned_exec_option =
                 csv_exec.get_repartitioned(target_partitions, repartition_file_min_size);
             if let Some(repartitioned_exec) = repartitioned_exec_option {

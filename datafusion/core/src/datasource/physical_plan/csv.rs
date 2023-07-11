@@ -106,11 +106,18 @@ impl CsvExec {
 
     /// Redistribute files across partitions according to their size
     /// See comments on `repartition_file_groups()` for more detail.
+    ///
+    /// Return `None` if can't get repartitioned(empty/compressed file).
     pub fn get_repartitioned(
         &self,
         target_partitions: usize,
         repartition_file_min_size: usize,
     ) -> Option<Self> {
+        // Parallel execution on compressed CSV file is not supported yet.
+        if self.file_compression_type.is_compressed() {
+            return None;
+        }
+
         let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
             self.base_config.file_groups.clone(),
             target_partitions,

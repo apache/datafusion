@@ -1202,7 +1202,7 @@ mod tests {
         Ok(())
     }
 
-    /// Parappel scan on a csv file with only 1 byte in each line
+    /// Parallel scan on a csv file with only 1 byte in each line
     /// Testing partition byte range land on line boundaries
     ///
     /// one_col.csv:
@@ -1254,7 +1254,7 @@ mod tests {
         Ok(())
     }
 
-    /// Parappel scan on a csv file with 2 wide rows
+    /// Parallel scan on a csv file with 2 wide rows
     /// The byte range of a partition might be within some line
     ///
     /// wode_rows.csv:
