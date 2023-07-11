@@ -183,7 +183,9 @@ pub(crate) struct GroupedHashAggregateStream {
     group_values: Rows,
 
     /// scratch space for the current input [`RecordBatch`] being
-    /// processed. Reused across batches here to avoid re-allocations
+    /// processed. The reason this is a field is so it can be reused
+    /// for all input batches, avoiding the need to reallocate Vecs on
+    /// each input.
     scratch_space: ScratchSpace,
 
     /// Tracks if this stream is generating input or output
