@@ -210,7 +210,9 @@ async fn csv_explain_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -282,7 +284,9 @@ async fn csv_explain_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -427,7 +431,9 @@ async fn csv_explain_verbose_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -499,7 +505,9 @@ async fn csv_explain_verbose_plans() {
     //
     // verify the grahviz format of the plan
     let expected = vec![
-        "// Begin DataFusion GraphViz Plan (see https://graphviz.org)",
+        "// Begin DataFusion GraphViz Plan,",
+        "// display it online here: https://dreampuf.github.io/GraphvizOnline",
+        "",
         "digraph {",
         "  subgraph cluster_1",
         "  {",
@@ -599,7 +607,7 @@ async fn test_physical_plan_display_indent() {
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
         "GlobalLimitExec: skip=0, fetch=10",
-        "  SortPreservingMergeExec: [the_min@2 DESC]",
+        "  SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
         "    SortExec: fetch=10, expr=[the_min@2 DESC]",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",

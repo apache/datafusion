@@ -80,20 +80,20 @@ async fn test_udwf() {
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
     let expected = vec![
-        "+---+---+-----+--------------------+",
-        "| x | y | val | odd_counter(t.val) |",
-        "+---+---+-----+--------------------+",
-        "| 1 | a | 0   | 1                  |",
-        "| 1 | b | 1   | 1                  |",
-        "| 1 | c | 2   | 1                  |",
-        "| 2 | d | 3   | 2                  |",
-        "| 2 | e | 4   | 2                  |",
-        "| 2 | f | 5   | 2                  |",
-        "| 2 | g | 6   | 2                  |",
-        "| 2 | h | 6   | 2                  |",
-        "| 2 | i | 6   | 2                  |",
-        "| 2 | j | 6   | 2                  |",
-        "+---+---+-----+--------------------+",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 1                                                                                                                     |",
+    "| 1 | b | 1   | 1                                                                                                                     |",
+    "| 1 | c | 2   | 1                                                                                                                     |",
+    "| 2 | d | 3   | 2                                                                                                                     |",
+    "| 2 | e | 4   | 2                                                                                                                     |",
+    "| 2 | f | 5   | 2                                                                                                                     |",
+    "| 2 | g | 6   | 2                                                                                                                     |",
+    "| 2 | h | 6   | 2                                                                                                                     |",
+    "| 2 | i | 6   | 2                                                                                                                     |",
+    "| 2 | j | 6   | 2                                                                                                                     |",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(
         expected,
@@ -111,20 +111,20 @@ async fn test_udwf_bounded_window_ignores_frame() {
 
     // Since the UDWF doesn't say it needs the window frame, the frame is ignored
     let expected = vec![
-        "+---+---+-----+--------------------+",
-        "| x | y | val | odd_counter(t.val) |",
-        "+---+---+-----+--------------------+",
-        "| 1 | a | 0   | 1                  |",
-        "| 1 | b | 1   | 1                  |",
-        "| 1 | c | 2   | 1                  |",
-        "| 2 | d | 3   | 2                  |",
-        "| 2 | e | 4   | 2                  |",
-        "| 2 | f | 5   | 2                  |",
-        "| 2 | g | 6   | 2                  |",
-        "| 2 | h | 6   | 2                  |",
-        "| 2 | i | 6   | 2                  |",
-        "| 2 | j | 6   | 2                  |",
-        "+---+---+-----+--------------------+",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 1                                                                                                            |",
+    "| 1 | b | 1   | 1                                                                                                            |",
+    "| 1 | c | 2   | 1                                                                                                            |",
+    "| 2 | d | 3   | 2                                                                                                            |",
+    "| 2 | e | 4   | 2                                                                                                            |",
+    "| 2 | f | 5   | 2                                                                                                            |",
+    "| 2 | g | 6   | 2                                                                                                            |",
+    "| 2 | h | 6   | 2                                                                                                            |",
+    "| 2 | i | 6   | 2                                                                                                            |",
+    "| 2 | j | 6   | 2                                                                                                            |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(
         expected,
@@ -142,20 +142,20 @@ async fn test_udwf_bounded_window() {
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
     let expected = vec![
-        "+---+---+-----+--------------------+",
-        "| x | y | val | odd_counter(t.val) |",
-        "+---+---+-----+--------------------+",
-        "| 1 | a | 0   | 1                  |",
-        "| 1 | b | 1   | 1                  |",
-        "| 1 | c | 2   | 1                  |",
-        "| 2 | d | 3   | 1                  |",
-        "| 2 | e | 4   | 2                  |",
-        "| 2 | f | 5   | 1                  |",
-        "| 2 | g | 6   | 1                  |",
-        "| 2 | h | 6   | 0                  |",
-        "| 2 | i | 6   | 0                  |",
-        "| 2 | j | 6   | 0                  |",
-        "+---+---+-----+--------------------+",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 1                                                                                                            |",
+    "| 1 | b | 1   | 1                                                                                                            |",
+    "| 1 | c | 2   | 1                                                                                                            |",
+    "| 2 | d | 3   | 1                                                                                                            |",
+    "| 2 | e | 4   | 2                                                                                                            |",
+    "| 2 | f | 5   | 1                                                                                                            |",
+    "| 2 | g | 6   | 1                                                                                                            |",
+    "| 2 | h | 6   | 0                                                                                                            |",
+    "| 2 | i | 6   | 0                                                                                                            |",
+    "| 2 | j | 6   | 0                                                                                                            |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(
         expected,
@@ -175,20 +175,20 @@ async fn test_stateful_udwf() {
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
     let expected = vec![
-        "+---+---+-----+--------------------+",
-        "| x | y | val | odd_counter(t.val) |",
-        "+---+---+-----+--------------------+",
-        "| 1 | a | 0   | 0                  |",
-        "| 1 | b | 1   | 1                  |",
-        "| 1 | c | 2   | 1                  |",
-        "| 2 | d | 3   | 1                  |",
-        "| 2 | e | 4   | 1                  |",
-        "| 2 | f | 5   | 2                  |",
-        "| 2 | g | 6   | 2                  |",
-        "| 2 | h | 6   | 2                  |",
-        "| 2 | i | 6   | 2                  |",
-        "| 2 | j | 6   | 2                  |",
-        "+---+---+-----+--------------------+",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 0                                                                                                                     |",
+    "| 1 | b | 1   | 1                                                                                                                     |",
+    "| 1 | c | 2   | 1                                                                                                                     |",
+    "| 2 | d | 3   | 1                                                                                                                     |",
+    "| 2 | e | 4   | 1                                                                                                                     |",
+    "| 2 | f | 5   | 2                                                                                                                     |",
+    "| 2 | g | 6   | 2                                                                                                                     |",
+    "| 2 | h | 6   | 2                                                                                                                     |",
+    "| 2 | i | 6   | 2                                                                                                                     |",
+    "| 2 | j | 6   | 2                                                                                                                     |",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(
         expected,
@@ -208,20 +208,20 @@ async fn test_stateful_udwf_bounded_window() {
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
     let expected = vec![
-        "+---+---+-----+--------------------+",
-        "| x | y | val | odd_counter(t.val) |",
-        "+---+---+-----+--------------------+",
-        "| 1 | a | 0   | 1                  |",
-        "| 1 | b | 1   | 1                  |",
-        "| 1 | c | 2   | 1                  |",
-        "| 2 | d | 3   | 1                  |",
-        "| 2 | e | 4   | 2                  |",
-        "| 2 | f | 5   | 1                  |",
-        "| 2 | g | 6   | 1                  |",
-        "| 2 | h | 6   | 0                  |",
-        "| 2 | i | 6   | 0                  |",
-        "| 2 | j | 6   | 0                  |",
-        "+---+---+-----+--------------------+",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 1                                                                                                            |",
+    "| 1 | b | 1   | 1                                                                                                            |",
+    "| 1 | c | 2   | 1                                                                                                            |",
+    "| 2 | d | 3   | 1                                                                                                            |",
+    "| 2 | e | 4   | 2                                                                                                            |",
+    "| 2 | f | 5   | 1                                                                                                            |",
+    "| 2 | g | 6   | 1                                                                                                            |",
+    "| 2 | h | 6   | 0                                                                                                            |",
+    "| 2 | i | 6   | 0                                                                                                            |",
+    "| 2 | j | 6   | 0                                                                                                            |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(
         expected,
@@ -240,20 +240,20 @@ async fn test_udwf_query_include_rank() {
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
     let expected = vec![
-        "+---+---+-----+--------------------+",
-        "| x | y | val | odd_counter(t.val) |",
-        "+---+---+-----+--------------------+",
-        "| 1 | a | 0   | 3                  |",
-        "| 1 | b | 1   | 2                  |",
-        "| 1 | c | 2   | 1                  |",
-        "| 2 | d | 3   | 7                  |",
-        "| 2 | e | 4   | 6                  |",
-        "| 2 | f | 5   | 5                  |",
-        "| 2 | g | 6   | 4                  |",
-        "| 2 | h | 6   | 3                  |",
-        "| 2 | i | 6   | 2                  |",
-        "| 2 | j | 6   | 1                  |",
-        "+---+---+-----+--------------------+",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 3                                                                                                                     |",
+    "| 1 | b | 1   | 2                                                                                                                     |",
+    "| 1 | c | 2   | 1                                                                                                                     |",
+    "| 2 | d | 3   | 7                                                                                                                     |",
+    "| 2 | e | 4   | 6                                                                                                                     |",
+    "| 2 | f | 5   | 5                                                                                                                     |",
+    "| 2 | g | 6   | 4                                                                                                                     |",
+    "| 2 | h | 6   | 3                                                                                                                     |",
+    "| 2 | i | 6   | 2                                                                                                                     |",
+    "| 2 | j | 6   | 1                                                                                                                     |",
+    "+---+---+-----+-----------------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(
         expected,
@@ -272,20 +272,20 @@ async fn test_udwf_bounded_query_include_rank() {
     let TestContext { ctx, test_state } = TestContext::new(test_state);
 
     let expected = vec![
-        "+---+---+-----+--------------------+",
-        "| x | y | val | odd_counter(t.val) |",
-        "+---+---+-----+--------------------+",
-        "| 1 | a | 0   | 3                  |",
-        "| 1 | b | 1   | 2                  |",
-        "| 1 | c | 2   | 1                  |",
-        "| 2 | d | 3   | 7                  |",
-        "| 2 | e | 4   | 6                  |",
-        "| 2 | f | 5   | 5                  |",
-        "| 2 | g | 6   | 4                  |",
-        "| 2 | h | 6   | 3                  |",
-        "| 2 | i | 6   | 2                  |",
-        "| 2 | j | 6   | 1                  |",
-        "+---+---+-----+--------------------+",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 3                                                                                                            |",
+    "| 1 | b | 1   | 2                                                                                                            |",
+    "| 1 | c | 2   | 1                                                                                                            |",
+    "| 2 | d | 3   | 7                                                                                                            |",
+    "| 2 | e | 4   | 6                                                                                                            |",
+    "| 2 | f | 5   | 5                                                                                                            |",
+    "| 2 | g | 6   | 4                                                                                                            |",
+    "| 2 | h | 6   | 3                                                                                                            |",
+    "| 2 | i | 6   | 2                                                                                                            |",
+    "| 2 | j | 6   | 1                                                                                                            |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(
         expected,
@@ -295,6 +295,39 @@ async fn test_udwf_bounded_query_include_rank() {
     assert_eq!(test_state.evaluate_all_called(), 0);
     // evaluated on 2 distinct batches (when x=1 and x=2)
     assert_eq!(test_state.evaluate_all_with_rank_called(), 2);
+}
+
+/// Basic user defined window function that can return NULL.
+#[tokio::test]
+async fn test_udwf_bounded_window_returns_null() {
+    let test_state = TestState::new()
+        .with_uses_window_frame()
+        .with_null_for_zero();
+    let TestContext { ctx, test_state } = TestContext::new(test_state);
+
+    let expected = vec![
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 1                                                                                                            |",
+    "| 1 | b | 1   | 1                                                                                                            |",
+    "| 1 | c | 2   | 1                                                                                                            |",
+    "| 2 | d | 3   | 1                                                                                                            |",
+    "| 2 | e | 4   | 2                                                                                                            |",
+    "| 2 | f | 5   | 1                                                                                                            |",
+    "| 2 | g | 6   | 1                                                                                                            |",
+    "| 2 | h | 6   |                                                                                                              |",
+    "| 2 | i | 6   |                                                                                                              |",
+    "| 2 | j | 6   |                                                                                                              |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(
+        expected,
+        &execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap()
+    );
+    // Evaluate is called for each input rows
+    assert_eq!(test_state.evaluate_called(), 10);
+    assert_eq!(test_state.evaluate_all_called(), 0);
 }
 
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
@@ -365,6 +398,8 @@ struct TestState {
     supports_bounded_execution: bool,
     /// should the functions they need include rank
     include_rank: bool,
+    /// should the functions return NULL for 0s?
+    null_for_zero: bool,
 }
 
 impl TestState {
@@ -387,6 +422,12 @@ impl TestState {
     /// Set that this function should include rank
     fn with_include_rank(mut self) -> Self {
         self.include_rank = true;
+        self
+    }
+
+    // Set that this function should return NULL instead of zero.
+    fn with_null_for_zero(mut self) -> Self {
+        self.null_for_zero = true;
         self
     }
 
@@ -476,7 +517,12 @@ impl PartitionEvaluator for OddCounter {
         self.test_state.inc_evaluate_called();
         let values: &Int64Array = values.get(0).unwrap().as_primitive();
         let values = values.slice(range.start, range.len());
-        let scalar = ScalarValue::Int64(Some(odd_count(&values)));
+        let scalar = ScalarValue::Int64(
+            match (odd_count(&values), self.test_state.null_for_zero) {
+                (0, true) => None,
+                (n, _) => Some(n),
+            },
+        );
         Ok(scalar)
     }
 

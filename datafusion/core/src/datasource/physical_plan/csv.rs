@@ -23,8 +23,7 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::FileMeta;
-use crate::error::Result;
-use crate::physical_plan::common::AbortOnDropSingle;
+use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -33,7 +32,6 @@ use crate::physical_plan::{
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
@@ -51,7 +49,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
-use tokio::task::{self, JoinHandle};
+use tokio::task::JoinSet;
 
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
@@ -133,6 +131,18 @@ impl CsvExec {
     }
 }
 
+impl DisplayAs for CsvExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "CsvExec: ")?;
+        self.base_config.fmt_as(t, f)?;
+        write!(f, ", has_header={}", self.has_header)
+    }
+}
+
 impl ExecutionPlan for CsvExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -204,16 +214,6 @@ impl ExecutionPlan for CsvExec {
         let stream =
             FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "CsvExec: ")?;
-        self.base_config.fmt_as(t, f)?;
-        write!(f, ", has_header={}", self.has_header)
     }
 
     fn statistics(&self) -> Statistics {
@@ -574,7 +574,7 @@ pub async fn plan_to_csv(
         )));
     }
 
-    let mut tasks = vec![];
+    let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let plan = plan.clone();
         let filename = format!("part-{i}.csv");
@@ -583,22 +583,29 @@ pub async fn plan_to_csv(
         let mut writer = csv::Writer::new(file);
         let stream = plan.execute(i, task_ctx.clone())?;
 
-        let handle: JoinHandle<Result<()>> = task::spawn(async move {
-            stream
+        join_set.spawn(async move {
+            let result: Result<()> = stream
                 .map(|batch| writer.write(&batch?))
                 .try_collect()
                 .await
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::from);
+            result
         });
-        tasks.push(AbortOnDropSingle::new(handle));
     }
 
-    futures::future::join_all(tasks)
-        .await
-        .into_iter()
-        .try_for_each(|result| {
-            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-        })?;
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(res) => res?, // propagate DataFusion error
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

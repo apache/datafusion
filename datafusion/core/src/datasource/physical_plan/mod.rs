@@ -44,14 +44,17 @@ pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
 
-use crate::datasource::{
-    listing::{FileRange, PartitionedFile},
-    object_store::ObjectStoreUrl,
-};
 use crate::physical_plan::ExecutionPlan;
 use crate::{
     datasource::file_format::FileWriterMode,
     physical_plan::{DisplayAs, DisplayFormatType},
+};
+use crate::{
+    datasource::{
+        listing::{FileRange, PartitionedFile},
+        object_store::ObjectStoreUrl,
+    },
+    physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay},
 };
 use crate::{
     error::{DataFusionError, Result},
@@ -70,7 +73,7 @@ use std::{
     borrow::Cow,
     cmp::min,
     collections::HashMap,
-    fmt::{Debug, Display, Formatter, Result as FmtResult},
+    fmt::{Debug, Formatter, Result as FmtResult},
     marker::PhantomData,
     sync::Arc,
     vec,
@@ -490,39 +493,6 @@ where
         format_element(element, f)?;
     }
     Ok(())
-}
-
-/// A wrapper to customize partitioned file display
-#[derive(Debug)]
-struct ProjectSchemaDisplay<'a>(&'a SchemaRef);
-
-impl<'a> Display for ProjectSchemaDisplay<'a> {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let parts: Vec<_> = self
-            .0
-            .fields()
-            .iter()
-            .map(|x| x.name().to_owned())
-            .collect::<Vec<String>>();
-        write!(f, "[{}]", parts.join(", "))
-    }
-}
-
-/// A wrapper to customize output ordering display.
-#[derive(Debug)]
-struct OutputOrderingDisplay<'a>(&'a [PhysicalSortExpr]);
-
-impl<'a> Display for OutputOrderingDisplay<'a> {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        write!(f, "[")?;
-        for (i, e) in self.0.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?
-            }
-            write!(f, "{e}")?;
-        }
-        write!(f, "]")
-    }
 }
 
 /// A utility which can adapt file-level record batches to a table schema which may have a schema

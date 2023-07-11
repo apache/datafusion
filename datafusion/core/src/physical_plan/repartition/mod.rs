@@ -43,7 +43,7 @@ use self::distributor_channels::{DistributionReceiver, DistributionSender};
 use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 
 use crate::physical_plan::common::transpose;
 use crate::physical_plan::metrics::BaselineMetrics;
@@ -263,7 +263,7 @@ struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches
     fetch_time: metrics::Time,
     /// Time in nanos to perform repartitioning
-    repart_time: metrics::Time,
+    repartition_time: metrics::Time,
     /// Time in nanos for sending resulting batches to channels
     send_time: metrics::Time,
 }
@@ -293,7 +293,7 @@ impl RepartitionMetrics {
 
         Self {
             fetch_time,
-            repart_time,
+            repartition_time: repart_time,
             send_time,
         }
     }
@@ -316,6 +316,26 @@ impl RepartitionExec {
             "SortPreservingRepartitionExec"
         } else {
             "RepartitionExec"
+        }
+    }
+}
+
+impl DisplayAs for RepartitionExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "{}: partitioning={}, input_partitions={}",
+                    self.name(),
+                    self.partitioning,
+                    self.input.output_partitioning().partition_count()
+                )
+            }
         }
     }
 }
@@ -407,7 +427,7 @@ impl ExecutionPlan for RepartitionExec {
                 // note we use a custom channel that ensures there is always data for each receiver
                 // but limits the amount of buffering if required.
                 let (txs, rxs) = channels(num_output_partitions);
-                // Clone sender for ech input partitions
+                // Clone sender for each input partitions
                 let txs = txs
                     .into_iter()
                     .map(|item| vec![item; num_input_partitions])
@@ -497,6 +517,7 @@ impl ExecutionPlan for RepartitionExec {
                 sort_exprs,
                 BaselineMetrics::new(&self.metrics, partition),
                 context.session_config().batch_size(),
+                None,
             )
         } else {
             Ok(Box::pin(RepartitionStream {
@@ -512,24 +533,6 @@ impl ExecutionPlan for RepartitionExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "{}: partitioning={}, input_partitions={}",
-                    self.name(),
-                    self.partitioning,
-                    self.input.output_partitioning().partition_count()
-                )
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {
@@ -564,34 +567,31 @@ impl RepartitionExec {
     /// Pulls data from the specified input plan, feeding it to the
     /// output partitions based on the desired partitioning
     ///
-    /// i is the input partition index
-    ///
     /// txs hold the output sending channels for each output partition
     async fn pull_from_input(
         input: Arc<dyn ExecutionPlan>,
-        i: usize,
-        mut txs: HashMap<
+        partition: usize,
+        mut output_channels: HashMap<
             usize,
             (DistributionSender<MaybeBatch>, SharedMemoryReservation),
         >,
         partitioning: Partitioning,
-        r_metrics: RepartitionMetrics,
+        metrics: RepartitionMetrics,
         context: Arc<TaskContext>,
     ) -> Result<()> {
         let mut partitioner =
-            BatchPartitioner::try_new(partitioning, r_metrics.repart_time.clone())?;
+            BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
 
         // execute the child operator
-        let timer = r_metrics.fetch_time.timer();
-        let mut stream = input.execute(i, context)?;
+        let timer = metrics.fetch_time.timer();
+        let mut stream = input.execute(partition, context)?;
         timer.done();
 
-        // While there are still outputs to send to, keep
-        // pulling inputs
+        // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
-        while !txs.is_empty() {
+        while !output_channels.is_empty() {
             // fetch the next batch
-            let timer = r_metrics.fetch_time.timer();
+            let timer = metrics.fetch_time.timer();
             let result = stream.next().await;
             timer.done();
 
@@ -605,15 +605,15 @@ impl RepartitionExec {
                 let (partition, batch) = res?;
                 let size = batch.get_array_memory_size();
 
-                let timer = r_metrics.send_time.timer();
+                let timer = metrics.send_time.timer();
                 // if there is still a receiver, send to it
-                if let Some((tx, reservation)) = txs.get_mut(&partition) {
+                if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
                     reservation.lock().try_grow(size)?;
 
                     if tx.send(Some(Ok(batch))).await.is_err() {
                         // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                         reservation.lock().shrink(size);
-                        txs.remove(&partition);
+                        output_channels.remove(&partition);
                     }
                 }
                 timer.done();

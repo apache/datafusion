@@ -58,6 +58,8 @@ use datafusion_physical_expr::utils::{
     get_finer_ordering, ordering_satisfy_requirement_concrete,
 };
 
+use super::DisplayAs;
+
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
@@ -79,19 +81,33 @@ pub enum AggregateMode {
 }
 
 /// Group By expression modes
+///
+/// `PartiallyOrdered` and `FullyOrdered` are used to reason about
+/// when certain group by keys will never again be seen (and thus can
+/// be emitted by the grouping operator).
+///
+/// Specifically, each distinct combination of the relevant columns
+/// are contiguous in the input, and once a new combination is seen
+/// previous combinations are guaranteed never to appear again
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupByOrderMode {
-    /// None of the expressions in the GROUP BY clause have an ordering.
+    /// The input is not (known to be) ordered by any of the
+    /// expressions in the GROUP BY clause.
     None,
-    /// Some of the expressions in the GROUP BY clause have an ordering.
-    // For example, if the input is ordered by a, b, c and we group by b, a, d;
-    // the mode will be `PartiallyOrdered` meaning a subset of group b, a, d
-    // defines a preset for the existing ordering, e.g a, b defines a preset.
+    /// The input is known to be ordered by a preset (prefix but
+    /// possibly reordered) of the expressions in the `GROUP BY` clause.
+    ///
+    /// For example, if the input is ordered by `a, b, c` and we group
+    /// by `b, a, d`, `PartiallyOrdered` means a subset of group `b,
+    /// a, d` defines a preset for the existing ordering, in this case
+    /// `a, b`.
     PartiallyOrdered,
-    /// All the expressions in the GROUP BY clause have orderings.
-    // For example, if the input is ordered by a, b, c, d and we group by b, a;
-    // the mode will be `Ordered` meaning a all of the of group b, d
-    // defines a preset for the existing ordering, e.g a, b defines a preset.
+    /// The input is known to be ordered by *all* the expressions in the
+    /// `GROUP BY` clause.
+    ///
+    /// For example, if the input is ordered by `a, b, c, d` and we group by b, a,
+    /// `Ordered` means that all of the of group by expressions appear
+    ///  as a preset for the existing ordering, in this case `a, b`.
     FullyOrdered,
 }
 
@@ -719,6 +735,80 @@ impl AggregateExec {
     }
 }
 
+impl DisplayAs for AggregateExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "AggregateExec: mode={:?}", self.mode)?;
+                let g: Vec<String> = if self.group_by.groups.len() == 1 {
+                    self.group_by
+                        .expr
+                        .iter()
+                        .map(|(e, alias)| {
+                            let e = e.to_string();
+                            if &e != alias {
+                                format!("{e} as {alias}")
+                            } else {
+                                e
+                            }
+                        })
+                        .collect()
+                } else {
+                    self.group_by
+                        .groups
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, is_null)| {
+                                    if *is_null {
+                                        let (e, alias) = &self.group_by.null_expr[idx];
+                                        let e = e.to_string();
+                                        if &e != alias {
+                                            format!("{e} as {alias}")
+                                        } else {
+                                            e
+                                        }
+                                    } else {
+                                        let (e, alias) = &self.group_by.expr[idx];
+                                        let e = e.to_string();
+                                        if &e != alias {
+                                            format!("{e} as {alias}")
+                                        } else {
+                                            e
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({terms})")
+                        })
+                        .collect()
+                };
+
+                write!(f, ", gby=[{}]", g.join(", "))?;
+
+                let a: Vec<String> = self
+                    .aggr_expr
+                    .iter()
+                    .map(|agg| agg.name().to_string())
+                    .collect();
+                write!(f, ", aggr=[{}]", a.join(", "))?;
+
+                if let Some(aggregation_ordering) = &self.aggregation_ordering {
+                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl ExecutionPlan for AggregateExec {
     /// Return a reference to Any that can be used for down-casting
     fn as_any(&self) -> &dyn Any {
@@ -836,78 +926,6 @@ impl ExecutionPlan for AggregateExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "AggregateExec: mode={:?}", self.mode)?;
-                let g: Vec<String> = if self.group_by.groups.len() == 1 {
-                    self.group_by
-                        .expr
-                        .iter()
-                        .map(|(e, alias)| {
-                            let e = e.to_string();
-                            if &e != alias {
-                                format!("{e} as {alias}")
-                            } else {
-                                e
-                            }
-                        })
-                        .collect()
-                } else {
-                    self.group_by
-                        .groups
-                        .iter()
-                        .map(|group| {
-                            let terms = group
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, is_null)| {
-                                    if *is_null {
-                                        let (e, alias) = &self.group_by.null_expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
-                                    } else {
-                                        let (e, alias) = &self.group_by.expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
-                                    }
-                                })
-                                .collect::<Vec<String>>()
-                                .join(", ");
-                            format!("({terms})")
-                        })
-                        .collect()
-                };
-
-                write!(f, ", gby=[{}]", g.join(", "))?;
-
-                let a: Vec<String> = self
-                    .aggr_expr
-                    .iter()
-                    .map(|agg| agg.name().to_string())
-                    .collect();
-                write!(f, ", aggr=[{}]", a.join(", "))?;
-
-                if let Some(aggregation_ordering) = &self.aggregation_ordering {
-                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     fn statistics(&self) -> Statistics {
@@ -1245,8 +1263,8 @@ mod tests {
     };
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::{
-        ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
-        Statistics,
+        DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
+        SendableRecordBatchStream, Statistics,
     };
     use crate::prelude::SessionContext;
 
@@ -1577,6 +1595,20 @@ mod tests {
     struct TestYieldingExec {
         /// True if this exec should yield back to runtime the first time it is polled
         pub yield_first: bool,
+    }
+
+    impl DisplayAs for TestYieldingExec {
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "TestYieldingExec")
+                }
+            }
+        }
     }
 
     impl ExecutionPlan for TestYieldingExec {

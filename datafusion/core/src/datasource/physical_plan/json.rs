@@ -22,7 +22,6 @@ use crate::datasource::physical_plan::file_stream::{
 };
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -44,7 +43,7 @@ use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
-use tokio::task::{self, JoinHandle};
+use tokio::task::JoinSet;
 
 use super::FileScanConfig;
 
@@ -82,6 +81,17 @@ impl NdJsonExec {
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+}
+
+impl DisplayAs for NdJsonExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "JsonExec: ")?;
+        self.base_config.fmt_as(t, f)
     }
 }
 
@@ -148,15 +158,6 @@ impl ExecutionPlan for NdJsonExec {
             FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
 
         Ok(Box::pin(stream) as SendableRecordBatchStream)
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "JsonExec: ")?;
-        self.base_config.fmt_as(t, f)
     }
 
     fn statistics(&self) -> Statistics {
@@ -266,7 +267,7 @@ pub async fn plan_to_json(
         )));
     }
 
-    let mut tasks = vec![];
+    let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let plan = plan.clone();
         let filename = format!("part-{i}.json");
@@ -274,22 +275,29 @@ pub async fn plan_to_json(
         let file = fs::File::create(path)?;
         let mut writer = json::LineDelimitedWriter::new(file);
         let stream = plan.execute(i, task_ctx.clone())?;
-        let handle: JoinHandle<Result<()>> = task::spawn(async move {
-            stream
+        join_set.spawn(async move {
+            let result: Result<()> = stream
                 .map(|batch| writer.write(&batch?))
                 .try_collect()
                 .await
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::from);
+            result
         });
-        tasks.push(AbortOnDropSingle::new(handle));
     }
 
-    futures::future::join_all(tasks)
-        .await
-        .into_iter()
-        .try_for_each(|result| {
-            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-        })?;
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(res) => res?, // propagate DataFusion error
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

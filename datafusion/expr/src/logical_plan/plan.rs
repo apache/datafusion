@@ -17,7 +17,7 @@
 
 //! Logical plan types
 
-use crate::expr::{Exists, InSubquery, Placeholder};
+use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::expr_vec_fmt;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -35,8 +35,8 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue,
+    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -898,13 +898,9 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl<'a> Display for Wrapper<'a> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                writeln!(
-                    f,
-                    "// Begin DataFusion GraphViz Plan (see https://graphviz.org)"
-                )?;
-                writeln!(f, "digraph {{")?;
-
                 let mut visitor = GraphvizVisitor::new(f);
+
+                visitor.start_graph()?;
 
                 visitor.pre_visit_plan("LogicalPlan")?;
                 self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
@@ -915,8 +911,7 @@ impl LogicalPlan {
                 self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
-                writeln!(f, "}}")?;
-                writeln!(f, "// End DataFusion GraphViz Plan")?;
+                visitor.end_graph()?;
                 Ok(())
             }
         }
@@ -1370,10 +1365,10 @@ impl Filter {
         }
 
         // filter predicates should not be aliased
-        if let Expr::Alias(expr, alias) = predicate {
+        if let Expr::Alias(Alias { expr, name, .. }) = predicate {
             return Err(DataFusionError::Plan(format!(
                 "Attempted to create Filter predicate with \
-                expression `{expr}` aliased as '{alias}'. Filter predicates should not be \
+                expression `{expr}` aliased as '{name}'. Filter predicates should not be \
                 aliased."
             )));
         }
@@ -1398,6 +1393,22 @@ pub struct Window {
     pub window_expr: Vec<Expr>,
     /// The schema description of the window output
     pub schema: DFSchemaRef,
+}
+
+impl Window {
+    /// Create a new window operator.
+    pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        let mut window_fields: Vec<DFField> = input.schema().fields().clone();
+        window_fields
+            .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
+        let metadata = input.schema().metadata().clone();
+
+        Ok(Window {
+            input,
+            window_expr,
+            schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata)?),
+        })
+    }
 }
 
 /// Produces rows from a table provider by reference or from the context
@@ -1834,31 +1845,46 @@ mod tests {
     fn test_display_graphviz() -> Result<()> {
         let plan = display_plan()?;
 
+        let expected_graphviz = r###"
+// Begin DataFusion GraphViz Plan,
+// display it online here: https://dreampuf.github.io/GraphvizOnline
+
+digraph {
+  subgraph cluster_1
+  {
+    graph[label="LogicalPlan"]
+    2[shape=box label="Projection: employee_csv.id"]
+    3[shape=box label="Filter: employee_csv.state IN (<subquery>)"]
+    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
+    4[shape=box label="Subquery:"]
+    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
+    5[shape=box label="TableScan: employee_csv projection=[state]"]
+    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
+    6[shape=box label="TableScan: employee_csv projection=[id, state]"]
+    3 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
+  }
+  subgraph cluster_7
+  {
+    graph[label="Detailed LogicalPlan"]
+    8[shape=box label="Projection: employee_csv.id\nSchema: [id:Int32]"]
+    9[shape=box label="Filter: employee_csv.state IN (<subquery>)\nSchema: [id:Int32, state:Utf8]"]
+    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
+    10[shape=box label="Subquery:\nSchema: [state:Utf8]"]
+    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
+    11[shape=box label="TableScan: employee_csv projection=[state]\nSchema: [state:Utf8]"]
+    10 -> 11 [arrowhead=none, arrowtail=normal, dir=back]
+    12[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]
+    9 -> 12 [arrowhead=none, arrowtail=normal, dir=back]
+  }
+}
+// End DataFusion GraphViz Plan
+"###;
+
         // just test for a few key lines in the output rather than the
         // whole thing to make test mainteance easier.
         let graphviz = format!("{}", plan.display_graphviz());
 
-        assert!(
-            graphviz.contains(
-                r#"// Begin DataFusion GraphViz Plan (see https://graphviz.org)"#
-            ),
-            "\n{}",
-            plan.display_graphviz()
-        );
-        assert!(
-            graphviz.contains(
-                r#"[shape=box label="TableScan: employee_csv projection=[id, state]"]"#
-            ),
-            "\n{}",
-            plan.display_graphviz()
-        );
-        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]"#),
-                "\n{}", plan.display_graphviz());
-        assert!(
-            graphviz.contains(r#"// End DataFusion GraphViz Plan"#),
-            "\n{}",
-            plan.display_graphviz()
-        );
+        assert_eq!(expected_graphviz, graphviz);
         Ok(())
     }
 
@@ -1879,7 +1905,7 @@ mod tests {
                 _ => {
                     return Err(DataFusionError::NotImplemented(
                         "unknown plan type".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -1895,7 +1921,7 @@ mod tests {
                 _ => {
                     return Err(DataFusionError::NotImplemented(
                         "unknown plan type".to_string(),
-                    ))
+                    ));
                 }
             };
 

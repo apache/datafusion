@@ -384,12 +384,8 @@ impl DFSchema {
         let self_fields = self.fields().iter();
         let other_fields = other.fields().iter();
         self_fields.zip(other_fields).all(|(f1, f2)| {
-            // TODO: resolve field when exist alias
-            // f1.qualifier() == f2.qualifier()
-            //     && f1.name() == f2.name()
-            // column(t1.a) field is "t1"."a"
-            // column(x) as t1.a field is ""."t1.a"
-            f1.qualified_name() == f2.qualified_name()
+            f1.qualifier() == f2.qualifier()
+                && f1.name() == f2.name()
                 && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
         })
     }

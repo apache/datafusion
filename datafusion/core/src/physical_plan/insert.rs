@@ -138,6 +138,21 @@ impl InsertExec {
     }
 }
 
+impl DisplayAs for InsertExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "InsertExec: sink=")?;
+                self.sink.fmt_as(t, f)
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for InsertExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -232,19 +247,6 @@ impl ExecutionPlan for InsertExec {
         )))
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "InsertExec: sink=")?;
-                self.sink.fmt_as(t, f)
-            }
-        }
-    }
-
     fn statistics(&self) -> Statistics {
         Statistics::default()
     }
@@ -278,8 +280,7 @@ fn check_not_null_contraits(
     batch: RecordBatch,
     column_indices: &Vec<usize>,
 ) -> Result<RecordBatch> {
-    for i in column_indices {
-        let index = *i;
+    for &index in column_indices {
         if batch.num_columns() <= index {
             return Err(DataFusionError::Execution(format!(
                 "Invalid batch column count {} expected > {}",

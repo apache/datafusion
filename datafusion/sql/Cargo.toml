@@ -48,4 +48,4 @@ sqlparser = { workspace = true }
 ctor = "0.2.0"
 env_logger = "0.10"
 paste = "^1.0"
-rstest = "0.17"
+rstest = "0.18"

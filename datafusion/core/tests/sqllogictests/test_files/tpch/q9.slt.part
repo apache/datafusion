@@ -77,7 +77,7 @@ Limit: skip=0, fetch=10
 --------------TableScan: nation projection=[n_nationkey, n_name]
 physical_plan
 GlobalLimitExec: skip=0, fetch=10
---SortPreservingMergeExec: [nation@0 ASC NULLS LAST,o_year@1 DESC]
+--SortPreservingMergeExec: [nation@0 ASC NULLS LAST,o_year@1 DESC], fetch=10
 ----SortExec: fetch=10, expr=[nation@0 ASC NULLS LAST,o_year@1 DESC]
 ------ProjectionExec: expr=[nation@0 as nation, o_year@1 as o_year, SUM(profit.amount)@2 as sum_profit]
 --------AggregateExec: mode=FinalPartitioned, gby=[nation@0 as nation, o_year@1 as o_year], aggr=[SUM(profit.amount)]
