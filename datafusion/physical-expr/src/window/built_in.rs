@@ -119,7 +119,7 @@ impl WindowExpr for BuiltInWindowExpr {
                     num_rows,
                     idx,
                 )?;
-                let value = evaluator.evaluate(&values, &range, idx)?;
+                let value = evaluator.evaluate(&values, &range)?;
                 row_wise_results.push(value);
                 last_range = range;
             }
@@ -205,11 +205,8 @@ impl WindowExpr for BuiltInWindowExpr {
                 }
                 // Update last range
                 state.window_frame_range = frame_range;
-                row_wise_results.push(evaluator.evaluate(
-                    &values,
-                    &state.window_frame_range,
-                    idx,
-                )?);
+                row_wise_results
+                    .push(evaluator.evaluate(&values, &state.window_frame_range)?);
             }
             let out_col = if row_wise_results.is_empty() {
                 new_empty_array(out_type)

@@ -191,12 +191,18 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     fn evaluate(
         &mut self,
         values: &[ArrayRef],
-        _range: &Range<usize>,
-        row_idx: usize,
+        range: &Range<usize>,
     ) -> Result<ScalarValue> {
         let array = &values[0];
         let dtype = array.data_type();
-        let idx = row_idx as i64 - self.shift_offset;
+        // LAG mode
+        let idx = if self.shift_offset > 0 {
+            range.end as i64 - self.shift_offset - 1
+        } else {
+            // LEAD mode
+            range.start as i64 - self.shift_offset
+        };
+
         if idx < 0 || idx as usize >= array.len() {
             get_default_value(self.default_value.as_ref(), dtype)
         } else {

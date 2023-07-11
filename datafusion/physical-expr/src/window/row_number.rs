@@ -98,7 +98,6 @@ impl PartitionEvaluator for NumRowsEvaluator {
         &mut self,
         _values: &[ArrayRef],
         _range: &Range<usize>,
-        _row_idx: usize,
     ) -> Result<ScalarValue> {
         self.state.n_rows += 1;
         Ok(ScalarValue::UInt64(Some(self.state.n_rows as u64)))

@@ -182,7 +182,6 @@ impl PartitionEvaluator for NthValueEvaluator {
         &mut self,
         values: &[ArrayRef],
         range: &Range<usize>,
-        _row_idx: usize,
     ) -> Result<ScalarValue> {
         if let Some(ref result) = self.state.finalized_result {
             Ok(result.clone())
@@ -244,8 +243,7 @@ mod tests {
         let values = expr.evaluate_args(&batch)?;
         let result = ranges
             .iter()
-            .enumerate()
-            .map(|(idx, range)| evaluator.evaluate(&values, range, idx))
+            .map(|range| evaluator.evaluate(&values, range))
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;
         let result = as_int32_array(&result)?;

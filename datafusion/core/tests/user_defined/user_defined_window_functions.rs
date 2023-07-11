@@ -456,7 +456,6 @@ impl PartitionEvaluator for OddCounter {
         &mut self,
         values: &[ArrayRef],
         range: &Range<usize>,
-        _row_idx: usize,
     ) -> Result<ScalarValue> {
         println!("evaluate, values: {values:#?}, range: {range:?}");
 

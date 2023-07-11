@@ -2889,7 +2889,6 @@ mod roundtrip_tests {
                 &mut self,
                 _values: &[ArrayRef],
                 _range: &std::ops::Range<usize>,
-                _row_idx: usize,
             ) -> Result<ScalarValue> {
                 Ok(ScalarValue::Float64(None))
             }

@@ -181,7 +181,7 @@ pub trait PartitionEvaluator: Debug + Send {
         // Default implementation may behave suboptimally (For instance `NumRowEvaluator` overwrites it)
         if !self.uses_window_frame() && self.supports_bounded_execution() {
             let res = (0..num_rows)
-                .map(|idx| self.evaluate(values, &self.get_range(idx, num_rows)?, idx))
+                .map(|idx| self.evaluate(values, &self.get_range(idx, num_rows)?))
                 .collect::<Result<Vec<_>>>()?;
             ScalarValue::iter_to_array(res.into_iter())
         } else {
@@ -206,7 +206,6 @@ pub trait PartitionEvaluator: Debug + Send {
         &mut self,
         _values: &[ArrayRef],
         _range: &Range<usize>,
-        _row_idx: usize,
     ) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate is not implemented by default".into(),

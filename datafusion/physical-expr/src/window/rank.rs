@@ -119,9 +119,9 @@ impl PartitionEvaluator for RankEvaluator {
     fn evaluate(
         &mut self,
         values: &[ArrayRef],
-        _range: &Range<usize>,
-        row_idx: usize,
+        range: &Range<usize>,
     ) -> Result<ScalarValue> {
+        let row_idx = range.start;
         // println!("self.state: {:?}, row_idx:{:?}", self.state, row_idx);
         // There is no argument, values are order by column values (where rank is calculated)
         let range_columns = values;
