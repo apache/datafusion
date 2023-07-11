@@ -93,7 +93,12 @@ impl Count {
 /// accumulator has no additional null or seen filter tracking.
 #[derive(Debug)]
 struct CountGroupsAccumulator {
-    /// Count per group (use i64 to make Int64Array)
+    /// Count per group.
+    ///
+    /// Note this is an i64 and not a u64 (or usize) because the
+    /// output type of count is `DataType::Int64`. Thus by using `i64`
+    /// for the counts, the output [`Int64Array`] can be created
+    /// without copy.
     counts: Vec<i64>,
 }
 
