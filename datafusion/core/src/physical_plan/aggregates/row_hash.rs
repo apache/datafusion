@@ -65,7 +65,7 @@ use super::AggregateExec;
 /// # Design Goals
 ///
 /// This structure is designed so that updating the aggregates can be
-/// vectorized (done in a tight loop) without allocatons. The
+/// vectorized (done in a tight loop) without allocations. The
 /// accumulator state is *not* managed by this operator (e.g in the
 /// hash table) and instead is delegated to the individual
 /// accumulators which have type specialized inner loops that perform
@@ -133,7 +133,7 @@ pub(crate) struct GroupedHashAggregateStream {
     ///
     /// For example, if the query has aggregates, `SUM(x)`,
     /// `COUNT(y)`, there will be two accumulators, each one
-    /// specialized for that partcular aggregate and its input types
+    /// specialized for that particular aggregate and its input types
     accumulators: Vec<Box<dyn GroupsAccumulator>>,
 
     /// Arguments to pass to each accumulator.
@@ -183,7 +183,7 @@ pub(crate) struct GroupedHashAggregateStream {
     group_values: Rows,
 
     /// scratch space for the current input [`RecordBatch`] being
-    /// processed. Reused across batches here to avoid reallocations
+    /// processed. Reused across batches here to avoid re-allocations
     scratch_space: ScratchSpace,
 
     /// Tracks if this stream is generating input or output
@@ -280,7 +280,7 @@ impl GroupedHashAggregateStream {
 }
 
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
-/// that is supported by the aggrgate, or a
+/// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
 fn create_group_accumulator(
     agg_expr: &Arc<dyn AggregateExpr>,
@@ -376,7 +376,7 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 }
 
 impl GroupedHashAggregateStream {
-    /// Calculates the group indicies for each input row of
+    /// Calculates the group indices for each input row of
     /// `group_values`.
     ///
     /// At the return of this function,
@@ -463,13 +463,13 @@ impl GroupedHashAggregateStream {
         // Evaluate the aggregation expressions.
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
 
-        // Evalute the filter expressions, if any, against the inputs
+        // Evaluate the filter expressions, if any, against the inputs
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
         let row_converter_size_pre = self.row_converter.size();
 
         for group_values in &group_by_values {
-            // calculate the group indicies for each input row
+            // calculate the group indices for each input row
             self.update_group_state(group_values, &mut allocated)?;
             let group_indices = &self.scratch_space.current_group_indices;
 
