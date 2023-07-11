@@ -17,9 +17,9 @@
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
-//! uses [Apache Arrow] as its in-memory format. DataFusion's [use
-//! cases] include building very fast database and analytic systems,
-//! customized to particular workloads.
+//! uses [Apache Arrow] as its in-memory format. DataFusion's many [use
+//! cases] help developers build very fast and feature rich database
+//! and analytic systems, customized to particular workloads.
 //!
 //! "Out of the box," DataFusion quickly runs complex [SQL] and
 //! [`DataFrame`] queries using a sophisticated query planner, a columnar,
@@ -132,13 +132,18 @@
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion supports extension at many points:
+//! DataFusion is designed to be a "disaggregated" query engine.  This
+//! means that developers can mix and extend the parts of DataFusion
+//! they need for their usecase. For example, just the
+//! [`ExecutionPlan`] operators, or the [`SqlToRel`] SQL planner and
+//! optimizer.
+//!
+//! In order to achieve this, DataFusion supports extension at many points:
 //!
 //! * read from any datasource ([`TableProvider`])
 //! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
 //! * build your own query langue or plans using the ([`LogicalPlanBuilder`])
-//! * declare and use user-defined scalar functions ([`ScalarUDF`])
-//! * declare and use user-defined aggregate functions ([`AggregateUDF`])
+//! * declare and use user-defined functions: ([`ScalarUDF`], and [`AggregateUDF`])
 //! * add custom optimizer rewrite passes ([`OptimizerRule`] and [`PhysicalOptimizerRule`])
 //! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`])
 //!
@@ -398,7 +403,7 @@
 //! [`AnalyzerRule`]: datafusion_optimizer::analyzer::AnalyzerRule
 //! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
 //! [`ExecutionPlan`]: physical_plan::ExecutionPlan
-//! [`PhysicalPlanner`]: physical_plan::PhysicalPlanner
+//! [`PhysicalPlanner`]: physical_planner::PhysicalPlanner
 //! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
@@ -420,23 +425,53 @@ pub mod error;
 pub mod execution;
 pub mod physical_optimizer;
 pub mod physical_plan;
+pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 pub mod variable;
 
-// re-export dependencies from arrow-rs to minimise version maintenance for crate users
+// re-export dependencies from arrow-rs to minimize version maintenance for crate users
 pub use arrow;
 pub use parquet;
 
-// re-export DataFusion crates
-pub use datafusion_common as common;
-pub use datafusion_common::config;
-pub use datafusion_execution;
-pub use datafusion_expr as logical_expr;
-pub use datafusion_optimizer as optimizer;
-pub use datafusion_physical_expr as physical_expr;
-pub use datafusion_row as row;
-pub use datafusion_sql as sql;
+// re-export DataFusion sub-crates at the top level. Use `pub use *`
+// so that the contents of the subcrates appears in rustdocs
+// for details, see https://github.com/apache/arrow-datafusion/issues/6648
+
+/// re-export of [`datafusion_common`] crate
+pub mod common {
+    pub use datafusion_common::*;
+}
+
+// Backwards compatibility
+pub use common::config;
+
+// NB datafusion execution is re-exported in the `execution` module
+
+/// re-export of [`datafusion_expr`] crate
+pub mod logical_expr {
+    pub use datafusion_expr::*;
+}
+
+/// re-export of [`datafusion_optimizer`] crate
+pub mod optimizer {
+    pub use datafusion_optimizer::*;
+}
+
+/// re-export of [`datafusion_physical_expr`] crate
+pub mod physical_expr {
+    pub use datafusion_physical_expr::*;
+}
+
+/// re-export of [`datafusion_row`] crate
+pub mod row {
+    pub use datafusion_row::*;
+}
+
+/// re-export of [`datafusion_sql`] crate
+pub mod sql {
+    pub use datafusion_sql::*;
+}
 
 #[cfg(test)]
 pub mod test;

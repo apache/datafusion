@@ -21,9 +21,11 @@ use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
     ScalarFunction, TryCast,
 };
+use crate::function::PartitionEvaluatorFactory;
+use crate::WindowUDF;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
-    logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
+    logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
@@ -529,6 +531,13 @@ scalar_expr!(
 );
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
+    ArrayContains,
+    array_contains,
+    first_array second_array,
+"returns true, if each element of the second array appe
+    aring in the first array, otherwise false."
+);
+scalar_expr!(
     ArrayDims,
     array_dims,
     array,
@@ -627,6 +636,8 @@ scalar_expr!(
     "converts the Unicode code point to a UTF8 character"
 );
 scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
+scalar_expr!(Encode, encode, input encoding, "encode the `input`, using the `encoding`. encoding can be base64 or hex");
+scalar_expr!(Decode, decode, input encoding, "decode the`input`, using the `encoding`. encoding can be base64 or hex");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
@@ -777,7 +788,7 @@ pub fn create_udaf(
     input_type: DataType,
     return_type: Arc<DataType>,
     volatility: Volatility,
-    accumulator: AccumulatorFunctionImplementation,
+    accumulator: AccumulatorFactoryFunction,
     state_type: Arc<Vec<DataType>>,
 ) -> AggregateUDF {
     let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
@@ -788,6 +799,27 @@ pub fn create_udaf(
         &return_type,
         &accumulator,
         &state_type,
+    )
+}
+
+/// Creates a new UDWF with a specific signature, state type and return type.
+///
+/// The signature and state type must match the [`PartitionEvaluator`]'s implementation`.
+///
+/// [`PartitionEvaluator`]: crate::PartitionEvaluator
+pub fn create_udwf(
+    name: &str,
+    input_type: DataType,
+    return_type: Arc<DataType>,
+    volatility: Volatility,
+    partition_evaluator_factory: PartitionEvaluatorFactory,
+) -> WindowUDF {
+    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
+    WindowUDF::new(
+        name,
+        &Signature::exact(vec![input_type], volatility),
+        &return_type,
+        &partition_evaluator_factory,
     )
 }
 
@@ -814,9 +846,9 @@ mod test {
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
         let col_not_null = ident("col2");
-        assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
+        assert_eq!(format!("{}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
-            format!("{:?}", col_not_null.is_not_null()),
+            format!("{}", col_not_null.is_not_null()),
             "col2 IS NOT NULL"
         );
     }
@@ -912,6 +944,8 @@ mod test {
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Digest, digest, string, algorithm);
+        test_scalar_expr!(Encode, encode, string, encoding);
+        test_scalar_expr!(Decode, decode, string, encoding);
         test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
         test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
@@ -1000,6 +1034,32 @@ mod test {
             digest(col("tableA.a"), lit("md5"))
         {
             let name = BuiltinScalarFunction::Digest;
+            assert_eq!(name, fun);
+            assert_eq!(2, args.len());
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[test]
+    fn encode_function_definitions() {
+        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
+            encode(col("tableA.a"), lit("base64"))
+        {
+            let name = BuiltinScalarFunction::Encode;
+            assert_eq!(name, fun);
+            assert_eq!(2, args.len());
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[test]
+    fn decode_function_definitions() {
+        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
+            decode(col("tableA.a"), lit("hex"))
+        {
+            let name = BuiltinScalarFunction::Decode;
             assert_eq!(name, fun);
             assert_eq!(2, args.len());
         } else {

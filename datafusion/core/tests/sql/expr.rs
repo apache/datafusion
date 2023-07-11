@@ -65,6 +65,66 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
 
 #[tokio::test]
 #[cfg_attr(not(feature = "crypto_expressions"), ignore)]
+async fn test_encoding_expressions() -> Result<()> {
+    // Input Utf8
+    test_expression!("encode('tom','base64')", "dG9t");
+    test_expression!("arrow_cast(decode('dG9t','base64'), 'Utf8')", "tom");
+    test_expression!("encode('tom','hex')", "746f6d");
+    test_expression!("arrow_cast(decode('746f6d','hex'), 'Utf8')", "tom");
+
+    // Input LargeUtf8
+    test_expression!("encode(arrow_cast('tom', 'LargeUtf8'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'LargeUtf8'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'LargeUtf8'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'LargeUtf8'),'hex'), 'Utf8')",
+        "tom"
+    );
+
+    // Input Binary
+    test_expression!("encode(arrow_cast('tom', 'Binary'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'Binary'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'Binary'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'Binary'),'hex'), 'Utf8')",
+        "tom"
+    );
+
+    // Input LargeBinary
+    test_expression!("encode(arrow_cast('tom', 'LargeBinary'),'base64')", "dG9t");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('dG9t', 'LargeBinary'),'base64'), 'Utf8')",
+        "tom"
+    );
+    test_expression!("encode(arrow_cast('tom', 'LargeBinary'),'hex')", "746f6d");
+    test_expression!(
+        "arrow_cast(decode(arrow_cast('746f6d', 'LargeBinary'),'hex'), 'Utf8')",
+        "tom"
+    );
+
+    // NULL
+    test_expression!("encode(NULL,'base64')", "NULL");
+    test_expression!("decode(NULL,'base64')", "NULL");
+    test_expression!("encode(NULL,'hex')", "NULL");
+    test_expression!("decode(NULL,'hex')", "NULL");
+
+    // Empty string
+    test_expression!("encode('','base64')", "");
+    test_expression!("decode('','base64')", "");
+    test_expression!("encode('','hex')", "");
+    test_expression!("decode('','hex')", "");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "crypto_expressions"), ignore)]
 async fn test_crypto_expressions() -> Result<()> {
     test_expression!("md5('tom')", "34b7da764b21d298ef307d04d8152dc5");
     test_expression!("digest('tom','md5')", "34b7da764b21d298ef307d04d8152dc5");
@@ -223,10 +283,11 @@ async fn test_interval_expressions() -> Result<()> {
         "interval '0.5 minute'",
         "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
-    test_expression!(
-        "interval '.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
-    );
+    // https://github.com/apache/arrow-rs/issues/4424
+    // test_expression!(
+    //     "interval '.5 minute'",
+    //     "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
+    // );
     test_expression!(
         "interval '5 minute'",
         "0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs"
@@ -512,15 +573,22 @@ async fn test_regex_expressions() -> Result<()> {
 
 #[tokio::test]
 async fn test_cast_expressions() -> Result<()> {
+    test_expression!("CAST('0' AS INT)", "0");
+    test_expression!("CAST(NULL AS INT)", "NULL");
+    test_expression!("TRY_CAST('0' AS INT)", "0");
+    test_expression!("TRY_CAST('x' AS INT)", "NULL");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+// issue: https://github.com/apache/arrow-datafusion/issues/6596
+async fn test_array_cast_expressions() -> Result<()> {
     test_expression!("CAST([1,2,3,4] AS INT[])", "[1, 2, 3, 4]");
     test_expression!(
         "CAST([1,2,3,4] AS NUMERIC(10,4)[])",
         "[1.0000, 2.0000, 3.0000, 4.0000]"
     );
-    test_expression!("CAST('0' AS INT)", "0");
-    test_expression!("CAST(NULL AS INT)", "NULL");
-    test_expression!("TRY_CAST('0' AS INT)", "0");
-    test_expression!("TRY_CAST('x' AS INT)", "NULL");
     Ok(())
 }
 

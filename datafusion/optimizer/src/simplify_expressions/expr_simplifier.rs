@@ -46,7 +46,7 @@ pub struct ExprSimplifier<S> {
     info: S,
 }
 
-const THRESHOLD_INLINE_INLIST: usize = 3;
+pub const THRESHOLD_INLINE_INLIST: usize = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
@@ -1187,11 +1187,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 lit(!negated)
             }
 
-            // a IS NOT NULL --> true, if a is not nullable
-            Expr::IsNotNull(expr) if !info.nullable(&expr)? => lit(true),
+            // a is not null/unknown --> true (if a is not nullable)
+            Expr::IsNotNull(expr) | Expr::IsNotUnknown(expr)
+                if !info.nullable(&expr)? =>
+            {
+                lit(true)
+            }
 
-            // a IS NULL --> false, if a is not nullable
-            Expr::IsNull(expr) if !info.nullable(&expr)? => lit(false),
+            // a is null/unknown --> false (if a is not nullable)
+            Expr::IsNull(expr) | Expr::IsUnknown(expr) if !info.nullable(&expr)? => {
+                lit(false)
+            }
 
             // no additional rewrites possible
             expr => expr,
@@ -1313,10 +1319,8 @@ mod tests {
         expected_expr: Expr,
         date_time: &DateTime<Utc>,
     ) {
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
+        let execution_props =
+            ExecutionProps::new().with_query_execution_start_time(*date_time);
 
         let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
         let evaluated_expr = input_expr
@@ -1672,9 +1676,12 @@ mod tests {
     fn test_simplify_divide_zero_by_zero() {
         // 0 / 0 -> null
         let expr = lit(0) / lit(0);
-        let expected = lit(ScalarValue::Int32(None));
+        let err = try_simplify(expr).unwrap_err();
 
-        assert_eq!(simplify(expr), expected);
+        assert!(
+            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
+            "{err}"
+        );
     }
 
     #[test]
@@ -2723,6 +2730,25 @@ mod tests {
             simplify(Expr::IsNull(Box::new(col("c1_non_null")))),
             lit(false)
         );
+    }
+
+    #[test]
+    fn simplify_expr_is_unknown() {
+        assert_eq!(simplify(col("c2").is_unknown()), col("c2").is_unknown(),);
+
+        // 'c2_non_null is unknown' is always false
+        assert_eq!(simplify(col("c2_non_null").is_unknown()), lit(false));
+    }
+
+    #[test]
+    fn simplify_expr_is_not_known() {
+        assert_eq!(
+            simplify(col("c2").is_not_unknown()),
+            col("c2").is_not_unknown()
+        );
+
+        // 'c2_non_null is not unknown' is always true
+        assert_eq!(simplify(col("c2_non_null").is_not_unknown()), lit(true));
     }
 
     #[test]

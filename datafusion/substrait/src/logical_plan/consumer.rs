@@ -22,8 +22,8 @@ use datafusion::logical_expr::{
     aggregate_function, window_function::find_df_window_func, BinaryExpr,
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
-use datafusion::logical_expr::{build_join_schema, Extension, LogicalPlanBuilder};
 use datafusion::logical_expr::{expr, Cast, WindowFrameBound, WindowFrameUnits};
+use datafusion::logical_expr::{Extension, LogicalPlanBuilder};
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
@@ -52,7 +52,7 @@ use substrait::proto::{
 };
 use substrait::proto::{FunctionArgument, SortField};
 
-use datafusion::logical_expr::expr::Sort;
+use datafusion::logical_expr::expr::{InList, Sort};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -67,6 +67,8 @@ use crate::variation_const::{
 enum ScalarFunctionType {
     Builtin(BuiltinScalarFunction),
     Op(Operator),
+    // logical negation
+    Not,
 }
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
@@ -116,6 +118,20 @@ fn name_to_op_or_scalar_function(name: &str) -> Result<ScalarFunctionType> {
     )))
 }
 
+fn scalar_function_or_not(name: &str) -> Result<ScalarFunctionType> {
+    if let Ok(fun) = BuiltinScalarFunction::from_str(name) {
+        return Ok(ScalarFunctionType::Builtin(fun));
+    }
+
+    if name == "not" {
+        return Ok(ScalarFunctionType::Not);
+    }
+
+    Err(DataFusionError::NotImplemented(format!(
+        "Unsupported function name: {name:?}"
+    )))
+}
+
 /// Convert Substrait Plan to DataFusion DataFrame
 pub async fn from_substrait_plan(
     ctx: &mut SessionContext,
@@ -151,7 +167,7 @@ pub async fn from_substrait_plan(
                         Ok(from_substrait_rel(ctx, root.input.as_ref().unwrap(), &function_extension).await?)
                     }
                 },
-                None => Err(DataFusionError::Internal("Cannot parse plan relation: None".to_string()))
+                None => Err(DataFusionError::Plan("Cannot parse plan relation: None".to_string()))
             }
         },
         _ => Err(DataFusionError::NotImplemented(format!(
@@ -328,69 +344,82 @@ pub async fn from_substrait_rel(
             let join_type = from_substrait_jointype(join.r#type)?;
             // The join condition expression needs full input schema and not the output schema from join since we lose columns from
             // certain join types such as semi and anti joins
-            // - if left and right schemas are different, we combine (join) the schema to include all fields
-            // - if left and right schemas are the same, we handle the duplicate fields by using `build_join_schema()`, which discard the unused schema
-            // TODO: Handle duplicate fields error for other join types (non-semi/anti). The current approach does not work due to Substrait's inability
-            //       to encode aliases
-            let join_schema = match left.schema().join(right.schema()) {
-                Ok(schema) => Ok(schema),
-                Err(DataFusionError::SchemaError(
-                    datafusion::common::SchemaError::DuplicateQualifiedField {
-                        qualifier: _,
-                        name: _,
-                    },
-                )) => build_join_schema(left.schema(), right.schema(), &join_type),
-                Err(e) => Err(e),
+            let in_join_schema = left.schema().join(right.schema())?;
+            // Parse post join filter if exists
+            let join_filter = match &join.post_join_filter {
+                Some(filter) => {
+                    let parsed_filter =
+                        from_substrait_rex(filter, &in_join_schema, extensions).await?;
+                    Some(parsed_filter.as_ref().clone())
+                }
+                None => None,
             };
-            let on = from_substrait_rex(
-                join.expression.as_ref().unwrap(),
-                &join_schema?,
-                extensions,
-            )
-            .await?;
-            let predicates = split_conjunction(&on);
-            // TODO: collect only one null_eq_null
-            let join_exprs: Vec<(Column, Column, bool)> = predicates
-                .iter()
-                .map(|p| match p {
-                    Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                        match (left.as_ref(), right.as_ref()) {
-                            (Expr::Column(l), Expr::Column(r)) => match op {
-                                Operator::Eq => Ok((l.clone(), r.clone(), false)),
-                                Operator::IsNotDistinctFrom => {
-                                    Ok((l.clone(), r.clone(), true))
+            // If join expression exists, parse the `on` condition expression, build join and return
+            // Otherwise, build join with koin filter, without join keys
+            match &join.expression.as_ref() {
+                Some(expr) => {
+                    let on =
+                        from_substrait_rex(expr, &in_join_schema, extensions).await?;
+                    let predicates = split_conjunction(&on);
+                    // TODO: collect only one null_eq_null
+                    let join_exprs: Vec<(Column, Column, bool)> = predicates
+                        .iter()
+                        .map(|p| {
+                            match p {
+                            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                                match (left.as_ref(), right.as_ref()) {
+                                    (Expr::Column(l), Expr::Column(r)) => match op {
+                                        Operator::Eq => Ok((l.clone(), r.clone(), false)),
+                                        Operator::IsNotDistinctFrom => {
+                                            Ok((l.clone(), r.clone(), true))
+                                        }
+                                        _ => Err(DataFusionError::Plan(
+                                            "invalid join condition op".to_string(),
+                                        )),
+                                    },
+                                    _ => Err(DataFusionError::Plan(
+                                        "invalid join condition expression".to_string(),
+                                    )),
                                 }
-                                _ => Err(DataFusionError::Internal(
-                                    "invalid join condition op".to_string(),
-                                )),
-                            },
-                            _ => Err(DataFusionError::Internal(
-                                "invalid join condition expression".to_string(),
+                            }
+                            _ => Err(DataFusionError::Plan(
+                                "Non-binary expression is not supported in join condition"
+                                    .to_string(),
                             )),
                         }
-                    }
-                    _ => Err(DataFusionError::Internal(
-                        "Non-binary expression is not supported in join condition"
-                            .to_string(),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let (left_cols, right_cols, null_eq_nulls): (Vec<_>, Vec<_>, Vec<_>) =
+                        itertools::multiunzip(join_exprs);
+                    left.join_detailed(
+                        right.build()?,
+                        join_type,
+                        (left_cols, right_cols),
+                        join_filter,
+                        null_eq_nulls[0],
+                    )?
+                    .build()
+                }
+                None => match &join_filter {
+                    Some(_) => left
+                        .join(
+                            right.build()?,
+                            join_type,
+                            (Vec::<Column>::new(), Vec::<Column>::new()),
+                            join_filter,
+                        )?
+                        .build(),
+                    None => Err(DataFusionError::Plan(
+                        "Join without join keys require a valid filter".to_string(),
                     )),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let (left_cols, right_cols, null_eq_nulls): (Vec<_>, Vec<_>, Vec<_>) =
-                itertools::multiunzip(join_exprs);
-            left.join_detailed(
-                right.build()?,
-                join_type,
-                (left_cols, right_cols),
-                None,
-                null_eq_nulls[0],
-            )?
-            .build()
+                },
+            }
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
                 let table_reference = match nt.names.len() {
                     0 => {
-                        return Err(DataFusionError::Internal(
+                        return Err(DataFusionError::Plan(
                             "No table name found in NamedTable".to_string(),
                         ));
                     }
@@ -432,7 +461,7 @@ pub async fn from_substrait_rel(
                                         )?);
                                     Ok(LogicalPlan::TableScan(scan))
                                 }
-                                _ => Err(DataFusionError::Internal(
+                                _ => Err(DataFusionError::Plan(
                                     "unexpected plan for table".to_string(),
                                 )),
                             }
@@ -511,12 +540,12 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Outer => Ok(JoinType::Full),
             join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
             join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => Err(DataFusionError::Plan(format!(
                 "unsupported join type {substrait_join_type:?}"
             ))),
         }
     } else {
-        Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Plan(format!(
             "invalid join type variant {join_type:?}"
         )))
     }
@@ -660,6 +689,21 @@ pub async fn from_substrait_rex(
     extensions: &HashMap<u32, &String>,
 ) -> Result<Arc<Expr>> {
     match &e.rex_type {
+        Some(RexType::SingularOrList(s)) => {
+            let substrait_expr = s.value.as_ref().unwrap();
+            let substrait_list = s.options.as_ref();
+            Ok(Arc::new(Expr::InList(InList {
+                expr: Box::new(
+                    from_substrait_rex(substrait_expr, input_schema, extensions)
+                        .await?
+                        .as_ref()
+                        .clone(),
+                ),
+                list: from_substrait_rex_vec(substrait_list, input_schema, extensions)
+                    .await?,
+                negated: false,
+            })))
+        }
         Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
             Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
                 Some(StructField(x)) => match &x.child.as_ref() {
@@ -790,6 +834,11 @@ pub async fn from_substrait_rex(
                                 ],
                             })))
                         }
+                        Ok(ScalarFunctionType::Not) => {
+                            Err(DataFusionError::NotImplemented(
+                                "Not expected function type: Not".to_string(),
+                            ))
+                        }
                         Err(e) => Err(e),
                     }
                 }
@@ -797,6 +846,54 @@ pub async fn from_substrait_rex(
                     "Invalid arguments for binary expression: {l:?} and {r:?}"
                 ))),
             },
+            // ScalarFunction or Expr::Not
+            1 => {
+                let fun = match extensions.get(&f.function_reference) {
+                    Some(fname) => scalar_function_or_not(fname),
+                    None => Err(DataFusionError::NotImplemented(format!(
+                        "Function not found: function reference = {:?}",
+                        f.function_reference
+                    ))),
+                };
+
+                match fun {
+                    Ok(ScalarFunctionType::Op(_)) => {
+                        Err(DataFusionError::NotImplemented(
+                            "Not expected function type: Op".to_string(),
+                        ))
+                    }
+                    Ok(scalar_function_type) => {
+                        match &f.arguments.first().unwrap().arg_type {
+                            Some(ArgType::Value(e)) => {
+                                let expr =
+                                    from_substrait_rex(e, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone();
+                                match scalar_function_type {
+                                    ScalarFunctionType::Builtin(fun) => Ok(Arc::new(
+                                        Expr::ScalarFunction(expr::ScalarFunction {
+                                            fun,
+                                            args: vec![expr],
+                                        }),
+                                    )),
+                                    ScalarFunctionType::Not => {
+                                        Ok(Arc::new(Expr::Not(Box::new(expr))))
+                                    }
+                                    _ => Err(DataFusionError::NotImplemented(
+                                        "Invalid arguments for Not expression"
+                                            .to_string(),
+                                    )),
+                                }
+                            }
+                            _ => Err(DataFusionError::NotImplemented(
+                                "Invalid arguments for Not expression".to_string(),
+                            )),
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            }
             // ScalarFunction
             _ => {
                 let fun = match extensions.get(&f.function_reference) {

@@ -38,6 +38,7 @@ use log::trace;
 
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, MetricsSet};
+use super::DisplayAs;
 use super::{metrics::ExecutionPlanMetricsSet, Statistics};
 
 /// CoalesceBatchesExec combines small batches into larger batches for more efficient use of
@@ -70,6 +71,24 @@ impl CoalesceBatchesExec {
     /// Minimum number of rows for coalesces batches
     pub fn target_batch_size(&self) -> usize {
         self.target_batch_size
+    }
+}
+
+impl DisplayAs for CoalesceBatchesExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "CoalesceBatchesExec: target_batch_size={}",
+                    self.target_batch_size
+                )
+            }
+        }
     }
 }
 
@@ -107,6 +126,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_ordering()
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
@@ -135,22 +158,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
             is_closed: false,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "CoalesceBatchesExec: target_batch_size={}",
-                    self.target_batch_size
-                )
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

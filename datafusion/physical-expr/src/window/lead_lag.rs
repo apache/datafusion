@@ -18,15 +18,16 @@
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::LeadLagState;
-use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
+use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::window_state::WindowAggState;
+use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
 use std::ops::{Neg, Range};
@@ -108,10 +109,6 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             shift_offset: self.shift_offset,
             default_value: self.default_value.clone(),
         }))
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
@@ -206,7 +203,11 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         }
     }
 
-    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         let array = &values[0];
         let dtype = array.data_type();
         let idx = self.state.idx as i64 - self.shift_offset;
@@ -217,10 +218,18 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         }
     }
 
-    fn evaluate(&self, values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(
+        &mut self,
+        values: &[ArrayRef],
+        _num_rows: usize,
+    ) -> Result<ArrayRef> {
         // LEAD, LAG window functions take single column, values will have size 1
         let value = &values[0];
         shift_with_default_value(value, self.shift_offset, self.default_value.as_ref())
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 }
 
@@ -258,7 +267,7 @@ mod tests {
         let values = expr.evaluate_args(&batch)?;
         let result = expr
             .create_evaluator()?
-            .evaluate(&values, batch.num_rows())?;
+            .evaluate_all(&values, batch.num_rows())?;
         let result = as_int32_array(&result)?;
         assert_eq!(expected, *result);
         Ok(())

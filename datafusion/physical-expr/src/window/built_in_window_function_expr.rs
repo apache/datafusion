@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::partition_evaluator::PartitionEvaluator;
 use crate::equivalence::OrderingEquivalenceBuilder;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -85,29 +85,4 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     ///
     /// The default implementation does nothing
     fn add_equal_orderings(&self, _builder: &mut OrderingEquivalenceBuilder) {}
-
-    /// Can the window function be incrementally computed using
-    /// bounded memory?
-    ///
-    /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_stateful`]
-    fn supports_bounded_execution(&self) -> bool {
-        false
-    }
-
-    /// Does the window function use the values from its window frame?
-    ///
-    /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_inside_range`]
-    fn uses_window_frame(&self) -> bool {
-        false
-    }
-
-    /// Can this function be evaluated with (only) rank
-    ///
-    /// If `include_rank` is true, then [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_with_rank`]
-    fn include_rank(&self) -> bool {
-        false
-    }
 }

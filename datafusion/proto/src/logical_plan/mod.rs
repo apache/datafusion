@@ -1460,7 +1460,8 @@ mod roundtrip_tests {
         Expr, LogicalPlan, Operator, TryCast, Volatility,
     };
     use datafusion_expr::{
-        create_udaf, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
+        create_udaf, PartitionEvaluator, Signature, WindowFrame, WindowFrameBound,
+        WindowFrameUnits, WindowFunction, WindowUDF,
     };
     use prost::Message;
     use std::collections::HashMap;
@@ -2341,6 +2342,37 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_field() {
+        let field =
+            Field::new("f", DataType::Int32, true).with_metadata(HashMap::from([
+                (String::from("k1"), String::from("v1")),
+                (String::from("k2"), String::from("v2")),
+            ]));
+        let proto_field: super::protobuf::Field = (&field).try_into().unwrap();
+        let returned_field: Field = (&proto_field).try_into().unwrap();
+        assert_eq!(field, returned_field);
+    }
+
+    #[test]
+    fn roundtrip_schema() {
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", DataType::Decimal128(15, 2), true).with_metadata(
+                    HashMap::from([(String::from("k1"), String::from("v1"))]),
+                ),
+            ],
+            HashMap::from([
+                (String::from("k2"), String::from("v2")),
+                (String::from("k3"), String::from("v3")),
+            ]),
+        );
+        let proto_schema: super::protobuf::Schema = (&schema).try_into().unwrap();
+        let returned_schema: Schema = (&proto_schema).try_into().unwrap();
+        assert_eq!(schema, returned_schema);
+    }
+
+    #[test]
     fn roundtrip_not() {
         let test_expr = Expr::Not(Box::new(lit(1.0_f32)));
 
@@ -2786,12 +2818,119 @@ mod roundtrip_tests {
             vec![col("col1")],
             vec![col("col1")],
             vec![col("col2")],
+            row_number_frame.clone(),
+        ));
+
+        // 5. test with AggregateUDF
+        #[derive(Debug)]
+        struct DummyAggr {}
+
+        impl Accumulator for DummyAggr {
+            fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
+                Ok(vec![])
+            }
+
+            fn update_batch(
+                &mut self,
+                _values: &[ArrayRef],
+            ) -> datafusion::error::Result<()> {
+                Ok(())
+            }
+
+            fn merge_batch(
+                &mut self,
+                _states: &[ArrayRef],
+            ) -> datafusion::error::Result<()> {
+                Ok(())
+            }
+
+            fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
+                Ok(ScalarValue::Float64(None))
+            }
+
+            fn size(&self) -> usize {
+                std::mem::size_of_val(self)
+            }
+        }
+
+        let dummy_agg = create_udaf(
+            // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
+            "dummy_agg",
+            // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
+            DataType::Float64,
+            // the return type; DataFusion expects this to match the type returned by `evaluate`.
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            // This is the accumulator factory; DataFusion uses it to create new accumulators.
+            Arc::new(|_| Ok(Box::new(DummyAggr {}))),
+            // This is the description of the state. `state()` must match the types here.
+            Arc::new(vec![DataType::Float64, DataType::UInt32]),
+        );
+
+        let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::AggregateUDF(Arc::new(dummy_agg.clone())),
+            vec![col("col1")],
+            vec![col("col1")],
+            vec![col("col2")],
+            row_number_frame.clone(),
+        ));
+        ctx.register_udaf(dummy_agg);
+
+        // 6. test with WindowUDF
+        #[derive(Clone, Debug)]
+        struct DummyWindow {}
+
+        impl PartitionEvaluator for DummyWindow {
+            fn uses_window_frame(&self) -> bool {
+                true
+            }
+
+            fn evaluate(
+                &mut self,
+                _values: &[ArrayRef],
+                _range: &std::ops::Range<usize>,
+            ) -> Result<ScalarValue> {
+                Ok(ScalarValue::Float64(None))
+            }
+        }
+
+        fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
+            if arg_types.len() != 1 {
+                return Err(DataFusionError::Plan(format!(
+                    "dummy_udwf expects 1 argument, got {}: {:?}",
+                    arg_types.len(),
+                    arg_types
+                )));
+            }
+            Ok(Arc::new(arg_types[0].clone()))
+        }
+
+        fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+            Ok(Box::new(DummyWindow {}))
+        }
+
+        let dummy_window_udf = WindowUDF {
+            name: String::from("dummy_udwf"),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+            return_type: Arc::new(return_type),
+            partition_evaluator_factory: Arc::new(make_partition_evaluator),
+        };
+
+        let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::WindowUDF(Arc::new(dummy_window_udf.clone())),
+            vec![col("col1")],
+            vec![col("col1")],
+            vec![col("col2")],
             row_number_frame,
         ));
+
+        ctx.register_udwf(dummy_window_udf);
 
         roundtrip_expr_test(test_expr1, ctx.clone());
         roundtrip_expr_test(test_expr2, ctx.clone());
         roundtrip_expr_test(test_expr3, ctx.clone());
-        roundtrip_expr_test(test_expr4, ctx);
+        roundtrip_expr_test(test_expr4, ctx.clone());
+        roundtrip_expr_test(test_expr5, ctx.clone());
+        roundtrip_expr_test(test_expr6, ctx);
     }
 }

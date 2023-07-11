@@ -44,12 +44,20 @@ struct Args {
     data_path: Option<String>,
 
     #[clap(
-        short = 'c',
+        short = 'b',
         long,
         help = "The batch size of each query, or use DataFusion default",
         validator(is_valid_batch_size)
     )]
     batch_size: Option<usize>,
+
+    #[clap(
+        short = 'c',
+        long,
+        multiple_values = true,
+        help = "Execute the given command string(s), then exit"
+    )]
+    command: Vec<String>,
 
     #[clap(
         short,
@@ -116,6 +124,7 @@ pub async fn main() -> Result<()> {
         quiet: args.quiet,
     };
 
+    let commands = args.command;
     let files = args.file;
     let rc = match args.rc {
         Some(file) => file,
@@ -132,18 +141,25 @@ pub async fn main() -> Result<()> {
         }
     };
 
-    if !files.is_empty() {
-        exec::exec_from_files(files, &mut ctx, &print_options).await;
-        Ok(())
-    } else {
+    if commands.is_empty() && files.is_empty() {
         if !rc.is_empty() {
             exec::exec_from_files(rc, &mut ctx, &print_options).await
         }
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
-        exec::exec_from_repl(&mut ctx, &mut print_options)
+        return exec::exec_from_repl(&mut ctx, &mut print_options)
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+            .map_err(|e| DataFusionError::External(Box::new(e)));
     }
+
+    if !files.is_empty() {
+        exec::exec_from_files(files, &mut ctx, &print_options).await;
+    }
+
+    if !commands.is_empty() {
+        exec::exec_from_commands(&mut ctx, &print_options, commands).await;
+    }
+
+    Ok(())
 }
 
 fn create_runtime_env() -> Result<RuntimeEnv> {

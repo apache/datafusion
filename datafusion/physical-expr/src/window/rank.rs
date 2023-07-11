@@ -18,15 +18,16 @@
 //! Defines physical expression for `rank`, `dense_rank`, and `percent_rank` that can evaluated
 //! at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::RankState;
-use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
+use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::window_state::WindowAggState;
+use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
@@ -100,14 +101,6 @@ impl BuiltInWindowFunctionExpr for Rank {
         &self.name
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        matches!(self.rank_type, RankType::Basic | RankType::Dense)
-    }
-
-    fn include_rank(&self) -> bool {
-        true
-    }
-
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(RankEvaluator {
             state: RankState::default(),
@@ -123,12 +116,6 @@ pub(crate) struct RankEvaluator {
 }
 
 impl PartitionEvaluator for RankEvaluator {
-    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
-        let start = idx;
-        let end = idx + 1;
-        Ok(Range { start, end })
-    }
-
     fn update_state(
         &mut self,
         state: &WindowAggState,
@@ -157,7 +144,11 @@ impl PartitionEvaluator for RankEvaluator {
     }
 
     /// evaluate window function result inside given range
-    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         match self.rank_type {
             RankType::Basic => Ok(ScalarValue::UInt64(Some(
                 self.state.last_rank_boundary as u64 + 1,
@@ -169,7 +160,7 @@ impl PartitionEvaluator for RankEvaluator {
         }
     }
 
-    fn evaluate_with_rank(
+    fn evaluate_all_with_rank(
         &self,
         num_rows: usize,
         ranks_in_partition: &[Range<usize>],
@@ -215,6 +206,14 @@ impl PartitionEvaluator for RankEvaluator {
         };
         Ok(result)
     }
+
+    fn supports_bounded_execution(&self) -> bool {
+        matches!(self.rank_type, RankType::Basic | RankType::Dense)
+    }
+
+    fn include_rank(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -238,7 +237,7 @@ mod tests {
     ) -> Result<()> {
         let result = expr
             .create_evaluator()?
-            .evaluate_with_rank(num_rows, &ranks)?;
+            .evaluate_all_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, *result);
@@ -250,7 +249,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<u64>,
     ) -> Result<()> {
-        let result = expr.create_evaluator()?.evaluate_with_rank(8, &ranks)?;
+        let result = expr.create_evaluator()?.evaluate_all_with_rank(8, &ranks)?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, *result);

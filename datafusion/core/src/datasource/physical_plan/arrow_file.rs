@@ -22,7 +22,7 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+    ordering_equivalence_properties_helper, DisplayAs, DisplayFormatType, ExecutionPlan,
     Partitioning, SendableRecordBatchStream,
 };
 use arrow_schema::SchemaRef;
@@ -65,6 +65,17 @@ impl ArrowExec {
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+}
+
+impl DisplayAs for ArrowExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "ArrowExec: ")?;
+        self.base_config.fmt_as(t, f)
     }
 }
 
@@ -130,18 +141,6 @@ impl ExecutionPlan for ArrowExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "ArrowExec: {}", self.base_config)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

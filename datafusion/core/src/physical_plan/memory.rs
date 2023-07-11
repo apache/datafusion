@@ -19,7 +19,7 @@
 
 use super::expressions::PhysicalSortExpr;
 use super::{
-    common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
+    common, project_schema, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
@@ -53,6 +53,27 @@ impl fmt::Debug for MemoryExec {
         write!(f, "partitions: [...]")?;
         write!(f, "schema: {:?}", self.projected_schema)?;
         write!(f, "projection: {:?}", self.projection)
+    }
+}
+
+impl DisplayAs for MemoryExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let partitions: Vec<_> =
+                    self.partitions.iter().map(|b| b.len()).collect();
+                write!(
+                    f,
+                    "MemoryExec: partitions={}, partition_sizes={:?}",
+                    partitions.len(),
+                    partitions
+                )
+            }
+        }
     }
 }
 
@@ -102,25 +123,6 @@ impl ExecutionPlan for MemoryExec {
         )?))
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                let partitions: Vec<_> =
-                    self.partitions.iter().map(|b| b.len()).collect();
-                write!(
-                    f,
-                    "MemoryExec: partitions={}, partition_sizes={:?}",
-                    partitions.len(),
-                    partitions
-                )
-            }
-        }
-    }
-
     /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
     fn statistics(&self) -> Statistics {
         common::compute_record_batch_statistics(
@@ -142,23 +144,6 @@ impl MemoryExec {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
             partitions: partitions.to_vec(),
-            schema,
-            projected_schema,
-            projection,
-            sort_information: None,
-        })
-    }
-
-    /// Create a new execution plan for reading in-memory record batches
-    /// The provided `schema` should not have the projection applied.
-    pub fn try_new_owned_data(
-        partitions: Vec<Vec<RecordBatch>>,
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
-        let projected_schema = project_schema(&schema, projection.as_ref())?;
-        Ok(Self {
-            partitions,
             schema,
             projected_schema,
             projection,

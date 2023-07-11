@@ -40,7 +40,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{ScalarValue, SharedResult};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
+use datafusion_physical_expr::{EquivalentClass, PhysicalExpr, PhysicalSortExpr};
 
 use datafusion_common::JoinType;
 use datafusion_common::{DataFusionError, Result};
@@ -144,6 +144,63 @@ pub fn adjust_right_output_partitioning(
                 .collect::<Vec<_>>();
             Partitioning::Hash(new_exprs, size)
         }
+    }
+}
+
+fn adjust_right_order(
+    right_order: &[PhysicalSortExpr],
+    left_columns_len: usize,
+) -> Result<Vec<PhysicalSortExpr>> {
+    right_order
+        .iter()
+        .map(|sort_expr| {
+            let expr = sort_expr.expr.clone();
+            let adjusted = expr.transform_up(&|expr| {
+                Ok(
+                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                        let new_col =
+                            Column::new(column.name(), column.index() + left_columns_len);
+                        Transformed::Yes(Arc::new(new_col))
+                    } else {
+                        Transformed::No(expr)
+                    },
+                )
+            })?;
+            Ok(PhysicalSortExpr {
+                expr: adjusted,
+                options: sort_expr.options,
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+}
+
+/// Calculate the output order for hash join.
+pub fn calculate_hash_join_output_order(
+    join_type: &JoinType,
+    maybe_left_order: Option<&[PhysicalSortExpr]>,
+    maybe_right_order: Option<&[PhysicalSortExpr]>,
+    left_len: usize,
+) -> Result<Option<Vec<PhysicalSortExpr>>> {
+    match maybe_right_order {
+        Some(right_order) => {
+            let result = match join_type {
+                JoinType::Inner => {
+                    // We modify the indices of the right order columns because their
+                    // columns are appended to the right side of the left schema.
+                    let mut adjusted_right_order =
+                        adjust_right_order(right_order, left_len)?;
+                    if let Some(left_order) = maybe_left_order {
+                        adjusted_right_order.extend_from_slice(left_order);
+                    }
+                    Some(adjusted_right_order)
+                }
+                JoinType::RightAnti | JoinType::RightSemi => Some(right_order.to_vec()),
+                _ => None,
+            };
+
+            Ok(result)
+        }
+        None => Ok(None),
     }
 }
 
@@ -784,8 +841,8 @@ pub(crate) fn apply_join_filter_to_indices(
         filter.schema(),
         build_input_buffer,
         probe_batch,
-        build_indices.clone(),
-        probe_indices.clone(),
+        &build_indices,
+        &probe_indices,
         filter.column_indices(),
         build_side,
     )?;
@@ -809,8 +866,8 @@ pub(crate) fn build_batch_from_indices(
     schema: &Schema,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_indices: UInt64Array,
-    probe_indices: UInt32Array,
+    build_indices: &UInt64Array,
+    probe_indices: &UInt32Array,
     column_indices: &[ColumnIndex],
     build_side: JoinSide,
 ) -> Result<RecordBatch> {
@@ -841,7 +898,7 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(build_indices.null_count(), build_indices.len());
                 new_null_array(array.data_type(), build_indices.len())
             } else {
-                compute::take(array.as_ref(), &build_indices, None)?
+                compute::take(array.as_ref(), build_indices, None)?
             }
         } else {
             let array = probe_batch.column(column_index.index);
@@ -849,7 +906,7 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(probe_indices.null_count(), probe_indices.len());
                 new_null_array(array.data_type(), probe_indices.len())
             } else {
-                compute::take(array.as_ref(), &probe_indices, None)?
+                compute::take(array.as_ref(), probe_indices, None)?
             }
         };
         columns.push(array);

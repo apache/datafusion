@@ -17,12 +17,12 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, BinaryExpr, Cast, GetIndexedField, InList,
+    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetIndexedField, InList,
     InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
-use crate::{aggregate_function, window_function, LogicalPlan, Projection, Subquery};
+use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
@@ -58,7 +58,7 @@ impl ExprSchemable for Expr {
     /// (e.g. `[utf8] + [bool]`).
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
-            Expr::Alias(expr, name) => match &**expr {
+            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
                     Some(dt) => Ok(dt.clone()),
@@ -92,14 +92,14 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                window_function::return_type(fun, &data_types)
+                fun.return_type(&data_types)
             }
             Expr::AggregateFunction(AggregateFunction { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                aggregate_function::return_type(fun, &data_types)
+                fun.return_type(&data_types)
             }
             Expr::AggregateUDF(AggregateUDF { fun, args, .. }) => {
                 let data_types = args
@@ -170,12 +170,40 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool> {
         match self {
-            Expr::Alias(expr, _)
+            Expr::Alias(Alias { expr, .. })
             | Expr::Not(expr)
             | Expr::Negative(expr)
-            | Expr::Sort(Sort { expr, .. })
-            | Expr::InList(InList { expr, .. }) => expr.nullable(input_schema),
-            Expr::Between(Between { expr, .. }) => expr.nullable(input_schema),
+            | Expr::Sort(Sort { expr, .. }) => expr.nullable(input_schema),
+
+            Expr::InList(InList { expr, list, .. }) => {
+                // Avoid inspecting too many expressions.
+                const MAX_INSPECT_LIMIT: usize = 6;
+                // Stop if a nullable expression is found or an error occurs.
+                let has_nullable = std::iter::once(expr.as_ref())
+                    .chain(list)
+                    .take(MAX_INSPECT_LIMIT)
+                    .find_map(|e| {
+                        e.nullable(input_schema)
+                            .map(|nullable| if nullable { Some(()) } else { None })
+                            .transpose()
+                    })
+                    .transpose()?;
+                Ok(match has_nullable {
+                    // If a nullable subexpression is found, the result may also be nullable.
+                    Some(_) => true,
+                    // If the list is too long, we assume it is nullable.
+                    None if list.len() + 1 > MAX_INSPECT_LIMIT => true,
+                    // All the subexpressions are non-nullable, so the result must be non-nullable.
+                    _ => false,
+                })
+            }
+
+            Expr::Between(Between {
+                expr, low, high, ..
+            }) => Ok(expr.nullable(input_schema)?
+                || low.nullable(input_schema)?
+                || high.nullable(input_schema)?),
+
             Expr::Column(c) => input_schema.nullable(c),
             Expr::OuterReferenceColumn(_, _) => Ok(true),
             Expr::Literal(value) => Ok(value.is_null()),
@@ -223,9 +251,11 @@ impl ExprSchemable for Expr {
                 ref right,
                 ..
             }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
-            Expr::Like(Like { expr, .. }) => expr.nullable(input_schema),
-            Expr::ILike(Like { expr, .. }) => expr.nullable(input_schema),
-            Expr::SimilarTo(Like { expr, .. }) => expr.nullable(input_schema),
+            Expr::Like(Like { expr, pattern, .. })
+            | Expr::ILike(Like { expr, pattern, .. })
+            | Expr::SimilarTo(Like { expr, pattern, .. }) => {
+                Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
+            }
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
@@ -361,6 +391,71 @@ mod tests {
     }
 
     #[test]
+    fn test_between_nullability() {
+        let get_schema = |nullable| {
+            MockExprSchema::new()
+                .with_data_type(DataType::Int32)
+                .with_nullable(nullable)
+        };
+
+        let expr = col("foo").between(lit(1), lit(2));
+        assert!(!expr.nullable(&get_schema(false)).unwrap());
+        assert!(expr.nullable(&get_schema(true)).unwrap());
+
+        let null = lit(ScalarValue::Int32(None));
+
+        let expr = col("foo").between(null.clone(), lit(2));
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+
+        let expr = col("foo").between(lit(1), null.clone());
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+
+        let expr = col("foo").between(null.clone(), null);
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+    }
+
+    #[test]
+    fn test_inlist_nullability() {
+        let get_schema = |nullable| {
+            MockExprSchema::new()
+                .with_data_type(DataType::Int32)
+                .with_nullable(nullable)
+        };
+
+        let expr = col("foo").in_list(vec![lit(1); 5], false);
+        assert!(!expr.nullable(&get_schema(false)).unwrap());
+        assert!(expr.nullable(&get_schema(true)).unwrap());
+        // Testing nullable() returns an error.
+        assert!(expr
+            .nullable(&get_schema(false).with_error_on_nullable(true))
+            .is_err());
+
+        let null = lit(ScalarValue::Int32(None));
+        let expr = col("foo").in_list(vec![null, lit(1)], false);
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+
+        // Testing on long list
+        let expr = col("foo").in_list(vec![lit(1); 6], false);
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+    }
+
+    #[test]
+    fn test_like_nullability() {
+        let get_schema = |nullable| {
+            MockExprSchema::new()
+                .with_data_type(DataType::Utf8)
+                .with_nullable(nullable)
+        };
+
+        let expr = col("foo").like(lit("bar"));
+        assert!(!expr.nullable(&get_schema(false)).unwrap());
+        assert!(expr.nullable(&get_schema(true)).unwrap());
+
+        let expr = col("foo").like(lit(ScalarValue::Utf8(None)));
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+    }
+
+    #[test]
     fn expr_schema_data_type() {
         let expr = col("foo");
         assert_eq!(
@@ -374,6 +469,7 @@ mod tests {
     struct MockExprSchema {
         nullable: bool,
         data_type: DataType,
+        error_on_nullable: bool,
     }
 
     impl MockExprSchema {
@@ -381,6 +477,7 @@ mod tests {
             Self {
                 nullable: false,
                 data_type: DataType::Null,
+                error_on_nullable: false,
             }
         }
 
@@ -393,11 +490,20 @@ mod tests {
             self.data_type = data_type;
             self
         }
+
+        fn with_error_on_nullable(mut self, error_on_nullable: bool) -> Self {
+            self.error_on_nullable = error_on_nullable;
+            self
+        }
     }
 
     impl ExprSchema for MockExprSchema {
         fn nullable(&self, _col: &Column) -> Result<bool> {
-            Ok(self.nullable)
+            if self.error_on_nullable {
+                Err(DataFusionError::Internal("nullable error".into()))
+            } else {
+                Ok(self.nullable)
+            }
         }
 
         fn data_type(&self, _col: &Column) -> Result<&DataType> {

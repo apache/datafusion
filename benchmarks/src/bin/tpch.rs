@@ -16,7 +16,9 @@
 // under the License.
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
+use log::info;
 
+use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::{csv::CsvFormat, FileFormat};
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
@@ -235,6 +237,7 @@ async fn benchmark_query(
         let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
         let ms = elapsed.as_secs_f64() * 1000.0;
         millis.push(ms);
+        info!("output:\n\n{}\n\n", pretty_format_batches(&result)?);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
             "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
@@ -303,14 +306,14 @@ async fn execute_query(
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",
-            displayable(physical_plan.as_ref()).indent()
+            displayable(physical_plan.as_ref()).indent(true)
         );
     }
     let result = collect(physical_plan.clone(), state.task_ctx()).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
-            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent()
+            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent(true)
         );
         if !result.is_empty() {
             // do not call print_batches if there are no batches as the result is confusing

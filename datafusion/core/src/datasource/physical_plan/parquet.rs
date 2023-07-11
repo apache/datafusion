@@ -21,7 +21,8 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, FileMeta, FileScanConfig, SchemaAdapter,
+    parquet::page_filter::PagePruningPredicate, DisplayAs, FileMeta, FileScanConfig,
+    SchemaAdapter,
 };
 use crate::{
     config::ConfigOptions,
@@ -30,7 +31,6 @@ use crate::{
     execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
-        common::AbortOnDropSingle,
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
         Partitioning, SendableRecordBatchStream, Statistics,
@@ -63,6 +63,7 @@ use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMas
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
+use tokio::task::JoinSet;
 
 mod metrics;
 pub mod page_filter;
@@ -324,6 +325,34 @@ impl ParquetExec {
     }
 }
 
+impl DisplayAs for ParquetExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let predicate_string = self
+                    .predicate
+                    .as_ref()
+                    .map(|p| format!(", predicate={p}"))
+                    .unwrap_or_default();
+
+                let pruning_predicate_string = self
+                    .pruning_predicate
+                    .as_ref()
+                    .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
+                    .unwrap_or_default();
+
+                write!(f, "ParquetExec: ")?;
+                self.base_config.fmt_as(t, f)?;
+                write!(f, "{}{}", predicate_string, pruning_predicate_string,)
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for ParquetExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -410,34 +439,6 @@ impl ExecutionPlan for ParquetExec {
             FileStream::new(&self.base_config, partition_index, opener, &self.metrics)?;
 
         Ok(Box::pin(stream))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                let predicate_string = self
-                    .predicate
-                    .as_ref()
-                    .map(|p| format!(", predicate={p}"))
-                    .unwrap_or_default();
-
-                let pruning_predicate_string = self
-                    .pruning_predicate
-                    .as_ref()
-                    .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
-                    .unwrap_or_default();
-
-                write!(
-                    f,
-                    "ParquetExec: {}{}{}",
-                    self.base_config, predicate_string, pruning_predicate_string,
-                )
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -702,7 +703,7 @@ pub async fn plan_to_parquet(
         )));
     }
 
-    let mut tasks = vec![];
+    let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let plan = plan.clone();
         let filename = format!("part-{i}.parquet");
@@ -711,27 +712,30 @@ pub async fn plan_to_parquet(
         let mut writer =
             ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
         let stream = plan.execute(i, task_ctx.clone())?;
-        let handle: tokio::task::JoinHandle<Result<()>> =
-            tokio::task::spawn(async move {
-                stream
-                    .map(|batch| {
-                        writer.write(&batch?).map_err(DataFusionError::ParquetError)
-                    })
-                    .try_collect()
-                    .await
-                    .map_err(DataFusionError::from)?;
+        join_set.spawn(async move {
+            stream
+                .map(|batch| writer.write(&batch?).map_err(DataFusionError::ParquetError))
+                .try_collect()
+                .await
+                .map_err(DataFusionError::from)?;
 
-                writer.close().map_err(DataFusionError::from).map(|_| ())
-            });
-        tasks.push(AbortOnDropSingle::new(handle));
+            writer.close().map_err(DataFusionError::from).map(|_| ())
+        });
     }
 
-    futures::future::join_all(tasks)
-        .await
-        .into_iter()
-        .try_for_each(|result| {
-            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-        })?;
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(res) => res?,
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1869,7 +1873,9 @@ mod tests {
         assert!(pruning_predicate.is_some());
 
         // convert to explain plan form
-        let display = displayable(rt.parquet_exec.as_ref()).indent().to_string();
+        let display = displayable(rt.parquet_exec.as_ref())
+            .indent(true)
+            .to_string();
 
         assert_contains!(
             &display,

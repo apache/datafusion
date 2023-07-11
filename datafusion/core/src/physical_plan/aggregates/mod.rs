@@ -58,6 +58,8 @@ use datafusion_physical_expr::utils::{
     get_finer_ordering, ordering_satisfy_requirement_concrete,
 };
 
+use super::DisplayAs;
+
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
@@ -79,17 +81,33 @@ pub enum AggregateMode {
 }
 
 /// Group By expression modes
+///
+/// `PartiallyOrdered` and `FullyOrdered` are used to reason about
+/// when certain group by keys will never again be seen (and thus can
+/// be emitted by the grouping operator).
+///
+/// Specifically, each distinct combination of the relevant columns
+/// are contiguous in the input, and once a new combination is seen
+/// previous combinations are guaranteed never to appear again
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupByOrderMode {
-    /// Some of the expressions in the GROUP BY clause have an ordering.
-    // For example, if the input is ordered by a, b, c and we group by b, a, d;
-    // the mode will be `PartiallyOrdered` meaning a subset of group b, a, d
-    // defines a preset for the existing ordering, e.g a, b defines a preset.
+    /// The input is not (known to be) ordered by any of the
+    /// expressions in the GROUP BY clause.
+    None,
+    /// The input is known to be ordered by a preset (prefix but
+    /// possibly reordered) of the expressions in the `GROUP BY` clause.
+    ///
+    /// For example, if the input is ordered by `a, b, c` and we group
+    /// by `b, a, d`, `PartiallyOrdered` means a subset of group `b,
+    /// a, d` defines a preset for the existing ordering, in this case
+    /// `a, b`.
     PartiallyOrdered,
-    /// All the expressions in the GROUP BY clause have orderings.
-    // For example, if the input is ordered by a, b, c, d and we group by b, a;
-    // the mode will be `Ordered` meaning a all of the of group b, d
-    // defines a preset for the existing ordering, e.g a, b defines a preset.
+    /// The input is known to be ordered by *all* the expressions in the
+    /// `GROUP BY` clause.
+    ///
+    /// For example, if the input is ordered by `a, b, c, d` and we group by b, a,
+    /// `Ordered` means that all of the of group by expressions appear
+    ///  as a preset for the existing ordering, in this case `a, b`.
     FullyOrdered,
 }
 
@@ -429,10 +447,12 @@ fn get_finest_requirement<
 /// ordering requirements of order-sensitive aggregation functions.
 fn calc_required_input_ordering(
     input: &Arc<dyn ExecutionPlan>,
-    aggr_expr: &mut [Arc<dyn AggregateExpr>],
+    aggr_exprs: &mut [Arc<dyn AggregateExpr>],
+    order_by_exprs: &mut [Option<LexOrdering>],
     aggregator_reqs: LexOrderingReq,
     aggregator_reverse_reqs: Option<LexOrderingReq>,
-    aggregation_ordering: &Option<AggregationOrdering>,
+    aggregation_ordering: &mut Option<AggregationOrdering>,
+    mode: &AggregateMode,
 ) -> Result<Option<LexOrderingReq>> {
     let mut required_input_ordering = vec![];
     // Boolean shows that whether `required_input_ordering` stored comes from
@@ -459,14 +479,14 @@ fn calc_required_input_ordering(
             // then we append the aggregator ordering requirement to the existing
             // ordering. This way, we can still run with bounded memory.
             mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
-            ..
+            order_indices,
         }) = aggregation_ordering
         {
             // Get the section of the input ordering that enables us to run in
             // FullyOrdered or PartiallyOrdered modes:
             let requirement_prefix =
                 if let Some(existing_ordering) = input.output_ordering() {
-                    &existing_ordering[0..ordering.len()]
+                    &existing_ordering[0..order_indices.len()]
                 } else {
                     &[]
                 };
@@ -474,21 +494,44 @@ fn calc_required_input_ordering(
                 PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
             for req in aggregator_requirement {
                 if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
-                    requirement.push(req);
+                    requirement.push(req.clone());
+                }
+                // In partial mode, append required ordering of the aggregator to the output ordering.
+                // In case of multiple partitions, this enables us to reduce partitions correctly.
+                if matches!(mode, AggregateMode::Partial)
+                    && ordering.iter().all(|item| req.expr.ne(&item.expr))
+                {
+                    ordering.push(req.into());
                 }
             }
             required_input_ordering = requirement;
         } else {
+            // If there was no pre-existing output ordering, the output ordering is simply the required
+            // ordering of the aggregator in partial mode.
+            if matches!(mode, AggregateMode::Partial)
+                && !aggregator_requirement.is_empty()
+            {
+                *aggregation_ordering = Some(AggregationOrdering {
+                    mode: GroupByOrderMode::None,
+                    order_indices: vec![],
+                    ordering: PhysicalSortRequirement::to_sort_exprs(
+                        aggregator_requirement.clone(),
+                    ),
+                });
+            }
             required_input_ordering = aggregator_requirement;
         }
-        // keep track of from which direction required_input_ordering is constructed
+        // Keep track of the direction from which required_input_ordering is constructed:
         reverse_req = is_reverse;
-        // If all of the order-sensitive aggregate functions are reversible (such as all of the order-sensitive aggregators are
-        // either FIRST_VALUE or LAST_VALUE). We can run aggregate expressions both in the direction of naive required ordering
-        // (e.g finest requirement that satisfy each aggregate function requirement) and in its reversed (opposite) direction.
-        // We analyze these two possibilities, and use the version that satisfies existing ordering (This saves us adding
-        // unnecessary SortExec to the final plan). If none of the versions satisfy existing ordering, we use naive required ordering.
-        // In short, if running aggregators in reverse order, helps us to remove a `SortExec`, we do so. Otherwise, we use aggregators as is.
+        // If all the order-sensitive aggregate functions are reversible (e.g. all the
+        // order-sensitive aggregators are either FIRST_VALUE or LAST_VALUE), then we can
+        // run aggregate expressions either in the given required ordering, (i.e. finest
+        // requirement that satisfies every aggregate function requirement) or its reverse
+        // (opposite) direction. We analyze these two possibilities, and use the version that
+        // satisfies existing ordering. This enables us to avoid an extra sort step in the final
+        // plan. If neither version satisfies the existing ordering, we use the given ordering
+        // requirement. In short, if running aggregators in reverse order help us to avoid a
+        // sorting step, we do so. Otherwise, we use the aggregators as is.
         let existing_ordering = input.output_ordering().unwrap_or(&[]);
         if ordering_satisfy_requirement_concrete(
             existing_ordering,
@@ -499,17 +542,20 @@ fn calc_required_input_ordering(
             break;
         }
     }
-    // If `required_input_ordering` is constructed using reverse requirement, we should reverse
-    // each `aggr_expr` to be able to correctly calculate their result in reverse order.
+    // If `required_input_ordering` is constructed using the reverse requirement, we
+    // should reverse each `aggr_expr` in order to correctly calculate their results
+    // in reverse order.
     if reverse_req {
-        aggr_expr
+        aggr_exprs
             .iter_mut()
-            .map(|elem| {
-                if is_order_sensitive(elem) {
-                    if let Some(reverse) = elem.reverse_expr() {
-                        *elem = reverse;
+            .zip(order_by_exprs.iter_mut())
+            .map(|(aggr_expr, ob_expr)| {
+                if is_order_sensitive(aggr_expr) {
+                    if let Some(reverse) = aggr_expr.reverse_expr() {
+                        *aggr_expr = reverse;
+                        *ob_expr = ob_expr.as_ref().map(|obs| reverse_order_bys(obs));
                     } else {
-                        return Err(DataFusionError::Execution(
+                        return Err(DataFusionError::Plan(
                             "Aggregate expression should have a reverse expression"
                                 .to_string(),
                         ));
@@ -529,6 +575,7 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        // Ordering requirement of each aggregate expression
         mut order_by_expr: Vec<Option<LexOrdering>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -555,8 +602,6 @@ impl AggregateExec {
                 }
             })
             .collect::<Vec<_>>();
-
-        let mut aggregator_reqs = vec![];
         let mut aggregator_reverse_reqs = None;
         // Currently we support order-sensitive aggregation only in `Single` mode.
         // For `Final` and `FinalPartitioned` modes, we cannot guarantee they will receive
@@ -564,31 +609,27 @@ impl AggregateExec {
         // in `Final` mode, it is not important to produce correct result in `Partial` mode.
         // We only support `Single` mode, where we are sure that output produced is final, and it
         // is produced in a single step.
-        if mode == AggregateMode::Single {
-            let requirement = get_finest_requirement(
-                &mut aggr_expr,
-                &mut order_by_expr,
-                || input.equivalence_properties(),
-                || input.ordering_equivalence_properties(),
-            )?;
-            let aggregator_requirement = requirement
-                .as_ref()
-                .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
-            aggregator_reqs = aggregator_requirement.unwrap_or(vec![]);
-            // If all aggregate expressions are reversible, also consider reverse
-            // requirement(s). The reason is that existing ordering may satisfy the
-            // given requirement or its reverse. By considering both, we can generate better plans.
-            if aggr_expr
-                .iter()
-                .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
-            {
-                let reverse_agg_requirement = requirement.map(|reqs| {
-                    PhysicalSortRequirement::from_sort_exprs(
-                        reverse_order_bys(&reqs).iter(),
-                    )
-                });
-                aggregator_reverse_reqs = reverse_agg_requirement;
-            }
+
+        let requirement = get_finest_requirement(
+            &mut aggr_expr,
+            &mut order_by_expr,
+            || input.equivalence_properties(),
+            || input.ordering_equivalence_properties(),
+        )?;
+        let aggregator_requirement = requirement
+            .as_ref()
+            .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
+        let aggregator_reqs = aggregator_requirement.unwrap_or(vec![]);
+        // If all aggregate expressions are reversible, also consider reverse
+        // requirement(s). The reason is that existing ordering may satisfy the
+        // given requirement or its reverse. By considering both, we can generate better plans.
+        if aggr_expr
+            .iter()
+            .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
+        {
+            aggregator_reverse_reqs = requirement.map(|reqs| {
+                PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(&reqs).iter())
+            });
         }
 
         // construct a map from the input columns to the output columns of the Aggregation
@@ -601,25 +642,17 @@ impl AggregateExec {
             };
         }
 
-        let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
+        let mut aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
 
         let required_input_ordering = calc_required_input_ordering(
             &input,
             &mut aggr_expr,
+            &mut order_by_expr,
             aggregator_reqs,
             aggregator_reverse_reqs,
-            &aggregation_ordering,
+            &mut aggregation_ordering,
+            &mode,
         )?;
-
-        // If aggregator is working on multiple partitions and there is an order-sensitive aggregator with a requirement return error.
-        if input.output_partitioning().partition_count() > 1
-            && order_by_expr.iter().any(|req| req.is_some())
-        {
-            return Err(DataFusionError::NotImplemented(
-                "Order-sensitive aggregators is not supported on multiple partitions"
-                    .to_string(),
-            ));
-        }
 
         Ok(AggregateExec {
             mode,
@@ -699,6 +732,80 @@ impl AggregateExec {
                 GroupedHashAggregateStream::new(self, context, partition)?,
             ))
         }
+    }
+}
+
+impl DisplayAs for AggregateExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "AggregateExec: mode={:?}", self.mode)?;
+                let g: Vec<String> = if self.group_by.groups.len() == 1 {
+                    self.group_by
+                        .expr
+                        .iter()
+                        .map(|(e, alias)| {
+                            let e = e.to_string();
+                            if &e != alias {
+                                format!("{e} as {alias}")
+                            } else {
+                                e
+                            }
+                        })
+                        .collect()
+                } else {
+                    self.group_by
+                        .groups
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, is_null)| {
+                                    if *is_null {
+                                        let (e, alias) = &self.group_by.null_expr[idx];
+                                        let e = e.to_string();
+                                        if &e != alias {
+                                            format!("{e} as {alias}")
+                                        } else {
+                                            e
+                                        }
+                                    } else {
+                                        let (e, alias) = &self.group_by.expr[idx];
+                                        let e = e.to_string();
+                                        if &e != alias {
+                                            format!("{e} as {alias}")
+                                        } else {
+                                            e
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({terms})")
+                        })
+                        .collect()
+                };
+
+                write!(f, ", gby=[{}]", g.join(", "))?;
+
+                let a: Vec<String> = self
+                    .aggr_expr
+                    .iter()
+                    .map(|agg| agg.name().to_string())
+                    .collect();
+                write!(f, ", aggr=[{}]", a.join(", "))?;
+
+                if let Some(aggregation_ordering) = &self.aggregation_ordering {
+                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -821,78 +928,6 @@ impl ExecutionPlan for AggregateExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "AggregateExec: mode={:?}", self.mode)?;
-                let g: Vec<String> = if self.group_by.groups.len() == 1 {
-                    self.group_by
-                        .expr
-                        .iter()
-                        .map(|(e, alias)| {
-                            let e = e.to_string();
-                            if &e != alias {
-                                format!("{e} as {alias}")
-                            } else {
-                                e
-                            }
-                        })
-                        .collect()
-                } else {
-                    self.group_by
-                        .groups
-                        .iter()
-                        .map(|group| {
-                            let terms = group
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, is_null)| {
-                                    if *is_null {
-                                        let (e, alias) = &self.group_by.null_expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
-                                    } else {
-                                        let (e, alias) = &self.group_by.expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
-                                    }
-                                })
-                                .collect::<Vec<String>>()
-                                .join(", ");
-                            format!("({terms})")
-                        })
-                        .collect()
-                };
-
-                write!(f, ", gby=[{}]", g.join(", "))?;
-
-                let a: Vec<String> = self
-                    .aggr_expr
-                    .iter()
-                    .map(|agg| agg.name().to_string())
-                    .collect();
-                write!(f, ", aggr=[{}]", a.join(", "))?;
-
-                if let Some(aggregation_ordering) = &self.aggregation_ordering {
-                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn statistics(&self) -> Statistics {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
@@ -1001,14 +1036,28 @@ fn aggregate_expressions(
                 } else {
                     None
                 };
-                agg.expressions()
+                let mut result = agg
+                    .expressions()
                     .into_iter()
                     .map(|expr| {
                         pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
                             Arc::new(CastExpr::new(expr, cast_type, None))
                         })
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                // In partial mode, append ordering requirements to expressions' results.
+                // Ordering requirements are used by subsequent executors to satisfy the required
+                // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.
+                if matches!(mode, AggregateMode::Partial) {
+                    if let Some(ordering_req) = agg.order_bys() {
+                        let ordering_exprs = ordering_req
+                            .iter()
+                            .map(|item| item.expr.clone())
+                            .collect::<Vec<_>>();
+                        result.extend(ordering_exprs);
+                    }
+                }
+                result
             })
             .collect()),
         // in this mode, we build the merge expressions of the aggregation
@@ -1214,8 +1263,8 @@ mod tests {
     };
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::{
-        ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
-        Statistics,
+        DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
+        SendableRecordBatchStream, Statistics,
     };
     use crate::prelude::SessionContext;
 
@@ -1546,6 +1595,20 @@ mod tests {
     struct TestYieldingExec {
         /// True if this exec should yield back to runtime the first time it is polled
         pub yield_first: bool,
+    }
+
+    impl DisplayAs for TestYieldingExec {
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "TestYieldingExec")
+                }
+            }
+        }
     }
 
     impl ExecutionPlan for TestYieldingExec {
@@ -1903,6 +1966,8 @@ mod tests {
             Arc::new(col_a.clone()),
             "first1",
             DataType::Int32,
+            vec![],
+            vec![],
         )) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
         let res = get_finest_requirement(

@@ -44,11 +44,11 @@ Sort: orders.o_orderpriority ASC NULLS LAST
 --Projection: orders.o_orderpriority, COUNT(UInt8(1)) AS order_count
 ----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[COUNT(UInt8(1))]]
 ------Projection: orders.o_orderpriority
---------LeftSemi Join: orders.o_orderkey = __correlated_sq_15.l_orderkey
+--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
 ----------Projection: orders.o_orderkey, orders.o_orderpriority
 ------------Filter: orders.o_orderdate >= Date32("8582") AND orders.o_orderdate < Date32("8674")
 --------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("8582"), orders.o_orderdate < Date32("8674")]
-----------SubqueryAlias: __correlated_sq_15
+----------SubqueryAlias: __correlated_sq_1
 ------------Projection: lineitem.l_orderkey
 --------------Filter: lineitem.l_commitdate < lineitem.l_receiptdate
 ----------------TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_commitdate < lineitem.l_receiptdate]
@@ -58,20 +58,20 @@ SortPreservingMergeExec: [o_orderpriority@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[o_orderpriority@0 as o_orderpriority, COUNT(UInt8(1))@1 as order_count]
 ------AggregateExec: mode=FinalPartitioned, gby=[o_orderpriority@0 as o_orderpriority], aggr=[COUNT(UInt8(1))]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "o_orderpriority", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=Hash([o_orderpriority@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[o_orderpriority@0 as o_orderpriority], aggr=[COUNT(UInt8(1))]
 --------------ProjectionExec: expr=[o_orderpriority@1 as o_orderpriority]
 ----------------CoalesceBatchesExec: target_batch_size=8192
-------------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: "o_orderkey", index: 0 }, Column { name: "l_orderkey", index: 0 })]
+------------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(o_orderkey@0, l_orderkey@0)]
 --------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------RepartitionExec: partitioning=Hash([Column { name: "o_orderkey", index: 0 }], 4), input_partitions=4
+----------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey, o_orderpriority@2 as o_orderpriority]
 --------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------FilterExec: o_orderdate@1 >= 8582 AND o_orderdate@1 < 8674
 ------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 --------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl]]}, projection=[o_orderkey, o_orderdate, o_orderpriority], has_header=false
 --------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------RepartitionExec: partitioning=Hash([Column { name: "l_orderkey", index: 0 }], 4), input_partitions=4
+----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey]
 --------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------FilterExec: l_commitdate@1 < l_receiptdate@2

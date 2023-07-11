@@ -24,7 +24,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::expressions::PhysicalSortExpr;
-use super::{ColumnStatistics, RecordBatchStream, SendableRecordBatchStream, Statistics};
+use super::{
+    ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
+};
 use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
@@ -82,6 +84,20 @@ impl FilterExec {
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+}
+
+impl DisplayAs for FilterExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "FilterExec: {}", self.predicate)
+            }
+        }
     }
 }
 
@@ -155,18 +171,6 @@ impl ExecutionPlan for FilterExec {
             input: self.input.execute(partition, context)?,
             baseline_metrics,
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "FilterExec: {}", self.predicate)
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

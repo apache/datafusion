@@ -22,6 +22,7 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::field_not_found;
+use datafusion_expr::WindowUDF;
 use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
@@ -46,6 +47,8 @@ pub trait ContextProvider {
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
+    /// Getter for a UDWF
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>>;
     /// Getter for system/user-defined variable type
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType>;
 

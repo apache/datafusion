@@ -971,9 +971,10 @@ mod tests {
     use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
     use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
+    use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::joins::utils::JoinOn;
-    use crate::physical_plan::joins::SortMergeJoinExec;
+    use crate::physical_plan::joins::utils::{JoinFilter, JoinOn};
+    use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::repartition::RepartitionExec;
@@ -1024,7 +1025,7 @@ mod tests {
 
     // Util function to get string representation of a physical plan
     fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-        let formatted = displayable(plan.as_ref()).indent().to_string();
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
         actual.iter().map(|elem| elem.to_string()).collect()
     }
@@ -1400,7 +1401,7 @@ mod tests {
             let state = session_ctx.state();
 
             let physical_plan = $PLAN;
-            let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+            let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();
 
             let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
@@ -1462,8 +1463,11 @@ mod tests {
             },
         )];
         let sort = sort_exec(sort_exprs.clone(), source);
+        // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
+        let coalesce_batches = coalesce_batches_exec(sort);
 
-        let window_agg = bounded_window_exec("non_nullable_col", sort_exprs, sort);
+        let window_agg =
+            bounded_window_exec("non_nullable_col", sort_exprs, coalesce_batches);
 
         let sort_exprs = vec![sort_expr_options(
             "non_nullable_col",
@@ -1491,16 +1495,18 @@ mod tests {
             "  FilterExec: NOT non_nullable_col@1",
             "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST]",
             "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
-            "        SortExec: expr=[non_nullable_col@1 DESC]",
-            "          MemoryExec: partitions=0, partition_sizes=[]",
+            "        CoalesceBatchesExec: target_batch_size=128",
+            "          SortExec: expr=[non_nullable_col@1 DESC]",
+            "            MemoryExec: partitions=0, partition_sizes=[]",
         ];
 
         let expected_optimized = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
             "  FilterExec: NOT non_nullable_col@1",
             "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
-            "      SortExec: expr=[non_nullable_col@1 DESC]",
-            "        MemoryExec: partitions=0, partition_sizes=[]",
+            "      CoalesceBatchesExec: target_batch_size=128",
+            "        SortExec: expr=[non_nullable_col@1 DESC]",
+            "          MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
@@ -1688,6 +1694,37 @@ mod tests {
             "          MemoryExec: partitions=0, partition_sizes=[]",
             "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
             "          MemoryExec: partitions=0, partition_sizes=[]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort5() -> Result<()> {
+        let left_schema = create_test_schema2()?;
+        let right_schema = create_test_schema3()?;
+        let left_input = memory_exec(&left_schema);
+        let parquet_sort_exprs = vec![sort_expr("a", &right_schema)];
+        let right_input = parquet_exec_sorted(&right_schema, parquet_sort_exprs);
+
+        let on = vec![(
+            Column::new_with_schema("col_a", &left_schema)?,
+            Column::new_with_schema("c", &right_schema)?,
+        )];
+        let join = hash_join_exec(left_input, right_input, on, None, &JoinType::Inner)?;
+        let physical_plan = sort_exec(vec![sort_expr("a", &join.schema())], join);
+
+        let expected_input = vec![
+            "SortExec: expr=[a@2 ASC]",
+            "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
+            "    MemoryExec: partitions=0, partition_sizes=[]",
+            "    ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        ];
+
+        let expected_optimized = vec![
+            "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col_a@0, c@2)]",
+            "  MemoryExec: partitions=0, partition_sizes=[]",
+            "  ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
@@ -2375,10 +2412,12 @@ mod tests {
             ];
             let physical_plan = sort_preserving_merge_exec(sort_exprs.clone(), join);
 
-            let join_plan =
-                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"nullable_col\", index: 0 }}, Column {{ name: \"col_a\", index: 0 }})]");
-            let join_plan2 =
-                format!("  SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"nullable_col\", index: 0 }}, Column {{ name: \"col_a\", index: 0 }})]");
+            let join_plan = format!(
+                "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
+            let join_plan2 = format!(
+                "  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let expected_input = vec![
                 "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
                 join_plan2.as_str(),
@@ -2446,16 +2485,18 @@ mod tests {
             ];
             let physical_plan = sort_preserving_merge_exec(sort_exprs, join);
 
-            let join_plan =
-                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"nullable_col\", index: 0 }}, Column {{ name: \"col_a\", index: 0 }})]");
+            let join_plan = format!(
+                "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let spm_plan = match join_type {
                 JoinType::RightAnti => {
                     "SortPreservingMergeExec: [col_a@0 ASC,col_b@1 ASC]"
                 }
                 _ => "SortPreservingMergeExec: [col_a@2 ASC,col_b@3 ASC]",
             };
-            let join_plan2 =
-                format!("  SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"nullable_col\", index: 0 }}, Column {{ name: \"col_a\", index: 0 }})]");
+            let join_plan2 = format!(
+                "  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let expected_input = vec![
                 spm_plan,
                 join_plan2.as_str(),
@@ -2515,7 +2556,7 @@ mod tests {
 
         let expected_input = vec![
             "SortPreservingMergeExec: [col_b@3 ASC,col_a@2 ASC]",
-            "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"nullable_col\", index: 0 }, Column { name: \"col_a\", index: 0 })]",
+            "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b]",
         ];
@@ -2523,7 +2564,7 @@ mod tests {
         // can not push down the sort requirements, need to add SortExec
         let expected_optimized = vec![
             "SortExec: expr=[col_b@3 ASC,col_a@2 ASC]",
-            "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"nullable_col\", index: 0 }, Column { name: \"col_a\", index: 0 })]",
+            "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    SortExec: expr=[col_a@0 ASC]",
@@ -2541,7 +2582,7 @@ mod tests {
 
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,col_b@3 ASC,col_a@2 ASC]",
-            "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"nullable_col\", index: 0 }, Column { name: \"col_a\", index: 0 })]",
+            "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b]",
         ];
@@ -2549,7 +2590,7 @@ mod tests {
         // can not push down the sort requirements, need to add SortExec
         let expected_optimized = vec![
             "SortExec: expr=[nullable_col@0 ASC,col_b@3 ASC,col_a@2 ASC]",
-            "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"nullable_col\", index: 0 }, Column { name: \"col_a\", index: 0 })]",
+            "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    SortExec: expr=[col_a@0 ASC]",
@@ -2749,6 +2790,24 @@ mod tests {
         Arc::new(SortExec::new(sort_exprs, input))
     }
 
+    fn hash_join_exec(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: JoinOn,
+        filter: Option<JoinFilter>,
+        join_type: &JoinType,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            PartitionMode::Partitioned,
+            true,
+        )?))
+    }
+
     fn sort_preserving_merge_exec(
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
@@ -2891,5 +2950,9 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(CoalesceBatchesExec::new(input, 128))
     }
 }

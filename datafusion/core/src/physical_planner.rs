@@ -15,14 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical query planner
+//! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
-use super::analyze::AnalyzeExec;
-use super::unnest::UnnestExec;
-use super::{
-    aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
-    values::ValuesExec, windows,
-};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -40,6 +34,7 @@ use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
@@ -50,8 +45,13 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
+use crate::physical_plan::{
+    aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
+    values::ValuesExec, windows,
 };
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
@@ -64,8 +64,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
-    GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
+    self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
+    GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -111,7 +111,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(c.flat_name())
             }
         }
-        Expr::Alias(_, name) => Ok(name.clone()),
+        Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{value:?}")),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
@@ -122,13 +122,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Case(case) => {
             let mut name = "CASE ".to_string();
             if let Some(e) = &case.expr {
-                let _ = write!(name, "{e:?} ");
+                let _ = write!(name, "{e} ");
             }
             for (w, t) in &case.when_then_expr {
-                let _ = write!(name, "WHEN {w:?} THEN {t:?} ");
+                let _ = write!(name, "WHEN {w} THEN {t} ");
             }
             if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {e:?} ");
+                let _ = write!(name, "ELSE {e} ");
             }
             name += "END";
             Ok(name)
@@ -629,7 +629,7 @@ impl DefaultPhysicalPlanner {
                             ref order_by,
                             ..
                         }) => generate_sort_key(partition_by, order_by),
-                        Expr::Alias(expr, _) => {
+                        Expr::Alias(Alias{expr,..}) => {
                             // Convert &Box<T> to &T
                             match &**expr {
                                 Expr::WindowFunction(WindowFunction{
@@ -1596,8 +1596,8 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
-        Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
-        _ => (physical_name(e)?, e),
+        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
+        _ => (e.display_name()?, e),
     };
     create_window_expr_with_name(
         e,
@@ -1652,13 +1652,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
-            let agg_expr = aggregates::create_aggregate_expr(
-                fun,
-                *distinct,
-                &args,
-                physical_input_schema,
-                name,
-            )?;
             let order_by = match order_by {
                 Some(e) => Some(
                     e.iter()
@@ -1674,6 +1667,15 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
+            let ordering_reqs = order_by.clone().unwrap_or(vec![]);
+            let agg_expr = aggregates::create_aggregate_expr(
+                fun,
+                *distinct,
+                &args,
+                &ordering_reqs,
+                physical_input_schema,
+                name,
+            )?;
             Ok((agg_expr, filter, order_by))
         }
         Expr::AggregateUDF(AggregateUDF {
@@ -1738,7 +1740,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
-        Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
+        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (physical_name(e)?, e),
     };
 
@@ -1815,7 +1817,7 @@ impl DefaultPhysicalPlanner {
                     Ok(input) => {
                         stringified_plans.push(
                             displayable(input.as_ref())
-                                .to_stringified(InitialPhysicalPlan),
+                                .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
                         match self.optimize_internal(
@@ -1824,13 +1826,15 @@ impl DefaultPhysicalPlanner {
                             |plan, optimizer| {
                                 let optimizer_name = optimizer.name().to_string();
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                                stringified_plans
-                                    .push(displayable(plan).to_stringified(plan_type));
+                                stringified_plans.push(
+                                    displayable(plan)
+                                        .to_stringified(e.verbose, plan_type),
+                                );
                             },
                         ) {
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
-                                    .to_stringified(FinalPhysicalPlan),
+                                    .to_stringified(e.verbose, FinalPhysicalPlan),
                             ),
                             Err(DataFusionError::Context(optimizer_name, e)) => {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
@@ -1873,11 +1877,11 @@ impl DefaultPhysicalPlanner {
         let optimizers = session_state.physical_optimizers();
         debug!(
             "Input physical plan:\n{}\n",
-            displayable(plan.as_ref()).indent()
+            displayable(plan.as_ref()).indent(false)
         );
         trace!(
             "Detailed input physical plan:\n{}",
-            displayable(plan.as_ref()).indent()
+            displayable(plan.as_ref()).indent(true)
         );
 
         let mut new_plan = plan;
@@ -1903,13 +1907,13 @@ impl DefaultPhysicalPlanner {
             trace!(
                 "Optimized physical plan by {}:\n{}\n",
                 optimizer.name(),
-                displayable(new_plan.as_ref()).indent()
+                displayable(new_plan.as_ref()).indent(false)
             );
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
             "Optimized physical plan:\n{}\n",
-            displayable(new_plan.as_ref()).indent()
+            displayable(new_plan.as_ref()).indent(false)
         );
         trace!("Detailed optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
@@ -1930,10 +1934,11 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
+        expressions, DisplayFormatType, Partitioning, Statistics,
     };
+    use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
+    use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
@@ -1951,7 +1956,7 @@ mod tests {
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
-    use std::ops::Not;
+    use std::ops::{BitAnd, Not};
     use std::{any::Any, fmt};
 
     fn make_session_state() -> SessionState {
@@ -2135,18 +2140,17 @@ mod tests {
     async fn errors() -> Result<()> {
         let bool_expr = col("c1").eq(col("c1"));
         let cases = vec![
-            // utf8 AND utf8
-            col("c1").and(col("c1")),
+            // utf8 = utf8
+            col("c1").eq(col("c1")),
             // u8 AND u8
-            col("c3").and(col("c3")),
-            // utf8 = bool
-            col("c1").eq(bool_expr.clone()),
-            // u32 AND bool
-            col("c2").and(bool_expr),
+            col("c3").bitand(col("c3")),
+            // utf8 = u8
+            col("c1").eq(col("c3")),
+            // bool AND bool
+            bool_expr.clone().and(bool_expr),
         ];
         for case in cases {
-            let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);
-            assert!(logical_plan.is_ok());
+            test_csv_scan().await?.project(vec![case.clone()]).unwrap();
         }
         Ok(())
     }
@@ -2419,7 +2423,7 @@ mod tests {
         } else {
             panic!(
                 "Plan was not an explain plan: {}",
-                displayable(plan.as_ref()).indent()
+                displayable(plan.as_ref()).indent(true)
             );
         }
     }
@@ -2496,6 +2500,16 @@ mod tests {
         schema: SchemaRef,
     }
 
+    impl DisplayAs for NoOpExecutionPlan {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "NoOpExecutionPlan")
+                }
+            }
+        }
+    }
+
     impl ExecutionPlan for NoOpExecutionPlan {
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
@@ -2531,14 +2545,6 @@ mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
-        }
-
-        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-            match t {
-                DisplayFormatType::Default => {
-                    write!(f, "NoOpExecutionPlan")
-                }
-            }
         }
 
         fn statistics(&self) -> Statistics {
@@ -2603,5 +2609,35 @@ mod tests {
         Ok(LogicalPlanBuilder::from(
             ctx.read_csv(path, options).await?.into_optimized_plan()?,
         ))
+    }
+
+    #[tokio::test]
+    async fn test_display_plan_in_graphviz_format() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .project(vec![col("id") + lit(2)])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).await.unwrap();
+
+        let expected_graph = r###"
+// Begin DataFusion GraphViz Plan,
+// display it online here: https://dreampuf.github.io/GraphvizOnline
+
+digraph {
+    1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
+    2[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
+    1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
+}
+// End DataFusion GraphViz Plan
+"###;
+
+        let generated_graph = format!("{}", displayable(&*plan).graphviz());
+
+        assert_eq!(expected_graph, generated_graph);
     }
 }
