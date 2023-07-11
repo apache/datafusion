@@ -57,7 +57,8 @@ use datafusion_common::cast::{as_dictionary_array, as_string_array};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use crate::physical_plan::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
+    add_offset_to_ordering_equivalence_classes, adjust_indices_by_join_type,
+    apply_join_filter_to_indices, build_batch_from_indices,
     calculate_hash_join_output_order, get_final_indices_from_bit_map,
     need_produce_result_in_final, JoinSide,
 };
@@ -83,6 +84,7 @@ use arrow::datatypes::TimeUnit;
 use datafusion_common::JoinType;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::{memory_pool::MemoryConsumer, TaskContext};
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use super::{
     utils::{OnceAsync, OnceFut},
@@ -379,6 +381,29 @@ impl ExecutionPlan for HashJoinExec {
             self.on(),
             self.schema(),
         )
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        let left_columns_len = self.left.schema().fields.len();
+        let right_oeq_properties = self.right.ordering_equivalence_properties();
+        match self.join_type {
+            JoinType::RightAnti | JoinType::RightSemi => {
+                new_properties.extend(right_oeq_properties.classes().to_vec());
+            }
+            JoinType::Inner => {
+                let updated_right_classes = add_offset_to_ordering_equivalence_classes(
+                    right_oeq_properties.classes(),
+                    left_columns_len,
+                )
+                .unwrap();
+                new_properties.extend(updated_right_classes);
+            }
+            // For other cases, since ordering is not preserved ordering equivalences
+            // cannot be propagated also.
+            _ => {}
+        }
+        new_properties
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

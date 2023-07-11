@@ -286,6 +286,8 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
+/// Add `offset` value to the `Column` indices inside the `expr`
+/// generally used during update of for right table schema for join operations.
 pub(crate) fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
@@ -299,6 +301,7 @@ pub(crate) fn add_offset_to_expr(
     })
 }
 
+/// Add `offset` value to the `Column` indices inside `sort_expr.expr`
 pub(crate) fn add_offset_to_sort_expr(
     sort_expr: &PhysicalSortExpr,
     offset: usize,
@@ -309,6 +312,7 @@ pub(crate) fn add_offset_to_sort_expr(
     })
 }
 
+/// Add `offset` value to the `Column` indices for each `sort_expr.expr` inside `sort_exprs`
 pub(crate) fn add_offset_to_lex_ordering(
     sort_exprs: LexOrderingRef,
     offset: usize,
@@ -319,6 +323,7 @@ pub(crate) fn add_offset_to_lex_ordering(
         .collect::<Result<Vec<_>>>()
 }
 
+/// Add `offset` value to the `Column` indices expression inside `OrderingEquivalentClass`es
 pub(crate) fn add_offset_to_ordering_equivalence_classes(
     oeq_classes: &[OrderingEquivalentClass],
     offset: usize,

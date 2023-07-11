@@ -3189,6 +3189,68 @@ SortPreservingMergeExec: [a@1 ASC,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST,rn1@11 A
 ----------BoundedWindowAggExec: wdw=[ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
 ------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
 
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
+
+# to preserve ordering until Hash join set target partition to 1.
+# Otherwise RepartitionExec s inserted may broke ordering.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# hash join should propagate ordering equivalence of the right side for INNER join.
+# Hence final requirement rn1 ASC is already satisfied at the end of HashJoinExec.
+query TT
+EXPLAIN SELECT *
+  FROM annotated_data as l_table
+  JOIN (SELECT *, ROW_NUMBER() OVER() as rn1
+              FROM annotated_data) as r_table
+  ON l_table.a = r_table.a
+  ORDER BY r_table.rn1
+----
+logical_plan
+Sort: r_table.rn1 ASC NULLS LAST
+--Inner Join: l_table.a = r_table.a
+----SubqueryAlias: l_table
+------TableScan: annotated_data projection=[a0, a, b, c, d]
+----SubqueryAlias: r_table
+------Projection: annotated_data.a0, annotated_data.a, annotated_data.b, annotated_data.c, annotated_data.d, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS rn1
+--------WindowAggr: windowExpr=[[ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+----------TableScan: annotated_data projection=[a0, a, b, c, d]
+physical_plan
+CoalesceBatchesExec: target_batch_size=4096
+--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@1, a@1)]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+----ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
+------BoundedWindowAggExec: wdw=[ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+# hash join should propagate ordering equivalence of the right side for RIGHT ANTI join.
+# Hence final requirement rn1 ASC is already satisfied at the end of HashJoinExec.
+query TT
+EXPLAIN SELECT *
+  FROM annotated_data as l_table
+  RIGHT ANTI JOIN (SELECT *, ROW_NUMBER() OVER() as rn1
+              FROM annotated_data) as r_table
+  ON l_table.a = r_table.a
+  ORDER BY r_table.rn1
+----
+logical_plan
+Sort: r_table.rn1 ASC NULLS LAST
+--RightAnti Join: l_table.a = r_table.a
+----SubqueryAlias: l_table
+------TableScan: annotated_data projection=[a]
+----SubqueryAlias: r_table
+------Projection: annotated_data.a0, annotated_data.a, annotated_data.b, annotated_data.c, annotated_data.d, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS rn1
+--------WindowAggr: windowExpr=[[ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+----------TableScan: annotated_data projection=[a0, a, b, c, d]
+physical_plan
+CoalesceBatchesExec: target_batch_size=4096
+--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(a@0, a@1)]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC], has_header=true
+----ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
+------BoundedWindowAggExec: wdw=[ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
 ####
 # Config teardown
 ####
