@@ -38,7 +38,9 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::intervals::is_operator_supported;
+use datafusion_physical_expr::intervals::{
+    interval_with_closed_bounds, is_operator_supported,
+};
 use datafusion_physical_expr::{
     analyze, get_columns, split_conjunction, AnalysisContext, ExprBoundaries,
     PhysicalExpr,
@@ -193,7 +195,6 @@ impl ExecutionPlan for FilterExec {
         }
 
         let input_stats = self.input.statistics();
-
         let input_column_stats = match input_stats.column_statistics {
             Some(stats) => stats,
             None => return Statistics::default(),
@@ -217,7 +218,6 @@ impl ExecutionPlan for FilterExec {
         let num_rows = input_stats
             .num_rows
             .map(|num| (num as f64 * selectivity).ceil() as usize);
-
         let total_byte_size = input_stats
             .total_byte_size
             .map(|size| (size as f64 * selectivity).ceil() as usize);
@@ -233,10 +233,19 @@ impl ExecutionPlan for FilterExec {
                 },
             ) in new_boundaries.into_iter().enumerate()
             {
+                let closed_interval = interval_with_closed_bounds(interval);
                 res.push(ColumnStatistics {
                     null_count: input_column_stats[i].null_count,
-                    max_value: Some(interval.lower.value),
-                    min_value: Some(interval.upper.value),
+                    max_value: if selectivity > 0.0 {
+                        Some(closed_interval.upper.value)
+                    } else {
+                        None
+                    },
+                    min_value: if selectivity > 0.0 {
+                        Some(closed_interval.lower.value)
+                    } else {
+                        None
+                    },
                     distinct_count,
                 });
             }
@@ -506,40 +515,6 @@ mod tests {
         let statistics = filter.statistics();
         assert_eq!(statistics.num_rows, Some(25));
         assert_eq!(statistics.total_byte_size, Some(25 * bytes_per_row));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_filter_statistics_column_level_basic_expr() -> Result<()> {
-        // Table:
-        //      a: min=1, max=100
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let input = Arc::new(StatisticsExec::new(
-            Statistics {
-                num_rows: Some(100),
-                column_statistics: Some(vec![ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(100))),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            },
-            schema.clone(),
-        ));
-
-        // a <= 25
-        let predicate: Arc<dyn PhysicalExpr> =
-            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?;
-
-        // WHERE a <= 25
-        let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input)?);
-
-        let statistics = filter.statistics();
-
-        // a must be in [1, 25] range now!
-        assert_eq!(statistics.num_rows, Some(25));
         assert_eq!(
             statistics.column_statistics,
             Some(vec![ColumnStatistics {
@@ -644,7 +619,6 @@ mod tests {
             binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
             b_gt_5,
         )?);
-
         let statistics = filter.statistics();
         // On a uniform distribution, only fifteen rows will satisfy the
         // filter that 'a' proposed (a >= 10 AND a <= 25) (15/100) and only
@@ -662,7 +636,7 @@ mod tests {
                     ..Default::default()
                 },
                 ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(45))),
+                    min_value: Some(ScalarValue::Int32(Some(46))),
                     max_value: Some(ScalarValue::Int32(Some(50))),
                     ..Default::default()
                 }
@@ -697,6 +671,297 @@ mod tests {
 
         let statistics = filter.statistics();
         assert_eq!(statistics.num_rows, None);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_multiple_columns() -> Result<()> {
+        // Table:
+        //      a: min=1, max=100
+        //      b: min=1, max=3
+        //      c: min=1000.0  max=1100.0
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Float32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(1000),
+                total_byte_size: Some(4000),
+                column_statistics: Some(vec![
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(3))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Float32(Some(1000.0))),
+                        max_value: Some(ScalarValue::Float32(Some(1100.0))),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            },
+            schema,
+        ));
+        // WHERE a<=53 AND (b=3 AND (c<=1075.0 AND a>b))
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::LtEq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(53)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("b", 1)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+                )),
+                Operator::And,
+                Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("c", 2)),
+                        Operator::LtEq,
+                        Arc::new(Literal::new(ScalarValue::Float32(Some(1075.0)))),
+                    )),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        Operator::Gt,
+                        Arc::new(Column::new("b", 1)),
+                    )),
+                )),
+            )),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.statistics();
+        // 0.5 (from a) * 0.333333... (from b) * 0.798387... (from c) ≈ 0.1330...
+        // num_rows after ceil => 133.0... => 134
+        // total_byte_size after ceil => 532.0... => 533
+        assert_eq!(statistics.num_rows, Some(134));
+        assert_eq!(statistics.total_byte_size, Some(533));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(4))),
+                    max_value: Some(ScalarValue::Int32(Some(53))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(3))),
+                    max_value: Some(ScalarValue::Int32(Some(3))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Float32(Some(1000.0))),
+                    max_value: Some(ScalarValue::Float32(Some(1075.0))),
+                    ..Default::default()
+                },
+            ])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_full_selective() -> Result<()> {
+        // Table:
+        //      a: min=1, max=100
+        //      b: min=1, max=3
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(1000),
+                total_byte_size: Some(4000),
+                column_statistics: Some(vec![
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(3))),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            },
+            schema,
+        ));
+        // WHERE a<200 AND 1<=b
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Lt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(200)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                Operator::LtEq,
+                Arc::new(Column::new("b", 1)),
+            )),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.statistics();
+
+        assert_eq!(statistics.num_rows, Some(1000));
+        assert_eq!(statistics.total_byte_size, Some(4000));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(3))),
+                    ..Default::default()
+                },
+            ])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_zero_selective() -> Result<()> {
+        // Table:
+        //      a: min=1, max=100
+        //      b: min=1, max=3
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(1000),
+                total_byte_size: Some(4000),
+                column_statistics: Some(vec![
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(3))),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            },
+            schema,
+        ));
+        // WHERE a>200 AND 1<=b
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(200)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                Operator::LtEq,
+                Arc::new(Column::new("b", 1)),
+            )),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.statistics();
+
+        assert_eq!(statistics.num_rows, Some(0));
+        assert_eq!(statistics.total_byte_size, Some(0));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![
+                ColumnStatistics {
+                    min_value: None,
+                    max_value: None,
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: None,
+                    max_value: None,
+                    ..Default::default()
+                },
+            ])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_more_inputs() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(1000),
+                total_byte_size: Some(4000),
+                column_statistics: Some(vec![
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            },
+            schema,
+        ));
+        // WHERE a<50
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.statistics();
+
+        assert_eq!(statistics.num_rows, Some(490));
+        assert_eq!(statistics.total_byte_size, Some(1960));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(49))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    ..Default::default()
+                },
+            ])
+        );
 
         Ok(())
     }

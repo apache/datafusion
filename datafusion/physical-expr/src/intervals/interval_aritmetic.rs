@@ -513,7 +513,7 @@ impl Interval {
     }
 }
 
-pub fn calculate_selectivity(
+pub fn cardinality_ratio(
     initial_interval: &Interval,
     final_interval: &Interval,
 ) -> Result<f64> {
@@ -587,6 +587,58 @@ fn calculate_cardinality_based_on_bounds(
         (true, true) => diff - 1,
         _ => diff,
     }
+}
+
+/// This function takes an interval, and if it has open bound/s, the function
+/// converts them to closed bounds preserving the interval values.
+pub fn interval_with_closed_bounds(mut interval: Interval) -> Interval {
+    if interval.lower.open {
+        interval.lower.value = match interval.lower.value {
+            ScalarValue::Float32(Some(val)) => {
+                let incremented_bits = val.to_bits() + 1;
+                ScalarValue::Float32(Some(f32::from_bits(incremented_bits)))
+            }
+            ScalarValue::Float64(Some(val)) => {
+                let incremented_bits = val.to_bits() + 1;
+                ScalarValue::Float64(Some(f64::from_bits(incremented_bits)))
+            }
+            ScalarValue::Int8(Some(val)) => ScalarValue::Int8(Some(val + 1)),
+            ScalarValue::Int16(Some(val)) => ScalarValue::Int16(Some(val + 1)),
+            ScalarValue::Int32(Some(val)) => ScalarValue::Int32(Some(val + 1)),
+            ScalarValue::Int64(Some(val)) => ScalarValue::Int64(Some(val + 1)),
+            ScalarValue::UInt8(Some(val)) => ScalarValue::UInt8(Some(val + 1)),
+            ScalarValue::UInt16(Some(val)) => ScalarValue::UInt16(Some(val + 1)),
+            ScalarValue::UInt32(Some(val)) => ScalarValue::UInt32(Some(val + 1)),
+            ScalarValue::UInt64(Some(val)) => ScalarValue::UInt64(Some(val + 1)),
+            _ => interval.lower.value, // Infinite bounds or unsupported datatypes
+        };
+        interval.lower.open = false;
+    }
+
+    if interval.upper.open {
+        interval.upper.value = match interval.upper.value {
+            ScalarValue::Float32(Some(val)) => {
+                let decremented_bits = val.to_bits() - 1;
+                ScalarValue::Float32(Some(f32::from_bits(decremented_bits)))
+            }
+            ScalarValue::Float64(Some(val)) => {
+                let decremented_bits = val.to_bits() - 1;
+                ScalarValue::Float64(Some(f64::from_bits(decremented_bits)))
+            }
+            ScalarValue::Int8(Some(val)) => ScalarValue::Int8(Some(val - 1)),
+            ScalarValue::Int16(Some(val)) => ScalarValue::Int16(Some(val - 1)),
+            ScalarValue::Int32(Some(val)) => ScalarValue::Int32(Some(val - 1)),
+            ScalarValue::Int64(Some(val)) => ScalarValue::Int64(Some(val - 1)),
+            ScalarValue::UInt8(Some(val)) => ScalarValue::UInt8(Some(val - 1)),
+            ScalarValue::UInt16(Some(val)) => ScalarValue::UInt16(Some(val - 1)),
+            ScalarValue::UInt32(Some(val)) => ScalarValue::UInt32(Some(val - 1)),
+            ScalarValue::UInt64(Some(val)) => ScalarValue::UInt64(Some(val - 1)),
+            _ => interval.upper.value, // Infinite bounds or unsupported datatypes
+        };
+        interval.upper.open = false;
+    }
+
+    interval
 }
 
 #[cfg(test)]

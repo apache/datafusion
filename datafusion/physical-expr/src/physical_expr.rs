@@ -30,9 +30,7 @@ use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterato
 
 use crate::expressions::{BinaryExpr, Column};
 use crate::intervals::cp_solver::PropagationResult;
-use crate::intervals::{
-    calculate_selectivity, ExprIntervalGraph, Interval, IntervalBound,
-};
+use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
 use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -134,13 +132,11 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 }
 
-/// Return the boundaries of this expression. This method (and all the
-/// related APIs) are experimental and subject to change.
 pub fn analyze(
     expr: Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
 ) -> Result<AnalysisContext> {
-    let mut target_boundaries = if let Some(boundaries) = context.boundaries.clone() {
+    let mut target_boundaries = if let Some(boundaries) = context.boundaries {
         boundaries
     } else {
         return Err(DataFusionError::Internal(
@@ -149,6 +145,7 @@ pub fn analyze(
     };
 
     let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
+
     let columns: Vec<Arc<dyn PhysicalExpr>> = get_columns(expr.clone())
         .into_iter()
         .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
@@ -192,36 +189,13 @@ pub fn analyze(
             };
             let final_result = graph.get_interval(root_expr_and_index.1);
 
-            let selectivity = match (final_result.lower.value, final_result.upper.value) {
-                (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => {
-                    1.0
-                }
-                (
-                    ScalarValue::Boolean(Some(false)),
-                    ScalarValue::Boolean(Some(false)),
-                ) => 0.0,
-                _ => {
-                    let mut min_selectivity = 1.0;
-                    for (
-                        i,
-                        ExprBoundaries {
-                            column: _,
-                            interval,
-                            distinct_count: _,
-                        },
-                    ) in target_boundaries.iter().enumerate()
-                    {
-                        let temp = calculate_selectivity(
-                            &initial_boundaries[i].interval,
-                            interval,
-                        )?;
-                        if min_selectivity < temp {
-                            min_selectivity = temp;
-                        }
-                    }
-                    min_selectivity
-                }
-            };
+            let selectivity = calculate_selectivity(
+                &final_result.lower.value,
+                &final_result.upper.value,
+                &target_boundaries,
+                &initial_boundaries,
+            )?;
+
             if !(0.0..=1.0).contains(&selectivity) {
                 return Err(DataFusionError::Internal(format!(
                     "Selectivity is out of limit: {}",
@@ -229,9 +203,50 @@ pub fn analyze(
                 )));
             }
 
-            Ok(context.set_selectivity(selectivity))
+            Ok(AnalysisContext::new_with_selectivity(
+                target_boundaries,
+                selectivity,
+            ))
         }
-        _ => Ok(context),
+        PropagationResult::Infeasible => Ok(AnalysisContext::new_with_selectivity(
+            target_boundaries,
+            0.0,
+        )),
+        PropagationResult::CannotPropagate => Ok(AnalysisContext::new_with_selectivity(
+            target_boundaries,
+            1.0,
+        )),
+    }
+}
+
+fn calculate_selectivity(
+    lower_value: &ScalarValue,
+    upper_value: &ScalarValue,
+    target_boundaries: &[ExprBoundaries],
+    initial_boundaries: &[ExprBoundaries],
+) -> Result<f64> {
+    match (lower_value, upper_value) {
+        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Ok(1.0),
+        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => Ok(0.0),
+        _ => {
+            // Since the intervals are assumed as uniform and we do not
+            // have the sort information, we need to multiply the selectivities
+            // of multiple columns to get overall selectivity.
+            let mut max_selectivity = 1.0;
+            for (
+                i,
+                ExprBoundaries {
+                    column: _,
+                    interval,
+                    distinct_count: _,
+                },
+            ) in target_boundaries.iter().enumerate()
+            {
+                let temp = cardinality_ratio(&initial_boundaries[i].interval, interval)?;
+                max_selectivity *= temp;
+            }
+            Ok(max_selectivity)
+        }
     }
 }
 
@@ -246,17 +261,20 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 
 pub fn get_columns(expr: Arc<dyn PhysicalExpr>) -> Vec<Column> {
     let mut columns = vec![];
-    get_columns_helper(expr, &mut columns);
-    columns
-}
+    let mut stack = vec![expr];
 
-fn get_columns_helper(expr: Arc<dyn PhysicalExpr>, columns: &mut Vec<Column>) {
-    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        get_columns_helper(binary.left().clone(), columns);
-        get_columns_helper(binary.right().clone(), columns);
-    } else if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-        columns.push(col.clone());
+    while let Some(expr) = stack.pop() {
+        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            stack.push(binary.left().clone());
+            stack.push(binary.right().clone());
+        } else if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            if !columns.contains(col) {
+                columns.push(col.clone());
+            }
+        }
     }
+
+    columns
 }
 
 /// The shared context used during the analysis of an expression. Includes
@@ -280,6 +298,16 @@ impl AnalysisContext {
         }
     }
 
+    pub fn new_with_selectivity(
+        boundaries: Vec<ExprBoundaries>,
+        selectivity: f64,
+    ) -> Self {
+        Self {
+            boundaries: Some(boundaries),
+            selectivity: Some(selectivity),
+        }
+    }
+
     /// Create a new analysis context from column statistics.
     pub fn from_statistics(
         input_schema: &Schema,
@@ -294,21 +322,6 @@ impl AnalysisContext {
             ));
         }
         Some(Self::new(column_boundaries))
-    }
-
-    /// Set the result of the current analysis.
-    pub fn set_selectivity(mut self, selectivity: f64) -> Self {
-        self.selectivity = Some(selectivity);
-        self
-    }
-
-    /// Update the boundaries of a column.
-    pub fn with_column_update(self, column: usize, boundaries: ExprBoundaries) -> Self {
-        if let Some(mut bound) = self.boundaries.clone() {
-            bound[column] = boundaries;
-        } else {
-        }
-        self
     }
 }
 
