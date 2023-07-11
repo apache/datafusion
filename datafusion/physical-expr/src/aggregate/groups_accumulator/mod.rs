@@ -51,7 +51,7 @@ pub trait GroupsAccumulator: Send {
     /// * `total_num_groups`: the number of groups (the largest
     /// group_index is thus `total_num_groups - 1`).
     ///
-    /// Note thats subsequent calls to update_batch may have larger
+    /// Note that subsequent calls to update_batch may have larger
     /// total_num_groups as new groups are seen.
     fn update_batch(
         &mut self,
@@ -90,7 +90,7 @@ pub trait GroupsAccumulator: Send {
     /// Note more sophisticated internal state can be passed as
     /// single `StructArray` rather than multiple arrays.
     ///
-    /// The accumulator should free to release / reset it is internal
+    /// The accumulator should free to release / reset its internal
     /// state after this call to the same as it was after being
     /// initially created.
     fn state(&mut self) -> Result<Vec<ArrayRef>>;
@@ -99,7 +99,7 @@ pub trait GroupsAccumulator: Send {
     /// into this accumulator's values.
     ///
     /// For some aggregates (such as `SUM`), `merge_batch` is the same
-    /// as `update_batch`, but for some aggregrates (such as `COUNT`,
+    /// as `update_batch`, but for some aggregates (such as `COUNT`,
     /// where the partial counts must be summed) the operations
     /// differ. See [`Self::state`] for more details on how state is
     /// used and merged.

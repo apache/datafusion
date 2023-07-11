@@ -32,7 +32,7 @@ use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 /// combinations of the input.
 ///
 /// Typically there are 4 potential combinations of inputs must be
-/// special caseed for performance:
+/// special cased for performance:
 ///
 /// * With / Without filter
 /// * With / Without nulls in the input
@@ -54,7 +54,7 @@ pub struct NullState {
     /// if there were any nulls in the input.
     ///
     /// If `null_inputs[i]` is true, have not seen any null values for
-    /// group `i`, or have not seen any vaues
+    /// group `i`, or have not seen any values
     ///
     /// If `null_inputs[i]` is false, saw at least one null value for
     /// group `i`
@@ -164,7 +164,7 @@ impl NullState {
                 let null_inputs =
                     initialize_builder(&mut self.null_inputs, total_num_groups, true);
 
-                // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
+                // This is based on (ahem, COPY/PASTE) arrow::compute::aggregate::sum
                 // iterate over in chunks of 64 bits for more efficient null checking
                 let group_indices_chunks = group_indices.chunks_exact(64);
                 let data_chunks = data.chunks_exact(64);
@@ -194,7 +194,7 @@ impl NullState {
                         )
                     });
 
-                // handle any remaining bits (after the intial 64)
+                // handle any remaining bits (after the initial 64)
                 let remainder_bits = bit_chunks.remainder_bits();
                 group_indices_remainder
                     .iter()
@@ -498,7 +498,7 @@ pub fn accumulate_indices<F>(
     }
 }
 
-/// Enures that `builder` contains a `BooleanBufferBuilder with at
+/// Ensures that `builder` contains a `BooleanBufferBuilder with at
 /// least `total_num_groups`.
 ///
 /// All new entries are initialized to `default_value`
