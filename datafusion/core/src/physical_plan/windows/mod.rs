@@ -258,7 +258,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        let nullable = false;
+        let nullable = true;
         Ok(Field::new(
             &self.name,
             self.data_type.as_ref().clone(),
