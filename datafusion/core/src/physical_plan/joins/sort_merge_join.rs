@@ -279,11 +279,16 @@ impl ExecutionPlan for SortMergeJoinExec {
         let right_oeq_properties = self.right.ordering_equivalence_properties();
         match self.join_type {
             JoinType::Inner => {
-                // Ordering equivalence left side is preserved. Since stream side is left
-                // Global ordering of the left table is preserved. Hence left table ordering
+                // Since stream side is left for this SortMergeJoin implementation.
+                // Global ordering of the left table is preserved at the output. Hence left table ordering
                 // equivalences are still valid.
                 new_properties.extend(left_oeq_properties.classes().to_vec());
                 if let Some(output_ordering) = &self.output_ordering {
+                    // We need to add ordering equivalence properties of right
+                    // table as append to the lexicographical ordering to the existing ordering.
+                    // For instance, if right table ordering equivalence contains b ASC
+                    // And output ordering of the SortMergeJoin is a ASC, We should add
+                    // ordering equivalence `b ASC` for right table as `a ASC, b ASC` for `SortMergeJoinExec`.
                     let updated_right_oeq_classes =
                         add_offset_to_ordering_equivalence_classes(
                             right_oeq_properties.classes(),
