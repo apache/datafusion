@@ -69,12 +69,14 @@ AS VALUES
 ;
 
 statement ok
-CREATE TABLE arrays_values_2
+CREATE TABLE arrays_values_v2
 AS VALUES
-  (make_array(NULL, 2, 3), make_array(4, 5, NULL)),
-  (NULL, make_array(7, NULL, 8)),
-  (make_array(9, NULL, 10), NULL),
-  (NULL, NULL)
+  (make_array(NULL, 2, 3), make_array(4, 5, NULL), 12, make_array([30, 40, 50])),
+  (NULL, make_array(7, NULL, 8), 13, make_array(make_array(NULL,NULL,60))),
+  (make_array(9, NULL, 10), NULL, 14, make_array(make_array(70,NULL,NULL))),
+  (make_array(NULL, 1), make_array(NULL, 21), NULL, NULL),
+  (make_array(11, 12), NULL, NULL, NULL),
+  (NULL, NULL, NULL, NULL)
 ;
 
 statement ok
@@ -125,13 +127,15 @@ NULL 44 5 @
 [51, 52, , 54, 55, 56, 57, 58, 59, 60] 55 NULL ^
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70] 66 7 NULL
 
-query ??
-select column1, column2 from arrays_values_2;
+query ??I?
+select column1, column2, column3, column4 from arrays_values_v2;
 ----
-[, 2, 3] [4, 5, ]
-NULL [7, , 8]
-[9, , 10] NULL
-NULL NULL
+[, 2, 3] [4, 5, ] 12 [[30, 40, 50]]
+NULL [7, , 8] 13 [[, , 60]]
+[9, , 10] NULL 14 [[70, , ]]
+[, 1] [, 21] NULL NULL
+[11, 12] NULL NULL NULL
+NULL NULL NULL NULL
 
 # arrays_values_without_nulls table
 query ?II
@@ -530,24 +534,59 @@ select array_concat(column1, make_array(make_array(1, 2), make_array(3, 4))), ar
 [[15, 16], [, 18], [1, 2], [3, 4]] [16.6, 17.7, 18.8, 1.1, 2.2, 3.3]
 
 # TODO: " is missing
-# query ?
-# select array_concat(column3, make_array('.', '.', '.')) from arrays;
-# ----
-# [L, o, r, e, m, ., ., .]
-# [i, p, , u, m, ., ., .]
-# [d, , l, o, r, ., ., .]
-# [s, i, t, ., ., .]
-# [a, m, e, t, ., ., .]
-# [,, ., ., .]
-# [., ., .]
-
 query ?
-select array_concat(column1, column2) from arrays_values_2;
+select array_concat(column3, make_array('.', '.', '.')) from arrays;
+----
+[L, o, r, e, m, ., ., .]
+[i, p, , u, m, ., ., .]
+[d, , l, o, r, ., ., .]
+[s, i, t, ., ., .]
+[a, m, e, t, ., ., .]
+[,, ., ., .]
+[., ., .]
+
+query ??I?
+select column1, column2, column3, column4 from arrays_values_v2;
+----
+[, 2, 3] [4, 5, ] 12 [[30, 40, 50]]
+NULL [7, , 8] 13 [[, , 60]]
+[9, , 10] NULL 14 [[70, , ]]
+[, 1] [, 21] NULL NULL
+[11, 12] NULL NULL NULL
+NULL NULL NULL NULL
+
+# array_concat column-wise #5 (1D + 1D)
+query ?
+select array_concat(column1, column2) from arrays_values_v2;
 ----
 [, 2, 3, 4, 5, ]
 [7, , 8]
 [9, , 10]
+[, 1, , 21]
+[11, 12]
 NULL
+
+# TODO: Concat columns with different dimensions fails
+# array_concat column-wise #6 (1D + 2D)
+# query error DataFusion error: Arrow error: Invalid argument error: column types must match schema types, expected List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) but found List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) at column index 0
+# select array_concat(make_array(column3), column4) from arrays_values_v2;
+
+# TODO: Null should be empty not 0
+# array_concat column-wise #6 (1D + Integers)
+query ?
+select array_concat(column2, column3) from arrays_values_v2;
+----
+[4, 5, , 12]
+[7, , 8, 13]
+[14]
+[, 21, 0]
+[0]
+[0]
+
+# TODO: Panic at 'range end index 3 out of range for slice of length 2'
+# array_concat column-wise #7 (2D + 1D)
+# query
+# select array_concat(column4, column1) from arrays_values_v2;
 
 ## array_position
 
