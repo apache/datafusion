@@ -16,20 +16,18 @@
 // under the License.
 
 //! Repartition optimizer that replaces `SortExec`s and their suitable `RepartitionExec` children with `SortPreservingRepartitionExec`s.
-use datafusion_common::tree_node::Transformed;
-
 use crate::error::Result;
-
+use crate::physical_optimizer::sort_enforcement::unbounded_output;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::ExecutionPlan;
 
 use super::utils::is_repartition;
 
+use datafusion_common::tree_node::Transformed;
 use datafusion_physical_expr::utils::ordering_satisfy;
-use itertools::enumerate;
 
-use crate::physical_optimizer::sort_enforcement::unbounded_output;
+use itertools::enumerate;
 use std::sync::Arc;
 
 /// Creates a `SortPreservingRepartitionExec` from given `RepartitionExec`
@@ -45,7 +43,7 @@ fn sort_preserving_repartition(
     ))
 }
 
-fn does_plan_maintains_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
+fn does_plan_maintain_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.maintains_input_order().iter().any(|flag| *flag)
 }
 
@@ -59,59 +57,60 @@ fn replace_sort_children(
     }
 
     let mut children = plan.children();
-    for (i, child) in enumerate(plan.children()) {
-        if !is_repartition(&child) && !does_plan_maintains_input_order(&child) {
+    for (idx, child) in enumerate(plan.children()) {
+        if !is_repartition(&child) && !does_plan_maintain_input_order(&child) {
             break;
         }
 
         if let Some(repartition) = child.as_any().downcast_ref::<RepartitionExec>() {
-            // Replace RepartitionExec with SortPreservingRepartitionExec if it doesn't preserve ordering
-            // and if its input is unbounded. Doing so may help with fixing pipeline
+            // Replace this RepartitionExec with a SortPreservingRepartitionExec
+            // if it doesn't preserve ordering and its input is unbounded. Doing
+            // so avoids breaking the pipeline.
             if !repartition.maintains_input_order()[0] && unbounded_output(&child) {
                 let spr = sort_preserving_repartition(repartition)?
                     .with_new_children(repartition.children())?;
-                // Change the current RepartitionExec with SortPreservingRepartitionExec and dive into its children
-                children[i] = replace_sort_children(&spr)?;
+                // Perform the replacement and recurse into this plan's children:
+                children[idx] = replace_sort_children(&spr)?;
                 continue;
             }
         }
 
-        children[i] = replace_sort_children(&child)?;
+        children[idx] = replace_sort_children(&child)?;
     }
 
     plan.clone().with_new_children(children)
 }
 
-/// ReplaceRepartitionExecs optimizer rule searches for `SortExec`s and their `RepartitionExec`
-/// children with multiple input partitioning (with proper ordering) so that it can replace the `RepartitionExec`s with
-/// `SortPreservingRepartitionExec`s and remove the additional `SortExec` from the physical plan.
-/// The rule only works for conditions that have a `SortExec` and at least one `RepartitionExec`
-/// with multiple input partitioning.
+/// The `replace_repartition_execs` optimizer subrule searches for `SortExec`s
+/// and their `RepartitionExec` children with multiple input partitioning having
+/// local (per-partition) ordering, so that it can replace the `RepartitionExec`
+/// with a `SortPreservingRepartitionExec` and remove the pipeline-breaking `SortExec`
+/// from the physical plan.
 ///
 /// The algorithm flow is simply like this:
-/// 1. Visit nodes of the physical plan top-down and look for a SortExec node (if not found do nothing)
-/// 2. If `SortExec` is found, iterate over its children recursively until the leaf node
-///      or check if anything breaks the ordering between,
-///      `RepartitionExec`s with multiple input partitions considered as they maintain input ordering
-///       because they're potentially changed with `SortPreservingRepartitionExec`s
+/// 1. Visit nodes of the physical plan top-down and look for `SortExec` nodes.
+/// 2. If a `SortExec` is found, iterate over its children recursively until a leaf
+///    node or check if anything breaks the ordering in between. `RepartitionExec`s
+///    with multiple input partitions are considered as if they maintain input ordering
+///    because they are potentially replacable with `SortPreservingRepartitionExec`s.
 /// 2_1. If the ordering is not being maintained from input, break the cycle of node visiting
-/// 3_1. Check if the child is a `RepartitionExec` with multiple input partitions
-/// 3_1_1. If conditions match, replace the `RepartitionExec` with `SortPreservingRepartitionExec`
-/// 3_1_2. If conditions do not match, keep the plan as is.
-/// 4. End the bottom-up transformation loop
-/// 5. Check if the `SortExec` plan is still necessary by comparing its inputs ordering and `SortExec` ordering
-/// 5_1. If ordering is the same, remove the `SortExec` from the plan
-/// 5_2. Otherwise keep the plan as is.
-/// 6. Continue to the top-down transformation
+/// 3_1. Check if the child is a `RepartitionExec` with multiple input partitions:
+/// 3_1_1. If conditions are met, replace the `RepartitionExec` with a `SortPreservingRepartitionExec`.
+/// 3_1_2. Otherwise, keep the plan as is.
+/// 4. End the bottom-up transformation loop.
+/// 5. Check if the `SortExec` is still necessary by comparing its input ordering with
+///    its output ordering.
+/// 5_1. If they are the same, remove the `SortExec` from the plan.
+/// 6. Continue the top-down transformation.
 pub fn replace_repartition_execs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let changed_plan = replace_sort_children(&plan)?;
-        // Since we got the `SortExec` here, it's guaranteed that it has only one child
+        // Since we have a `SortExec` here, it's guaranteed that it has a single child.
         let input = &changed_plan.children()[0];
-        // Check if any child is changed, if changed remove the `SortExec`
-        // If ordering is being satisfied with the child then it means `SortExec` is unnecessary
+        // Check if any child is changed, if so remove the `SortExec`. If the ordering
+        // is being satisfied with the child, then it means `SortExec` is unnecessary.
         if ordering_satisfy(
             input.output_ordering(),
             sort_exec.output_ordering(),
@@ -123,7 +122,7 @@ pub fn replace_repartition_execs(
             Ok(Transformed::No(plan))
         }
     } else {
-        // We don't have anything to do until we get to the `SortExec` parent
+        // We don't have anything to do until we get to the `SortExec` parent.
         Ok(Transformed::No(plan))
     }
 }
@@ -137,7 +136,6 @@ mod tests {
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use datafusion_common::tree_node::TreeNode;
 
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -145,13 +143,16 @@ mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, Partitioning};
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+
+    use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{JoinType, Operator};
     use datafusion_physical_expr::expressions::{self, col, Column};
     use datafusion_physical_expr::PhysicalSortExpr;
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     /// Runs the sort enforcement optimizer and asserts the plan
     /// against the original and expected plans

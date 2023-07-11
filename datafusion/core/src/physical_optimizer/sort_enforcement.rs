@@ -948,9 +948,9 @@ fn check_alignment(
     })
 }
 
-// Get unbounded_output information for the executor
+// Get output (un)boundedness information for the given `plan`.
 pub(crate) fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let res = if plan.children().is_empty() {
+    let result = if plan.children().is_empty() {
         plan.unbounded_output(&[])
     } else {
         let children_unbounded_output = plan
@@ -960,7 +960,7 @@ pub(crate) fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
             .collect::<Vec<_>>();
         plan.unbounded_output(&children_unbounded_output)
     };
-    res.unwrap_or(true)
+    result.unwrap_or(true)
 }
 
 #[cfg(test)]
