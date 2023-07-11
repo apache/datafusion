@@ -597,7 +597,7 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     }
 
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
-        ExprSchema::metadata(&self, col)
+        ExprSchema::metadata(self.as_ref(), col)
     }
 }
 
