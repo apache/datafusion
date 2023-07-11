@@ -28,9 +28,10 @@ use std::fmt::{Debug, Display};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 
-use crate::expressions::{BinaryExpr, Column};
+use crate::expressions::Column;
 use crate::intervals::cp_solver::PropagationResult;
 use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
+use crate::utils::collect_columns;
 use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -133,61 +134,59 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
 }
 
 pub fn analyze(
-    expr: Arc<dyn PhysicalExpr>,
+    expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
 ) -> Result<AnalysisContext> {
-    let mut target_boundaries = if let Some(boundaries) = context.boundaries {
-        boundaries
-    } else {
-        return Err(DataFusionError::Internal(
-            "No column exists at the input to filter".to_string(),
-        ));
-    };
+    let mut target_boundaries = context.boundaries.ok_or_else(|| {
+        DataFusionError::Internal("No column exists at the input to filter".to_string())
+    })?;
 
     let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
 
-    let columns: Vec<Arc<dyn PhysicalExpr>> = get_columns(expr.clone())
+    let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(expr)
         .into_iter()
         .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
         .collect();
 
-    let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
+    let target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
+        graph.gather_node_indices(columns.as_slice());
 
-    let mut target_indices_and_boundaries: Vec<(usize, Interval)> = Vec::new();
-    for (expr, i) in &target_expr_and_indices {
-        for bound in target_boundaries.clone() {
-            if let Some(expr_column) = expr.as_any().downcast_ref::<Column>() {
-                if bound.column.eq(expr_column) {
-                    target_indices_and_boundaries.push((*i, bound.interval.clone()))
-                }
-            }
-        }
-    }
+    let mut target_indices_and_boundaries: Vec<(usize, Interval)> =
+        target_expr_and_indices
+            .iter()
+            .filter_map(|(expr, i)| {
+                target_boundaries.iter().find_map(|bound| {
+                    expr.as_any()
+                        .downcast_ref::<Column>()
+                        .filter(|expr_column| bound.column.eq(*expr_column))
+                        .map(|_| (*i, bound.interval.clone()))
+                })
+            })
+            .collect();
 
     match graph.update_ranges(&mut target_indices_and_boundaries)? {
         PropagationResult::Success => {
             let initial_boundaries = target_boundaries.clone();
-            for (expr, i) in &target_expr_and_indices {
-                for bound in target_boundaries.iter_mut() {
-                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                        if bound.column.eq(column) {
-                            bound.update_interval(graph.get_interval(*i));
-                        }
-                    } else {
-                        break;
-                    }
+            target_expr_and_indices.iter().for_each(|(expr, i)| {
+                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    if let Some(bound) = target_boundaries
+                        .iter_mut()
+                        .find(|bound| bound.column.eq(column))
+                    {
+                        bound.update_interval(graph.get_interval(*i))
+                    };
                 }
-            }
-            let root = graph.gather_node_indices(&[expr]);
-            let root_expr_and_index = match root.first() {
-                Some(root) => root,
-                None => {
-                    return Err(DataFusionError::Internal(
+            });
+            let root_index = graph
+                .gather_node_indices(&[expr.clone()])
+                .first()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
                         "Error in constructing predicate graph".to_string(),
-                    ))
-                }
-            };
-            let final_result = graph.get_interval(root_expr_and_index.1);
+                    )
+                })?
+                .1;
+            let final_result = graph.get_interval(root_index);
 
             let selectivity = calculate_selectivity(
                 &final_result.lower.value,
@@ -232,20 +231,14 @@ fn calculate_selectivity(
             // Since the intervals are assumed as uniform and we do not
             // have the sort information, we need to multiply the selectivities
             // of multiple columns to get overall selectivity.
-            let mut max_selectivity = 1.0;
-            for (
-                i,
-                ExprBoundaries {
-                    column: _,
-                    interval,
-                    distinct_count: _,
+            target_boundaries.iter().enumerate().try_fold(
+                1.0,
+                |acc, (i, ExprBoundaries { interval, .. })| {
+                    let temp =
+                        cardinality_ratio(&initial_boundaries[i].interval, interval)?;
+                    Ok(acc * temp)
                 },
-            ) in target_boundaries.iter().enumerate()
-            {
-                let temp = cardinality_ratio(&initial_boundaries[i].interval, interval)?;
-                max_selectivity *= temp;
-            }
-            Ok(max_selectivity)
+            )
         }
     }
 }
@@ -258,24 +251,6 @@ impl Hash for dyn PhysicalExpr {
 
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
-
-pub fn get_columns(expr: Arc<dyn PhysicalExpr>) -> Vec<Column> {
-    let mut columns = vec![];
-    let mut stack = vec![expr];
-
-    while let Some(expr) = stack.pop() {
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            stack.push(binary.left().clone());
-            stack.push(binary.right().clone());
-        } else if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-            if !columns.contains(col) {
-                columns.push(col.clone());
-            }
-        }
-    }
-
-    columns
-}
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.

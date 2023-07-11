@@ -42,13 +42,13 @@ use datafusion_physical_expr::intervals::{
     interval_with_closed_bounds, is_operator_supported,
 };
 use datafusion_physical_expr::{
-    analyze, get_columns, split_conjunction, AnalysisContext, ExprBoundaries,
-    PhysicalExpr,
+    analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
 };
 
 use log::trace;
 
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::utils::collect_columns;
 use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
@@ -185,10 +185,10 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
-        let predicate = self.predicate().clone();
-        let columns = get_columns(predicate.clone());
+        let predicate = self.predicate();
 
         if let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() {
+            let columns = collect_columns(predicate).into_iter().collect::<Vec<_>>();
             if !is_operator_supported(binary.op()) || columns.is_empty() {
                 return Statistics::default();
             }
@@ -208,7 +208,7 @@ impl ExecutionPlan for FilterExec {
             None => return Statistics::default(),
         };
 
-        let analysis_ctx = match analyze(predicate.clone(), starter_ctx) {
+        let analysis_ctx = match analyze(predicate, starter_ctx) {
             Ok(ctx) => ctx,
             Err(_) => return Statistics::default(),
         };
@@ -227,9 +227,9 @@ impl ExecutionPlan for FilterExec {
             for (
                 i,
                 ExprBoundaries {
-                    column: _,
                     interval,
                     distinct_count,
+                    ..
                 },
             ) in new_boundaries.into_iter().enumerate()
             {

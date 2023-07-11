@@ -54,7 +54,7 @@ pub use equivalence::{
     OrderingEquivalentClass,
 };
 pub use physical_expr::{
-    analyze, get_columns, AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef,
+    analyze, AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef,
 };
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
