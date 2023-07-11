@@ -47,8 +47,21 @@ fn does_plan_maintain_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.maintains_input_order().iter().any(|flag| *flag)
 }
 
-/// Check the children nodes between two `SortExec`s if they all maintain the input ordering
-/// if all of the related children maintain, then it is a possibility to replace `RepartitionExec`s
+/// Check the children nodes of a `SortExec` until ordering is not preserved (such as until another `SortExec` or
+/// `CoalescePartitionsExec` which doesn't maintain ordering). Until iteration is stopped, replace `RepartitionExec`s
+/// that do not maintain ordering (e.g `RepartitionExec`s where input partition count is larger than 1)
+/// with `SortPreservingRepartitionExec`s. Doing so may turn `SortExec` at the top obsolete. This rule turns plan below
+/// "FilterExec: c@2 > 3",
+/// "  RepartitionExec: partitioning=Hash(\[b@0], 16), input_partitions=16",
+/// "    RepartitionExec: partitioning=Hash(\[a@0], 16), input_partitions=1",
+/// "      MemoryExec: partitions=1, partition_sizes=\[(<depends_on_batch_size>)], output_ordering: \[PhysicalSortExpr { expr: Column { name: \"a\", index: 0 }, options: SortOptions { descending: false, nulls_first: false } }]",
+/// to
+/// "FilterExec: c@2 > 3",
+/// "  SortPreservingRepartitionExec: partitioning=Hash(\[b@0], 16), input_partitions=16",
+/// "    RepartitionExec: partitioning=Hash(\[a@0], 16), input_partitions=1",
+/// "      MemoryExec: partitions=1, partition_sizes=\[<depends_on_batch_size>], output_ordering: \[PhysicalSortExpr { expr: Column { name: \"a\", index: 0 }, options: SortOptions { descending: false, nulls_first: false } }]",
+/// in the new version output ordering of `FilterExec` is `a ASC`. This ordering will potentially remove
+/// `SortExec` at the top of `FilterExec`. If this is not helpful with removing a `SortExec` old version is used.
 fn replace_sort_children(
     plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -81,7 +94,7 @@ fn replace_sort_children(
     plan.clone().with_new_children(children)
 }
 
-/// The `replace_repartition_execs` optimizer subrule searches for `SortExec`s
+/// The `replace_repartition_execs` optimizer sub-rule searches for `SortExec`s
 /// and their `RepartitionExec` children with multiple input partitioning having
 /// local (per-partition) ordering, so that it can replace the `RepartitionExec`
 /// with a `SortPreservingRepartitionExec` and remove the pipeline-breaking `SortExec`
@@ -89,19 +102,23 @@ fn replace_sort_children(
 ///
 /// The algorithm flow is simply like this:
 /// 1. Visit nodes of the physical plan top-down and look for `SortExec` nodes.
-/// 2. If a `SortExec` is found, iterate over its children recursively until a leaf
-///    node or check if anything breaks the ordering in between. `RepartitionExec`s
+/// 2. If a `SortExec` is found, iterate over its children recursively until an executor
+///    that do not maintain ordering is encountered (or until a leaf node). `RepartitionExec`s
 ///    with multiple input partitions are considered as if they maintain input ordering
-///    because they are potentially replacable with `SortPreservingRepartitionExec`s.
-/// 2_1. If the ordering is not being maintained from input, break the cycle of node visiting
-/// 3_1. Check if the child is a `RepartitionExec` with multiple input partitions:
-/// 3_1_1. If conditions are met, replace the `RepartitionExec` with a `SortPreservingRepartitionExec`.
-/// 3_1_2. Otherwise, keep the plan as is.
-/// 4. End the bottom-up transformation loop.
-/// 5. Check if the `SortExec` is still necessary by comparing its input ordering with
-///    its output ordering.
-/// 5_1. If they are the same, remove the `SortExec` from the plan.
-/// 6. Continue the top-down transformation.
+///    because they are potentially replaceable with `SortPreservingRepartitionExec`s which p
+///    maintains ordering.
+/// 3_1. Replace the `RepartitionExec`s with multiple input partitions (which doesn't maintains ordering)
+///    with a `SortPreservingRepartitionExec`.
+/// 3_2. Otherwise, keep the plan as is.
+/// 4. In
+/// 5. Check if the `SortExec` is still necessary in the updated plan by comparing
+///    `SortExec`s input ordering with `SortExec`s output ordering (replacing `RepartitionExec`s with
+///    `SortPreservingRepartitionExec`s enabled us to preserve lost ordering during `RepartitionExec`s,
+///     this potentially makes `SortExec` unnecessary).
+/// 5_1. If `SortExec` at the top is unnecessary, remove `SortExec` and use updated plan,
+///      otherwise use old plan (replacing `RepartitionExec`s with `SortPreservingRepartitionExec`s is not
+///      helpful.)
+/// 6. Continue the top-down iteration until another `SortExec` is seen, or iteration completes.
 pub fn replace_repartition_execs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
