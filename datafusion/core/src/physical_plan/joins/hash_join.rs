@@ -610,26 +610,7 @@ pub fn update_hash(
 
     // insert hashes to key of the hashmap
     for (row, hash_value) in hash_values.iter().enumerate() {
-        let item = hash_map
-            .map
-            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-        if let Some((_, index)) = item {
-            // Already exists: add index to next array
-            let prev_index = *index;
-            // Store new value inside hashmap
-            *index = (row + offset + 1) as u64;
-            // Update chained Vec at row + offset with previous value
-            hash_map.next[row + offset] = prev_index;
-        } else {
-            hash_map.map.insert(
-                *hash_value,
-                // store the value + 1 as 0 value reserved for end of list
-                (*hash_value, (row + offset + 1) as u64),
-                |(hash, _)| *hash,
-            );
-            // chained list at (row + offset) is already initialized with 0
-            // meaning end of list
-        }
+        hash_map.insert(*hash_value, row + offset);
     }
     Ok(())
 }
@@ -740,11 +721,9 @@ pub fn build_equal_condition_join_indices(
         // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
-        if let Some((_, index)) = build_hashmap
-            .map
-            .get(*hash_value, |(hash, _)| *hash_value == *hash)
-        {
-            let mut i = *index - 1;
+        let index = build_hashmap.get_first_index(*hash_value);
+        if index != 0 {
+            let mut i = index - 1;
             loop {
                 build_indices.append(i);
                 probe_indices.append(row as u32);
@@ -1348,7 +1327,6 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::Literal;
-    use hashbrown::raw::RawTable;
 
     use crate::execution::context::SessionConfig;
     use crate::physical_expr::expressions::BinaryExpr;
@@ -2689,7 +2667,6 @@ mod tests {
 
     #[test]
     fn join_with_hash_collision() -> Result<()> {
-        let mut hashmap_left = RawTable::with_capacity(2);
         let left = build_table_i32(
             ("a", &vec![10, 20]),
             ("x", &vec![100, 200]),
@@ -2701,11 +2678,12 @@ mod tests {
         let hashes =
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
-        // Create hash collisions (same hashes)
-        hashmap_left.insert(hashes[0], (hashes[0], 1), |(h, _)| *h);
-        hashmap_left.insert(hashes[1], (hashes[1], 1), |(h, _)| *h);
+        let mut join_hash_map = JoinHashMap::with_bucket_capacity(2, left.num_rows());
+        for (row, hash_value) in hashes.iter().enumerate() {
+            join_hash_map.insert(*hash_value, row);
+        }
 
-        let next = vec![2, 0];
+        let left_data = (join_hash_map, left);
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
@@ -2713,13 +2691,6 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
-        let left_data = (
-            JoinHashMap {
-                map: hashmap_left,
-                next,
-            },
-            left,
-        );
         let (l, r) = build_equal_condition_join_indices(
             &left_data.0,
             &left_data.1,
