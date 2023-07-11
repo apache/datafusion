@@ -6049,6 +6049,9 @@ impl serde::Serialize for Field {
         if !self.children.is_empty() {
             len += 1;
         }
+        if !self.metadata.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.Field", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -6061,6 +6064,9 @@ impl serde::Serialize for Field {
         }
         if !self.children.is_empty() {
             struct_ser.serialize_field("children", &self.children)?;
+        }
+        if !self.metadata.is_empty() {
+            struct_ser.serialize_field("metadata", &self.metadata)?;
         }
         struct_ser.end()
     }
@@ -6077,6 +6083,7 @@ impl<'de> serde::Deserialize<'de> for Field {
             "arrowType",
             "nullable",
             "children",
+            "metadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6085,6 +6092,7 @@ impl<'de> serde::Deserialize<'de> for Field {
             ArrowType,
             Nullable,
             Children,
+            Metadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6110,6 +6118,7 @@ impl<'de> serde::Deserialize<'de> for Field {
                             "arrowType" | "arrow_type" => Ok(GeneratedField::ArrowType),
                             "nullable" => Ok(GeneratedField::Nullable),
                             "children" => Ok(GeneratedField::Children),
+                            "metadata" => Ok(GeneratedField::Metadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6133,6 +6142,7 @@ impl<'de> serde::Deserialize<'de> for Field {
                 let mut arrow_type__ = None;
                 let mut nullable__ = None;
                 let mut children__ = None;
+                let mut metadata__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -6159,6 +6169,14 @@ impl<'de> serde::Deserialize<'de> for Field {
                             }
                             children__ = Some(map.next_value()?);
                         }
+                        GeneratedField::Metadata => {
+                            if metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadata"));
+                            }
+                            metadata__ = Some(
+                                map.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(Field {
@@ -6166,6 +6184,7 @@ impl<'de> serde::Deserialize<'de> for Field {
                     arrow_type: arrow_type__,
                     nullable: nullable__.unwrap_or_default(),
                     children: children__.unwrap_or_default(),
+                    metadata: metadata__.unwrap_or_default(),
                 })
             }
         }
@@ -17884,6 +17903,8 @@ impl serde::Serialize for ScalarFunction {
             Self::Cardinality => "Cardinality",
             Self::TrimArray => "TrimArray",
             Self::ArrayContains => "ArrayContains",
+            Self::Encode => "Encode",
+            Self::Decode => "Decode",
         };
         serializer.serialize_str(variant)
     }
@@ -17996,6 +18017,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cardinality",
             "TrimArray",
             "ArrayContains",
+            "Encode",
+            "Decode",
         ];
 
         struct GeneratedVisitor;
@@ -18139,6 +18162,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cardinality" => Ok(ScalarFunction::Cardinality),
                     "TrimArray" => Ok(ScalarFunction::TrimArray),
                     "ArrayContains" => Ok(ScalarFunction::ArrayContains),
+                    "Encode" => Ok(ScalarFunction::Encode),
+                    "Decode" => Ok(ScalarFunction::Decode),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -19487,9 +19512,15 @@ impl serde::Serialize for Schema {
         if !self.columns.is_empty() {
             len += 1;
         }
+        if !self.metadata.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.Schema", len)?;
         if !self.columns.is_empty() {
             struct_ser.serialize_field("columns", &self.columns)?;
+        }
+        if !self.metadata.is_empty() {
+            struct_ser.serialize_field("metadata", &self.metadata)?;
         }
         struct_ser.end()
     }
@@ -19502,11 +19533,13 @@ impl<'de> serde::Deserialize<'de> for Schema {
     {
         const FIELDS: &[&str] = &[
             "columns",
+            "metadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Columns,
+            Metadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19529,6 +19562,7 @@ impl<'de> serde::Deserialize<'de> for Schema {
                     {
                         match value {
                             "columns" => Ok(GeneratedField::Columns),
+                            "metadata" => Ok(GeneratedField::Metadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19549,6 +19583,7 @@ impl<'de> serde::Deserialize<'de> for Schema {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut columns__ = None;
+                let mut metadata__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Columns => {
@@ -19557,10 +19592,19 @@ impl<'de> serde::Deserialize<'de> for Schema {
                             }
                             columns__ = Some(map.next_value()?);
                         }
+                        GeneratedField::Metadata => {
+                            if metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadata"));
+                            }
+                            metadata__ = Some(
+                                map.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(Schema {
                     columns: columns__.unwrap_or_default(),
+                    metadata: metadata__.unwrap_or_default(),
                 })
             }
         }

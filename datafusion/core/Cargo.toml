@@ -38,10 +38,11 @@ path = "src/lib.rs"
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
-default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "compression"]
+default = ["crypto_expressions", "encoding__expressions", "regex_expressions", "unicode_expressions", "compression"]
 # Enables support for non-scalar, binary operations on dictionaries
 # Note: this results in significant additional codegen
 dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions", "datafusion-optimizer/dictionary_expressions"]
+encoding__expressions = ["datafusion-physical-expr/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 pyarrow = ["datafusion-common/pyarrow"]
@@ -97,7 +98,7 @@ zstd = { version = "0.12", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = "0.1.53"
-bigdecimal = "0.3.0"
+bigdecimal = "0.4.0"
 criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
 ctor = "0.2.0"
@@ -106,7 +107,7 @@ env_logger = "0.10"
 half = "2.2.1"
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
-rstest = "0.17.0"
+rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 sqllogictest = "0.14.0"
 test-utils = { path = "../../test-utils" }

@@ -43,7 +43,7 @@ use self::distributor_channels::{DistributionReceiver, DistributionSender};
 use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 
 use crate::physical_plan::common::transpose;
 use crate::physical_plan::metrics::BaselineMetrics;
@@ -320,6 +320,26 @@ impl RepartitionExec {
     }
 }
 
+impl DisplayAs for RepartitionExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "{}: partitioning={}, input_partitions={}",
+                    self.name(),
+                    self.partitioning,
+                    self.input.output_partitioning().partition_count()
+                )
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for RepartitionExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -515,24 +535,6 @@ impl ExecutionPlan for RepartitionExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "{}: partitioning={}, input_partitions={}",
-                    self.name(),
-                    self.partitioning,
-                    self.input.output_partitioning().partition_count()
-                )
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {
