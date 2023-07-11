@@ -29,17 +29,18 @@ CREATE TABLE values(
   b INT,
   c INT,
   d FLOAT,
-  e VARCHAR
+  e VARCHAR,
+  f VARCHAR
 ) AS VALUES
-  (1, 1, 2, 1.1, 'Lorem'),
-  (2, 3, 4, 2.2, 'ipsum'),
-  (3, 5, 6, 3.3, 'dolor'),
-  (4, 7, 8, 4.4, 'sit'),
-  (NULL, 9, 10, 5.5, 'amet'),
-  (5, NULL, 12, 6.6, ','),
-  (6, 11, NULL, 7.7, 'consectetur'),
-  (7, 13, 14, NULL, 'adipiscing'),
-  (8, 15, 16, 8.8, NULL)
+  (1,    1,    2,    1.1,  'Lorem',       'A'),
+  (2,    3,    4,    2.2,  'ipsum',       ''),
+  (3,    5,    6,    3.3,  'dolor',       'BB'),
+  (4,    7,    8,    4.4,  'sit',          NULL),
+  (NULL, 9,    10,   5.5,  'amet',        'CCC'),
+  (5,    NULL, 12,   6.6,  ',',           'DD'),
+  (6,    11,   NULL, 7.7,  'consectetur', 'E'),
+  (7,    13,   14,   NULL, 'adipiscing',  'F'),
+  (8,    15,   16,   8.8,   NULL,          '')
 ;
 
 statement ok
@@ -189,21 +190,35 @@ select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NUL
 ----
 [] [] [[], []]
 
-# make_array with columns #1
-query ????
-select make_array(a), make_array(b, c), make_array(d), make_array(e) from values;
+# make_array with 1 columns
+query ???
+select make_array(a), make_array(d), make_array(e) from values;
 ----
-[1] [1, 2] [1.1] [Lorem]
-[2] [3, 4] [2.2] [ipsum]
-[3] [5, 6] [3.3] [dolor]
-[4] [7, 8] [4.4] [sit]
-[0] [9, 10] [5.5] [amet]
-[5] [0, 12] [6.6] [,]
-[6] [11, 0] [7.7] [consectetur]
-[7] [13, 14] [0.0] [adipiscing]
-[8] [15, 16] [8.8] []
+[1] [1.1] [Lorem]
+[2] [2.2] [ipsum]
+[3] [3.3] [dolor]
+[4] [4.4] [sit]
+[] [5.5] [amet]
+[5] [6.6] [,]
+[6] [7.7] [consectetur]
+[7] [] [adipiscing]
+[8] [8.8] []
 
-# make_array with columns #2
+# make_array with 2 columns #1
+query ??
+select make_array(b, c), make_array(e, f) from values;
+----
+[1, 2] [Lorem, A]
+[3, 4] [ipsum, ]
+[5, 6] [dolor, BB]
+[7, 8] [sit, ]
+[9, 10] [amet, CCC]
+[, 12] [,, DD]
+[11, ] [consectetur, E]
+[13, 14] [adipiscing, F]
+[15, 16] [, ]
+
+# make_array with 4 columns
 query ?
 select make_array(a, b, c, d) from values;
 ----
@@ -211,11 +226,30 @@ select make_array(a, b, c, d) from values;
 [2.0, 3.0, 4.0, 2.2]
 [3.0, 5.0, 6.0, 3.3]
 [4.0, 7.0, 8.0, 4.4]
-[0.0, 9.0, 10.0, 5.5]
-[5.0, 0.0, 12.0, 6.6]
-[6.0, 11.0, 0.0, 7.7]
-[7.0, 13.0, 14.0, 0.0]
+[, 9.0, 10.0, 5.5]
+[5.0, , 12.0, 6.6]
+[6.0, 11.0, , 7.7]
+[7.0, 13.0, 14.0, ]
 [8.0, 15.0, 16.0, 8.8]
+
+# make_array null handling
+query ?B?BB
+select
+  make_array(a), make_array(a)[1] IS NULL,
+  make_array(e, f), make_array(e, f)[1] IS NULL, make_array(e, f)[2] IS NULL
+from values;
+----
+[1] false [Lorem, A] false false
+[2] false [ipsum, ] false false
+[3] false [dolor, BB] false false
+[4] false [sit, ] false true
+[] true [amet, CCC] false false
+[5] false [,, DD] false false
+[6] false [consectetur, E] false false
+[7] false [adipiscing, F] false false
+[8] false [, ] true false
+
+
 
 ## array_append
 
