@@ -566,25 +566,20 @@ async fn collect_left_input(
     reservation.try_grow(estimated_hastable_size)?;
     metrics.build_mem_used.add(estimated_hastable_size);
 
-    let mut hashmap = JoinHashMap::with_capacity(num_rows);
-    let mut hashes_buffer = Vec::new();
-    let mut offset = 0;
-    for batch in batches.iter() {
-        hashes_buffer.clear();
-        hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash(
-            &on_left,
-            batch,
-            &mut hashmap,
-            offset,
-            &random_state,
-            &mut hashes_buffer,
-        )?;
-        offset += batch.num_rows();
-    }
     // Merge all batches into a single batch, so we
     // can directly index into the arrays
     let single_batch = concat_batches(&schema, &batches, num_rows)?;
+
+    let mut hashmap = JoinHashMap::with_capacity(num_rows);
+    let mut hashes_buffer = vec![0; num_rows];
+    update_hash(
+        &on_left,
+        &single_batch,
+        &mut hashmap,
+        0,
+        &random_state,
+        &mut hashes_buffer,
+    )?;
 
     Ok((hashmap, single_batch, reservation))
 }
