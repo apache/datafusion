@@ -414,6 +414,17 @@ where
     Ok(RecordBatch::try_new(schema.clone(), arrays.to_vec())?)
 }
 
+/// Unnest the given list array. Given the array:
+///
+/// ```ignore
+/// [1], null, [2, 3, 4], null, [5, 6]
+/// ```
+///
+/// returns:
+///
+/// ```ignore
+/// 1, null, 2, 3, 4, null, 5, 6
+/// ```
 fn unnest_array<T>(list_array: &T) -> Result<Arc<dyn Array + 'static>>
 where
     T: ArrayAccessor<Item = ArrayRef>,
@@ -424,7 +435,7 @@ where
         }
         dt => {
             return Err(DataFusionError::Execution(format!(
-                "Cannot flatten array of type {dt}"
+                "Cannot unnest array of type {dt}"
             )))
         }
     };
