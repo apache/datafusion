@@ -357,6 +357,37 @@ where
     builder.finish()
 }
 
+/// Create the final batch given the unnested column array and a `indices` array
+/// that is used by the take kernel to copy values.
+///
+/// For example if we have the following `RecordBatch`:
+///
+/// ```ignore
+/// c1: [1], null, [2, 3, 4], null, [5, 6]
+/// c2: 'a', 'b',  'c', null, 'd'
+/// ```
+///
+/// then the `unnested_array` contains the unnest column that will replace `c1` in
+/// the final batch:
+///
+/// ```ignore
+/// c1: 1, null, 2, 3, 4, null, 5, 6
+/// ```
+///
+/// And the `indices` array contains the indices that are used by `take` kernel to
+/// repeat the values in `c2`:
+///
+/// ```ignore
+/// 0, 1, 2, 2, 2, 3, 4, 4
+/// ```
+///
+/// so that the final batch will look like:
+///
+/// ```ignore
+/// c1: 1, null, 2, 3, 4, null, 5, 6
+/// c2: 'a', 'b', 'c', 'c', 'c', null, 'd', 'd'
+/// ```
+///
 fn batch_from_indices<T>(
     batch: &RecordBatch,
     schema: &SchemaRef,
