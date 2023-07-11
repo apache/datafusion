@@ -552,6 +552,8 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
         .collect();
 
     aligned_args
+}
+
 macro_rules! concat_internal {
     ($args:expr, $DataType:ident, $ArrayType:ident) => {{
         let list_arrays =
@@ -673,6 +675,8 @@ fn concat_(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn old_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let args = align_array_dimensions(args.to_vec())?;
+
     let list_arrays =
         downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
     let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
@@ -714,81 +718,67 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::List(field) => match field.data_type() {
             DataType::Null => array_concat(&args[1..]),
             _ => {
-                let args = align_array_dimensions(args.to_vec())?;
+                old_concat(args)
 
-                let list_arrays = downcast_vec!(args, ListArray)
-                    .collect::<Result<Vec<&ListArray>>>()?;
+                // DataType::List(_) => {
+                //     old_concat(args)
+                // }
+                // data_type => {
+                //     // println!("data_type: {:?}", data_type);
+                //     // println!("args: {:?}", args);
+                //     // concat_(args)
+                //     // old_concat(args)
 
-                let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
+                //     match data_type {
+                //         DataType::Int64 => concat_internal!(args, Int64, Int64Array),
+                //         DataType::Int32 => concat_internal!(args, Int32, Int32Array),
+                //         DataType::Int16 => concat_internal!(args, Int16, Int16Array),
+                //         DataType::Int8 => concat_internal!(args, Int8, Int8Array),
+                //         DataType::UInt64 => concat_internal!(args, UInt64, UInt64Array),
+                //         DataType::UInt32 => concat_internal!(args, UInt32, UInt32Array),
+                //         DataType::UInt16 => concat_internal!(args, UInt16, UInt16Array),
+                //         DataType::UInt8 => concat_internal!(args, UInt8, UInt8Array),
+                //         DataType::Float64 => concat_internal!(args, Float64, Float64Array),
+                //         DataType::Float32 => concat_internal!(args, Float32, Float32Array),
+                //         DataType::Boolean => concat_internal!(args, Boolean, BooleanArray),
+                //         DataType::Utf8 => concat_internal!(args, Utf8, StringArray),
+                //         DataType::LargeUtf8 => {
+                //             concat_internal!(args, LargeUtf8, LargeStringArray)
+                //         }
+                //         data_type => Err(DataFusionError::NotImplemented(format!(
+                //             "Array_concat is not implemented for type '{:?}'.",
+                //             data_type
+                //         ))),
+                //     }
+                // DataType::List(_) => old_concat(args),
+                // data_type => {
+                //     // println!("data_type: {:?}", data_type);
+                //     // println!("args: {:?}", args);
+                //     // concat_(args)
+                //     old_concat(args)
 
-                let capacity =
-                    Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-                let array_data: Vec<_> =
-                    list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-
-                let array_data = array_data.iter().collect();
-
-                let mut mutable =
-                    MutableArrayData::with_capacities(array_data, false, capacity);
-            // DataType::List(_) => {
-            //     old_concat(args)
-            // }
-            // data_type => {
-            //     // println!("data_type: {:?}", data_type);
-            //     // println!("args: {:?}", args);
-            //     // concat_(args)
-            //     // old_concat(args)
-
-            //     match data_type {
-            //         DataType::Int64 => concat_internal!(args, Int64, Int64Array),
-            //         DataType::Int32 => concat_internal!(args, Int32, Int32Array),
-            //         DataType::Int16 => concat_internal!(args, Int16, Int16Array),
-            //         DataType::Int8 => concat_internal!(args, Int8, Int8Array),
-            //         DataType::UInt64 => concat_internal!(args, UInt64, UInt64Array),
-            //         DataType::UInt32 => concat_internal!(args, UInt32, UInt32Array),
-            //         DataType::UInt16 => concat_internal!(args, UInt16, UInt16Array),
-            //         DataType::UInt8 => concat_internal!(args, UInt8, UInt8Array),
-            //         DataType::Float64 => concat_internal!(args, Float64, Float64Array),
-            //         DataType::Float32 => concat_internal!(args, Float32, Float32Array),
-            //         DataType::Boolean => concat_internal!(args, Boolean, BooleanArray),
-            //         DataType::Utf8 => concat_internal!(args, Utf8, StringArray),
-            //         DataType::LargeUtf8 => {
-            //             concat_internal!(args, LargeUtf8, LargeStringArray)
-            //         }
-            //         data_type => Err(DataFusionError::NotImplemented(format!(
-            //             "Array_concat is not implemented for type '{:?}'.",
-            //             data_type
-            //         ))),
-            //     }
-            // DataType::List(_) => old_concat(args),
-            // data_type => {
-            //     // println!("data_type: {:?}", data_type);
-            //     // println!("args: {:?}", args);
-            //     // concat_(args)
-            //     old_concat(args)
-
-            //     // match data_type {
-            //     //     DataType::Int64 => concat_internal!(args, Int64, Int64Array),
-            //     //     DataType::Int32 => concat_internal!(args, Int32, Int32Array),
-            //     //     DataType::Int16 => concat_internal!(args, Int16, Int16Array),
-            //     //     DataType::Int8 => concat_internal!(args, Int8, Int8Array),
-            //     //     DataType::UInt64 => concat_internal!(args, UInt64, UInt64Array),
-            //     //     DataType::UInt32 => concat_internal!(args, UInt32, UInt32Array),
-            //     //     DataType::UInt16 => concat_internal!(args, UInt16, UInt16Array),
-            //     //     DataType::UInt8 => concat_internal!(args, UInt8, UInt8Array),
-            //     //     DataType::Float64 => concat_internal!(args, Float64, Float64Array),
-            //     //     DataType::Float32 => concat_internal!(args, Float32, Float32Array),
-            //     //     DataType::Boolean => concat_internal!(args, Boolean, BooleanArray),
-            //     //     DataType::Utf8 => concat_internal!(args, Utf8, StringArray),
-            //     //     DataType::LargeUtf8 => {
-            //     //         concat_internal!(args, LargeUtf8, LargeStringArray)
-            //     //     }
-            //     //     data_type => Err(DataFusionError::NotImplemented(format!(
-            //     //         "Array_concat is not implemented for type '{:?}'.",
-            //     //         data_type
-            //     //     ))),
-            //     // }
-            // }
+                //     // match data_type {
+                //     //     DataType::Int64 => concat_internal!(args, Int64, Int64Array),
+                //     //     DataType::Int32 => concat_internal!(args, Int32, Int32Array),
+                //     //     DataType::Int16 => concat_internal!(args, Int16, Int16Array),
+                //     //     DataType::Int8 => concat_internal!(args, Int8, Int8Array),
+                //     //     DataType::UInt64 => concat_internal!(args, UInt64, UInt64Array),
+                //     //     DataType::UInt32 => concat_internal!(args, UInt32, UInt32Array),
+                //     //     DataType::UInt16 => concat_internal!(args, UInt16, UInt16Array),
+                //     //     DataType::UInt8 => concat_internal!(args, UInt8, UInt8Array),
+                //     //     DataType::Float64 => concat_internal!(args, Float64, Float64Array),
+                //     //     DataType::Float32 => concat_internal!(args, Float32, Float32Array),
+                //     //     DataType::Boolean => concat_internal!(args, Boolean, BooleanArray),
+                //     //     DataType::Utf8 => concat_internal!(args, Utf8, StringArray),
+                //     //     DataType::LargeUtf8 => {
+                //     //         concat_internal!(args, LargeUtf8, LargeStringArray)
+                //     //     }
+                //     //     data_type => Err(DataFusionError::NotImplemented(format!(
+                //     //         "Array_concat is not implemented for type '{:?}'.",
+                //     //         data_type
+                //     //     ))),
+                //     // }
+            }
         },
         data_type => Err(DataFusionError::NotImplemented(format!(
             "Array is not type '{data_type:?}'."
