@@ -26,6 +26,7 @@ use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// trait to allow expr to typable with respect to a schema
@@ -35,6 +36,9 @@ pub trait ExprSchemable {
 
     /// given a schema, return the nullability of the expr
     fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool>;
+
+    /// given a schema, return the expr's optional metadata
+    fn metadata<S: ExprSchema>(&self, schema: &S) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
     fn to_field(&self, input_schema: &DFSchema) -> Result<DFField>;
@@ -275,6 +279,14 @@ impl ExprSchemable for Expr {
         }
     }
 
+    fn metadata<S: ExprSchema>(&self, schema: &S) -> Result<HashMap<String, String>> {
+        match self {
+            Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
+            Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
+            _ => Ok(HashMap::new()),
+        }
+    }
+
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
@@ -286,12 +298,14 @@ impl ExprSchemable for Expr {
                 &c.name,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
-            )),
+            )
+            .with_metadata(self.metadata(input_schema)?)),
             _ => Ok(DFField::new_unqualified(
                 &self.display_name()?,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
-            )),
+            )
+            .with_metadata(self.metadata(input_schema)?)),
         }
     }
 
