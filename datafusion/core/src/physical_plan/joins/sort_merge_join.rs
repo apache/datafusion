@@ -35,14 +35,16 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 use futures::{Stream, StreamExt};
 
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
-    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
+    add_offset_to_expr, add_offset_to_lex_ordering,
+    add_offset_to_ordering_equivalence_classes, build_join_schema, check_join_is_valid,
+    combine_join_equivalence_properties, estimate_join_statistics,
+    partitioned_join_output_partitioning, JoinOn,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
@@ -148,29 +150,7 @@ impl SortMergeJoinExec {
                 right
                     .output_ordering()
                     .map(|sort_exprs| {
-                        let new_sort_exprs: Result<Vec<PhysicalSortExpr>> = sort_exprs
-                            .iter()
-                            .map(|e| {
-                                let new_expr =
-                                    e.expr.clone().transform_down(&|e| match e
-                                        .as_any()
-                                        .downcast_ref::<Column>(
-                                    ) {
-                                        Some(col) => {
-                                            Ok(Transformed::Yes(Arc::new(Column::new(
-                                                col.name(),
-                                                left_columns_len + col.index(),
-                                            ))))
-                                        }
-                                        None => Ok(Transformed::No(e)),
-                                    });
-                                Ok(PhysicalSortExpr {
-                                    expr: new_expr?,
-                                    options: e.options,
-                                })
-                            })
-                            .collect();
-                        new_sort_exprs
+                        add_offset_to_lex_ordering(sort_exprs, left_columns_len)
                     })
                     .map_or(Ok(None), |v| v.map(Some))?
             }
@@ -293,6 +273,33 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.on(),
             self.schema(),
         )
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        let left_columns_len = self.left.schema().fields.len();
+        let left_oeq_properties = self.left.ordering_equivalence_properties();
+        let right_oeq_properties = self.right.ordering_equivalence_properties();
+        match self.join_type {
+            JoinType::Inner => {
+                new_properties.extend(left_oeq_properties.classes().to_vec());
+                let new_right_properties = add_offset_to_ordering_equivalence_classes(
+                    right_oeq_properties.classes(),
+                    left_columns_len,
+                )
+                .unwrap();
+                new_properties.extend(new_right_properties);
+            }
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+                new_properties.extend(left_oeq_properties.classes().to_vec());
+            }
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                new_properties.extend(right_oeq_properties.classes().to_vec());
+            }
+            // All ordering equivalences from left and/or right are invalidated.
+            _ => {}
+        }
+        new_properties
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -57,7 +57,8 @@ pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalE
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
-    LexOrdering, LexOrderingReq, PhysicalSortExpr, PhysicalSortRequirement,
+    LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order,

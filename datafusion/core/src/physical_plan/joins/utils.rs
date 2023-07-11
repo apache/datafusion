@@ -40,7 +40,10 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{ScalarValue, SharedResult};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::{EquivalentClass, PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{
+    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalenceProperties,
+    OrderingEquivalentClass, PhysicalExpr, PhysicalSortExpr,
+};
 
 use datafusion_common::JoinType;
 use datafusion_common::{DataFusionError, Result};
@@ -281,6 +284,57 @@ pub fn cross_join_equivalence_properties(
         .collect::<Vec<_>>();
     new_properties.extend(new_right_properties);
     new_properties
+}
+
+pub(crate) fn add_offset_to_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
+            col.name(),
+            offset + col.index(),
+        )))),
+        None => Ok(Transformed::No(e)),
+    })
+}
+
+pub(crate) fn add_offset_to_sort_expr(
+    sort_expr: &PhysicalSortExpr,
+    offset: usize,
+) -> Result<PhysicalSortExpr> {
+    Ok(PhysicalSortExpr {
+        expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
+        options: sort_expr.options,
+    })
+}
+
+pub(crate) fn add_offset_to_lex_ordering(
+    sort_exprs: LexOrderingRef,
+    offset: usize,
+) -> Result<LexOrdering> {
+    sort_exprs
+        .iter()
+        .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
+        .collect::<Result<Vec<_>>>()
+}
+
+pub(crate) fn add_offset_to_ordering_equivalence_classes(
+    oeq_classes: &[OrderingEquivalentClass],
+    offset: usize,
+) -> Result<Vec<OrderingEquivalentClass>> {
+    oeq_classes
+        .iter()
+        .map(|prop| {
+            let new_head = add_offset_to_lex_ordering(prop.head(), offset)?;
+            let new_others = prop
+                .others()
+                .iter()
+                .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(OrderingEquivalentClass::new(new_head, new_others))
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 impl Display for JoinSide {
