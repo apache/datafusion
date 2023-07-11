@@ -136,7 +136,13 @@ pub(crate) struct GroupedHashAggregateStream {
     /// specialized for that partcular aggregate and its input types
     accumulators: Vec<Box<dyn GroupsAccumulator>>,
 
-    /// Arguments to pass to  accumulator.
+    /// Arguments to pass to each accumulator.
+    ///
+    /// The arguments in `accumulator[i]` is passed `aggregate_arguments[i]`
+    ///
+    /// The argument to each accumulator is itself a `Vec` because
+    /// some aggregates such as `CORR` can accept more than one
+    /// argument.
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     /// Optional filter expression to evaluate, one for each for
