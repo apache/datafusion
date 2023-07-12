@@ -242,6 +242,7 @@ pub fn normalize_sort_requirements(
             )
         })
         .collect::<Vec<_>>();
+    println!("normalized_exprs after eq: {:?}", normalized_exprs);
     for ordering_eq_class in ordering_eq_properties {
         for item in ordering_eq_class.others() {
             let item = item
@@ -318,6 +319,8 @@ pub fn ordering_satisfy_concrete<
         normalize_sort_exprs(required, eq_classes, ordering_eq_classes);
     let provided_normalized =
         normalize_sort_exprs(provided, eq_classes, ordering_eq_classes);
+    println!("required_normalized:{:?}", required_normalized);
+    println!("provided_normalized:{:?}", provided_normalized);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }

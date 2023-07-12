@@ -73,7 +73,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
             let options = SortOptions {
                 descending: false,
                 nulls_first: false,
-            }; // ASC, NULLS LAST
+            }; // ASC, NULLS FIRST
             let rhs = PhysicalSortExpr {
                 expr: Arc::new(column) as _,
                 options,

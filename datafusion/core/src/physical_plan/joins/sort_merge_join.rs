@@ -55,6 +55,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 
 use futures::{Stream, StreamExt};
+use datafusion_physical_expr::utils::normalize_sort_exprs;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -133,23 +134,41 @@ impl SortMergeJoinExec {
 
         let output_ordering = match join_type {
             JoinType::Inner => {
-                // match (left.output_ordering(), right.output_ordering()) {
-                //     // In the inner join if n=both side has ordering, ordering of the right hand side
-                //     // can be appended to the left side ordering.
-                //     (Some(left_ordering), Some(right_ordering)) => {
-                //         let left_columns_len = left.schema().fields.len();
-                //         let right_ordering = add_offset_to_lex_ordering(right_ordering, left_columns_len)?;
-                //         let mut new_ordering = vec![];
-                //         new_ordering.extend(left_ordering.to_vec());
-                //         new_ordering.extend(right_ordering);
-                //         Some(new_ordering)
-                //     },
-                //     (Some(left_ordering), _) => {
-                //         Some(left_ordering.to_vec())
-                //     },
-                //     _ => None,
-                // }
-                left.output_ordering().map(|sort_exprs| sort_exprs.to_vec())
+                match (left.output_ordering(), right.output_ordering()) {
+                    // In the inner join if n=both side has ordering, ordering of the right hand side
+                    // can be appended to the left side ordering.
+                    (Some(left_ordering), Some(right_ordering)) => {
+                        let left_columns_len = left.schema().fields.len();
+                        let mut right_ordering = add_offset_to_lex_ordering(right_ordering, left_columns_len)?;
+                        for (left_col, right_col) in &on {
+                            let right_col = Column::new(right_col.name(), right_col.index()+left_columns_len);
+                            println!("left_col:{:?}, right_col:{:?}", left_col, right_col);
+                            for item in right_ordering.iter_mut() {
+                                if let Some(col) = item.expr.as_any().downcast_ref::<Column>() {
+                                    if col.eq(&right_col) {
+                                        item.expr = Arc::new(left_col.clone()) as _;
+                                    }
+                                }
+                            }
+                        }
+                        let mut new_ordering = vec![];
+                        new_ordering.extend(left_ordering.to_vec());
+                        for sort_expr in right_ordering {
+                            if !new_ordering.contains(&sort_expr){
+                                // Append right table ordering as lexicographical ordering. if it is not exists
+                                new_ordering.push(sort_expr);
+                            }
+                        }
+                        println!("new_ordering SMJ:{:?}", new_ordering);
+                        // new_ordering.extend(right_ordering);
+                        Some(new_ordering)
+                    },
+                    (Some(left_ordering), _) => {
+                        Some(left_ordering.to_vec())
+                    },
+                    _ => None,
+                }
+                // left.output_ordering().map(|sort_exprs| sort_exprs.to_vec())
             },
             JoinType::Left
             | JoinType::LeftSemi
@@ -312,11 +331,20 @@ impl ExecutionPlan for SortMergeJoinExec {
                             left_columns_len,
                         )
                         .unwrap();
+                    let left_output_ordering = self.left.output_ordering().unwrap_or(&[]);
                     for oeq_class in updated_right_oeq_classes {
                         for ordering in oeq_class.others() {
-                            let mut new_oeq_ordering = output_ordering.clone();
-                            // Append right table ordering as lexicographical ordering.
-                            new_oeq_ordering.extend(ordering.clone());
+                            let mut new_oeq_ordering = left_output_ordering.to_vec();
+                            let normalized_ordering = normalize_sort_exprs(&ordering, self.equivalence_properties().classes(), &[]);
+                            println!("normalized_ordering:{:?}", normalized_ordering);
+                            println!("ordering:{:?}", ordering);
+                            println!("self.equivalence_properties().classes():{:?}", self.equivalence_properties().classes());
+                            for sort_expr in normalized_ordering {
+                                if !new_oeq_ordering.contains(&sort_expr){
+                                    // Append right table ordering as lexicographical ordering.
+                                    new_oeq_ordering.push(sort_expr);
+                                }
+                            }
                             new_properties.add_equal_conditions((
                                 output_ordering,
                                 &new_oeq_ordering,
@@ -365,6 +393,9 @@ impl ExecutionPlan for SortMergeJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        println!("                            self.output_ordering: {:?}", self.output_ordering);
+        println!("         self.equivalence_properties().classes(): {:?}", self.equivalence_properties().classes());
+        println!("self.ordering_equivalence_properties().classes(): {:?}", self.ordering_equivalence_properties().classes());
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
         if left_partitions != right_partitions {
