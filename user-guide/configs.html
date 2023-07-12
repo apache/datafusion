@@ -448,7 +448,7 @@ Environment variables are read during <code class="docutils literal notranslate"
 </tr>
 <tr class="row-even"><td><p>datafusion.optimizer.repartition_file_scans</p></td>
 <td><p>true</p></td>
-<td><p>When set to true, file groups will be repartitioned to achieve maximum parallelism. Currently supported only for Parquet format in which case multiple row groups from the same file may be read concurrently. If false then each row group is read serially, though different files may be read in parallel.</p></td>
+<td><p>When set to <code class="docutils literal notranslate"><span class="pre">true</span></code>, file groups will be repartitioned to achieve maximum parallelism. Currently Parquet and CSV formats are supported. If set to <code class="docutils literal notranslate"><span class="pre">true</span></code>, all files will be repartitioned evenly (i.e., a single large file might be partitioned into smaller chunks) for parallel scanning. If set to <code class="docutils literal notranslate"><span class="pre">false</span></code>, different files will be read in parallel, but repartitioning won’t happen within a single file.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.optimizer.repartition_windows</p></td>
 <td><p>true</p></td>
