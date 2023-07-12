@@ -67,7 +67,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         // The built-in RowNumber window function introduces a new
         // ordering:
         if let Some((idx, field)) = schema.column_with_name(self.name()) {
-            let column = Column::new(field.name(), idx);
+            let expr = Arc::new(Column::new(field.name(), idx));
             let options = SortOptions {
                 descending: false,
                 nulls_first: false,
