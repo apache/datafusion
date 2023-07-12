@@ -72,10 +72,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
                 descending: false,
                 nulls_first: false,
             }; // ASC, NULLS LAST
-            let rhs = PhysicalSortExpr {
-                expr,
-                options,
-            };
+            let rhs = PhysicalSortExpr { expr, options };
             Some(rhs)
         } else {
             None

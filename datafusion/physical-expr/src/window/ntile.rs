@@ -68,15 +68,12 @@ impl BuiltInWindowFunctionExpr for Ntile {
         // The built-in RowNumber window function introduces a new
         // ordering:
         if let Some((idx, field)) = schema.column_with_name(self.name()) {
-            let column = Column::new(field.name(), idx);
+            let expr = Arc::new(Column::new(field.name(), idx));
             let options = SortOptions {
                 descending: false,
                 nulls_first: false,
             }; // ASC, NULLS LAST
-            let rhs = PhysicalSortExpr {
-                expr: Arc::new(column) as _,
-                options,
-            };
+            let rhs = PhysicalSortExpr { expr, options };
             Some(rhs)
         } else {
             None
