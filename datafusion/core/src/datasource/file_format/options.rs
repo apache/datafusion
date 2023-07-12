@@ -55,6 +55,8 @@ pub struct CsvReadOptions<'a> {
     pub has_header: bool,
     /// An optional column delimiter. Defaults to `b','`.
     pub delimiter: u8,
+    /// An optional quote character. Defaults to `b'"'`.
+    pub quote: u8,
     /// An optional schema representing the CSV files. If None, CSV reader will try to infer it
     /// based on data in file.
     pub schema: Option<&'a Schema>,
@@ -85,6 +87,7 @@ impl<'a> CsvReadOptions<'a> {
             schema: None,
             schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             delimiter: b',',
+            quote: b'"',
             file_extension: DEFAULT_CSV_EXTENSION,
             table_partition_cols: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
@@ -435,6 +438,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
         let file_format = CsvFormat::default()
             .with_has_header(self.has_header)
             .with_delimiter(self.delimiter)
+            .with_quote(self.quote)
             .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
             .with_file_compression_type(self.file_compression_type.to_owned());
 

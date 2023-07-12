@@ -348,10 +348,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Csv(protobuf::CsvFormat {
                             has_header,
                             delimiter,
+                            quote
                         }) => Arc::new(
                             CsvFormat::default()
                                 .with_has_header(*has_header)
-                                .with_delimiter(str_to_byte(delimiter)?),
+                                .with_delimiter(str_to_byte(delimiter)?)
+                                .with_quote(str_to_byte(quote)?),
                         ),
                         FileFormatType::Avro(..) => Arc::new(AvroFormat),
                     };
@@ -846,6 +848,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Csv(protobuf::CsvFormat {
                             delimiter: byte_to_string(csv.delimiter())?,
                             has_header: csv.has_header(),
+                            quote: byte_to_string(csv.quote())?,
                         })
                     } else if any.is::<AvroFormat>() {
                         FileFormatType::Avro(protobuf::AvroFormat {})

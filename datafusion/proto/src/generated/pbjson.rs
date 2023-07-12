@@ -4188,12 +4188,18 @@ impl serde::Serialize for CsvFormat {
         if !self.delimiter.is_empty() {
             len += 1;
         }
+        if !self.quote.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvFormat", len)?;
         if self.has_header {
             struct_ser.serialize_field("hasHeader", &self.has_header)?;
         }
         if !self.delimiter.is_empty() {
             struct_ser.serialize_field("delimiter", &self.delimiter)?;
+        }
+        if !self.quote.is_empty() {
+            struct_ser.serialize_field("quote", &self.quote)?;
         }
         struct_ser.end()
     }
@@ -4208,12 +4214,14 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
             "has_header",
             "hasHeader",
             "delimiter",
+            "quote",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             HasHeader,
             Delimiter,
+            Quote,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4237,6 +4245,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                         match value {
                             "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "delimiter" => Ok(GeneratedField::Delimiter),
+                            "quote" => Ok(GeneratedField::Quote),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4258,6 +4267,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
             {
                 let mut has_header__ = None;
                 let mut delimiter__ = None;
+                let mut quote__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -4272,11 +4282,18 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                             }
                             delimiter__ = Some(map.next_value()?);
                         }
+                        GeneratedField::Quote => {
+                            if quote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("quote"));
+                            }
+                            quote__ = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(CsvFormat {
                     has_header: has_header__.unwrap_or_default(),
                     delimiter: delimiter__.unwrap_or_default(),
+                    quote: quote__.unwrap_or_default(),
                 })
             }
         }
@@ -4300,6 +4317,9 @@ impl serde::Serialize for CsvScanExecNode {
         if !self.delimiter.is_empty() {
             len += 1;
         }
+        if !self.quote.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
@@ -4309,6 +4329,9 @@ impl serde::Serialize for CsvScanExecNode {
         }
         if !self.delimiter.is_empty() {
             struct_ser.serialize_field("delimiter", &self.delimiter)?;
+        }
+        if !self.quote.is_empty() {
+            struct_ser.serialize_field("quote", &self.quote)?;
         }
         struct_ser.end()
     }
@@ -4325,6 +4348,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             "has_header",
             "hasHeader",
             "delimiter",
+            "quote",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4332,6 +4356,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             BaseConf,
             HasHeader,
             Delimiter,
+            Quote,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4356,6 +4381,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             "baseConf" | "base_conf" => Ok(GeneratedField::BaseConf),
                             "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "delimiter" => Ok(GeneratedField::Delimiter),
+                            "quote" => Ok(GeneratedField::Quote),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4378,6 +4404,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut base_conf__ = None;
                 let mut has_header__ = None;
                 let mut delimiter__ = None;
+                let mut quote__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -4398,12 +4425,19 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             }
                             delimiter__ = Some(map.next_value()?);
                         }
+                        GeneratedField::Quote => {
+                            if quote__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("quote"));
+                            }
+                            quote__ = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(CsvScanExecNode {
                     base_conf: base_conf__,
                     has_header: has_header__.unwrap_or_default(),
                     delimiter: delimiter__.unwrap_or_default(),
+                    quote: quote__.unwrap_or_default(),
                 })
             }
         }

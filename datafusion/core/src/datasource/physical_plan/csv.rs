@@ -56,6 +56,7 @@ pub struct CsvExec {
     projected_output_ordering: Vec<LexOrdering>,
     has_header: bool,
     delimiter: u8,
+    quote: u8,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
@@ -67,6 +68,7 @@ impl CsvExec {
         base_config: FileScanConfig,
         has_header: bool,
         delimiter: u8,
+        quote: u8,
         file_compression_type: FileCompressionType,
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
@@ -79,6 +81,7 @@ impl CsvExec {
             projected_output_ordering,
             has_header,
             delimiter,
+            quote,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
         }
@@ -95,6 +98,11 @@ impl CsvExec {
     /// A column delimiter
     pub fn delimiter(&self) -> u8 {
         self.delimiter
+    }
+
+    /// The quote character
+    pub fn quote(&self) -> u8 {
+        self.quote
     }
 }
 
@@ -171,6 +179,7 @@ impl ExecutionPlan for CsvExec {
             file_projection: self.base_config.file_column_projection_indices(),
             has_header: self.has_header,
             delimiter: self.delimiter,
+            quote: self.quote,
             object_store,
         });
 
@@ -200,6 +209,7 @@ pub struct CsvConfig {
     file_projection: Option<Vec<usize>>,
     has_header: bool,
     delimiter: u8,
+    quote: u8,
     object_store: Arc<dyn ObjectStore>,
 }
 
@@ -211,6 +221,7 @@ impl CsvConfig {
         file_projection: Option<Vec<usize>>,
         has_header: bool,
         delimiter: u8,
+        quote: u8,
         object_store: Arc<dyn ObjectStore>,
     ) -> Self {
         Self {
@@ -219,6 +230,7 @@ impl CsvConfig {
             file_projection,
             has_header,
             delimiter,
+            quote,
             object_store,
         }
     }
@@ -229,6 +241,7 @@ impl CsvConfig {
         let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
             .has_header(self.has_header)
             .with_delimiter(self.delimiter)
+            .with_quote(self.quote)
             .with_batch_size(self.batch_size);
 
         if let Some(p) = &self.file_projection {
@@ -414,7 +427,8 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.projection = Some(vec![0, 2, 4]);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv =
+            CsvExec::new(config, true, b',', b'"', file_compression_type.to_owned());
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -470,7 +484,8 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.projection = Some(vec![4, 0, 2]);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv =
+            CsvExec::new(config, true, b',', b'"', file_compression_type.to_owned());
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -526,7 +541,8 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.limit = Some(5);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv =
+            CsvExec::new(config, true, b',', b'"', file_compression_type.to_owned());
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(13, csv.projected_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
@@ -582,7 +598,8 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.limit = Some(5);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv =
+            CsvExec::new(config, true, b',', b'"', file_compression_type.to_owned());
         assert_eq!(14, csv.base_config.file_schema.fields().len());
         assert_eq!(14, csv.projected_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
@@ -636,7 +653,8 @@ mod tests {
 
         // we don't have `/date=xx/` in the path but that is ok because
         // partitions are resolved during scan anyway
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv =
+            CsvExec::new(config, true, b',', b'"', file_compression_type.to_owned());
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(2, csv.projected_schema.fields().len());
         assert_eq!(2, csv.schema().fields().len());
@@ -722,7 +740,8 @@ mod tests {
         .unwrap();
 
         let config = partitioned_csv_config(file_schema, file_groups).unwrap();
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv =
+            CsvExec::new(config, true, b',', b'"', file_compression_type.to_owned());
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();
