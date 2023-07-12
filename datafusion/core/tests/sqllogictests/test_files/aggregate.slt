@@ -1648,6 +1648,101 @@ drop table t_source;
 statement ok
 drop table t;
 
+
+# All supported Date tpes
+
+# "date32" --> Date32Array
+# "date64" --> Date64Array
+# "names" --> StringArray
+
+statement ok
+create table t_source
+as values
+ ('2018-11-13', 'Row 0', 'X'),
+ ('2011-12-13', 'Row 1', 'X'),
+ (null,         'Row 2', 'Y'),
+ ('2021-01-01', 'Row 3', 'Y');
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Date32') as date32,
+  -- Workaround https://github.com/apache/arrow-rs/issues/4512 is fixed, can use this
+  -- arrow_cast(column1, 'Date64') as date64,
+  arrow_cast(arrow_cast(column1, 'Date32'), 'Date64') as date64,
+  column2 as names,
+  column3 as tag
+from t_source;
+
+# Demonstate the contents
+query DDTT
+select * from t;
+----
+2018-11-13 2018-11-13T00:00:00 Row 0 X
+2011-12-13 2011-12-13T00:00:00 Row 1 X
+NULL NULL Row 2 Y
+2021-01-01 2021-01-01T00:00:00 Row 3 Y
+
+
+# aggregate_timestamps_sum
+statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Date32\.
+SELECT sum(date32), sum(date64) FROM t;
+
+statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Date32\.
+SELECT tag, sum(date32), sum(date64) FROM t GROUP BY tag ORDER BY tag;
+
+# aggregate_timestamps_count
+query II
+SELECT count(date32), count(date64) FROM t;
+----
+3 3
+
+query TII
+SELECT tag, count(date32), count(date64) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2 2
+Y 1 1
+
+# aggregate_timestamps_min
+query DD
+SELECT min(date32), min(date64) FROM t;
+----
+2011-12-13 2011-12-13T00:00:00
+
+query TDD
+SELECT tag, min(date32), min(date64) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2011-12-13 2011-12-13T00:00:00
+Y 2021-01-01 2021-01-01T00:00:00
+
+# aggregate_timestamps_max
+query DD
+SELECT max(date32), max(date64) FROM t;
+----
+2021-01-01 2021-01-01T00:00:00
+
+query TDD
+SELECT tag, max(date32), max(date64) FROM t GROUP BY tag ORDER BY tag
+----
+X 2018-11-13 2018-11-13T00:00:00
+Y 2021-01-01 2021-01-01T00:00:00
+
+
+# aggregate_timestamps_avg
+statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Date32\.
+SELECT avg(date32), avg(date64) FROM t
+
+statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Date32\.
+SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
 # All supported time types
 
 # Columns are named:
