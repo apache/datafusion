@@ -104,7 +104,7 @@ impl GroupsAccumulatorAdapter {
         let vec_size_pre =
             std::mem::size_of::<AccumulatorState>() * self.states.capacity();
 
-        // instanatiate new accumulators
+        // instantiate new accumulators
         let new_accumulators = total_num_groups - self.states.len();
         for _ in 0..new_accumulators {
             let accumulator = (self.factory)()?;
