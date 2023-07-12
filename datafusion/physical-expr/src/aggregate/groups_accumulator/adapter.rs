@@ -141,8 +141,8 @@ impl GroupsAccumulatorAdapter {
     /// │ └─────┘ │   │ └─────┘ │     └─────┘              ┗━━━━━┛    │ └─────┘ │     └─────┘
     /// └─────────┘   └─────────┘   └ ─ ─ ─ ─ ┘                       └─────────┘   └ ─ ─ ─ ─ ┘
     ///
-    ///   values        opt_filter         logical group  values        opt_filter
-    ///                                                 index
+    /// logical group   values      opt_filter           logical group  values       opt_filter
+    ///
     /// ```
     fn invoke_per_accumulator<F>(
         &mut self,
