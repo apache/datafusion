@@ -824,7 +824,9 @@ impl ExecutionPlan for AggregateExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         match &self.mode {
-            AggregateMode::Partial | AggregateMode::Single | AggregateMode::Partitioned => {
+            AggregateMode::Partial
+            | AggregateMode::Single
+            | AggregateMode::Partitioned => {
                 // Partial and Single Aggregation will not change the output partitioning but need to respect the Alias
                 let input_partition = self.input.output_partitioning();
                 match input_partition {
@@ -877,7 +879,7 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Partial | AggregateMode::Single => {
                 vec![Distribution::UnspecifiedDistribution]
             }
-            AggregateMode::FinalPartitioned | AggregateMode::Partitioned  => {
+            AggregateMode::FinalPartitioned | AggregateMode::Partitioned => {
                 vec![Distribution::HashPartitioned(self.output_group_expr())]
             }
             AggregateMode::Final => vec![Distribution::SinglePartition],
@@ -937,11 +939,11 @@ impl ExecutionPlan for AggregateExec {
         // TODO stats: aggr expression:
         // - aggregations somtimes also preserve invariants such as min, max...
         match self.mode {
-            AggregateMode::Final 
-            | AggregateMode::FinalPartitioned 
+            AggregateMode::Final
+            | AggregateMode::FinalPartitioned
             | AggregateMode::Single
             | AggregateMode::Partitioned
-            if self.group_by.expr.is_empty() =>
+                if self.group_by.expr.is_empty() =>
             {
                 Statistics {
                     num_rows: Some(1),
@@ -954,7 +956,7 @@ impl ExecutionPlan for AggregateExec {
                 num_rows: self.input.statistics().num_rows,
                 is_exact: false,
                 ..Default::default()
-            }
+            },
         }
     }
 }
@@ -1014,58 +1016,60 @@ fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial | AggregateMode::Single | AggregateMode::Partitioned  => Ok(aggr_expr
-            .iter()
-            .map(|agg| {
-                let pre_cast_type = if let Some(Sum {
-                    data_type,
-                    pre_cast_to_sum_type,
-                    ..
-                }) = agg.as_any().downcast_ref::<Sum>()
-                {
-                    if *pre_cast_to_sum_type {
-                        Some(data_type.clone())
+        AggregateMode::Partial | AggregateMode::Single | AggregateMode::Partitioned => {
+            Ok(aggr_expr
+                .iter()
+                .map(|agg| {
+                    let pre_cast_type = if let Some(Sum {
+                        data_type,
+                        pre_cast_to_sum_type,
+                        ..
+                    }) = agg.as_any().downcast_ref::<Sum>()
+                    {
+                        if *pre_cast_to_sum_type {
+                            Some(data_type.clone())
+                        } else {
+                            None
+                        }
+                    } else if let Some(Avg {
+                        sum_data_type,
+                        pre_cast_to_sum_type,
+                        ..
+                    }) = agg.as_any().downcast_ref::<Avg>()
+                    {
+                        if *pre_cast_to_sum_type {
+                            Some(sum_data_type.clone())
+                        } else {
+                            None
+                        }
                     } else {
                         None
-                    }
-                } else if let Some(Avg {
-                    sum_data_type,
-                    pre_cast_to_sum_type,
-                    ..
-                }) = agg.as_any().downcast_ref::<Avg>()
-                {
-                    if *pre_cast_to_sum_type {
-                        Some(sum_data_type.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let mut result = agg
-                    .expressions()
-                    .into_iter()
-                    .map(|expr| {
-                        pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
-                            Arc::new(CastExpr::new(expr, cast_type, None))
+                    };
+                    let mut result = agg
+                        .expressions()
+                        .into_iter()
+                        .map(|expr| {
+                            pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
+                                Arc::new(CastExpr::new(expr, cast_type, None))
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>();
-                // In partial mode, append ordering requirements to expressions' results.
-                // Ordering requirements are used by subsequent executors to satisfy the required
-                // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.
-                if matches!(mode, AggregateMode::Partial) {
-                    if let Some(ordering_req) = agg.order_bys() {
-                        let ordering_exprs = ordering_req
-                            .iter()
-                            .map(|item| item.expr.clone())
-                            .collect::<Vec<_>>();
-                        result.extend(ordering_exprs);
+                        .collect::<Vec<_>>();
+                    // In partial mode, append ordering requirements to expressions' results.
+                    // Ordering requirements are used by subsequent executors to satisfy the required
+                    // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.
+                    if matches!(mode, AggregateMode::Partial) {
+                        if let Some(ordering_req) = agg.order_bys() {
+                            let ordering_exprs = ordering_req
+                                .iter()
+                                .map(|item| item.expr.clone())
+                                .collect::<Vec<_>>();
+                            result.extend(ordering_exprs);
+                        }
                     }
-                }
-                result
-            })
-            .collect()),
+                    result
+                })
+                .collect())
+        }
         // in this mode, we build the merge expressions of the aggregation
         AggregateMode::Final | AggregateMode::FinalPartitioned => {
             let mut col_idx_base = col_idx_base;

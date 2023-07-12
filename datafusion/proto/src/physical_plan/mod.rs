@@ -358,7 +358,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         AggregateMode::FinalPartitioned
                     }
                     protobuf::AggregateMode::Single => AggregateMode::Single,
-                    protobuf::AggregateMode::PartitionedMode => AggregateMode::Partitioned,
+                    protobuf::AggregateMode::PartitionedMode => {
+                        AggregateMode::Partitioned
+                    }
                 };
 
                 let num_expr = hash_agg.group_expr.len();
