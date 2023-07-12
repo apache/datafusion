@@ -174,13 +174,12 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
-    /// Runs the sort enforcement optimizer and asserts the plan
-    /// against the original and expected plans
+    /// Runs the `replace_repartition_execs` sub-rule and asserts the plan
+    /// against the original and expected plans.
     ///
     /// `$EXPECTED_PLAN_LINES`: input plan
     /// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
     /// `$PLAN`: the plan to optimized
-    ///
     macro_rules! assert_optimized {
         ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr) => {
             let physical_plan = $PLAN;
