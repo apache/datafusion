@@ -1301,7 +1301,7 @@ async fn make_datafusion_like(
 
     let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
         return Err(DataFusionError::NotImplemented(
-            format!("Invalid arguments type for `{}` expr", fn_name)
+            format!("Invalid arguments type for `{fn_name}` expr")
         ))
     };
     let expr = from_substrait_rex(expr_substrait, input_schema, extensions)
@@ -1310,7 +1310,7 @@ async fn make_datafusion_like(
         .clone();
     let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
         return Err(DataFusionError::NotImplemented(
-            "Invalid arguments type for `Like` expr".to_string()
+            format!("Invalid arguments type for `{fn_name}` expr")
         ))
     };
     let pattern = from_substrait_rex(pattern_substrait, input_schema, extensions)
@@ -1319,7 +1319,7 @@ async fn make_datafusion_like(
         .clone();
     let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
         return Err(DataFusionError::NotImplemented(
-            "Invalid arguments type for `Like` expr".to_string()
+            format!("Invalid arguments type for `{fn_name}` expr")
         ))
     };
     let escape_char_expr =
