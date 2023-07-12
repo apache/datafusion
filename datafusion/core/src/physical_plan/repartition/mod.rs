@@ -25,9 +25,9 @@ use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
 use crate::physical_plan::hash_utils::create_hashes;
-use crate::physical_plan::repartition::distributor_channels::{
-    channels, partition_aware_channels,
-};
+// use crate::physical_plan::repartition::distributor_channels::{
+//     channels, partition_aware_channels,
+// };
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
@@ -38,7 +38,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use log::trace;
 
-use self::distributor_channels::{DistributionReceiver, DistributionSender};
+// use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
 use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
 use super::expressions::PhysicalSortExpr;
@@ -51,12 +51,14 @@ use crate::physical_plan::sorts::streaming_merge;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::Stream;
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
-mod distributor_channels;
+// mod distributor_channels;
+mod flume_channels;
+use self::flume_channels::*;
 
 type MaybeBatch = Option<Result<RecordBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
@@ -720,7 +722,7 @@ impl Stream for RepartitionStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         loop {
-            match self.input.recv().poll_unpin(cx) {
+            match self.input.poll_next(cx) {
                 Poll::Ready(Some(Some(v))) => {
                     if let Ok(batch) = &v {
                         self.reservation
@@ -783,7 +785,7 @@ impl Stream for PerPartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        match self.receiver.recv().poll_unpin(cx) {
+        match self.receiver.poll_next(cx) {
             Poll::Ready(Some(Some(v))) => {
                 if let Ok(batch) = &v {
                     self.reservation
