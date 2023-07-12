@@ -41,7 +41,7 @@ use datafusion_expr::{
     array_prepend, array_remove, array_replace, array_to_string, ascii, asin, asinh,
     atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
     chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, current_date, current_time,
-    date_bin, date_part, date_trunc, degrees, digest, exp,
+    date_bin, date_part, date_trunc, degrees, digest, exp, cot,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -1474,6 +1474,7 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::CurrentDate => Ok(current_date()),
                 ScalarFunction::CurrentTime => Ok(current_time()),
+                ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry)?)),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),
