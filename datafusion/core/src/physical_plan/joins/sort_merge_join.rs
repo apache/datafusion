@@ -132,8 +132,26 @@ impl SortMergeJoinExec {
             .unzip();
 
         let output_ordering = match join_type {
-            JoinType::Inner
-            | JoinType::Left
+            JoinType::Inner => {
+                // match (left.output_ordering(), right.output_ordering()) {
+                //     // In the inner join if n=both side has ordering, ordering of the right hand side
+                //     // can be appended to the left side ordering.
+                //     (Some(left_ordering), Some(right_ordering)) => {
+                //         let left_columns_len = left.schema().fields.len();
+                //         let right_ordering = add_offset_to_lex_ordering(right_ordering, left_columns_len)?;
+                //         let mut new_ordering = vec![];
+                //         new_ordering.extend(left_ordering.to_vec());
+                //         new_ordering.extend(right_ordering);
+                //         Some(new_ordering)
+                //     },
+                //     (Some(left_ordering), _) => {
+                //         Some(left_ordering.to_vec())
+                //     },
+                //     _ => None,
+                // }
+                left.output_ordering().map(|sort_exprs| sort_exprs.to_vec())
+            },
+            JoinType::Left
             | JoinType::LeftSemi
             | JoinType::LeftAnti => {
                 left.output_ordering().map(|sort_exprs| sort_exprs.to_vec())

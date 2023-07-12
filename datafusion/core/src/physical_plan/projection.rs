@@ -45,6 +45,7 @@ use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, OrderingEquivalenceProperties,
 };
+use datafusion_physical_expr::expressions::CastExpr;
 
 /// Execution plan for a projection
 #[derive(Debug)]
@@ -60,6 +61,7 @@ pub struct ProjectionExec {
     /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
     columns_map: HashMap<Column, Vec<Column>>,
+    // cast_map: HashMap<Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -245,8 +247,19 @@ impl ExecutionPlan for ProjectionExec {
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        let input_oeq = self.input().ordering_equivalence_properties();
+        let mut cast_exprs: Vec<CastExpr> = vec![];
+        for (expr, _name) in &self.expr {
+            if let Some(cast_expr) = expr.as_any().downcast_ref::<CastExpr>(){
+                cast_exprs.push(cast_expr.clone());
+            }
+        }
+        if let Some(output_ordering) = self.output_ordering() {
+            update_ordering_equivalence_with_cast(output_ordering, &cast_exprs, &input_oeq, &mut new_properties)
+        }
+
         project_ordering_equivalence_properties(
-            self.input.ordering_equivalence_properties(),
+            input_oeq,
             &self.columns_map,
             &mut new_properties,
         );
@@ -296,6 +309,22 @@ impl ExecutionPlan for ProjectionExec {
             self.input.statistics(),
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
         )
+    }
+}
+
+fn update_ordering_equivalence_with_cast(output_ordering: &[PhysicalSortExpr], cast_exprs: &[CastExpr], input_oeq: &OrderingEquivalenceProperties, output_eq: &mut OrderingEquivalenceProperties,){
+    for cast_expr in cast_exprs.iter() {
+        for cls in input_oeq.classes() {
+            for ordering in std::iter::once(cls.head()).chain(cls.others().iter()) {
+                for idx in 0..ordering.len() {
+                    if ordering[idx].expr.eq(cast_expr.expr()) {
+                        let mut updated_ordering = ordering.clone();
+                        updated_ordering[idx].expr = Arc::new(cast_expr.clone()) as _;
+                        output_eq.add_equal_conditions((&output_ordering.to_vec(), &updated_ordering))
+                    }
+                }
+            }
+        }
     }
 }
 
