@@ -215,44 +215,13 @@ impl ExecutionPlan for FilterExec {
 
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
 
-        let num_rows = input_stats
-            .num_rows
-            .map(|num| (num as f64 * selectivity).ceil() as usize);
-        let total_byte_size = input_stats
-            .total_byte_size
-            .map(|size| (size as f64 * selectivity).ceil() as usize);
-
-        let column_statistics = if let Some(new_boundaries) = analysis_ctx.boundaries {
-            let mut res = Vec::with_capacity(new_boundaries.len());
-            for (
-                i,
-                ExprBoundaries {
-                    interval,
-                    distinct_count,
-                    ..
-                },
-            ) in new_boundaries.into_iter().enumerate()
-            {
-                let closed_interval = interval_with_closed_bounds(interval);
-                res.push(ColumnStatistics {
-                    null_count: input_column_stats[i].null_count,
-                    max_value: if selectivity > 0.0 {
-                        Some(closed_interval.upper.value)
-                    } else {
-                        None
-                    },
-                    min_value: if selectivity > 0.0 {
-                        Some(closed_interval.lower.value)
-                    } else {
-                        None
-                    },
-                    distinct_count,
-                });
-            }
-            Some(res)
-        } else {
-            Some(input_column_stats)
-        };
+        let (num_rows, total_byte_size, column_statistics) = collect_new_statistics(
+            input_stats.num_rows,
+            input_stats.total_byte_size,
+            input_column_stats,
+            selectivity,
+            analysis_ctx.boundaries,
+        );
 
         Statistics {
             num_rows,
@@ -261,6 +230,51 @@ impl ExecutionPlan for FilterExec {
             is_exact: Default::default(),
         }
     }
+}
+
+fn collect_new_statistics(
+    num_rows: Option<usize>,
+    total_byte_size: Option<usize>,
+    input_column_stats: Vec<ColumnStatistics>,
+    selectivity: f64,
+    analysis_result: Option<Vec<ExprBoundaries>>,
+) -> (Option<usize>, Option<usize>, Option<Vec<ColumnStatistics>>) {
+    let num_rows = num_rows.map(|num| (num as f64 * selectivity).ceil() as usize);
+    let total_byte_size =
+        total_byte_size.map(|size| (size as f64 * selectivity).ceil() as usize);
+
+    let column_statistics = if let Some(new_boundaries) = analysis_result {
+        let mut res = Vec::with_capacity(new_boundaries.len());
+        for (
+            i,
+            ExprBoundaries {
+                interval,
+                distinct_count,
+                ..
+            },
+        ) in new_boundaries.into_iter().enumerate()
+        {
+            let closed_interval = interval_with_closed_bounds(interval);
+            res.push(ColumnStatistics {
+                null_count: input_column_stats[i].null_count,
+                max_value: if selectivity > 0.0 {
+                    Some(closed_interval.upper.value)
+                } else {
+                    None
+                },
+                min_value: if selectivity > 0.0 {
+                    Some(closed_interval.lower.value)
+                } else {
+                    None
+                },
+                distinct_count,
+            });
+        }
+        Some(res)
+    } else {
+        Some(input_column_stats)
+    };
+    (num_rows, total_byte_size, column_statistics)
 }
 
 /// The FilterExec streams wraps the input iterator and applies the predicate expression to
@@ -749,26 +763,52 @@ mod tests {
         // total_byte_size after ceil => 532.0... => 533
         assert_eq!(statistics.num_rows, Some(134));
         assert_eq!(statistics.total_byte_size, Some(533));
-        assert_eq!(
-            statistics.column_statistics,
-            Some(vec![
-                ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(4))),
-                    max_value: Some(ScalarValue::Int32(Some(53))),
-                    ..Default::default()
-                },
-                ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(3))),
-                    max_value: Some(ScalarValue::Int32(Some(3))),
-                    ..Default::default()
-                },
-                ColumnStatistics {
-                    min_value: Some(ScalarValue::Float32(Some(1000.0))),
-                    max_value: Some(ScalarValue::Float32(Some(1075.0))),
-                    ..Default::default()
-                },
-            ])
-        );
+        let exp_col_stats = Some(vec![
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(4))),
+                max_value: Some(ScalarValue::Int32(Some(53))),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(3))),
+                max_value: Some(ScalarValue::Int32(Some(3))),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                min_value: Some(ScalarValue::Float32(Some(1000.0))),
+                max_value: Some(ScalarValue::Float32(Some(1075.0))),
+                ..Default::default()
+            },
+        ]);
+        let _ = exp_col_stats
+            .unwrap()
+            .into_iter()
+            .zip(statistics.column_statistics.unwrap())
+            .map(|(expected, actual)| {
+                if actual
+                    .min_value
+                    .clone()
+                    .unwrap()
+                    .get_datatype()
+                    .is_floating()
+                {
+                    // Windows rounds arithmetic operation results differently for floating point numbers.
+                    // Therefore, we check if the actual values are in an epsilon range.
+                    let actual_min = actual.min_value.unwrap();
+                    let actual_max = actual.max_value.unwrap();
+                    let expected_min = expected.min_value.unwrap();
+                    let expected_max = expected.max_value.unwrap();
+                    let eps = ScalarValue::Float32(Some(1e-6));
+
+                    assert!(actual_min.sub(&expected_min).unwrap() < eps);
+                    assert!(actual_min.sub(&expected_min).unwrap() < eps);
+
+                    assert!(actual_max.sub(&expected_max).unwrap() < eps);
+                    assert!(actual_max.sub(&expected_max).unwrap() < eps);
+                } else {
+                    assert_eq!(actual, expected);
+                }
+            });
 
         Ok(())
     }

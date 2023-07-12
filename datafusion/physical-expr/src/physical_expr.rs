@@ -137,7 +137,7 @@ pub fn analyze(
     expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
 ) -> Result<AnalysisContext> {
-    let mut target_boundaries = context.boundaries.ok_or_else(|| {
+    let target_boundaries = context.boundaries.ok_or_else(|| {
         DataFusionError::Internal("No column exists at the input to filter".to_string())
     })?;
 
@@ -166,46 +166,7 @@ pub fn analyze(
 
     match graph.update_ranges(&mut target_indices_and_boundaries)? {
         PropagationResult::Success => {
-            let initial_boundaries = target_boundaries.clone();
-            target_expr_and_indices.iter().for_each(|(expr, i)| {
-                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                    if let Some(bound) = target_boundaries
-                        .iter_mut()
-                        .find(|bound| bound.column.eq(column))
-                    {
-                        bound.update_interval(graph.get_interval(*i))
-                    };
-                }
-            });
-            let root_index = graph
-                .gather_node_indices(&[expr.clone()])
-                .first()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Error in constructing predicate graph".to_string(),
-                    )
-                })?
-                .1;
-            let final_result = graph.get_interval(root_index);
-
-            let selectivity = calculate_selectivity(
-                &final_result.lower.value,
-                &final_result.upper.value,
-                &target_boundaries,
-                &initial_boundaries,
-            )?;
-
-            if !(0.0..=1.0).contains(&selectivity) {
-                return Err(DataFusionError::Internal(format!(
-                    "Selectivity is out of limit: {}",
-                    selectivity
-                )));
-            }
-
-            Ok(AnalysisContext::new_with_selectivity(
-                target_boundaries,
-                selectivity,
-            ))
+            shrink_boundaries(expr, graph, target_boundaries, target_expr_and_indices)
         }
         PropagationResult::Infeasible => Ok(AnalysisContext::new_with_selectivity(
             target_boundaries,
@@ -216,6 +177,52 @@ pub fn analyze(
             1.0,
         )),
     }
+}
+
+fn shrink_boundaries(
+    expr: &Arc<dyn PhysicalExpr>,
+    mut graph: ExprIntervalGraph,
+    mut target_boundaries: Vec<ExprBoundaries>,
+    target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
+) -> Result<AnalysisContext> {
+    let initial_boundaries = target_boundaries.clone();
+    target_expr_and_indices.iter().for_each(|(expr, i)| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            if let Some(bound) = target_boundaries
+                .iter_mut()
+                .find(|bound| bound.column.eq(column))
+            {
+                bound.update_interval(graph.get_interval(*i))
+            };
+        }
+    });
+    let root_index = graph
+        .gather_node_indices(&[expr.clone()])
+        .first()
+        .ok_or_else(|| {
+            DataFusionError::Internal("Error in constructing predicate graph".to_string())
+        })?
+        .1;
+    let final_result = graph.get_interval(root_index);
+
+    let selectivity = calculate_selectivity(
+        &final_result.lower.value,
+        &final_result.upper.value,
+        &target_boundaries,
+        &initial_boundaries,
+    )?;
+
+    if !(0.0..=1.0).contains(&selectivity) {
+        return Err(DataFusionError::Internal(format!(
+            "Selectivity is out of limit: {}",
+            selectivity
+        )));
+    }
+
+    Ok(AnalysisContext::new_with_selectivity(
+        target_boundaries,
+        selectivity,
+    ))
 }
 
 fn calculate_selectivity(
