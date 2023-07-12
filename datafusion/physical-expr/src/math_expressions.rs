@@ -525,13 +525,13 @@ pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn compute_cot32(x:f32, y:f32) -> f32 {
+fn compute_cot32(x: f32, y: f32) -> f32 {
     let a = f32::sin(x);
     let b = f32::cos(y);
     return b / a;
 }
 
-fn compute_cot64(x:f64, y:f64) -> f64 {
+fn compute_cot64(x: f64, y: f64) -> f64 {
     let a = f64::sin(x);
     let b = f64::cos(y);
     return b / a;
@@ -782,14 +782,18 @@ mod tests {
 
     #[test]
     fn test_cot_f32() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float32Array::from(vec![12.1, 30.0, 90.0, -30.0]))
-        ];
+        let args: Vec<ArrayRef> =
+            vec![Arc::new(Float32Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
         let result = cot(&args).expect("failed to initialize function cot");
-        let floats = as_float32_array(&result).expect("failed to initialize function cot");
+        let floats =
+            as_float32_array(&result).expect("failed to initialize function cot");
 
-        let expected = Float32Array::from(
-            vec![-1.98646045, -0.156119958, -0.501202822, 0.156119958]);
+        let expected = Float32Array::from(vec![
+            -1.98646045,
+            -0.156119958,
+            -0.501202822,
+            0.156119958
+        ]);
 
         assert_eq!(floats.len(), 4);
         assert_eq!(floats, &expected);
@@ -798,14 +802,18 @@ mod tests {
 
     #[test]
     fn test_cot_f64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![12.1, 30.0, 90.0, -30.0]))
-        ];
+        let args: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
         let result = cot(&args).expect("failed to initialize function cot");
-        let floats = as_float64_array(&result).expect("failed to initialize function cot");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function cot");
 
-        let expected = Float64Array::from(
-            vec![-1.9864586858814326, -0.15611995216165922, -0.5012027833801533, 0.15611995216165922]);
+        let expected = Float64Array::from(vec![
+            -1.9864586858814326,
+            -0.15611995216165922,
+            -0.5012027833801533,
+            0.15611995216165922
+        ]);
 
         assert_eq!(floats.len(), 4);
         assert_eq!(floats, &expected);
