@@ -718,8 +718,8 @@ impl DefaultPhysicalPlanner {
 
                     let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter.into_iter());
 
-                    let initial_aggr = Arc::new(AggregateExec::try_new(
-                        AggregateMode::Partial,
+                    let final_grouping_set = Arc::new(AggregateExec::try_new(
+                        AggregateMode::Partitioned,
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
@@ -728,42 +728,26 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema.clone(),
                     )?);
 
-                    // update group column indices based on partial aggregate plan evaluation
-                    let final_group: Vec<Arc<dyn PhysicalExpr>> = initial_aggr.output_group_expr();
+                    // // update group column indices based on partial aggregate plan evaluation
+                    // let final_group: Vec<Arc<dyn PhysicalExpr>> = initial_aggr.output_group_expr();
 
-                    let can_repartition = !groups.is_empty()
-                        && session_state.config().target_partitions() > 1
-                        && session_state.config().repartition_aggregations();
+                    // let can_repartition = !groups.is_empty()
+                    //     && session_state.config().target_partitions() > 1
+                    //     && session_state.config().repartition_aggregations();
 
-                    let (initial_aggr, next_partition_mode): (
-                        Arc<dyn ExecutionPlan>,
-                        AggregateMode,
-                    ) = if can_repartition {
-                        // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                        (initial_aggr, AggregateMode::FinalPartitioned)
-                    } else {
-                        // construct a second aggregation, keeping the final column name equal to the
-                        // first aggregation and the expressions corresponding to the respective aggregate
-                        (initial_aggr, AggregateMode::Final)
-                    };
+                    // let (initial_aggr, next_partition_mode): (
+                    //     Arc<dyn ExecutionPlan>,
+                    //     AggregateMode,
+                    // ) = if can_repartition {
+                    //     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+                    //     (initial_aggr, AggregateMode::FinalPartitioned)
+                    // } else {
+                    //     // construct a second aggregation, keeping the final column name equal to the
+                    //     // first aggregation and the expressions corresponding to the respective aggregate
+                    //     (initial_aggr, AggregateMode::Final)
+                    // };
 
-                    let final_grouping_set = PhysicalGroupBy::new_single(
-                        final_group
-                            .iter()
-                            .enumerate()
-                            .map(|(i, expr)| (expr.clone(), groups.expr()[i].1.clone()))
-                            .collect()
-                    );
-
-                    Ok(Arc::new(AggregateExec::try_new(
-                        next_partition_mode,
-                        final_grouping_set,
-                        aggregates,
-                        filters,
-                        order_bys,
-                        initial_aggr,
-                        physical_input_schema.clone(),
-                    )?))
+                    Ok(final_grouping_set)
                 }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;

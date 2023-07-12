@@ -1321,6 +1321,7 @@ enum AggregateMode {
   FINAL = 1;
   FINAL_PARTITIONED = 2;
   SINGLE = 3;
+  PARTITIONED_MODE = 4;
 }
 
 message WindowAggExecNode {

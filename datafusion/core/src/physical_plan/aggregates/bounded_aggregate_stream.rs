@@ -155,7 +155,7 @@ impl BoundedAggregateStream {
         let all_aggregate_expressions =
             aggregates::aggregate_expressions(&agg.aggr_expr, &agg.mode, start_idx)?;
         let filter_expressions = match agg.mode {
-            AggregateMode::Partial | AggregateMode::Single => agg_filter_expr,
+            AggregateMode::Partial | AggregateMode::Single | AggregateMode::Partitioned => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 vec![None; agg.aggr_expr.len()]
             }
@@ -599,7 +599,7 @@ impl BoundedAggregateStream {
                         state_accessor
                             .point_to(0, group_state.aggregation_buffer.as_mut_slice());
                         match self.mode {
-                            AggregateMode::Partial | AggregateMode::Single => {
+                            AggregateMode::Partial | AggregateMode::Single | AggregateMode::Partitioned => {
                                 accumulator.update_batch(&values, &mut state_accessor)
                             }
                             AggregateMode::FinalPartitioned | AggregateMode::Final => {
@@ -622,7 +622,7 @@ impl BoundedAggregateStream {
                         )?;
                         let size_pre = accumulator.size();
                         let res = match self.mode {
-                            AggregateMode::Partial | AggregateMode::Single => {
+                            AggregateMode::Partial | AggregateMode::Single | AggregateMode::Partitioned => {
                                 accumulator.update_batch(&values)
                             }
                             AggregateMode::FinalPartitioned | AggregateMode::Final => {
@@ -973,7 +973,8 @@ impl BoundedAggregateStream {
             }
             AggregateMode::Final
             | AggregateMode::FinalPartitioned
-            | AggregateMode::Single => {
+            | AggregateMode::Single
+            | AggregateMode::Partitioned => {
                 let mut results = vec![];
                 for (idx, acc) in self.row_accumulators.iter().enumerate() {
                     let mut state_accessor = RowAccessor::new(&self.row_aggr_schema);
@@ -1016,7 +1017,8 @@ impl BoundedAggregateStream {
                     ),
                     AggregateMode::Final
                     | AggregateMode::FinalPartitioned
-                    | AggregateMode::Single => ScalarValue::iter_to_array(
+                    | AggregateMode::Single
+                    | AggregateMode::Partitioned => ScalarValue::iter_to_array(
                         group_state_chunk.iter().map(|group_state| {
                             group_state.group_state.accumulator_set[idx]
                                 .evaluate()

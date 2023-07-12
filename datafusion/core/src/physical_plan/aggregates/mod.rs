@@ -67,6 +67,8 @@ pub enum AggregateMode {
     Partial,
     /// Final aggregate that produces a single partition of output
     Final,
+    /// Aggregate that works on pre-partitioned data.
+    Partitioned,
     /// Final aggregate that works on pre-partitioned data.
     ///
     /// This requires the invariant that all rows with a particular
@@ -822,7 +824,7 @@ impl ExecutionPlan for AggregateExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         match &self.mode {
-            AggregateMode::Partial | AggregateMode::Single => {
+            AggregateMode::Partial | AggregateMode::Single | AggregateMode::Partitioned => {
                 // Partial and Single Aggregation will not change the output partitioning but need to respect the Alias
                 let input_partition = self.input.output_partitioning();
                 match input_partition {
@@ -875,7 +877,7 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Partial | AggregateMode::Single => {
                 vec![Distribution::UnspecifiedDistribution]
             }
-            AggregateMode::FinalPartitioned => {
+            AggregateMode::FinalPartitioned | AggregateMode::Partitioned  => {
                 vec![Distribution::HashPartitioned(self.output_group_expr())]
             }
             AggregateMode::Final => vec![Distribution::SinglePartition],
@@ -935,8 +937,11 @@ impl ExecutionPlan for AggregateExec {
         // TODO stats: aggr expression:
         // - aggregations somtimes also preserve invariants such as min, max...
         match self.mode {
-            AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.group_by.expr.is_empty() =>
+            AggregateMode::Final 
+            | AggregateMode::FinalPartitioned 
+            | AggregateMode::Single
+            | AggregateMode::Partitioned
+            if self.group_by.expr.is_empty() =>
             {
                 Statistics {
                     num_rows: Some(1),
@@ -949,7 +954,7 @@ impl ExecutionPlan for AggregateExec {
                 num_rows: self.input.statistics().num_rows,
                 is_exact: false,
                 ..Default::default()
-            },
+            }
         }
     }
 }
@@ -982,7 +987,8 @@ fn create_schema(
         }
         AggregateMode::Final
         | AggregateMode::FinalPartitioned
-        | AggregateMode::Single => {
+        | AggregateMode::Single
+        | AggregateMode::Partitioned => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
                 fields.push(expr.field()?)
@@ -1008,7 +1014,7 @@ fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial | AggregateMode::Single => Ok(aggr_expr
+        AggregateMode::Partial | AggregateMode::Single | AggregateMode::Partitioned  => Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let pre_cast_type = if let Some(Sum {
@@ -1141,7 +1147,8 @@ fn finalize_aggregation(
         }
         AggregateMode::Final
         | AggregateMode::FinalPartitioned
-        | AggregateMode::Single => {
+        | AggregateMode::Single
+        | AggregateMode::Partitioned => {
             // merge the state to the final value
             accumulators
                 .iter()
