@@ -30,14 +30,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::*;
-use arrow::compute::{concat_batches, take, SortOptions};
-use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
-use futures::{Stream, StreamExt};
-
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
@@ -51,11 +43,18 @@ use crate::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_common::DataFusionError;
-use datafusion_common::JoinType;
-use datafusion_common::Result;
+
+use arrow::array::*;
+use arrow::compute::{concat_batches, take, SortOptions};
+use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
+
+use futures::{Stream, StreamExt};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -279,10 +278,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         let right_oeq_properties = self.right.ordering_equivalence_properties();
         match self.join_type {
             JoinType::Inner => {
-                // Since stream side is left for this SortMergeJoin implementation.
-                // Global ordering of the left table is preserved at the output. Hence left table ordering
-                // equivalences are still valid.
-                new_properties.extend(left_oeq_properties.classes().to_vec());
+                // Since left side is the stream side for this SortMergeJoin implementation,
+                // global ordering of the left table is preserved at the output. Hence, left
+                // side ordering equivalences are still valid.
+                new_properties.extend(left_oeq_properties.classes().iter().cloned());
                 if let Some(output_ordering) = &self.output_ordering {
                     // We need to add ordering equivalence properties of right
                     // table as append to the lexicographical ordering to the existing ordering.
@@ -309,10 +308,10 @@ impl ExecutionPlan for SortMergeJoinExec {
                 }
             }
             JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-                new_properties.extend(left_oeq_properties.classes().to_vec());
+                new_properties.extend(left_oeq_properties.classes().iter().cloned());
             }
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-                new_properties.extend(right_oeq_properties.classes().to_vec());
+                new_properties.extend(right_oeq_properties.classes().iter().cloned());
             }
             // All ordering equivalences from left and/or right are invalidated.
             _ => {}

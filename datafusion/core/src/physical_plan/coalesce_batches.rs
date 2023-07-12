@@ -27,20 +27,21 @@ use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream,
 };
-use datafusion_common::Result;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
-use futures::stream::{Stream, StreamExt};
-use log::trace;
 
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, MetricsSet};
 use super::DisplayAs;
 use super::{metrics::ExecutionPlanMetricsSet, Statistics};
+
+use futures::stream::{Stream, StreamExt};
+use log::trace;
 
 /// CoalesceBatchesExec combines small batches into larger batches for more efficient use of
 /// vectorized processing by upstream operators.

@@ -20,24 +20,25 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use log::{debug, trace};
-
 use crate::physical_plan::common::spawn_buffered;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::sorts::streaming_merge;
-use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
-    expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
 };
+
+use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
+
+use log::{debug, trace};
 
 /// Sort preserving merge execution plan
 ///

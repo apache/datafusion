@@ -232,18 +232,18 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
 /// For this case, we say that `vec![a ASC, b ASC]`, and `vec![c DESC, d ASC]` are ordering equivalent.
 pub type OrderingEquivalentClass = EquivalentClass<LexOrdering>;
 
-/// Update each expression in the `ordering`, with alias expressions.
-/// Assume `ordering` is `a ASC, b ASC` and `c` is alias of `b`. Result will
-/// be `a ASC, c ASC`.
+/// Update each expression in `ordering` with alias expressions. Assume
+/// `ordering` is `a ASC, b ASC` and `c` is alias of `b`. Then, the result
+/// will be `a ASC, c ASC`.
 fn update_with_alias(
     mut ordering: LexOrdering,
     columns_map: &HashMap<Column, Vec<Column>>,
 ) -> LexOrdering {
     for (column, columns) in columns_map {
-        let col_expr = Arc::new(column.clone()) as Arc<dyn PhysicalExpr>;
+        let col_expr: Arc<dyn PhysicalExpr> = Arc::new(column.clone());
         // By convention we replace with first alias expression. Since during equivalence normalization
         // same aliases are normalized, we do not lose any capability by only using first alias.
-        let target_col = Arc::new(columns[0].clone()) as Arc<dyn PhysicalExpr>;
+        let target_col: Arc<dyn PhysicalExpr> = Arc::new(columns[0].clone());
         for item in ordering.iter_mut() {
             if item.expr.eq(&col_expr) {
                 // Change the corresponding entry with alias expression
@@ -256,10 +256,10 @@ fn update_with_alias(
 
 impl OrderingEquivalentClass {
     /// This function updates ordering equivalences with alias information.
-    /// For instance, assume column a and b are aliases (a as b),
-    /// and column (a ASC), (c DESC) are ordering equivalent. We replace column a with b
-    /// in ordering equivalence expressions. After this function, (a ASC), (c DESC) will be
-    /// converted to the (b ASC), (c DESC).
+    /// For instance, assume columns `a` and `b` are aliases (a as b), and
+    /// orderings `a ASC` and `c DESC` are equivalent. Here, we replace column
+    /// `a` with `b` in ordering equivalence expressions. After this function,
+    /// `a ASC`, `c DESC` will be converted to the `b ASC`, `c DESC`.
     fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
         self.head = update_with_alias(self.head.clone(), columns_map);
         self.others = self

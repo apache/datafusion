@@ -21,18 +21,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
-use super::{DisplayAs, Statistics};
+use super::{DisplayAs, SendableRecordBatchStream, Statistics};
+
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
-use datafusion_common::{DataFusionError, Result};
 
-use super::SendableRecordBatchStream;
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 

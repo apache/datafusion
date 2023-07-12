@@ -27,26 +27,27 @@ use super::expressions::PhysicalSortExpr;
 use super::{
     ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+
 use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr,
 };
+
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::{
     split_conjunction, AnalysisContext, OrderingEquivalenceProperties,
 };
 
-use log::trace;
-
-use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
+use log::trace;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.

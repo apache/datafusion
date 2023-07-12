@@ -17,17 +17,6 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use arrow::array::{
-    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
-};
-use arrow::compute;
-use arrow::datatypes::{Field, Schema, SchemaBuilder};
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_physical_expr::expressions::Column;
-use futures::future::{BoxFuture, Shared};
-use futures::{ready, FutureExt};
-use parking_lot::Mutex;
 use std::cmp::max;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -36,23 +25,31 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{ScalarValue, SharedResult};
-
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::{
-    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalentClass, PhysicalExpr,
-    PhysicalSortExpr,
-};
-
-use datafusion_common::JoinType;
-use datafusion_common::{DataFusionError, Result};
-
 use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::physical_plan::SchemaRef;
 use crate::physical_plan::{
     ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
+
+use arrow::array::{
+    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
+    UInt32Builder, UInt64Array,
+};
+use arrow::compute;
+use arrow::datatypes::{Field, Schema, SchemaBuilder};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{DataFusionError, JoinType, Result, ScalarValue, SharedResult};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalentClass, PhysicalExpr,
+    PhysicalSortExpr,
+};
+
+use futures::future::{BoxFuture, Shared};
+use futures::{ready, FutureExt};
+use parking_lot::Mutex;
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -286,8 +283,8 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
-/// Add `offset` value to the `Column` indices inside the `expr`
-/// generally used during update of for right table schema for join operations.
+/// Adds the `offset` value to `Column` indices inside `expr`. This function is
+/// generally used during the update of the right table schema in join operations.
 pub(crate) fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: usize,
@@ -301,7 +298,7 @@ pub(crate) fn add_offset_to_expr(
     })
 }
 
-/// Add `offset` value to the `Column` indices inside `sort_expr.expr`
+/// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
 pub(crate) fn add_offset_to_sort_expr(
     sort_expr: &PhysicalSortExpr,
     offset: usize,
@@ -312,7 +309,8 @@ pub(crate) fn add_offset_to_sort_expr(
     })
 }
 
-/// Add `offset` value to the `Column` indices for each `sort_expr.expr` inside `sort_exprs`
+/// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
+/// inside `sort_exprs`.
 pub(crate) fn add_offset_to_lex_ordering(
     sort_exprs: LexOrderingRef,
     offset: usize,
@@ -320,10 +318,11 @@ pub(crate) fn add_offset_to_lex_ordering(
     sort_exprs
         .iter()
         .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
-/// Add `offset` value to the `Column` indices expression inside `OrderingEquivalentClass`es
+/// Adds the `offset` value to `Column` indices for all expressions inside the
+/// given `OrderingEquivalentClass`es.
 pub(crate) fn add_offset_to_ordering_equivalence_classes(
     oeq_classes: &[OrderingEquivalentClass],
     offset: usize,
@@ -339,7 +338,7 @@ pub(crate) fn add_offset_to_ordering_equivalence_classes(
                 .collect::<Result<Vec<_>>>()?;
             Ok(OrderingEquivalentClass::new(new_head, new_others))
         })
-        .collect::<Result<Vec<_>>>()
+        .collect()
 }
 
 impl Display for JoinSide {

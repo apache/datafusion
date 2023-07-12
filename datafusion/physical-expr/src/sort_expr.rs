@@ -17,13 +17,15 @@
 
 //! Sort expressions
 
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::PhysicalExpr;
+
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 /// Represents Sort operation for a column in a RecordBatch
 #[derive(Clone, Debug)]
