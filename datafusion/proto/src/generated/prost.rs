@@ -2281,7 +2281,6 @@ impl ScalarFunction {
             ScalarFunction::Ascii => "Ascii",
             ScalarFunction::Ceil => "Ceil",
             ScalarFunction::Cos => "Cos",
-            ScalarFunction::Cot => "Cot",
             ScalarFunction::Digest => "Digest",
             ScalarFunction::Exp => "Exp",
             ScalarFunction::Floor => "Floor",
@@ -2378,6 +2377,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayContains => "ArrayContains",
             ScalarFunction::Encode => "Encode",
             ScalarFunction::Decode => "Decode",
+            ScalarFunction::Cot => "Cot",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2390,7 +2390,6 @@ impl ScalarFunction {
             "Ascii" => Some(Self::Ascii),
             "Ceil" => Some(Self::Ceil),
             "Cos" => Some(Self::Cos),
-            "Cot" => Some(Self::Cot),
             "Digest" => Some(Self::Digest),
             "Exp" => Some(Self::Exp),
             "Floor" => Some(Self::Floor),
@@ -2487,6 +2486,7 @@ impl ScalarFunction {
             "ArrayContains" => Some(Self::ArrayContains),
             "Encode" => Some(Self::Encode),
             "Decode" => Some(Self::Decode),
+            "Cot" => Some(Self::Cot),
             _ => None,
         }
     }

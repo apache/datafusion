@@ -17968,7 +17968,6 @@ impl serde::Serialize for ScalarFunction {
             Self::Ascii => "Ascii",
             Self::Ceil => "Ceil",
             Self::Cos => "Cos",
-            Self::Cot => "Cot",
             Self::Digest => "Digest",
             Self::Exp => "Exp",
             Self::Floor => "Floor",
@@ -18065,6 +18064,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayContains => "ArrayContains",
             Self::Encode => "Encode",
             Self::Decode => "Decode",
+            Self::Cot => "Cot",
         };
         serializer.serialize_str(variant)
     }
@@ -18083,7 +18083,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Ascii",
             "Ceil",
             "Cos",
-            "Cot",
             "Digest",
             "Exp",
             "Floor",
@@ -18180,6 +18179,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayContains",
             "Encode",
             "Decode",
+            "Cot",
         ];
 
         struct GeneratedVisitor;
@@ -18229,7 +18229,6 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Ascii" => Ok(ScalarFunction::Ascii),
                     "Ceil" => Ok(ScalarFunction::Ceil),
                     "Cos" => Ok(ScalarFunction::Cos),
-                    "Cot" => Ok(ScalarFunction::Cot),
                     "Digest" => Ok(ScalarFunction::Digest),
                     "Exp" => Ok(ScalarFunction::Exp),
                     "Floor" => Ok(ScalarFunction::Floor),
@@ -18326,6 +18325,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayContains" => Ok(ScalarFunction::ArrayContains),
                     "Encode" => Ok(ScalarFunction::Encode),
                     "Decode" => Ok(ScalarFunction::Decode),
+                    "Cot" => Ok(ScalarFunction::Cot),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
