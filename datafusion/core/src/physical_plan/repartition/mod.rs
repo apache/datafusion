@@ -58,7 +58,9 @@ use tokio::task::JoinHandle;
 
 // mod distributor_channels;
 mod flume_channels;
-use self::flume_channels::*;
+use self::flume_channels::{
+    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
+};
 
 type MaybeBatch = Option<Result<RecordBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
