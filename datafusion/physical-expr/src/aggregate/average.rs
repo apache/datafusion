@@ -567,7 +567,7 @@ where
 
         assert_eq!(counts.len(), sums.len());
 
-        // don't evaluate averages with null inputs to avoid errors on null vaues
+        // don't evaluate averages with null inputs to avoid errors on null values
         let array: PrimitiveArray<T> = if let Some(nulls) = nulls.as_ref() {
             assert_eq!(nulls.len(), sums.len());
             let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len());

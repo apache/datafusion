@@ -29,7 +29,7 @@ use datafusion_common::{
 };
 use datafusion_expr::Accumulator;
 
-/// An adpater that implements [`GroupsAccumulator`] for any [`Accumulator`]
+/// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
 /// While [`Accumulator`] are simpler to implement and can support
 /// more general calculations (like retractable window functions),
@@ -104,7 +104,7 @@ impl GroupsAccumulatorAdapter {
         let vec_size_pre =
             std::mem::size_of::<AccumulatorState>() * self.states.capacity();
 
-        // instanatiate new accumulators
+        // instantiate new accumulators
         let new_accumulators = total_num_groups - self.states.len();
         for _ in 0..new_accumulators {
             let accumulator = (self.factory)()?;

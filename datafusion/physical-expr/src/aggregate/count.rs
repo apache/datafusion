@@ -181,7 +181,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(Arc::new(array))
     }
 
-    // return arrays for sums and counts
+    // return arrays for counts
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
         let counts = std::mem::take(&mut self.counts);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
