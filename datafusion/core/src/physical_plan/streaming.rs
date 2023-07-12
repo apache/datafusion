@@ -25,12 +25,15 @@ use async_trait::async_trait;
 use futures::stream::StreamExt;
 
 use datafusion_common::{DataFusionError, Result, Statistics};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use log::debug;
 
+use crate::physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay};
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use datafusion_execution::TaskContext;
+
+use super::{DisplayAs, DisplayFormatType};
 
 /// A partition that can be converted into a [`SendableRecordBatchStream`]
 pub trait PartitionStream: Send + Sync {
@@ -46,6 +49,7 @@ pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
     projected_schema: SchemaRef,
+    projected_output_ordering: Option<LexOrdering>,
     infinite: bool,
 }
 
@@ -55,6 +59,7 @@ impl StreamingTableExec {
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
         projection: Option<&Vec<usize>>,
+        projected_output_ordering: Option<LexOrdering>,
         infinite: bool,
     ) -> Result<Self> {
         for x in partitions.iter() {
@@ -79,6 +84,7 @@ impl StreamingTableExec {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
+            projected_output_ordering,
             infinite,
         })
     }
@@ -87,6 +93,47 @@ impl StreamingTableExec {
 impl std::fmt::Debug for StreamingTableExec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LazyMemTableExec").finish_non_exhaustive()
+    }
+}
+
+impl DisplayAs for StreamingTableExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "StreamingTableExec: partition_sizes={:?}",
+                    self.partitions.len(),
+                )?;
+                if !self.projected_schema.fields().is_empty() {
+                    write!(
+                        f,
+                        ", projection={}",
+                        ProjectSchemaDisplay(&self.projected_schema)
+                    )?;
+                }
+                if self.infinite {
+                    write!(f, ", infinite_source=true")?;
+                }
+
+                self.projected_output_ordering
+                    .as_deref()
+                    .map_or(Ok(()), |ordering| {
+                        if !ordering.is_empty() {
+                            write!(
+                                f,
+                                ", output_ordering={}",
+                                OutputOrderingDisplay(ordering)
+                            )?;
+                        }
+                        Ok(())
+                    })
+            }
+        }
     }
 }
 
@@ -109,7 +156,7 @@ impl ExecutionPlan for StreamingTableExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        self.projected_output_ordering.as_deref()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -66,19 +66,19 @@ use crate::window_state::WindowAggState;
 /// ```
 ///
 /// Different methods on this trait will be called depending on the
-/// capabilities described by [`Self::supports_bounded_execution`],
-/// [`Self::uses_window_frame`], and [`Self::include_rank`],
+/// capabilities described by [`supports_bounded_execution`],
+/// [`uses_window_frame`], and [`include_rank`],
 ///
-/// # Stateless `PartitionEvaluator`
+/// # Stateless `PartitionEvaluator`s
 ///
-/// In this case, either [`Self::evaluate_all`] or [`Self::evaluate_all_with_rank`] is called with values for the
-/// entire partition.
+/// In this case, `PartitionEvaluator` holds no state, and either
+/// [`evaluate_all`] or [`evaluate_all_with_rank`] is called with
+/// values for the entire partition.
 ///
-/// # Stateful `PartitionEvaluator`
+/// # Stateful `PartitionEvaluator`s
 ///
-/// In this case, [`Self::evaluate`] is called to calculate
-/// the results of the window function incrementally for each new
-/// batch.
+/// In this case, [`Self::evaluate`] is called to calculate the window
+/// function incrementally for each new batch.
 ///
 /// For example, when computing `ROW_NUMBER` incrementally,
 /// [`Self::evaluate`] will be called multiple times with
@@ -87,16 +87,23 @@ use crate::window_state::WindowAggState;
 /// previous batch. The previous row number is saved and restored as
 /// the state.
 ///
-/// When implementing a new `PartitionEvaluator`,
-/// `uses_window_frame` and `supports_bounded_execution` flags determine which evaluation method will be called
-/// during runtime. Implement corresponding evaluator according to table below.
+/// When implementing a new `PartitionEvaluator`, implement
+/// corresponding evaluator according to table below.
 ///
-/// |uses_window_frame|supports_bounded_execution|function_to_implement|
-/// |---|---|----|
-/// |false|false|`evaluate_all` (if we were to implement `PERCENT_RANK` it would end up in this quadrant, we cannot produce any result without seeing whole data)|
-/// |false|true|`evaluate` (optionally can also implement `evaluate_all` for more optimized implementation. However, there will be default implementation that is suboptimal) . If we were to implement `ROW_NUMBER` it will end up in this quadrant. Example `OddRowNumber` showcases this use case|
-/// |true|false|`evaluate` (I think as long as `uses_window_frame` is `true`. There is no way for `supports_bounded_execution` to be false). I couldn't come up with any example for this quadrant |
-/// |true|true|`evaluate`. If we were to implement `FIRST_VALUE`, it would end up in this quadrant|.
+///
+/// |[`uses_window_frame`]|[`supports_bounded_execution`]|[`include_rank`]|function_to_implement|
+/// |---|---|----|----|
+/// |false (default)      |false (default)               |false (default)   | [`evaluate_all`]           |
+/// |false                |true                          |false             | [`evaluate`]               |
+/// |false                |true/false                    |true              | [`evaluate_all_with_rank`] |
+/// |true                 |true/false                    |true/false        | [`evaluate`]               |
+///
+/// [`evaluate`]: Self::evaluate
+/// [`evaluate_all`]: Self::evaluate_all
+/// [`evaluate_all_with_rank`]: Self::evaluate_all_with_rank
+/// [`uses_window_frame`]: Self::uses_window_frame
+/// [`include_rank`]: Self::include_rank
+/// [`supports_bounded_execution`]: Self::supports_bounded_execution
 pub trait PartitionEvaluator: Debug + Send {
     /// Updates the internal state for window function
     ///
@@ -129,9 +136,14 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(())
     }
 
-    /// If `uses_window_frame` flag is `false`. This method is used to calculate required range for the window function
-    /// Generally there is no required range, hence by default this returns smallest range(current row). e.g seeing current row
-    /// is enough to calculate window result (such as row_number, rank, etc)
+    /// If `uses_window_frame` flag is `false`. This method is used to
+    /// calculate required range for the window function during
+    /// stateful execution.
+    ///
+    /// Generally there is no required range, hence by default this
+    /// returns smallest range(current row). e.g seeing current row is
+    /// enough to calculate window result (such as row_number, rank,
+    /// etc)
     fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
         if self.uses_window_frame() {
             Err(DataFusionError::Execution(
@@ -259,8 +271,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// Can the window function be incrementally computed using
     /// bounded memory?
     ///
-    /// If this function returns true, implement [`PartitionEvaluator::evaluate`] and
-    /// [`PartitionEvaluator::update_state`].
+    /// See the table on [`Self`] for what functions to implement
     fn supports_bounded_execution(&self) -> bool {
         false
     }
@@ -268,16 +279,14 @@ pub trait PartitionEvaluator: Debug + Send {
     /// Does the window function use the values from the window frame,
     /// if one is specified?
     ///
-    /// If this function returns true, implement [`PartitionEvaluator::evaluate_all`].
-    ///
-    /// See details and examples on [`PartitionEvaluator::evaluate_all`].
+    /// See the table on [`Self`] for what functions to implement
     fn uses_window_frame(&self) -> bool {
         false
     }
 
     /// Can this function be evaluated with (only) rank
     ///
-    /// If `include_rank` is true, implement [`PartitionEvaluator::evaluate_all_with_rank`]
+    /// See the table on [`Self`] for what functions to implement
     fn include_rank(&self) -> bool {
         false
     }

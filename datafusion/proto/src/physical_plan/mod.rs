@@ -35,7 +35,7 @@ use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion::physical_plan::joins::CrossJoinExec;
+use datafusion::physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -716,6 +716,61 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
                 Ok(extension_node)
             }
+            PhysicalPlanType::NestedLoopJoin(join) => {
+                let left: Arc<dyn ExecutionPlan> =
+                    into_physical_plan(&join.left, registry, runtime, extension_codec)?;
+                let right: Arc<dyn ExecutionPlan> =
+                    into_physical_plan(&join.right, registry, runtime, extension_codec)?;
+                let join_type =
+                    protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
+                        proto_error(format!(
+                            "Received a NestedLoopJoinExecNode message with unknown JoinType {}",
+                            join.join_type
+                        ))
+                    })?;
+                let filter = join
+                    .filter
+                    .as_ref()
+                    .map(|f| {
+                        let schema = f
+                            .schema
+                            .as_ref()
+                            .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
+                            .try_into()?;
+
+                        let expression = parse_physical_expr(
+                            f.expression.as_ref().ok_or_else(|| {
+                                proto_error("Unexpected empty filter expression")
+                            })?,
+                            registry, &schema
+                        )?;
+                        let column_indices = f.column_indices
+                            .iter()
+                            .map(|i| {
+                                let side = protobuf::JoinSide::from_i32(i.side)
+                                    .ok_or_else(|| proto_error(format!(
+                                        "Received a NestedLoopJoinExecNode message with JoinSide in Filter {}",
+                                        i.side))
+                                    )?;
+
+                                Ok(ColumnIndex{
+                                    index: i.index as usize,
+                                    side: side.into(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+
+                        Ok(JoinFilter::new(expression, column_indices, schema))
+                    })
+                    .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
+
+                Ok(Arc::new(NestedLoopJoinExec::try_new(
+                    left,
+                    right,
+                    filter,
+                    &join_type.into(),
+                )?))
+            }
         }
     }
 
@@ -1155,6 +1210,52 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     }),
                 )),
             })
+        } else if let Some(exec) = plan.downcast_ref::<NestedLoopJoinExec>() {
+            let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.left().to_owned(),
+                extension_codec,
+            )?;
+            let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.right().to_owned(),
+                extension_codec,
+            )?;
+
+            let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+            let filter = exec
+                .filter()
+                .as_ref()
+                .map(|f| {
+                    let expression = f.expression().to_owned().try_into()?;
+                    let column_indices = f
+                        .column_indices()
+                        .iter()
+                        .map(|i| {
+                            let side: protobuf::JoinSide = i.side.to_owned().into();
+                            protobuf::ColumnIndex {
+                                index: i.index as u32,
+                                side: side.into(),
+                            }
+                        })
+                        .collect();
+                    let schema = f.schema().try_into()?;
+                    Ok(protobuf::JoinFilter {
+                        expression: Some(expression),
+                        column_indices,
+                        schema: Some(schema),
+                    })
+                })
+                .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
+
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::NestedLoopJoin(Box::new(
+                    protobuf::NestedLoopJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        join_type: join_type.into(),
+                        filter,
+                    },
+                ))),
+            })
         } else {
             let mut buf: Vec<u8> = vec![];
             match extension_codec.try_encode(plan_clone.clone(), &mut buf) {
@@ -1295,7 +1396,7 @@ mod roundtrip_tests {
             expressions::{binary, col, lit, NotExpr},
             expressions::{Avg, Column, DistinctCount, PhysicalSortExpr},
             filter::FilterExec,
-            joins::{HashJoinExec, PartitionMode},
+            joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
             sorts::sort::SortExec,
             AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics,
@@ -1427,6 +1528,34 @@ mod roundtrip_tests {
                     false,
                 )?))?;
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrip_nested_loop_join() -> Result<()> {
+        let field_a = Field::new("col", DataType::Int64, false);
+        let schema_left = Schema::new(vec![field_a.clone()]);
+        let schema_right = Schema::new(vec![field_a]);
+
+        let schema_left = Arc::new(schema_left);
+        let schema_right = Arc::new(schema_right);
+        for join_type in &[
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+        ] {
+            roundtrip_test(Arc::new(NestedLoopJoinExec::try_new(
+                Arc::new(EmptyExec::new(false, schema_left.clone())),
+                Arc::new(EmptyExec::new(false, schema_right.clone())),
+                None,
+                join_type,
+            )?))?;
         }
         Ok(())
     }

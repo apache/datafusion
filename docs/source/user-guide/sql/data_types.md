@@ -151,7 +151,6 @@ The following types are supported by the `arrow_typeof` function:
 | `Interval(YearMonth)`                                       |
 | `Interval(DayTime)`                                         |
 | `Interval(MonthDayNano)`                                    |
-| `Interval(MonthDayNano)`                                    |
 | `FixedSizeBinary(<len>)` (e.g. `FixedSizeBinary(16)`)       |
 | `Decimal128(<precision>, <scale>)` e.g. `Decimal128(3, 10)` |
 | `Decimal256(<precision>, <scale>)` e.g. `Decimal256(3, 10)` |

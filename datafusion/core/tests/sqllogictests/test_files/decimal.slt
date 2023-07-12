@@ -603,3 +603,12 @@ query R
 select try_cast(1234567 as decimal(7,3));
 ----
 NULL
+
+statement ok
+create table foo (a DECIMAL(38, 20), b DECIMAL(38, 0));
+
+statement ok
+insert into foo VALUES (1, 5);
+
+query error DataFusion error: Arrow error: Compute error: Overflow happened on: 100000000000000000000 \* 100000000000000000000000000000000000000
+select a / b from foo;

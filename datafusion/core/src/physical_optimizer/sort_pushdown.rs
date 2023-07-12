@@ -17,7 +17,7 @@
 use crate::physical_optimizer::utils::{add_sort_above, is_limit, is_union, is_window};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::JoinSide;
-use crate::physical_plan::joins::SortMergeJoinExec;
+use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -263,16 +263,25 @@ fn pushdown_requirement_to_children(
         // TODO: Add support for Projection push down
         || plan.as_any().is::<ProjectionExec>()
         || is_limit(plan)
+        || plan.as_any().is::<HashJoinExec>()
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // Pushing down is not beneficial
         Ok(None)
     } else {
-        Ok(Some(vec![
-            parent_required.map(|elem| elem.to_vec());
-            plan.children().len()
-        ]))
+        Ok(Some(
+            maintains_input_order
+                .iter()
+                .map(|flag| {
+                    if *flag {
+                        parent_required.map(|elem| elem.to_vec())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ))
     }
     // TODO: Add support for Projection push down
 }

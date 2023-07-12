@@ -101,7 +101,9 @@ pub enum ScalarValue {
     FixedSizeBinary(i32, Option<Vec<u8>>),
     /// large binary
     LargeBinary(Option<Vec<u8>>),
-    /// list of nested ScalarValue
+    /// Fixed size list of nested ScalarValue
+    Fixedsizelist(Option<Vec<ScalarValue>>, FieldRef, i32),
+    /// List of nested ScalarValue
     List(Option<Vec<ScalarValue>>, FieldRef),
     /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
     Date32(Option<i32>),
@@ -196,6 +198,10 @@ impl PartialEq for ScalarValue {
             (FixedSizeBinary(_, _), _) => false,
             (LargeBinary(v1), LargeBinary(v2)) => v1.eq(v2),
             (LargeBinary(_), _) => false,
+            (Fixedsizelist(v1, t1, l1), Fixedsizelist(v2, t2, l2)) => {
+                v1.eq(v2) && t1.eq(t2) && l1.eq(l2)
+            }
+            (Fixedsizelist(_, _, _), _) => false,
             (List(v1, t1), List(v2, t2)) => v1.eq(v2) && t1.eq(t2),
             (List(_, _), _) => false,
             (Date32(v1), Date32(v2)) => v1.eq(v2),
@@ -315,6 +321,14 @@ impl PartialOrd for ScalarValue {
             (FixedSizeBinary(_, _), _) => None,
             (LargeBinary(v1), LargeBinary(v2)) => v1.partial_cmp(v2),
             (LargeBinary(_), _) => None,
+            (Fixedsizelist(v1, t1, l1), Fixedsizelist(v2, t2, l2)) => {
+                if t1.eq(t2) && l1.eq(l2) {
+                    v1.partial_cmp(v2)
+                } else {
+                    None
+                }
+            }
+            (Fixedsizelist(_, _, _), _) => None,
             (List(v1, t1), List(v2, t2)) => {
                 if t1.eq(t2) {
                     v1.partial_cmp(v2)
@@ -1449,6 +1463,11 @@ impl std::hash::Hash for ScalarValue {
             Binary(v) => v.hash(state),
             FixedSizeBinary(_, v) => v.hash(state),
             LargeBinary(v) => v.hash(state),
+            Fixedsizelist(v, t, l) => {
+                v.hash(state);
+                t.hash(state);
+                l.hash(state);
+            }
             List(v, t) => {
                 v.hash(state);
                 t.hash(state);
@@ -1935,6 +1954,10 @@ impl ScalarValue {
             ScalarValue::Binary(_) => DataType::Binary,
             ScalarValue::FixedSizeBinary(sz, _) => DataType::FixedSizeBinary(*sz),
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
+            ScalarValue::Fixedsizelist(_, field, length) => DataType::FixedSizeList(
+                Arc::new(Field::new("item", field.data_type().clone(), true)),
+                *length,
+            ),
             ScalarValue::List(_, field) => DataType::List(Arc::new(Field::new(
                 "item",
                 field.data_type().clone(),
@@ -2027,11 +2050,13 @@ impl ScalarValue {
         impl_checked_op!(self, rhs, checked_sub, -)
     }
 
+    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
     pub fn and<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, &&)
     }
 
+    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
     pub fn or<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, ||)
@@ -2083,6 +2108,7 @@ impl ScalarValue {
             ScalarValue::Binary(v) => v.is_none(),
             ScalarValue::FixedSizeBinary(_, v) => v.is_none(),
             ScalarValue::LargeBinary(v) => v.is_none(),
+            ScalarValue::Fixedsizelist(v, ..) => v.is_none(),
             ScalarValue::List(v, _) => v.is_none(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
@@ -2788,6 +2814,9 @@ impl ScalarValue {
                         .collect::<LargeBinaryArray>(),
                 ),
             },
+            ScalarValue::Fixedsizelist(..) => {
+                unimplemented!("FixedSizeList is not supported yet")
+            }
             ScalarValue::List(values, field) => Arc::new(match field.data_type() {
                 DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
                 DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
@@ -3249,6 +3278,7 @@ impl ScalarValue {
             ScalarValue::LargeBinary(val) => {
                 eq_array_primitive!(array, index, LargeBinaryArray, val)
             }
+            ScalarValue::Fixedsizelist(..) => unimplemented!(),
             ScalarValue::List(_, _) => unimplemented!(),
             ScalarValue::Date32(val) => {
                 eq_array_primitive!(array, index, Date32Array, val)
@@ -3369,7 +3399,8 @@ impl ScalarValue {
                 | ScalarValue::LargeBinary(b) => {
                     b.as_ref().map(|b| b.capacity()).unwrap_or_default()
                 }
-                ScalarValue::List(vals, field) => {
+                ScalarValue::Fixedsizelist(vals, field, _)
+                | ScalarValue::List(vals, field) => {
                     vals.as_ref()
                         .map(|vals| Self::size_of_vec(vals) - std::mem::size_of_val(vals))
                         .unwrap_or_default()
@@ -3699,7 +3730,9 @@ impl fmt::Display for ScalarValue {
             ScalarValue::TimestampNanosecond(e, _) => format_option!(f, e)?,
             ScalarValue::Utf8(e) => format_option!(f, e)?,
             ScalarValue::LargeUtf8(e) => format_option!(f, e)?,
-            ScalarValue::Binary(e) => match e {
+            ScalarValue::Binary(e)
+            | ScalarValue::FixedSizeBinary(_, e)
+            | ScalarValue::LargeBinary(e) => match e {
                 Some(l) => write!(
                     f,
                     "{}",
@@ -3710,29 +3743,7 @@ impl fmt::Display for ScalarValue {
                 )?,
                 None => write!(f, "NULL")?,
             },
-            ScalarValue::FixedSizeBinary(_, e) => match e {
-                Some(l) => write!(
-                    f,
-                    "{}",
-                    l.iter()
-                        .map(|v| format!("{v}"))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                )?,
-                None => write!(f, "NULL")?,
-            },
-            ScalarValue::LargeBinary(e) => match e {
-                Some(l) => write!(
-                    f,
-                    "{}",
-                    l.iter()
-                        .map(|v| format!("{v}"))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                )?,
-                None => write!(f, "NULL")?,
-            },
-            ScalarValue::List(e, _) => match e {
+            ScalarValue::Fixedsizelist(e, ..) | ScalarValue::List(e, _) => match e {
                 Some(l) => write!(
                     f,
                     "{}",
@@ -3816,6 +3827,7 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({self})"),
             ScalarValue::LargeBinary(Some(_)) => write!(f, "LargeBinary(\"{self}\")"),
+            ScalarValue::Fixedsizelist(..) => write!(f, "FixedSizeList([{self}])"),
             ScalarValue::List(_, _) => write!(f, "List([{self}])"),
             ScalarValue::Date32(_) => write!(f, "Date32(\"{self}\")"),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{self}\")"),

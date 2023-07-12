@@ -564,6 +564,8 @@ enum ScalarFunction {
   Cardinality = 98;
   TrimArray = 99;
   ArrayContains = 100;
+  Encode = 101;
+  Decode = 102;
 }
 
 message ScalarFunctionNode {
@@ -738,6 +740,7 @@ message WindowFrameBound {
 
 message Schema {
   repeated Field columns = 1;
+  map<string, string> metadata = 2;
 }
 
 message Field {
@@ -747,6 +750,7 @@ message Field {
   bool nullable = 3;
   // for complex data types like structs, unions
   repeated Field children = 4;
+  map<string, string> metadata = 5;
 }
 
 message FixedSizeBinary{
@@ -1055,6 +1059,7 @@ message PhysicalPlanNode {
     UnionExecNode union = 19;
     ExplainExecNode explain = 20;
     SortPreservingMergeExecNode sort_preserving_merge = 21;
+    NestedLoopJoinExecNode nested_loop_join = 22;
   }
 }
 
@@ -1375,6 +1380,13 @@ message SortPreservingMergeExecNode {
   repeated PhysicalExprNode expr = 2;
   // Maximum number of highest/lowest rows to fetch; negative means no limit
   int64 fetch = 3;
+}
+
+message NestedLoopJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  JoinType join_type = 3;
+  JoinFilter filter = 4;
 }
 
 message CoalesceBatchesExecNode {

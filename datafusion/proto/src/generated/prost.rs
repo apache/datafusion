@@ -893,6 +893,11 @@ pub struct WindowFrameBound {
 pub struct Schema {
     #[prost(message, repeated, tag = "1")]
     pub columns: ::prost::alloc::vec::Vec<Field>,
+    #[prost(map = "string, string", tag = "2")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -907,6 +912,11 @@ pub struct Field {
     /// for complex data types like structs, unions
     #[prost(message, repeated, tag = "4")]
     pub children: ::prost::alloc::vec::Vec<Field>,
+    #[prost(map = "string, string", tag = "5")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1384,7 +1394,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1435,6 +1445,8 @@ pub mod physical_plan_node {
         SortPreservingMerge(
             ::prost::alloc::boxed::Box<super::SortPreservingMergeExecNode>,
         ),
+        #[prost(message, tag = "22")]
+        NestedLoopJoin(::prost::alloc::boxed::Box<super::NestedLoopJoinExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1936,6 +1948,18 @@ pub struct SortPreservingMergeExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NestedLoopJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(enumeration = "JoinType", tag = "3")]
+    pub join_type: i32,
+    #[prost(message, optional, tag = "4")]
+    pub filter: ::core::option::Option<JoinFilter>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CoalesceBatchesExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
@@ -2235,6 +2259,8 @@ pub enum ScalarFunction {
     Cardinality = 98,
     TrimArray = 99,
     ArrayContains = 100,
+    Encode = 101,
+    Decode = 102,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2344,6 +2370,8 @@ impl ScalarFunction {
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::TrimArray => "TrimArray",
             ScalarFunction::ArrayContains => "ArrayContains",
+            ScalarFunction::Encode => "Encode",
+            ScalarFunction::Decode => "Decode",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2450,6 +2478,8 @@ impl ScalarFunction {
             "Cardinality" => Some(Self::Cardinality),
             "TrimArray" => Some(Self::TrimArray),
             "ArrayContains" => Some(Self::ArrayContains),
+            "Encode" => Some(Self::Encode),
+            "Decode" => Some(Self::Decode),
             _ => None,
         }
     }
