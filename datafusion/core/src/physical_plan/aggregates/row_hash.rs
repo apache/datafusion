@@ -291,7 +291,10 @@ fn create_group_accumulator(
         agg_expr.create_groups_accumulator()
     } else {
         // Note in the log when the slow path is used
-        debug!("Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}", agg_expr.name());
+        debug!(
+            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
+            agg_expr.name()
+        );
         let agg_expr_captured = agg_expr.clone();
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
