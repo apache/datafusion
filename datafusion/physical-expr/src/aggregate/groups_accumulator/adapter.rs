@@ -29,7 +29,7 @@ use datafusion_common::{
 };
 use datafusion_expr::Accumulator;
 
-/// An adpater that implements [`GroupsAccumulator`] for any [`Accumulator`]
+/// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
 /// While [`Accumulator`] are simpler to implement and can support
 /// more general calculations (like retractable window functions),
