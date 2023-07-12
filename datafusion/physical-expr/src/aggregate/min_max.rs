@@ -1266,7 +1266,7 @@ where
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values.get(0).unwrap().as_primitive::<T>();
+        let values = values[0].as_primitive::<T>();
 
         self.min_max.resize(
             total_num_groups,

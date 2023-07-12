@@ -117,7 +117,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values.get(0).unwrap();
+        let values = &values[0];
 
         // Add one to each group's counter for each non null, non
         // filtered value
@@ -143,7 +143,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
         // first batch is counts, second is partial sums
-        let partial_counts = values.get(0).unwrap().as_primitive::<Int64Type>();
+        let partial_counts = values[0].as_primitive::<Int64Type>();
 
         // intermediate counts are always created as non null
         assert_eq!(partial_counts.null_count(), 0);

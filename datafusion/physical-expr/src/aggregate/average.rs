@@ -500,7 +500,7 @@ where
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values.get(0).unwrap().as_primitive::<T>();
+        let values = values[0].as_primitive::<T>();
 
         // increment counts, update sums
         self.counts.resize(total_num_groups, 0);
@@ -530,8 +530,8 @@ where
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
         // first batch is counts, second is partial sums
-        let partial_counts = values.get(0).unwrap().as_primitive::<UInt64Type>();
-        let partial_sums = values.get(1).unwrap().as_primitive::<T>();
+        let partial_counts = values[0].as_primitive::<UInt64Type>();
+        let partial_sums = values[1].as_primitive::<T>();
         // update counts with partial counts
         self.counts.resize(total_num_groups, 0);
         self.null_state.accumulate(

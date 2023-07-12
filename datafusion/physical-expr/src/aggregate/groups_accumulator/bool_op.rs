@@ -75,7 +75,7 @@ where
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values.get(0).unwrap().as_boolean();
+        let values = values[0].as_boolean();
 
         if self.values.len() < total_num_groups {
             let new_groups = total_num_groups - self.values.len();
