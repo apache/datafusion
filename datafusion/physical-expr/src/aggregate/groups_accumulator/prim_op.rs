@@ -24,7 +24,7 @@ use datafusion_common::Result;
 
 use crate::{aggregate::utils::adjust_output_array, GroupsAccumulator};
 
-use super::accumulate::NullState;
+use super::{accumulate::NullState, EmitTo};
 
 /// An accumulator that implements a single operation over
 /// [`ArrowPrimitiveType`] where the accumulated state is the same as
@@ -112,16 +112,16 @@ where
         Ok(())
     }
 
-    fn evaluate(&mut self) -> Result<ArrayRef> {
-        let values = std::mem::take(&mut self.values);
-        let nulls = self.null_state.build();
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let values = emit_to.take_needed(&mut self.values);
+        let nulls = self.null_state.build(emit_to);
         let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)); // no copy
 
         adjust_output_array(&self.data_type, Arc::new(values))
     }
 
-    fn state(&mut self) -> Result<Vec<ArrayRef>> {
-        self.evaluate().map(|arr| vec![arr])
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        self.evaluate(emit_to).map(|arr| vec![arr])
     }
 
     fn merge_batch(

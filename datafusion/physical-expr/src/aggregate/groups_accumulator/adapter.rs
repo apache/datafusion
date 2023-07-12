@@ -17,7 +17,7 @@
 
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
-use super::GroupsAccumulator;
+use super::{EmitTo, GroupsAccumulator};
 use arrow::{
     array::{AsArray, UInt32Builder},
     compute,
@@ -71,7 +71,7 @@ impl AccumulatorState {
     fn size(&self) -> usize {
         self.accumulator.size()
             + std::mem::size_of_val(self)
-            + std::mem::size_of::<u32>() * self.indices.capacity()
+            + self.indices.allocated_size()
     }
 }
 
@@ -82,40 +82,29 @@ impl GroupsAccumulatorAdapter {
     where
         F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
     {
-        let mut new_self = Self {
+        Self {
             factory: Box::new(factory),
             states: vec![],
             allocation_bytes: 0,
-        };
-        new_self.reset_allocation();
-        new_self
-    }
-
-    // Reset the allocation bytes to empty state
-    fn reset_allocation(&mut self) {
-        assert!(self.states.is_empty());
-        self.allocation_bytes = std::mem::size_of::<GroupsAccumulatorAdapter>();
+        }
     }
 
     /// Ensure that self.accumulators has total_num_groups
     fn make_accumulators_if_needed(&mut self, total_num_groups: usize) -> Result<()> {
         // can't shrink
         assert!(total_num_groups >= self.states.len());
-        let vec_size_pre =
-            std::mem::size_of::<AccumulatorState>() * self.states.capacity();
+        let vec_size_pre = self.states.allocated_size();
 
         // instantiate new accumulators
         let new_accumulators = total_num_groups - self.states.len();
         for _ in 0..new_accumulators {
             let accumulator = (self.factory)()?;
             let state = AccumulatorState::new(accumulator);
-            self.allocation_bytes += state.size();
+            self.add_allocation(state.size());
             self.states.push(state);
         }
 
-        self.allocation_bytes +=
-            std::mem::size_of::<AccumulatorState>() * self.states.capacity();
-        self.allocation_bytes -= vec_size_pre;
+        self.adjust_allocation(vec_size_pre, self.states.allocated_size());
         Ok(())
     }
 
@@ -204,9 +193,11 @@ impl GroupsAccumulatorAdapter {
         // RecordBatch(es)
         let iter = groups_with_rows.iter().zip(offsets.windows(2));
 
+        let mut sizes_pre = 0;
+        let mut sizes_post = 0;
         for (&group_idx, offsets) in iter {
             let state = &mut self.states[group_idx];
-            let size_pre = state.size();
+            sizes_pre += state.size();
 
             let values_to_accumulate =
                 slice_and_maybe_filter(&values, opt_filter.as_ref(), offsets)?;
@@ -215,11 +206,31 @@ impl GroupsAccumulatorAdapter {
             // clear out the state so they are empty for next
             // iteration
             state.indices.clear();
-
-            self.allocation_bytes += state.size();
-            self.allocation_bytes -= size_pre;
+            sizes_post += state.size();
         }
+
+        self.adjust_allocation(sizes_pre, sizes_post);
         Ok(())
+    }
+
+    fn add_allocation(&mut self, size: usize) {
+        self.allocation_bytes += size;
+    }
+
+    fn free_allocation(&mut self, size: usize) {
+        // use saturating sub to avoid errors if the accumulators
+        // report erronious sizes
+        self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
+    }
+
+    /// Adjusts the allocation for something that started with
+    /// start_size and now has new_size avoiding overflow
+    fn adjust_allocation(&mut self, old_size: usize, new_size: usize) {
+        if new_size > old_size {
+            self.add_allocation(new_size - old_size)
+        } else {
+            self.free_allocation(old_size - new_size)
+        }
     }
 }
 
@@ -243,27 +254,36 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         Ok(())
     }
 
-    fn evaluate(&mut self) -> Result<ArrayRef> {
-        let states = std::mem::take(&mut self.states);
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let vec_size_pre = self.states.allocated_size();
+
+        let states = emit_to.take_needed(&mut self.states);
 
         let results: Vec<ScalarValue> = states
             .into_iter()
-            .map(|state| state.accumulator.evaluate())
+            .map(|state| {
+                self.free_allocation(state.size());
+                state.accumulator.evaluate()
+            })
             .collect::<Result<_>>()?;
 
         let result = ScalarValue::iter_to_array(results);
-        self.reset_allocation();
+
+        self.adjust_allocation(vec_size_pre, self.states.allocated_size());
+
         result
     }
 
-    fn state(&mut self) -> Result<Vec<ArrayRef>> {
-        let states = std::mem::take(&mut self.states);
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let vec_size_pre = self.states.allocated_size();
+        let states = emit_to.take_needed(&mut self.states);
 
         // each accumulator produces a potential vector of values
         // which we need to form into columns
         let mut results: Vec<Vec<ScalarValue>> = vec![];
 
         for state in states {
+            self.free_allocation(state.size());
             let accumulator_state = state.accumulator.state()?;
             results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
@@ -284,8 +304,8 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
                 assert_eq!(arr.len(), first_col.len())
             }
         }
+        self.adjust_allocation(vec_size_pre, self.states.allocated_size());
 
-        self.reset_allocation();
         Ok(arrays)
     }
 
@@ -302,7 +322,8 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             opt_filter,
             total_num_groups,
             |accumulator, values_to_accumulate| {
-                accumulator.merge_batch(values_to_accumulate)
+                accumulator.merge_batch(values_to_accumulate)?;
+                Ok(())
             },
         )?;
         Ok(())
@@ -310,6 +331,23 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
     fn size(&self) -> usize {
         self.allocation_bytes
+    }
+}
+
+/// Extension trait for [`Vec`] to account for allocations.
+pub trait VecAllocExt {
+    /// Item type.
+    type T;
+    /// Return the amount of memory allocated by this Vec (not
+    /// recursively counting any heap allocations contained within the
+    /// structure). Does not include the size of `self`
+    fn allocated_size(&self) -> usize;
+}
+
+impl<T> VecAllocExt for Vec<T> {
+    type T = T;
+    fn allocated_size(&self) -> usize {
+        std::mem::size_of::<T>() * self.capacity()
     }
 }
 

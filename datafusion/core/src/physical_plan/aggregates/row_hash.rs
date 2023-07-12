@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Hash aggregation through row format
-//!
-//! POC demonstration of GroupByHashApproach
+//! Hash aggregation
 
 use datafusion_physical_expr::{
-    AggregateExpr, GroupsAccumulator, GroupsAccumulatorAdapter,
+    AggregateExpr, EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
 };
 use log::debug;
 use std::sync::Arc;
@@ -44,7 +42,7 @@ use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryDelta, MemoryReservation};
 use datafusion_execution::TaskContext;
 use hashbrown::raw::RawTable;
 
@@ -58,6 +56,7 @@ pub(crate) enum ExecutionState {
     Done,
 }
 
+use super::order::GroupOrdering;
 use super::AggregateExec;
 
 /// Hash based Grouping Aggregator
@@ -199,6 +198,14 @@ pub(crate) struct GroupedHashAggregateStream {
 
     /// max rows in output RecordBatches
     batch_size: usize,
+
+    /// Optional ordering information, that might allow groups to be
+    /// emitted from the hash table prior to seeing the end of the
+    /// input
+    group_ordering: GroupOrdering,
+
+    /// Have we seen the end of the input
+    input_done: bool,
 }
 
 impl GroupedHashAggregateStream {
@@ -258,6 +265,16 @@ impl GroupedHashAggregateStream {
         let map = RawTable::with_capacity(0);
         let group_values = row_converter.empty_rows(0, 0);
 
+        let group_ordering = agg
+            .aggregation_ordering
+            .as_ref()
+            .map(|aggregation_ordering| {
+                GroupOrdering::try_new(&group_schema, aggregation_ordering)
+            })
+            // return error if any
+            .transpose()?
+            .unwrap_or(GroupOrdering::None);
+
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -279,6 +296,8 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             random_state: Default::default(),
             batch_size,
+            group_ordering,
+            input_done: false,
         })
     }
 }
@@ -303,6 +322,16 @@ fn create_group_accumulator(
     }
 }
 
+/// Extracts a successful Ok(_) or returns Poll::Ready(Some(Err(e))) with errors
+macro_rules! extract_ok {
+    ($RES: expr) => {{
+        match $RES {
+            Ok(v) => v,
+            Err(e) => return Poll::Ready(Some(Err(e))),
+        }
+    }};
+}
+
 impl Stream for GroupedHashAggregateStream {
     type Item = Result<RecordBatch>;
 
@@ -320,36 +349,36 @@ impl Stream for GroupedHashAggregateStream {
                         // new batch to aggregate
                         Some(Ok(batch)) => {
                             let timer = elapsed_compute.timer();
-                            let result = self.group_aggregate_batch(batch);
+                            // Do the grouping
+                            extract_ok!(self.group_aggregate_batch(batch));
+
+                            // If we can begin emitting rows, do so,
+                            // otherwise keep consuming input
+                            let to_emit = if self.input_done {
+                                Some(EmitTo::All)
+                            } else {
+                                self.group_ordering.emit_to()
+                            };
+
+                            if let Some(to_emit) = to_emit {
+                                let batch =
+                                    extract_ok!(self.create_batch_from_map(to_emit));
+                                self.exec_state = ExecutionState::ProducingOutput(batch);
+                            }
                             timer.done();
-
-                            // allocate memory AFTER we actually used
-                            // the memory, which simplifies the whole
-                            // accounting and we are OK with
-                            // overshooting a bit.
-                            //
-                            // Also this means we either store the
-                            // whole record batch or not.
-                            let result = result.and_then(|allocated| {
-                                self.reservation.try_grow(allocated)
-                            });
-
-                            if let Err(e) = result {
-                                return Poll::Ready(Some(Err(e)));
-                            }
                         }
-                        // inner had error, return to caller
-                        Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-                        // inner is done, producing output
+                        Some(Err(e)) => {
+                            // inner had error, return to caller
+                            return Poll::Ready(Some(Err(e)));
+                        }
                         None => {
+                            // inner is done, emit all rows and switch to producing output
+                            self.input_done = true;
+                            self.group_ordering.input_done();
                             let timer = elapsed_compute.timer();
-                            match self.create_batch_from_map() {
-                                Ok(batch) => {
-                                    self.exec_state =
-                                        ExecutionState::ProducingOutput(batch)
-                                }
-                                Err(e) => return Poll::Ready(Some(Err(e))),
-                            }
+                            let batch =
+                                extract_ok!(self.create_batch_from_map(EmitTo::All));
+                            self.exec_state = ExecutionState::ProducingOutput(batch);
                             timer.done();
                         }
                     }
@@ -358,7 +387,11 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput(batch) => {
                     // slice off a part of the batch, if needed
                     let output_batch = if batch.num_rows() <= self.batch_size {
-                        self.exec_state = ExecutionState::Done;
+                        if self.input_done {
+                            self.exec_state = ExecutionState::Done;
+                        } else {
+                            self.exec_state = ExecutionState::ReadingInput
+                        }
                         batch
                     } else {
                         // output first batch_size rows
@@ -397,7 +430,7 @@ impl GroupedHashAggregateStream {
     fn update_group_state(
         &mut self,
         group_values: &[ArrayRef],
-        allocated: &mut usize,
+        memory_delta: &mut MemoryDelta,
     ) -> Result<()> {
         // Convert the group keys into the row format
         // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
@@ -405,8 +438,7 @@ impl GroupedHashAggregateStream {
         let n_rows = group_rows.num_rows();
 
         // track memory used
-        let group_values_size_pre = self.group_values.size();
-        let scratch_size_pre = self.scratch_space.size();
+        memory_delta.dec(self.state_size());
 
         // tracks to which group each of the input rows belongs
         let group_indices = &mut self.scratch_space.current_group_indices;
@@ -418,6 +450,8 @@ impl GroupedHashAggregateStream {
         batch_hashes.resize(n_rows, 0);
         create_hashes(group_values, &self.random_state, batch_hashes)?;
 
+        let mut allocated = 0;
+        let starting_num_groups = self.group_values.num_rows();
         for (row, &hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
@@ -439,35 +473,40 @@ impl GroupedHashAggregateStream {
                     self.map.insert_accounted(
                         (hash, group_idx),
                         |(hash, _group_index)| *hash,
-                        allocated,
+                        &mut allocated,
                     );
                     group_idx
                 }
             };
             group_indices.push(group_idx);
         }
+        memory_delta.inc(allocated);
 
-        // account for memory growth in scratch space
-        *allocated += self.scratch_space.size();
-        *allocated -= scratch_size_pre; // subtract after adding to avoid underflow
+        // Update ordering information if necessary
+        let total_num_groups = self.group_values.num_rows();
+        if total_num_groups > starting_num_groups {
+            self.group_ordering.new_groups(
+                group_values,
+                group_indices,
+                batch_hashes,
+                total_num_groups,
+            )?;
+        }
 
-        // account for any memory increase used to store group_values
-        *allocated += self.group_values.size();
-        *allocated -= group_values_size_pre; // subtract after adding to avoid underflow
+        // account for memory change
+        memory_delta.inc(self.state_size());
 
         Ok(())
     }
 
     /// Perform group-by aggregation for the given [`RecordBatch`].
-    ///
-    /// If successful, returns the additional amount of memory, in
-    /// bytes, that were allocated during this process.
-    fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<usize> {
+    fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Evaluate the grouping expressions
         let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
 
         // Keep track of memory allocated:
-        let mut allocated = 0usize;
+        let mut memory_delta = MemoryDelta::new();
+        memory_delta.dec(self.state_size());
 
         // Evaluate the aggregation expressions.
         let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
@@ -475,11 +514,9 @@ impl GroupedHashAggregateStream {
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
 
-        let row_converter_size_pre = self.row_converter.size();
-
         for group_values in &group_by_values {
             // calculate the group indices for each input row
-            self.update_group_state(group_values, &mut allocated)?;
+            self.update_group_state(group_values, &mut memory_delta)?;
             let group_indices = &self.scratch_space.current_group_indices;
 
             // Gather the inputs to call the actual accumulator
@@ -492,7 +529,7 @@ impl GroupedHashAggregateStream {
             let total_num_groups = self.group_values.num_rows();
 
             for ((acc, values), opt_filter) in t {
-                let acc_size_pre = acc.size();
+                memory_delta.dec(acc.size());
                 let opt_filter = opt_filter.as_ref().map(|filter| filter.as_boolean());
 
                 // Call the appropriate method on each aggregator with
@@ -519,40 +556,100 @@ impl GroupedHashAggregateStream {
                         )?;
                     }
                 }
-
-                allocated += acc.size();
-                allocated -= acc_size_pre;
+                memory_delta.inc(acc.size());
             }
         }
-        allocated += self.row_converter.size();
-        allocated -= row_converter_size_pre;
+        memory_delta.inc(self.state_size());
 
-        Ok(allocated)
+        // Update allocation AFTER it is used, simplifying accounting,
+        // though it results in a temporary overshoot.
+        memory_delta.update(&mut self.reservation)
     }
 
-    /// Create an output RecordBatch with all group keys and accumulator states/values
-    fn create_batch_from_map(&mut self) -> Result<RecordBatch> {
+    /// Create an output RecordBatch with the group keys and
+    /// accumulator states/values specified in emit_to
+    fn create_batch_from_map(&mut self, emit_to: EmitTo) -> Result<RecordBatch> {
         if self.group_values.num_rows() == 0 {
-            let schema = self.schema.clone();
-            return Ok(RecordBatch::new_empty(schema));
+            return Ok(RecordBatch::new_empty(self.schema()));
         }
 
-        // First output rows are the groups
-        let groups_rows = self.group_values.iter();
-        let mut output: Vec<ArrayRef> = self.row_converter.convert_rows(groups_rows)?;
+        let output = self.build_output(emit_to)?;
+        self.remove_emitted(emit_to)?;
+        let batch = RecordBatch::try_new(self.schema(), output)?;
+        Ok(batch)
+    }
 
-        // Next output each aggregate value, from the accumulators
+    /// Creates output: `(group 1, group 2, ... agg 1, agg 2, ...)`
+    fn build_output(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        // First output rows are the groups
+        let mut output: Vec<ArrayRef> = match emit_to {
+            EmitTo::All => {
+                let groups_rows = self.group_values.iter();
+                self.row_converter.convert_rows(groups_rows)?
+            }
+            EmitTo::First(n) => {
+                let groups_rows = self.group_values.iter().take(n);
+                self.row_converter.convert_rows(groups_rows)?
+            }
+        };
+
+        // Next output each aggregate value
         for acc in self.accumulators.iter_mut() {
             match self.mode {
-                AggregateMode::Partial => output.extend(acc.state()?),
+                AggregateMode::Partial => output.extend(acc.state(emit_to)?),
                 AggregateMode::Final
                 | AggregateMode::FinalPartitioned
                 | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => output.push(acc.evaluate()?),
+                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
             }
         }
 
-        Ok(RecordBatch::try_new(self.schema.clone(), output)?)
+        Ok(output)
+    }
+
+    /// Removes the first `n` groups, adjusting all group_indices
+    /// appropriately
+    fn remove_emitted(&mut self, emit_to: EmitTo) -> Result<()> {
+        let mut memory_delta = MemoryDelta::new();
+        memory_delta.dec(self.state_size());
+
+        match emit_to {
+            EmitTo::All => {
+                // Eventually we may also want to clear the hash table here
+                //self.map.clear();
+            }
+            EmitTo::First(n) => {
+                // Clear out first n group keys by copying them to a new Rows.
+                // TODO file some ticket in arrow-rs to make this more efficent?
+                let mut new_group_values = self.row_converter.empty_rows(0, 0);
+                for row in self.group_values.iter().skip(n) {
+                    new_group_values.push(row);
+                }
+                std::mem::swap(&mut new_group_values, &mut self.group_values);
+
+                // rebuild hash table (maybe we should remove the
+                // entries for each group that was emitted rather than
+                // rebuilding the whole thing
+
+                let hashes = self.group_ordering.remove_groups(n);
+                assert_eq!(hashes.len(), self.group_values.num_rows());
+                self.map.clear();
+                for (idx, &hash) in hashes.iter().enumerate() {
+                    self.map.insert(hash, (hash, idx), |(hash, _)| *hash);
+                }
+            }
+        };
+        // account for memory change
+        memory_delta.inc(self.state_size());
+        memory_delta.update(&mut self.reservation)
+    }
+
+    /// return the current size stored by variable state in this structure
+    fn state_size(&self) -> usize {
+        self.group_values.size()
+            + self.scratch_space.size()
+            + self.group_ordering.size()
+            + self.row_converter.size()
     }
 }
 
