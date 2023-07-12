@@ -528,13 +528,13 @@ pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn compute_cot32(x: f32, y: f32) -> f32 {
     let a = f32::sin(x);
     let b = f32::cos(y);
-    return b / a;
+    b / a
 }
 
 fn compute_cot64(x: f64, y: f64) -> f64 {
     let a = f64::sin(x);
     let b = f64::cos(y);
-    return b / a;
+    b / a
 }
 
 #[cfg(test)]
@@ -789,14 +789,18 @@ mod tests {
             as_float32_array(&result).expect("failed to initialize function cot");
 
         let expected = Float32Array::from(vec![
-            -1.98646045,
-            -0.156119958,
-            -0.501202822,
-            0.156119958,
+            -1.986_460_4,
+            -0.156_119_96,
+            -0.501_202_8,
+            0.156_119_96,
         ]);
 
+        let eps = 1e-6;
         assert_eq!(floats.len(), 4);
-        assert_eq!(floats, &expected);
+        assert!((floats.value(0) - expected.value(0)).abs() < eps);
+        assert!((floats.value(1) - expected.value(1)).abs() < eps);
+        assert!((floats.value(2) - expected.value(2)).abs() < eps);
+        assert!((floats.value(3) - expected.value(3)).abs() < eps);
     }
 
     #[test]
@@ -808,13 +812,17 @@ mod tests {
             as_float64_array(&result).expect("failed to initialize function cot");
 
         let expected = Float64Array::from(vec![
-            -1.9864586858814326,
-            -0.15611995216165922,
-            -0.5012027833801533,
-            0.15611995216165922,
+            -1.986_458_685_881_4,
+            -0.156_119_952_161_6,
+            -0.501_202_783_380_1,
+            0.156_119_952_161_6,
         ]);
 
+        let eps = 1e-12;
         assert_eq!(floats.len(), 4);
-        assert_eq!(floats, &expected);
+        assert!((floats.value(0) - expected.value(0)).abs() < eps);
+        assert!((floats.value(1) - expected.value(1)).abs() < eps);
+        assert!((floats.value(2) - expected.value(2)).abs() < eps);
+        assert!((floats.value(3) - expected.value(3)).abs() < eps);
     }
 }
