@@ -2248,7 +2248,6 @@ pub enum ScalarFunction {
     Factorial = 83,
     Lcm = 84,
     Gcd = 85,
-    Cot = 86,
     ArrayAppend = 86,
     ArrayConcat = 87,
     ArrayDims = 88,
@@ -2266,6 +2265,7 @@ pub enum ScalarFunction {
     ArrayContains = 100,
     Encode = 101,
     Decode = 102,
+    Cot = 103,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
