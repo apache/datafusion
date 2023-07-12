@@ -342,7 +342,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
-            BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::TrimArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
