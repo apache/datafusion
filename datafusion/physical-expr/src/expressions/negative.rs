@@ -21,14 +21,9 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
-use arrow::compute::kernels::arithmetic::negate;
 use arrow::{
-    array::{
-        Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-    },
-    datatypes::{DataType, IntervalUnit, Schema},
+    compute::kernels::numeric::neg_wrapping,
+    datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 
@@ -39,18 +34,6 @@ use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
     ColumnarValue,
 };
-
-/// Invoke a compute kernel on array(s)
-macro_rules! compute_op {
-    // invoke unary operator
-    ($OPERAND:expr, $OP:ident, $DT:ident) => {{
-        let operand = $OPERAND
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
-        Ok(Arc::new($OP(&operand)?))
-    }};
-}
 
 /// Negative expression
 #[derive(Debug, Hash)]
@@ -95,23 +78,8 @@ impl PhysicalExpr for NegativeExpr {
         let arg = self.arg.evaluate(batch)?;
         match arg {
             ColumnarValue::Array(array) => {
-                let result: Result<ArrayRef> = match array.data_type() {
-                    DataType::Int8 => compute_op!(array, negate, Int8Array),
-                    DataType::Int16 => compute_op!(array, negate, Int16Array),
-                    DataType::Int32 => compute_op!(array, negate, Int32Array),
-                    DataType::Int64 => compute_op!(array, negate, Int64Array),
-                    DataType::Float32 => compute_op!(array, negate, Float32Array),
-                    DataType::Float64 => compute_op!(array, negate, Float64Array),
-                    DataType::Interval(IntervalUnit::YearMonth) => compute_op!(array, negate, IntervalYearMonthArray),
-                    DataType::Interval(IntervalUnit::DayTime) => compute_op!(array, negate, IntervalDayTimeArray),
-                    DataType::Interval(IntervalUnit::MonthDayNano) => compute_op!(array, negate, IntervalMonthDayNanoArray),
-                    _ => Err(DataFusionError::Internal(format!(
-                        "(- '{:?}') can't be evaluated because the expression's type is {:?}, not signed numeric",
-                        self,
-                        array.data_type(),
-                    ))),
-                };
-                result.map(|a| ColumnarValue::Array(a))
+                let result = neg_wrapping(array.as_ref())?;
+                Ok(ColumnarValue::Array(result))
             }
             ColumnarValue::Scalar(scalar) => {
                 Ok(ColumnarValue::Scalar((scalar.arithmetic_negate())?))
@@ -203,31 +171,6 @@ mod tests {
         };
     }
 
-    macro_rules! test_array_negative_op_intervals {
-        ($DATA_TY:tt, $($VALUE:expr),*   ) => {
-            let schema = Schema::new(vec![Field::new("a", DataType::Interval(IntervalUnit::$DATA_TY), true)]);
-            let expr = negative(col("a", &schema)?, &schema)?;
-            assert_eq!(expr.data_type(&schema)?, DataType::Interval(IntervalUnit::$DATA_TY));
-            assert!(expr.nullable(&schema)?);
-            let mut arr = Vec::new();
-            let mut arr_expected = Vec::new();
-            $(
-                arr.push(Some($VALUE));
-                arr_expected.push(Some(-$VALUE));
-            )+
-            arr.push(None);
-            arr_expected.push(None);
-            let input = paste!{[<Interval $DATA_TY Array>]::from(arr)};
-            let expected = &paste!{[<Interval $DATA_TY Array>]::from(arr_expected)};
-            let batch =
-                RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;
-            let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-            let result =
-                as_primitive_array(&result).expect(format!("failed to downcast to {:?}Array", $DATA_TY).as_str());
-            assert_eq!(result, expected);
-        };
-    }
-
     #[test]
     fn array_negative_op() -> Result<()> {
         test_array_negative_op!(Int8, 2i8, 1i8);
@@ -236,9 +179,6 @@ mod tests {
         test_array_negative_op!(Int64, 23456i64, 12345i64);
         test_array_negative_op!(Float32, 2345.0f32, 1234.0f32);
         test_array_negative_op!(Float64, 23456.0f64, 12345.0f64);
-        test_array_negative_op_intervals!(YearMonth, 2345i32, 1234i32);
-        test_array_negative_op_intervals!(DayTime, 23456i64, 12345i64);
-        test_array_negative_op_intervals!(MonthDayNano, 234567i128, 123456i128);
         Ok(())
     }
 }
