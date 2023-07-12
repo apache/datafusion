@@ -566,6 +566,8 @@ enum ScalarFunction {
   ArrayContains = 100;
   Encode = 101;
   Decode = 102;
+  ArrayElement = 103;
+  ArraySlice = 104;
 }
 
 message ScalarFunctionNode {

@@ -125,6 +125,14 @@ select column1, column2, column3 from arrays_values_without_nulls;
 [21, 22, 23, 24, 25, 26, 27, 28, 29, 30] 23 3
 [31, 32, 33, 34, 35, 26, 37, 38, 39, 40] 34 4
 
+
+### Array index
+
+
+# array index with scalars
+query ?
+
+
 ### Array function tests
 
 
@@ -249,7 +257,37 @@ from values;
 [7] false [adipiscing, F] false false
 [8] false [, ] true false
 
+## array_slice
 
+# array_slice scalar function #1
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 2, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 1, 2);
+----
+
+# array_slice scalar function #2
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 0, 6), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, 5);
+----
+
+# array_slice scalar function #3 (first index = second index)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 4, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, 3);
+----
+
+# array_slice scalar function #4 (first index > second_index)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 2, 0), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 4, 0);
+----
+
+# array slice scalar function #5 (with negative indexes)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), -4, -1), array_slice(make_array(1, 2, 3, 4, 5), -3, -1);
+----
+
+# array slice scalar function #6 (with negative indexes)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), -4, -1), array_slice(make_array(1, 2, 3, 4, 5), -3, -1);
+----
 
 ## array_append
 

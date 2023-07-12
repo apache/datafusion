@@ -151,7 +151,7 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+            Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
                 let data_type = expr.get_type(schema)?;
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())

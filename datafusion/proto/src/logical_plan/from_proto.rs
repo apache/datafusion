@@ -37,7 +37,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_contains, array_dims,
-    array_fill, array_length, array_ndims, array_position, array_positions,
+    array_fill, array_length, array_ndims, array_position, array_positions,, array_element, array_slice,
     array_prepend, array_remove, array_replace, array_to_string, ascii, asin, asinh,
     atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
     chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, current_date, current_time,
@@ -452,6 +452,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
             ScalarFunction::ArrayContains => Self::ArrayContains,
             ScalarFunction::ArrayDims => Self::ArrayDims,
+            ScalarFunction::ArrayElement => Self::ArrayElement,
             ScalarFunction::ArrayFill => Self::ArrayFill,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
@@ -460,6 +461,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
+            ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
@@ -1241,6 +1243,11 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::ArraySlice => Ok(array_slice(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                ))
                 ScalarFunction::ArrayToString => Ok(array_to_string(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1258,6 +1265,9 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::ArrayDims => {
                     Ok(array_dims(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::ArrayElement => {
+                    Ok(array_element(parse_expr(&args[0], registry)?))
                 }
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))

@@ -23,9 +23,18 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 /// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
 /// # Error
 /// Errors if
-/// * the `data_type` is not a Struct or,
+/// * the `data_type` is not a Struct or a List,
+/// * the `data_type` of extra key does not match with `data_type` of key
 /// * there is no field key is not of the required index type
-pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Field> {
+pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue, extra_key: &Option<ScalarValue>) -> Result<Field> {
+    if let Some(extra_key_value) = extra_key {
+        if extra_key_value.data_type() != key.data_type() {
+            return Err(DataFusionError::Plan(format!(
+                "DataType of extra key {extra_key} does not match with datatype of key {key}"
+            )));
+        }
+    }
+
     match (data_type, key) {
         (DataType::List(lt), ScalarValue::Int64(Some(i))) => {
             Ok(Field::new(i.to_string(), lt.data_type().clone(), true))

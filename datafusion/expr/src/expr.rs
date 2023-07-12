@@ -363,12 +363,14 @@ pub struct GetIndexedField {
     pub expr: Box<Expr>,
     /// The name of the field to take
     pub key: ScalarValue,
+    /// The right border of the field to take
+    pub extra_key: Option<ScalarValue>,
 }
 
 impl GetIndexedField {
     /// Create a new GetIndexedField expression
-    pub fn new(expr: Box<Expr>, key: ScalarValue) -> Self {
-        Self { expr, key }
+    pub fn new(expr: Box<Expr>, key: ScalarValue, extra_key: Option<ScalarValue>) -> Self {
+        Self { expr, key, extra_key }
     }
 }
 
@@ -1133,8 +1135,11 @@ impl fmt::Display for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{qualifier}.*"),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                write!(f, "({expr})[{key}]")
+            Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
+                match extra_key {
+                    Some(extra_key) => write!(f, "({expr})[{key}:{extra_key}]"),
+                    None => write!(f, "({expr})[{key}]"),
+                }
             }
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
@@ -1340,9 +1345,12 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
             let expr = create_name(expr)?;
-            Ok(format!("{expr}[{key}]"))
+            match extra_key {
+                Some(extra_key) => Ok(format!("{expr}[{key}:{extra_key}]")),
+                None => Ok(format!("{expr}[{key}]")),
+            }
         }
         Expr::ScalarFunction(func) => {
             create_function_name(&func.fun.to_string(), false, &func.args)

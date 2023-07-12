@@ -544,6 +544,12 @@ scalar_expr!(
     "returns an array of the array's dimensions."
 );
 scalar_expr!(
+    ArrayElement,
+    array_element,
+    array element,
+    ""
+);
+scalar_expr!(
     ArrayFill,
     array_fill,
     element array,
@@ -590,6 +596,12 @@ scalar_expr!(
     array_replace,
     array from to,
     "replaces a specified element with another specified element."
+);
+scalar_expr!(
+    ArraySlice,
+    array_slice,
+    array offset length,
+    ""
 );
 scalar_expr!(
     ArrayToString,

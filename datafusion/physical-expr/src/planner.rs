@@ -371,7 +371,7 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(
                     expr,
@@ -380,6 +380,7 @@ pub fn create_physical_expr(
                     execution_props,
                 )?,
                 key.clone(),
+                extra_key.clone(),
             )))
         }
 

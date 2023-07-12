@@ -344,6 +344,17 @@ pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     array(values)
 }
 
+pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let key = as_int64_array(&args[1])?;
+}
+
+pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let key = as_int64_array(&args[1]);
+    let extra_key = as_int64_array(&args[2]);
+}
+
 macro_rules! append {
     ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
         let mut offsets: Vec<i32> = vec![0];
@@ -1212,24 +1223,8 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Trim_array SQL function
-pub fn trim_array(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_list_array(&args[0])?;
-    let n = as_int64_array(&args[1])?.value(0) as usize;
-
-    let values = list_array.value(0);
-    if values.len() <= n {
-        return Ok(array(&[ColumnarValue::Scalar(ScalarValue::Null)])?.into_array(1));
-    }
-
-    let res = values.slice(0, values.len() - n);
-    let mut scalars = vec![];
-    for i in 0..res.len() {
-        scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&res, i)?));
-    }
-
-    Ok(array(scalars.as_slice())?.into_array(1))
-}
+#[deprecated(note = "please use `array_slice` instead")]
+pub fn trim_array(args: &[ArrayRef]) -> Result<ArrayRef> {}
 
 /// Cardinality SQL function
 pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -1472,6 +1467,21 @@ mod tests {
                 .unwrap()
                 .null_count()
         )
+    }
+
+    #[test]
+    fn test_array_element() {
+        // array_element([1, 2, 3, 4], 1) = 1
+        let list_array = return_array();
+        let arr = array_element(&[
+            list_array,
+            Int64Array::from_value()
+        ])
+    }
+
+    #[test]
+    fn test_array_slice() {
+
     }
 
     #[test]
@@ -1725,45 +1735,6 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!("1-*-3-*-*-6-7-*", result.value(0));
-    }
-
-    #[test]
-    fn test_trim_array() {
-        // trim_array([1, 2, 3, 4], 1) = [1, 2, 3]
-        let list_array = return_array().into_array(1);
-        let arr = trim_array(&[list_array, Arc::new(Int64Array::from(vec![Some(1)]))])
-            .expect("failed to initialize function trim_array");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function trim_array");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1, 2, 3],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-
-        // trim_array([1, 2, 3, 4], 3) = [1]
-        let list_array = return_array().into_array(1);
-        let arr = trim_array(&[list_array, Arc::new(Int64Array::from(vec![Some(3)]))])
-            .expect("failed to initialize function trim_array");
-        let result =
-            as_list_array(&arr).expect("failed to initialize function trim_array");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
     }
 
     #[test]

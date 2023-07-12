@@ -2265,6 +2265,8 @@ pub enum ScalarFunction {
     ArrayContains = 100,
     Encode = 101,
     Decode = 102,
+    ArrayElement = 103,
+    ArraySlice = 104,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2376,6 +2378,8 @@ impl ScalarFunction {
             ScalarFunction::ArrayContains => "ArrayContains",
             ScalarFunction::Encode => "Encode",
             ScalarFunction::Decode => "Decode",
+            ScalarFunction::ArrayElement => "ArrayElement",
+            ScalarFunction::ArraySlice => "ArraySlice",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2484,6 +2488,8 @@ impl ScalarFunction {
             "ArrayContains" => Some(Self::ArrayContains),
             "Encode" => Some(Self::Encode),
             "Decode" => Some(Self::Decode),
+            "ArrayElement" => Some(Self::ArrayElement),
+            "ArraySlice" => Some(Self::ArraySlice),
             _ => None,
         }
     }

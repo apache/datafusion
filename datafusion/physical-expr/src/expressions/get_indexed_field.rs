@@ -43,17 +43,23 @@ use std::{any::Any, sync::Arc};
 pub struct GetIndexedFieldExpr {
     arg: Arc<dyn PhysicalExpr>,
     key: ScalarValue,
+    extra_key: Option<ScalarValue>,
 }
 
 impl GetIndexedFieldExpr {
     /// Create new get field expression
-    pub fn new(arg: Arc<dyn PhysicalExpr>, key: ScalarValue) -> Self {
-        Self { arg, key }
+    pub fn new(arg: Arc<dyn PhysicalExpr>, key: ScalarValue, extra_key: Option<ScalarValue>) -> Self {
+        Self { arg, key, extra_key }
     }
 
     /// Get the input key
     pub fn key(&self) -> &ScalarValue {
         &self.key
+    }
+
+    /// Get the input extra key
+    pub fn extra_key(&self) -> &ScalarValue {
+        &self.extra_key
     }
 
     /// Get the input expression
@@ -64,7 +70,10 @@ impl GetIndexedFieldExpr {
 
 impl std::fmt::Display for GetIndexedFieldExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "({}).[{}]", self.arg, self.key)
+        match self.extra_key {
+            Some(extra_key) => write!(f, "({}).[{}]", self.arg, self.key)
+            None => write!(f, "({}).[{}:{}]", self.arg, self.key, self.extra_key)
+        }
     }
 }
 
@@ -85,59 +94,95 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let array = self.arg.evaluate(batch)?.into_array(1);
-        match (array.data_type(), &self.key) {
-            (DataType::List(_) | DataType::Struct(_), _) if self.key.is_null() => {
-                let scalar_null: ScalarValue = array.data_type().try_into()?;
-                Ok(ColumnarValue::Scalar(scalar_null))
-            }
-            (DataType::List(lst), ScalarValue::Int64(Some(i))) => {
-                let as_list_array = as_list_array(&array)?;
+        if Some(extra_key) = self.extra_key {
+            match (array.data_type(), &self.key, &self.extra_key) {
+                (DataType::List(lst), ScalarValue::Int64(Some(i)), ScalarValue::Int64(Some(i))) => {
+                    let as_list_array = as_list_array(&array)?;
+    
+                    if *i < 1 || as_list_array.is_empty() {
+                        let scalar_null: ScalarValue = lst.data_type().try_into()?;
+                        return Ok(ColumnarValue::Scalar(scalar_null))
+                    }
 
-                if *i < 1 || as_list_array.is_empty() {
-                    let scalar_null: ScalarValue = lst.data_type().try_into()?;
-                    return Ok(ColumnarValue::Scalar(scalar_null))
+                    let sliced_array: Vec<Arc<dyn Array>> = as_list_array
+                        .iter()
+                        .filter_map(|o| match o {
+                            Some(list) => if *i as usize > list.len() {
+                                None
+                            } else {
+                                Some(list.slice((*i -1) as usize, 1))
+                            },
+                            None => None
+                        })
+                        .collect();
+    
+                    // concat requires input of at least one array
+                    if sliced_array.is_empty() {
+                        let scalar_null: ScalarValue = lst.data_type().try_into()?;
+                        Ok(ColumnarValue::Scalar(scalar_null))
+                    } else {
+                        let vec = sliced_array.iter().map(|a| a.as_ref()).collect::<Vec<&dyn Array>>();
+                        let iter = concat(vec.as_slice()).unwrap();
+    
+                        Ok(ColumnarValue::Array(iter))
+                    }
                 }
-
-                let sliced_array: Vec<Arc<dyn Array>> = as_list_array
-                    .iter()
-                    .filter_map(|o| match o {
-                        Some(list) => if *i as usize > list.len() {
-                            None
-                        } else {
-                            Some(list.slice((*i -1) as usize, 1))
-                        },
-                        None => None
-                    })
-                    .collect();
-
-                // concat requires input of at least one array
-                if sliced_array.is_empty() {
-                    let scalar_null: ScalarValue = lst.data_type().try_into()?;
+            }
+        } else {
+            match (array.data_type(), &self.key) {
+                (DataType::List(_) | DataType::Struct(_), _) if self.key.is_null() => {
+                    let scalar_null: ScalarValue = array.data_type().try_into()?;
                     Ok(ColumnarValue::Scalar(scalar_null))
-                } else {
-                    let vec = sliced_array.iter().map(|a| a.as_ref()).collect::<Vec<&dyn Array>>();
-                    let iter = concat(vec.as_slice()).unwrap();
+                }
+                (DataType::List(lst), ScalarValue::Int64(Some(i))) => {
+                    let as_list_array = as_list_array(&array)?;
+    
+                    if *i < 1 || as_list_array.is_empty() {
+                        let scalar_null: ScalarValue = lst.data_type().try_into()?;
+                        return Ok(ColumnarValue::Scalar(scalar_null))
+                    }
 
-                    Ok(ColumnarValue::Array(iter))
+                    let sliced_array: Vec<Arc<dyn Array>> = as_list_array
+                        .iter()
+                        .filter_map(|o| match o {
+                            Some(list) => if *i as usize > list.len() {
+                                None
+                            } else {
+                                Some(list.slice((*i -1) as usize, 1))
+                            },
+                            None => None
+                        })
+                        .collect();
+    
+                    // concat requires input of at least one array
+                    if sliced_array.is_empty() {
+                        let scalar_null: ScalarValue = lst.data_type().try_into()?;
+                        Ok(ColumnarValue::Scalar(scalar_null))
+                    } else {
+                        let vec = sliced_array.iter().map(|a| a.as_ref()).collect::<Vec<&dyn Array>>();
+                        let iter = concat(vec.as_slice()).unwrap();
+    
+                        Ok(ColumnarValue::Array(iter))
+                    }
                 }
-            }
-            (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
-                let as_struct_array = as_struct_array(&array)?;
-                match as_struct_array.column_by_name(k) {
-                    None => Err(DataFusionError::Execution(
-                        format!("get indexed field {k} not found in struct"))),
-                    Some(col) => Ok(ColumnarValue::Array(col.clone()))
+                (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
+                    let as_struct_array = as_struct_array(&array)?;
+                    match as_struct_array.column_by_name(k) {
+                        None => Err(DataFusionError::Execution(
+                            format!("get indexed field {k} not found in struct"))),
+                        Some(col) => Ok(ColumnarValue::Array(col.clone()))
+                    }
                 }
+                (DataType::List(_), key) => Err(DataFusionError::Execution(
+                    format!("get indexed field is only possible on lists with int64 indexes. \
+                             Tried with {key:?} index"))),
+                (DataType::Struct(_), key) => Err(DataFusionError::Execution(
+                    format!("get indexed field is only possible on struct with utf8 indexes. \
+                             Tried with {key:?} index"))),
+                (dt, key) => Err(DataFusionError::Execution(
+                    format!("get indexed field is only possible on lists with int64 indexes or struct \
+                             with utf8 indexes. Tried {dt:?} with {key:?} index"))),
             }
-            (DataType::List(_), key) => Err(DataFusionError::Execution(
-                format!("get indexed field is only possible on lists with int64 indexes. \
-                         Tried with {key:?} index"))),
-            (DataType::Struct(_), key) => Err(DataFusionError::Execution(
-                format!("get indexed field is only possible on struct with utf8 indexes. \
-                         Tried with {key:?} index"))),
-            (dt, key) => Err(DataFusionError::Execution(
-                format!("get indexed field is only possible on lists with int64 indexes or struct \
-                         with utf8 indexes. Tried {dt:?} with {key:?} index"))),
         }
     }
 
@@ -152,6 +197,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
         Ok(Arc::new(GetIndexedFieldExpr::new(
             children[0].clone(),
             self.key.clone(),
+            self.extra_key.clone(),
         )))
     }
 
@@ -165,7 +211,7 @@ impl PartialEq<dyn Any> for GetIndexedFieldExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg) && self.key == x.key)
+            .map(|x| self.arg.eq(&x.arg) && self.key == x.key && self.extra_key == x.extra_key)
             .unwrap_or(false)
     }
 }

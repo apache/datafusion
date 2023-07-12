@@ -181,7 +181,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::ArrayIndex { obj, indexes } => {
                 let expr = self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
-                plan_indexed(expr, indexes)
+                plan_indexed(expr, indexes, schema, planner_context)
             }
 
             SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema, planner_context),
@@ -553,26 +553,70 @@ fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     })
 }
 
-fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
-    let scalar = match key {
-        SQLExpr::Value(Value::Number(s, _)) => ScalarValue::Int64(Some(
+fn plan_key(
+    expr: SQLExpr,
+    schema: &DFSchema,
+    planner_context: &mut PlannerContext,
+) -> Result<(ScalarValue, Option<ScalarValue>)> {
+    let (key, extra_key) = match expr {
+        SQLExpr::JsonAccess {
+            left,
+            operator,
+            right,
+        } => match operator {
+            JsonOperator::Colon => {
+                left = sql_expr_to_logical_expr(left, schema, planner_context)?;
+                right = sql_expr_to_logical_expr(right, schema, planner_context)?;
+                (left, right)
+            }
+            _ => (
+                sql_expr_to_logical_expr(expr, schema, planner_context)?,
+                None,
+            ),
+        },
+        _ => (
+            sql_expr_to_logical_expr(expr, schema, planner_context)?,
+            None,
+        ),
+    };
+
+    let (scalar_key, scalar_extra_key) = match (key, extra_key) {
+        (SQLExpr::Value(Value::Number(s, _)), SQLExpr::Value(Value::Number(es, _))) => {
+            ScalarValue::Int64(Some((
+                s.parse()
+                    .map_err(|_| ParserError(format!("Cannot parse {s} as i64.")))?,
+                es.parse()
+                    .map_err(|_| ParserError(format!("Cannot parse {es} as i64.")))?,
+            )))
+        }
+        (SQLExpr::Value(Value::Number(s, _)), None) => ScalarValue::Int64(Some((
             s.parse()
                 .map_err(|_| ParserError(format!("Cannot parse {s} as i64.")))?,
-        )),
-        SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
-            ScalarValue::Utf8(Some(s))
-        }
+            None,
+        ))),
+        (SQLExpr::Value(Value::SingleQuotedString(s)), None)
+        | (Value::DoubleQuotedString(s), None) => (ScalarValue::Utf8(Some(s)), None),
         _ => {
+            if let Some(extra_key) = extra_key {
+                return Err(DataFusionError::SQL(ParserError(format!(
+                    "Unsupported index keys expression: {key:?}:{extra_key:?}"
+                ))));
+            }
             return Err(DataFusionError::SQL(ParserError(format!(
                 "Unsupported index key expression: {key:?}"
             ))));
         }
     };
 
-    Ok(scalar)
+    Ok((scalar_key, scalar_extra_key))
 }
 
-fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
+fn plan_indexed(
+    expr: Expr,
+    mut keys: Vec<SQLExpr>,
+    schema: &DFSchema,
+    planner_context: &mut PlannerContext,
+) -> Result<Expr> {
     let key = keys.pop().ok_or_else(|| {
         ParserError("Internal error: Missing index key expression".to_string())
     })?;
@@ -583,9 +627,11 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
         expr
     };
 
+    let (scalar_key, scalar_extra_key) = plan_key(key, schema, planner_context)?;
     Ok(Expr::GetIndexedField(GetIndexedField::new(
         Box::new(expr),
-        plan_key(key)?,
+        scalar_key,
+        scalar_extra_key,
     )))
 }
 

@@ -121,6 +121,8 @@ pub enum BuiltinScalarFunction {
     ArrayContains,
     /// array_dims
     ArrayDims,
+    /// array_element
+    ArrayElement,
     /// array_fill
     ArrayFill,
     /// array_length
@@ -137,6 +139,8 @@ pub enum BuiltinScalarFunction {
     ArrayRemove,
     /// array_replace
     ArrayReplace,
+    /// array_slice
+    ArraySlice,
     /// array_to_string
     ArrayToString,
     /// cardinality
@@ -329,6 +333,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayContains => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
@@ -337,6 +342,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
+            BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
@@ -483,6 +489,12 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayDims => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
+            BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
+                List(field) => Ok(field.data_type().clone()),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept list as the first argument"
+                ))),
+            }
             BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
                 "item",
                 input_expr_types[1].clone(),
@@ -510,6 +522,16 @@ impl BuiltinScalarFunction {
                 ))),
             },
             BuiltinScalarFunction::ArrayReplace => match &input_expr_types[0] {
+                List(field) => Ok(List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                )))),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept list as the first argument"
+                ))),
+            },
+            BuiltinScalarFunction::ArraySlice => match &input_expr_types[0] {
                 List(field) => Ok(List(Arc::new(Field::new(
                     "item",
                     field.data_type().clone(),
@@ -787,6 +809,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayContains => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayFill => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
@@ -801,6 +824,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplace => {
                 Signature::variadic_any(self.volatility())
             }
+            BuiltinScalarFunction::ArraySlice => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())
             }
@@ -1240,6 +1264,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ArrayConcat => &["array_concat"],
         BuiltinScalarFunction::ArrayContains => &["array_contains"],
         BuiltinScalarFunction::ArrayDims => &["array_dims"],
+        BuiltinScalarFunction::ArrayElement => &["array_element"],
         BuiltinScalarFunction::ArrayFill => &["array_fill"],
         BuiltinScalarFunction::ArrayLength => &["array_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims"],
@@ -1248,6 +1273,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ArrayPrepend => &["array_prepend"],
         BuiltinScalarFunction::ArrayRemove => &["array_remove"],
         BuiltinScalarFunction::ArrayReplace => &["array_replace"],
+        BuiltinScalarFunction::ArraySlice => &["array_slice"],
         BuiltinScalarFunction::ArrayToString => &["array_to_string"],
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array"],
