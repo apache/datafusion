@@ -417,6 +417,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
+            ScalarFunction::Cot => Self::Cot,
             ScalarFunction::Asin => Self::Asin,
             ScalarFunction::Acos => Self::Acos,
             ScalarFunction::Atan => Self::Atan,
