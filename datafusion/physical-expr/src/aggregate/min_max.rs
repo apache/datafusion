@@ -890,11 +890,7 @@ impl AggregateExpr for Min {
     }
 
     fn groups_accumulator_supported(&self) -> bool {
-        Max::groups_accumulator_supported(&Max::new(
-            self.expr.clone(),
-            self.name.clone(),
-            self.data_type.clone(),
-        ))
+        self.data_type.is_primitive()
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
