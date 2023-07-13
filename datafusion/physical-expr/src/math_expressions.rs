@@ -497,24 +497,19 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+///cot SQL function
 pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
+        DataType::Float64 => Ok(Arc::new(make_function_scalar_inputs!(
             &args[0],
             "x",
-            "y",
-            Float64Array,
             Float64Array,
             { compute_cot64 }
         )) as ArrayRef),
 
-        DataType::Float32 => Ok(Arc::new(make_function_inputs2!(
-            &args[0],
+        DataType::Float32 => Ok(Arc::new(make_function_scalar_inputs!(
             &args[0],
             "x",
-            "y",
-            Float32Array,
             Float32Array,
             { compute_cot32 }
         )) as ArrayRef),
@@ -525,16 +520,14 @@ pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn compute_cot32(x: f32, y: f32) -> f32 {
-    let a = f32::sin(x);
-    let b = f32::cos(y);
-    b / a
+fn compute_cot32(x: f32) -> f32 {
+    let a = f32::tan(x);
+    1.0 / a
 }
 
-fn compute_cot64(x: f64, y: f64) -> f64 {
-    let a = f64::sin(x);
-    let b = f64::cos(y);
-    b / a
+fn compute_cot64(x: f64) -> f64 {
+    let a = f64::tan(x);
+    1.0 / a
 }
 
 #[cfg(test)]
