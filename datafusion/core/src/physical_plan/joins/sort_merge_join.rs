@@ -347,6 +347,9 @@ impl ExecutionPlan for SortMergeJoinExec {
                         )
                         .unwrap();
                     let left_output_ordering = self.left.output_ordering().unwrap_or(&[]);
+                    // Orderings inside right ordering equivalence properties should be prepended with
+                    // ordering of the left table before insertion to the OrderingEquivalenceProperties for
+                    // SortMergeJoin.
                     for oeq_class in updated_right_oeq_classes {
                         for ordering in oeq_class.others() {
                             // Entries inside ordering equivalence, should be normalized according to

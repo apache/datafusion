@@ -238,15 +238,14 @@ pub type OrderingEquivalentClass = EquivalentClass<LexOrdering>;
 /// will be `a ASC, c ASC`.
 fn update_with_alias(
     mut ordering: LexOrdering,
-    columns_map: &HashMap<Column, Vec<Column>>,
+    oeq_alias_map: &[(Column, Column)],
 ) -> LexOrdering {
-    for (column, columns) in columns_map {
-        let col_expr: Arc<dyn PhysicalExpr> = Arc::new(column.clone());
-        // By convention we replace with first alias expression. Since during equivalence normalization
-        // same aliases are normalized, we do not lose any capability by only using first alias.
-        let target_col: Arc<dyn PhysicalExpr> = Arc::new(columns[0].clone());
+    for (source_col, target_col) in oeq_alias_map {
+        let source_col: Arc<dyn PhysicalExpr> = Arc::new(source_col.clone());
+        // Replace invalidated columns with its alias in the ordering expression.
+        let target_col: Arc<dyn PhysicalExpr> = Arc::new(target_col.clone());
         for item in ordering.iter_mut() {
-            if item.expr.eq(&col_expr) {
+            if item.expr.eq(&source_col) {
                 // Change the corresponding entry with alias expression
                 item.expr = target_col.clone();
             }
@@ -261,13 +260,27 @@ impl OrderingEquivalentClass {
     /// orderings `a ASC` and `c DESC` are equivalent. Here, we replace column
     /// `a` with `b` in ordering equivalence expressions. After this function,
     /// `a ASC`, `c DESC` will be converted to the `b ASC`, `c DESC`.
-    fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
-        self.head = update_with_alias(self.head.clone(), columns_map);
-        self.others = self
-            .others
-            .iter()
-            .map(|item| update_with_alias(item.clone(), columns_map))
-            .collect::<HashSet<_>>();
+    fn update_with_aliases(
+        &mut self,
+        oeq_alias_map: &[(Column, Column)],
+        fields: &Fields,
+    ) {
+        let is_head_invalid = self.head.iter().any(|sort_expr| {
+            let res = get_column_indices(&(sort_expr.expr));
+            res.iter().any(|(idx, name)| {
+                is_column_invalid_in_new_schema(&Column::new(name, *idx), fields)
+            })
+        });
+        // If head is invalidated, update head with alias expressions
+        if is_head_invalid {
+            self.head = update_with_alias(self.head.clone(), oeq_alias_map);
+        } else {
+            let new_oeq_expr = update_with_alias(self.head.clone(), oeq_alias_map);
+            self.insert(new_oeq_expr);
+        }
+        for ordering in self.others.clone().into_iter() {
+            self.insert(update_with_alias(ordering, oeq_alias_map));
+        }
     }
 }
 
@@ -436,14 +449,22 @@ pub fn project_ordering_equivalence_properties(
     columns_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
+    // Get schema and fields of projection output
+    let schema = output_eq.schema();
+    let fields = schema.fields();
+
     let mut eq_classes = input_eq.classes().to_vec();
+    let mut oeq_alias_map = vec![];
+    for (column, columns) in columns_map {
+        if is_column_invalid_in_new_schema(column, fields) {
+            oeq_alias_map.push((column.clone(), columns[0].clone()));
+        }
+    }
     for class in eq_classes.iter_mut() {
-        class.update_with_aliases(columns_map);
+        class.update_with_aliases(&oeq_alias_map, fields);
     }
 
     // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
-    let schema = output_eq.schema();
-    let fields = schema.fields();
     for class in eq_classes.iter_mut() {
         let sort_exprs_to_remove = class
             .iter()
