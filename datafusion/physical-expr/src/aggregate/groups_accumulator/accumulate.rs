@@ -150,8 +150,8 @@ impl NullState {
             return;
         }
 
-        // have been tracking values previously, so we still need to
-        // track them here
+        // have been tracking seen values previously, so we still need
+        // to track them here
         let seen_values =
             initialize_builder(&mut self.seen_values, total_num_groups, false);
 
@@ -726,7 +726,14 @@ mod test {
             }
 
             // Validate the final buffer (one value per group)
-            let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
+            let expected_null_buffer = if values.null_count() > 0 || opt_filter.is_some() {
+                mock.expected_null_buffer(total_num_groups)
+            } else {
+                // the test data doesn't always pass all group indices
+                // unlike the real hash grouper, so only build a null
+                // buffer if it would have made one
+                None
+            };
 
             let null_buffer = null_state.build();
 
