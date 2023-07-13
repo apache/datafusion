@@ -98,7 +98,7 @@ zstd = { version = "0.12", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = "0.1.53"
-bigdecimal = "0.4.0"
+bigdecimal = "0.3.0"
 criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
 ctor = "0.2.0"
@@ -107,6 +107,7 @@ env_logger = "0.10"
 half = "2.2.1"
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
+regex = "1.5.4"
 rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 sqllogictest = "0.14.0"
