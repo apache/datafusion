@@ -79,7 +79,9 @@ impl AggregateStream {
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
-            AggregateMode::Partial | AggregateMode::Single | AggregateMode::SinglePartitioned => agg_filter_expr,
+            AggregateMode::Partial
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 vec![None; agg.aggr_expr.len()]
             }
@@ -222,9 +224,9 @@ fn aggregate_batch(
             // 1.4
             let size_pre = accum.size();
             let res = match mode {
-                AggregateMode::Partial | AggregateMode::Single | AggregateMode::SinglePartitioned=> {
-                    accum.update_batch(values)
-                }
+                AggregateMode::Partial
+                | AggregateMode::Single
+                | AggregateMode::SinglePartitioned => accum.update_batch(values),
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
                     accum.merge_batch(values)
                 }

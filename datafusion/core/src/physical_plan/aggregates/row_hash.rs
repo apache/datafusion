@@ -230,7 +230,9 @@ impl GroupedHashAggregateStream {
         )?;
 
         let filter_expressions = match agg.mode {
-            AggregateMode::Partial | AggregateMode::Single | AggregateMode::SinglePartitioned => agg_filter_expr,
+            AggregateMode::Partial
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 vec![None; agg.aggr_expr.len()]
             }
@@ -496,7 +498,9 @@ impl GroupedHashAggregateStream {
                 // Call the appropriate method on each aggregator with
                 // the entire input row and the relevant group indexes
                 match self.mode {
-                    AggregateMode::Partial | AggregateMode::Single | AggregateMode::SinglePartitioned => {
+                    AggregateMode::Partial
+                    | AggregateMode::Single
+                    | AggregateMode::SinglePartitioned => {
                         acc.update_batch(
                             values,
                             group_indices,

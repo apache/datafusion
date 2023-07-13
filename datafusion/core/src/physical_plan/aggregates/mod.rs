@@ -884,7 +884,9 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
                 vec![Distribution::HashPartitioned(self.output_group_expr())]
             }
-            AggregateMode::Final | AggregateMode::Single => vec![Distribution::SinglePartition],
+            AggregateMode::Final | AggregateMode::Single => {
+                vec![Distribution::SinglePartition]
+            }
         }
     }
 
@@ -1015,7 +1017,9 @@ fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial | AggregateMode::Single | AggregateMode::SinglePartitioned => Ok(aggr_expr
+        AggregateMode::Partial
+        | AggregateMode::Single
+        | AggregateMode::SinglePartitioned => Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let pre_cast_type = if let Some(Sum {
