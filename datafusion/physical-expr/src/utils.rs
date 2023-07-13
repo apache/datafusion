@@ -318,8 +318,6 @@ pub fn ordering_satisfy_concrete<
         normalize_sort_exprs(required, eq_classes, ordering_eq_classes);
     let provided_normalized =
         normalize_sort_exprs(provided, eq_classes, ordering_eq_classes);
-    println!("required_normalized:{:?}", required_normalized);
-    println!("provided_normalized:{:?}", provided_normalized);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }

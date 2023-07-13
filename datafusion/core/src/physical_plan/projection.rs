@@ -61,7 +61,6 @@ pub struct ProjectionExec {
     /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
     columns_map: HashMap<Column, Vec<Column>>,
-    // cast_map: HashMap<Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }

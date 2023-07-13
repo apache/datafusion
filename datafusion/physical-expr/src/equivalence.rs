@@ -441,6 +441,7 @@ pub fn project_ordering_equivalence_properties(
     for class in eq_classes.iter_mut() {
         class.update_with_aliases(columns_map);
     }
+
     // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
     let schema = output_eq.schema();
     let fields = schema.fields();
