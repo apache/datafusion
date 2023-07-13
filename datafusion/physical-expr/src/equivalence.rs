@@ -22,8 +22,8 @@ use crate::{
 };
 
 use arrow::datatypes::SchemaRef;
-
 use arrow_schema::Fields;
+
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -266,10 +266,11 @@ impl OrderingEquivalentClass {
         fields: &Fields,
     ) {
         let is_head_invalid = self.head.iter().any(|sort_expr| {
-            let res = get_column_indices(&(sort_expr.expr));
-            res.iter().any(|(idx, name)| {
-                is_column_invalid_in_new_schema(&Column::new(name, *idx), fields)
-            })
+            get_column_indices(&sort_expr.expr)
+                .iter()
+                .any(|(idx, name)| {
+                    is_column_invalid_in_new_schema(&Column::new(name, *idx), fields)
+                })
         });
         // If head is invalidated, update head with alias expressions
         if is_head_invalid {
@@ -364,23 +365,20 @@ impl OrderingEquivalenceBuilder {
     }
 }
 
-// Check whether column is still valid after projection
+/// Checks whether column is still valid after projection.
 fn is_column_invalid_in_new_schema(column: &Column, fields: &Fields) -> bool {
     let idx = column.index();
     idx >= fields.len() || fields[idx].name() != column.name()
 }
 
-// Get first aliased version found of the `col` among `alias_map`
+/// Gets first aliased version of `col` found in `alias_map`.
 fn get_alias_column(
     col: &Column,
     alias_map: &HashMap<Column, Vec<Column>>,
 ) -> Option<Column> {
-    for (column, columns) in alias_map {
-        if column.eq(col) {
-            return Some(columns[0].clone());
-        }
-    }
-    None
+    alias_map
+        .iter()
+        .find_map(|(column, columns)| column.eq(col).then(|| columns[0].clone()))
 }
 
 /// This function applies the given projection to the given equivalence

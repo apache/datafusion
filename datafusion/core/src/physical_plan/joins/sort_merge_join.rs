@@ -52,9 +52,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::utils::normalize_sort_exprs;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 
-use datafusion_physical_expr::utils::normalize_sort_exprs;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 
@@ -86,8 +86,8 @@ pub struct SortMergeJoinExec {
     pub(crate) null_equals_null: bool,
 }
 
-// Replace right_column(1st index in the tuple) with left_column (0th index in the tuple)
-// inside `right_ordering`.
+/// Replaces the right column (first index in the `on_column` tuple) with
+/// the left column (zeroth index in the tuple) inside `right_ordering`.
 fn replace_on_columns_of_right_ordering(
     on_columns: &[(Column, Column)],
     right_ordering: &mut [PhysicalSortExpr],
@@ -98,7 +98,7 @@ fn replace_on_columns_of_right_ordering(
             Column::new(right_col.name(), right_col.index() + left_columns_len);
         for item in right_ordering.iter_mut() {
             if let Some(col) = item.expr.as_any().downcast_ref::<Column>() {
-                if col.eq(&right_col) {
+                if right_col.eq(col) {
                     item.expr = Arc::new(left_col.clone()) as _;
                 }
             }
@@ -106,17 +106,16 @@ fn replace_on_columns_of_right_ordering(
     }
 }
 
-// Merge left and right vectors with deduplicate check
+/// Merge left and right sort expressions, checking for duplicates.
 fn merge_vectors(
     left: &[PhysicalSortExpr],
     right: &[PhysicalSortExpr],
 ) -> Vec<PhysicalSortExpr> {
-    let mut merged = vec![];
-    merged.extend(left.to_vec());
-    merged.extend(right.to_vec());
-    // When left and right contains same expressions
-    // new_ordering may contain duplicate entries, below call removes duplicates
-    merged.into_iter().unique().collect()
+    left.iter()
+        .cloned()
+        .chain(right.iter().cloned())
+        .unique()
+        .collect()
 }
 
 impl SortMergeJoinExec {
@@ -169,8 +168,8 @@ impl SortMergeJoinExec {
         let output_ordering = match join_type {
             JoinType::Inner => {
                 match (left.output_ordering(), right.output_ordering()) {
-                    // In the inner join if both side has ordering, ordering of the right hand side
-                    // can be appended to the left side ordering.
+                    // If both sides have orderings, ordering of the right hand side
+                    // can be appended to the left side ordering for inner joins.
                     (Some(left_ordering), Some(right_ordering)) => {
                         let left_columns_len = left.schema().fields.len();
                         let mut right_ordering =
@@ -180,8 +179,7 @@ impl SortMergeJoinExec {
                             &mut right_ordering,
                             left_columns_len,
                         );
-                        let new_ordering = merge_vectors(left_ordering, &right_ordering);
-                        Some(new_ordering)
+                        Some(merge_vectors(left_ordering, &right_ordering))
                     }
                     (Some(left_ordering), _) => Some(left_ordering.to_vec()),
                     _ => None,
@@ -330,7 +328,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         let right_oeq_properties = self.right.ordering_equivalence_properties();
         match self.join_type {
             JoinType::Inner => {
-                // Since left side is the stream side for this SortMergeJoin implementation,
+                // Since left side is the stream side for this `SortMergeJoin` implementation,
                 // global ordering of the left table is preserved at the output. Hence, left
                 // side ordering equivalences are still valid.
                 new_properties.extend(left_oeq_properties.classes().iter().cloned());
@@ -344,8 +342,9 @@ impl ExecutionPlan for SortMergeJoinExec {
                         )
                         .unwrap();
                     let left_output_ordering = self.left.output_ordering().unwrap_or(&[]);
-                    // We need to add ordering equivalence properties of right table as postfix to
-                    // the existing ordering. As an example;
+                    // Right side ordering equivalence properties should be prepended with
+                    // those of the left side while constructing output ordering equivalence
+                    // properties for `SortMergeJoin`. As an example;
                     //  - if right table ordering equivalence, contains `b ASC`,
                     //  - and output ordering of the left table is `a ASC`:
                     //  -> then, Ordering equivalence `b ASC` for the right table should be
@@ -353,8 +352,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                     //     of `SortMergeJoinExec`.
                     for oeq_class in updated_right_oeq_classes {
                         for ordering in oeq_class.others() {
-                            // Entries inside ordering equivalence, should be normalized according to
-                            // equivalence before insertion.
+                            // Entries inside ordering equivalence should be normalized before insertion.
                             let normalized_ordering = normalize_sort_exprs(
                                 ordering,
                                 self.equivalence_properties().classes(),
@@ -376,7 +374,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
                 new_properties.extend(right_oeq_properties.classes().iter().cloned());
             }
-            // All ordering equivalences from left and/or right are invalidated.
+            // All ordering equivalences from left and/or right sides are invalidated.
             _ => {}
         }
         new_properties
