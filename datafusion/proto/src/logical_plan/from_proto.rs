@@ -1291,7 +1291,7 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::Trunc => Ok(trunc(
                     parse_expr(&args[0], registry)?,
-                    parse_expr( &args[1], registry)?
+                    parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], registry)?)),
