@@ -325,8 +325,8 @@ fn update_ordering_equivalence_with_cast(
     for cast_expr in cast_exprs.iter() {
         for cls in input_oeq.classes() {
             for ordering in std::iter::once(cls.head()).chain(cls.others().iter()) {
-                for idx in 0..ordering.len() {
-                    if ordering[idx].expr.eq(cast_expr.expr()) {
+                for (idx, current) in ordering.iter().enumerate() {
+                    if current.expr.eq(cast_expr.expr()) {
                         let mut updated_ordering = ordering.clone();
                         updated_ordering[idx].expr = Arc::new(cast_expr.clone()) as _;
                         output_eq.add_equal_conditions((
