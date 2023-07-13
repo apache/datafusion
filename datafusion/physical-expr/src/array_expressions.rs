@@ -1040,7 +1040,6 @@ macro_rules! to_string {
                 }
             }
         }
-
         Ok($ARG)
     }};
 }
@@ -1073,7 +1072,6 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let list_array = downcast_arg!(arr, ListArray);
 
                 for i in 0..list_array.len() {
-                    println!("listarryvaluei: {:?}", list_array.value(i));
                     compute_array_to_string(
                         arg,
                         list_array.value(i),
@@ -1081,7 +1079,6 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                         null_string.clone(),
                         with_null_string,
                     )?;
-                    println!("arg: {:?}", arg);
                 }
 
                 Ok(arg)
@@ -1203,28 +1200,25 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     match arr.data_type() {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
             let list_array = arr.as_list::<i32>();
-            for (arr, delimeter) in list_array.iter().zip(delimeters.iter()) {
-                if delimeter.is_none() || arr.is_none() {
-                    res.push(None);
-                } else {
+            for (arr, &delimeter) in list_array.iter().zip(delimeters.iter()) {
+                if let (Some(arr), Some(delimeter)) = (arr, delimeter) {
                     arg = String::from("");
                     let s = compute_array_to_string(
                         &mut arg,
-                        arr.unwrap(),
-                        delimeter.unwrap().to_string(),
+                        arr,
+                        delimeter.to_string(),
                         null_string.clone(),
                         with_null_string,
                     )?
                     .clone();
 
-                    let delimeter = delimeter.unwrap();
-
-                    if !s.is_empty() {
-                        let s = s.trim_end_matches(delimeter).to_string();
-                        res.push(Some(s));
+                    if let Some(s) = s.strip_suffix(delimeter) {
+                        res.push(Some(s.to_string()));
                     } else {
                         res.push(Some(s));
                     }
+                } else {
+                    res.push(None);
                 }
             }
         }
@@ -1242,7 +1236,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
             .clone();
 
             if !s.is_empty() {
-                let s = s.trim_end_matches(delimeter).to_string();
+                let s = s.strip_suffix(delimeter).unwrap().to_string();
                 res.push(Some(s));
             } else {
                 res.push(Some(s));
