@@ -56,6 +56,7 @@ use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequir
 
 use datafusion_physical_expr::utils::normalize_sort_exprs;
 use futures::{Stream, StreamExt};
+use itertools::Itertools;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -83,6 +84,39 @@ pub struct SortMergeJoinExec {
     pub(crate) sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
+}
+
+// Replace right_column(1st index in the tuple) with left_column (0th index in the tuple)
+// inside `right_ordering`.
+fn replace_on_columns_of_right_ordering(
+    on_columns: &[(Column, Column)],
+    right_ordering: &mut [PhysicalSortExpr],
+    left_columns_len: usize,
+) {
+    for (left_col, right_col) in on_columns {
+        let right_col =
+            Column::new(right_col.name(), right_col.index() + left_columns_len);
+        for item in right_ordering.iter_mut() {
+            if let Some(col) = item.expr.as_any().downcast_ref::<Column>() {
+                if col.eq(&right_col) {
+                    item.expr = Arc::new(left_col.clone()) as _;
+                }
+            }
+        }
+    }
+}
+
+// Merge left and right vectors with deduplicate check
+fn merge_vectors(
+    left: &[PhysicalSortExpr],
+    right: &[PhysicalSortExpr],
+) -> Vec<PhysicalSortExpr> {
+    let mut merged = vec![];
+    merged.extend(left.to_vec());
+    merged.extend(right.to_vec());
+    // When left and right contains same expressions
+    // new_ordering may contain duplicate entries, below call removes duplicates
+    merged.into_iter().unique().collect()
 }
 
 impl SortMergeJoinExec {
@@ -135,35 +169,18 @@ impl SortMergeJoinExec {
         let output_ordering = match join_type {
             JoinType::Inner => {
                 match (left.output_ordering(), right.output_ordering()) {
-                    // In the inner join if n=both side has ordering, ordering of the right hand side
+                    // In the inner join if both side has ordering, ordering of the right hand side
                     // can be appended to the left side ordering.
                     (Some(left_ordering), Some(right_ordering)) => {
                         let left_columns_len = left.schema().fields.len();
                         let mut right_ordering =
                             add_offset_to_lex_ordering(right_ordering, left_columns_len)?;
-                        for (left_col, right_col) in &on {
-                            let right_col = Column::new(
-                                right_col.name(),
-                                right_col.index() + left_columns_len,
-                            );
-                            for item in right_ordering.iter_mut() {
-                                if let Some(col) =
-                                    item.expr.as_any().downcast_ref::<Column>()
-                                {
-                                    if col.eq(&right_col) {
-                                        item.expr = Arc::new(left_col.clone()) as _;
-                                    }
-                                }
-                            }
-                        }
-                        let mut new_ordering = vec![];
-                        new_ordering.extend(left_ordering.to_vec());
-                        for sort_expr in right_ordering {
-                            if !new_ordering.contains(&sort_expr) {
-                                // Append right table ordering as lexicographical ordering. if it is not exists
-                                new_ordering.push(sort_expr);
-                            }
-                        }
+                        replace_on_columns_of_right_ordering(
+                            &on,
+                            &mut right_ordering,
+                            left_columns_len,
+                        );
+                        let new_ordering = merge_vectors(left_ordering, &right_ordering);
                         Some(new_ordering)
                     }
                     (Some(left_ordering), _) => Some(left_ordering.to_vec()),
@@ -332,18 +349,15 @@ impl ExecutionPlan for SortMergeJoinExec {
                     let left_output_ordering = self.left.output_ordering().unwrap_or(&[]);
                     for oeq_class in updated_right_oeq_classes {
                         for ordering in oeq_class.others() {
-                            let mut new_oeq_ordering = left_output_ordering.to_vec();
+                            // Entries inside ordering equivalence, should be normalized according to
+                            // equivalence before insertion.
                             let normalized_ordering = normalize_sort_exprs(
                                 ordering,
                                 self.equivalence_properties().classes(),
                                 &[],
                             );
-                            for sort_expr in normalized_ordering {
-                                if !new_oeq_ordering.contains(&sort_expr) {
-                                    // Append right table ordering as lexicographical ordering.
-                                    new_oeq_ordering.push(sort_expr);
-                                }
-                            }
+                            let new_oeq_ordering =
+                                merge_vectors(left_output_ordering, &normalized_ordering);
                             new_properties.add_equal_conditions((
                                 output_ordering,
                                 &new_oeq_ordering,
