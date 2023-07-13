@@ -872,10 +872,10 @@ impl ExecutionPlan for AggregateExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.mode {
-            AggregateMode::Partial | AggregateMode::Single => {
+            AggregateMode::Partial => {
                 vec![Distribution::UnspecifiedDistribution]
             }
-            AggregateMode::FinalPartitioned => {
+            AggregateMode::FinalPartitioned | AggregateMode::Single => {
                 vec![Distribution::HashPartitioned(self.output_group_expr())]
             }
             AggregateMode::Final => vec![Distribution::SinglePartition],
