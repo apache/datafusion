@@ -139,9 +139,13 @@ impl NullState {
             // no nulls, no filter,
             (false, None) => {
                 let iter = group_indices.iter().zip(data.iter());
+
                 for (&group_index, &new_value) in iter {
-                    seen_values.set_bit(group_index, true);
                     value_fn(group_index, new_value);
+                }
+                // update seen values in separate loop
+                for &group_index in group_indices.iter() {
+                    seen_values.set_bit(group_index, true);
                 }
             }
             // nulls, no filter
@@ -157,6 +161,7 @@ impl NullState {
                 let data_remainder = data_chunks.remainder();
 
                 group_indices_chunks
+                    .clone()
                     .zip(data_chunks)
                     .zip(bit_chunks.iter())
                     .for_each(|((group_index_chunk, data_chunk), mask)| {
@@ -167,13 +172,27 @@ impl NullState {
                                 // valid bit was set, real value
                                 let is_valid = (mask & index_mask) != 0;
                                 if is_valid {
-                                    seen_values.set_bit(group_index, true);
                                     value_fn(group_index, new_value);
                                 }
                                 index_mask <<= 1;
                             },
                         )
                     });
+
+                group_indices_chunks.zip(bit_chunks.iter()).for_each(
+                    |(group_index_chunk, mask)| {
+                        // index_mask has value 1 << i in the loop
+                        let mut index_mask = 1;
+                        group_index_chunk.iter().for_each(|&group_index| {
+                            // valid bit was set, real value
+                            let is_valid = (mask & index_mask) != 0;
+                            if is_valid {
+                                seen_values.set_bit(group_index, true);
+                            }
+                            index_mask <<= 1;
+                        })
+                    },
+                );
 
                 // handle any remaining bits (after the initial 64)
                 let remainder_bits = bit_chunks.remainder_bits();
@@ -184,10 +203,17 @@ impl NullState {
                     .for_each(|(i, (&group_index, &new_value))| {
                         let is_valid = remainder_bits & (1 << i) != 0;
                         if is_valid {
-                            seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
                         }
                     });
+                group_indices_remainder.iter().enumerate().for_each(
+                    |(i, &group_index)| {
+                        let is_valid = remainder_bits & (1 << i) != 0;
+                        if is_valid {
+                            seen_values.set_bit(group_index, true);
+                        }
+                    },
+                );
             }
             // no nulls, but a filter
             (false, Some(filter)) => {
@@ -201,10 +227,17 @@ impl NullState {
                     .zip(filter.iter())
                     .for_each(|((&group_index, &new_value), filter_value)| {
                         if let Some(true) = filter_value {
-                            seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
                         }
-                    })
+                    });
+
+                group_indices.iter().zip(filter.iter()).for_each(
+                    |(&group_index, filter_value)| {
+                        if let Some(true) = filter_value {
+                            seen_values.set_bit(group_index, true);
+                        }
+                    },
+                )
             }
             // both null values and filters
             (true, Some(filter)) => {
