@@ -196,14 +196,14 @@ fn shrink_boundaries(
             };
         }
     });
-    let root_index = graph
+    let node_data = graph
         .gather_node_indices(&[expr.clone()])
         .first()
         .ok_or_else(|| {
             DataFusionError::Internal("Error in constructing predicate graph".to_string())
-        })?
-        .1;
-    let final_result = graph.get_interval(root_index);
+        })?;
+    let (_, root_index) = node_data;
+    let final_result = graph.get_interval(*root_index);
 
     let selectivity = calculate_selectivity(
         &final_result.lower.value,
@@ -266,7 +266,7 @@ pub struct AnalysisContext {
     // A list of known column boundaries, ordered by the index
     // of the column in the current schema.
     pub boundaries: Option<Vec<ExprBoundaries>>,
-    /// The estimated percantage of rows that this expression would select, if
+    /// The estimated percentage of rows that this expression would select, if
     /// it were to be used as a boolean predicate on a filter. The value will be
     /// between 0.0 (selects nothing) and 1.0 (selects everything).
     pub selectivity: Option<f64>,
@@ -294,7 +294,7 @@ impl AnalysisContext {
     pub fn from_statistics(
         input_schema: &Schema,
         statistics: &[ColumnStatistics],
-    ) -> Option<Self> {
+    ) -> Self {
         let mut column_boundaries = vec![];
         for (i, stats) in statistics.iter().enumerate() {
             column_boundaries.push(ExprBoundaries::from_column(
@@ -303,7 +303,7 @@ impl AnalysisContext {
                 i,
             ));
         }
-        Some(Self::new(column_boundaries))
+        Self::new(column_boundaries)
     }
 }
 

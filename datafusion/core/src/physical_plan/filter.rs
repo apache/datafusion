@@ -200,13 +200,8 @@ impl ExecutionPlan for FilterExec {
             None => return Statistics::default(),
         };
 
-        let starter_ctx = match AnalysisContext::from_statistics(
-            &self.input.schema(),
-            &input_column_stats,
-        ) {
-            Some(ctx) => ctx,
-            None => return Statistics::default(),
-        };
+        let starter_ctx =
+            AnalysisContext::from_statistics(&self.input.schema(), &input_column_stats);
 
         let analysis_ctx = match analyze(predicate, starter_ctx) {
             Ok(ctx) => ctx,
