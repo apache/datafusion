@@ -128,8 +128,12 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
-    let ctx = test_ctx.session_ctx().clone();
-    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
+    let mut runner = sqllogictest::Runner::new(|| async {
+        Ok(DataFusion::new(
+            test_ctx.session_ctx().clone(),
+            relative_path.clone(),
+        ))
+    });
     runner.with_column_validator(strict_column_validator);
     runner
         .run_file_async(path)
@@ -143,10 +147,8 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
         relative_path,
     } = test_file;
     info!("Running with Postgres runner: {}", path.display());
-    let postgres_client = Postgres::connect(relative_path)
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let mut runner = sqllogictest::Runner::new(postgres_client);
+    let mut runner =
+        sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
     runner.with_column_validator(strict_column_validator);
     runner
         .run_file_async(path)
@@ -168,9 +170,12 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
-    let ctx = test_ctx.session_ctx().clone();
-    let mut runner =
-        sqllogictest::Runner::new(DataFusion::new(ctx, relative_path.clone()));
+    let mut runner = sqllogictest::Runner::new(|| async {
+        Ok(DataFusion::new(
+            test_ctx.session_ctx().clone(),
+            relative_path.clone(),
+        ))
+    });
     let col_separator = " ";
     runner
         .update_test_file(
