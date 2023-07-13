@@ -17,10 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::any::Any;
-use std::sync::Arc;
-
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{ArrayRef, BooleanArray},
@@ -28,7 +25,10 @@ use arrow::{
 };
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
+use std::any::Any;
+use std::sync::Arc;
 
+use crate::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
 };
@@ -191,6 +191,23 @@ impl AggregateExpr for BoolAnd {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        match self.data_type {
+            DataType::Boolean => {
+                Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x && y)))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -379,6 +396,23 @@ impl AggregateExpr for BoolOr {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        match self.data_type {
+            DataType::Boolean => {
+                Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x || y)))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
