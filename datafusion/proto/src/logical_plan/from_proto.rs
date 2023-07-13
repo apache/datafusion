@@ -1290,8 +1290,10 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Trunc => Ok(trunc(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], registry)?)),

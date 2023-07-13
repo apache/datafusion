@@ -499,26 +499,33 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Truncate(numeric, decimalPrecision) and trunc(numeric) SQL function
 pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 && args.len() != 2 {
+        return Err(DataFusionError::Internal(format!(
+            "truncate function requires one or two arguments, got {}",
+            args.len()
+        )));
+    }
+
     //if only one arg then invoke toolchain trunc(num) and precision = 0 by default
     //or then invoke the compute_truncate method to process precision
-    let mut precision = ColumnarValue::Scalar(Int32(Some(0)));
+    let mut _precision = ColumnarValue::Scalar(Int32(Some(0)));
 
-    let mut num = &args[0];
+    let num = &args[0];
     if args.len() == 2 {
-        precision = ColumnarValue::Array(args[1].clone());
+        _precision = ColumnarValue::Array(args[1].clone());
     }
 
     match args[0].data_type() {
-        DataType::Float64 => match precision {
-            ColumnarValue::Scalar(Int32(Some(precision))) => Ok(Arc::new(
+        DataType::Float64 => match _precision {
+            ColumnarValue::Scalar(Int32(Some(_precision))) => Ok(Arc::new(
                 make_function_scalar_inputs!(num, "num", Float64Array, {
                     |value: f64| f64::trunc(value)
                 }),
             )
                 as ArrayRef),
-            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
+            ColumnarValue::Array(_precision) => Ok(Arc::new(make_function_inputs2!(
                 num,
-                precision,
+                _precision,
                 "x",
                 "y",
                 Float64Array,
@@ -529,16 +536,16 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 "trunc function requires a scalar or array for precision".to_string(),
             )),
         },
-        DataType::Float32 => match precision {
-            ColumnarValue::Scalar(Int32(Some(precision))) => Ok(Arc::new(
+        DataType::Float32 => match _precision {
+            ColumnarValue::Scalar(Int32(Some(_precision))) => Ok(Arc::new(
                 make_function_scalar_inputs!(num, "num", Float32Array, {
                     |value: f32| f32::trunc(value)
                 }),
             )
                 as ArrayRef),
-            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
+            ColumnarValue::Array(_precision) => Ok(Arc::new(make_function_inputs2!(
                 num,
-                precision,
+                _precision,
                 "x",
                 "y",
                 Float32Array,
@@ -588,7 +595,6 @@ mod tests {
 
     use super::*;
     use arrow::array::{Float64Array, NullArray};
-    use arrow_schema::DataType::Int32;
     use datafusion_common::cast::{as_float32_array, as_float64_array, as_int64_array};
 
     #[test]
