@@ -1933,27 +1933,44 @@ CREATE TABLE test_table (c1 INT, c2 INT, c3 INT)
 
 # Inserting data
 statement ok
-INSERT INTO test_table VALUES (1, 10, 50), (1, 20, 60), (2, 10, 70), (2, 20, 80), (3, 10, NULL)
+INSERT INTO test_table VALUES
+  (1, 10, 50),
+  (1, 20, 60),
+  (2, 10, 70),
+  (2, 20, 80),
+  (3, 10, NULL)
 
 # query_group_by_with_filter
-query II rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result FROM test_table GROUP BY c1
+query III rowsort
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20),
+  SUM(c2) FILTER (WHERE c2 < 1) -- no rows pass filter, so the output should be NULL
+FROM test_table GROUP BY c1
 ----
-1 20
-2 20
-3 NULL
+1 20 NULL
+2 20 NULL
+3 NULL NULL
 
 # query_group_by_avg_with_filter
-query IR rowsort
-SELECT c1, AVG(c2) FILTER (WHERE c2 >= 20) AS avg_c2 FROM test_table GROUP BY c1
+query IRR rowsort
+SELECT
+  c1,
+  AVG(c2) FILTER (WHERE c2 >= 20),
+  AVG(c2) FILTER (WHERE c2 < 1)  -- no rows pass filter, so output should be null
+FROM test_table GROUP BY c1
 ----
-1 20
-2 20
-3 NULL
+1 20 NULL
+2 20 NULL
+3 NULL NULL
 
 # query_group_by_with_multiple_filters
 query IIR rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2, AVG(c3) FILTER (WHERE c3 <= 70) AS avg_c3 FROM test_table GROUP BY c1
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2,
+  AVG(c3) FILTER (WHERE c3 <= 70) AS avg_c3
+FROM test_table GROUP BY c1
 ----
 1 20 55
 2 20 70
@@ -1961,7 +1978,10 @@ SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2, AVG(c3) FILTER (WHERE c3 <
 
 # query_group_by_distinct_with_filter
 query II rowsort
-SELECT c1, COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count FROM test_table GROUP BY c1
+SELECT
+  c1,
+  COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count
+FROM test_table GROUP BY c1
 ----
 1 1
 2 1
@@ -1969,19 +1989,27 @@ SELECT c1, COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count FROM 
 
 # query_without_group_by_with_filter
 query I rowsort
-SELECT SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2 FROM test_table
+SELECT
+  SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2
+FROM test_table
 ----
 40
 
 # count_without_group_by_with_filter
 query I rowsort
-SELECT COUNT(c2) FILTER (WHERE c2 >= 20) AS count_c2 FROM test_table
+SELECT
+  COUNT(c2) FILTER (WHERE c2 >= 20) AS count_c2
+FROM test_table
 ----
 2
 
 # query_with_and_without_filter
 query III rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result, SUM(c2) as result_no_filter FROM test_table GROUP BY c1;
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20) as result,
+  SUM(c2) as result_no_filter
+FROM test_table GROUP BY c1;
 ----
 1 20 30
 2 20 30
@@ -1989,13 +2017,17 @@ SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result, SUM(c2) as result_no_filte
 
 # query_filter_on_different_column_than_aggregate
 query I rowsort
-select sum(c1) FILTER (WHERE c2 < 30) from test_table;
+select
+  sum(c1) FILTER (WHERE c2 < 30)
+FROM test_table;
 ----
 9
 
 # query_test_empty_filter
 query I rowsort
-SELECT SUM(c2) FILTER (WHERE c2 >= 20000000) AS sum_c2 FROM test_table;
+SELECT
+  SUM(c2) FILTER (WHERE c2 >= 20000000) AS sum_c2
+FROM test_table;
 ----
 NULL
 
