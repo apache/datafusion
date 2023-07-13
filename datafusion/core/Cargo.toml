@@ -98,7 +98,7 @@ zstd = { version = "0.12", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = "0.1.53"
-bigdecimal = "0.3.0"
+bigdecimal = "0.4.1"
 criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
 ctor = "0.2.0"
