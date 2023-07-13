@@ -110,7 +110,7 @@ postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 regex = "1.5.4"
 rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
-sqllogictest = "0.14.0"
+sqllogictest = "0.15.0"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"
