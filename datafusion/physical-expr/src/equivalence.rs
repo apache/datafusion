@@ -388,6 +388,8 @@ pub fn project_equivalence_properties(
     for (column, columns) in alias_map {
         let mut find_match = false;
         for class in eq_classes.iter_mut() {
+            // If `self.head` is invalidated in the new schema, update head
+            // with this change `self.head` is not randomly assigned by one of the entries from `self.others`
             if is_column_invalid_in_new_schema(&class.head, fields) {
                 if let Some(alias_col) = get_alias_column(&class.head, alias_map) {
                     class.head = alias_col;
@@ -410,10 +412,7 @@ pub fn project_equivalence_properties(
     for class in eq_classes.iter_mut() {
         let columns_to_remove = class
             .iter()
-            .filter(|column| {
-                let idx = column.index();
-                idx >= fields.len() || fields[idx].name() != column.name()
-            })
+            .filter(|column| is_column_invalid_in_new_schema(column, fields))
             .cloned()
             .collect::<Vec<_>>();
         for column in columns_to_remove {
