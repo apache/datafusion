@@ -20,12 +20,12 @@
 //! determined by the [`JoinType`].
 
 use crate::physical_plan::joins::utils::{
-    adjust_right_output_partitioning, append_right_indices, apply_join_filter_to_indices,
-    build_batch_from_indices, build_join_schema, check_join_is_valid,
-    combine_join_equivalence_properties, estimate_join_statistics, get_anti_indices,
-    get_anti_u64_indices, get_final_indices_from_bit_map, get_semi_indices,
-    get_semi_u64_indices, BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinSide,
-    OnceAsync, OnceFut,
+    append_right_indices, apply_join_filter_to_indices, build_batch_from_indices,
+    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
+    estimate_join_statistics, get_anti_indices, get_anti_u64_indices,
+    get_final_indices_from_bit_map, get_semi_indices, get_semi_u64_indices,
+    partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
+    JoinSide, OnceAsync, OnceFut,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -118,6 +118,26 @@ impl NestedLoopJoinExec {
             metrics: Default::default(),
         })
     }
+
+    /// left (build) side which gets hashed
+    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.left
+    }
+
+    /// right (probe) side which are filtered by the hash table
+    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.right
+    }
+
+    /// Filters applied before join output
+    pub fn filter(&self) -> Option<&JoinFilter> {
+        self.filter.as_ref()
+    }
+
+    /// How the join is performed
+    pub fn join_type(&self) -> &JoinType {
+        &self.join_type
+    }
 }
 
 impl DisplayAs for NestedLoopJoinExec {
@@ -149,25 +169,15 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn output_partitioning(&self) -> Partitioning {
         // the partition of output is determined by the rule of `required_input_distribution`
-        // TODO we can replace it by `partitioned_join_output_partitioning`
-        match self.join_type {
-            // use the left partition
-            JoinType::Inner
-            | JoinType::Left
-            | JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::Full => self.left.output_partitioning(),
-            // use the right partition
-            JoinType::Right => {
-                // if the partition of right is hash,
-                // and the right partition should be adjusted the column index for the right expr
-                adjust_right_output_partitioning(
-                    self.right.output_partitioning(),
-                    self.left.schema().fields.len(),
-                )
-            }
-            // use the right partition
-            JoinType::RightSemi | JoinType::RightAnti => self.right.output_partitioning(),
+        if self.join_type == JoinType::Full {
+            self.left.output_partitioning()
+        } else {
+            partitioned_join_output_partitioning(
+                self.join_type,
+                self.left.output_partitioning(),
+                self.right.output_partitioning(),
+                self.left.schema().fields.len(),
+            )
         }
     }
 
