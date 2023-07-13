@@ -1420,65 +1420,95 @@ select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.c
 2 1 1.414213562373 1
 
 
-# sum / count for all nulls
+
+# aggregates on empty tables
 statement ok
-create table the_nulls as values (null::bigint, 1), (null::bigint, 1), (null::bigint, 2);
+CREATE TABLE empty (column1 bigint, column2 int);
 
-# counts should be zeros (even for nulls)
-query II
-SELECT count(column1), column2 from the_nulls group by column2 order by column2;
+# no group by column
+query IIRIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1)
+FROM empty
 ----
-0 1
-0 2
+0 NULL NULL NULL NULL NULL NULL NULL
 
-# sums should be null
-query II
-SELECT sum(column1), column2 from the_nulls group by column2 order by column2;
+# Same query but with grouping (no groups, so no output)
+query IIRIIIIII
+SELECT
+  count(column1),
+  sum(column1),
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1),
+  column2
+FROM empty
+GROUP BY column2
+ORDER BY column2;
 ----
+
+
+statement ok
+drop table empty
+
+# aggregates on all nulls
+statement ok
+CREATE TABLE the_nulls
+AS VALUES
+  (null::bigint, 1),
+  (null::bigint, 1),
+  (null::bigint, 2);
+
+query II
+select * from the_nulls
+----
+NULL 1
 NULL 1
 NULL 2
 
-# avg should be null
-query RI
-SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
+# no group by column
+query IIRIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1)
+FROM the_nulls
 ----
-NULL 1
-NULL 2
+0 NULL NULL NULL NULL NULL NULL NULL
 
-# bit_and should be null
-query II
-SELECT bit_and(column1), column2 from the_nulls group by column2 order by column2;
+# Same query but with grouping
+query IIRIIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1),
+  column2
+FROM the_nulls
+GROUP BY column2
+ORDER BY column2;
 ----
-NULL 1
-NULL 2
-
-# bit_or should be null
-query II
-SELECT bit_or(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# bit_xor should be null
-query II
-SELECT bit_xor(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# min should be null
-query II
-SELECT min(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# max should be null
-query II
-SELECT max(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
+0 NULL NULL NULL NULL NULL NULL NULL 1
+0 NULL NULL NULL NULL NULL NULL NULL 2
 
 
 statement ok
@@ -1489,29 +1519,49 @@ create table bit_aggregate_functions (
   c1 SMALLINT NOT NULL,
   c2 SMALLINT NOT NULL,
   c3 SMALLINT,
+  tag varchar
 )
 as values
-  (5, 10, 11),
-  (33, 11, null),
-  (9, 12, null);
+  (5,  10, 11,   'A'),
+  (33, 11, null, 'B'),
+  (9,  12, null, 'A');
 
-# query_bit_and
-query III
-SELECT bit_and(c1), bit_and(c2), bit_and(c3) FROM bit_aggregate_functions
+# query_bit_and, query_bit_or, query_bit_xor
+query IIIIIIIII
+SELECT
+  bit_and(c1),
+  bit_and(c2),
+  bit_and(c3),
+  bit_or(c1),
+  bit_or(c2),
+  bit_or(c3),
+  bit_xor(c1),
+  bit_xor(c2),
+  bit_xor(c3)
+FROM bit_aggregate_functions
 ----
-1 8 11
+1 8 11 45 15 11 45 13 11
 
-# query_bit_or
-query III
-SELECT bit_or(c1), bit_or(c2), bit_or(c3) FROM bit_aggregate_functions
+# query_bit_and, query_bit_or, query_bit_xor, with group
+query IIIIIIIIIT
+SELECT
+  bit_and(c1),
+  bit_and(c2),
+  bit_and(c3),
+  bit_or(c1),
+  bit_or(c2),
+  bit_or(c3),
+  bit_xor(c1),
+  bit_xor(c2),
+  bit_xor(c3),
+  tag
+FROM bit_aggregate_functions
+GROUP BY tag
+ORDER BY tag
 ----
-45 15 11
+1 8 11 13 14 11 12 6 11 A
+33 11 NULL 33 11 NULL 33 11 NULL B
 
-# query_bit_xor
-query III
-SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3) FROM bit_aggregate_functions
-----
-45 13 11
 
 statement ok
 create table bool_aggregate_functions (
