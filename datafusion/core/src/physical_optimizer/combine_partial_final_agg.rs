@@ -91,8 +91,9 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             ),
                                         )
                                     {
+                                        let mode = if *final_mode ==  AggregateMode::Final {AggregateMode::Single} else {AggregateMode::SinglePartitioned};
                                         AggregateExec::try_new(
-                                            AggregateMode::Single,
+                                            mode,
                                             input_group_by.clone(),
                                             input_aggr_expr.to_vec(),
                                             input_filter_expr.to_vec(),

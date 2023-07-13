@@ -496,7 +496,7 @@ impl GroupedHashAggregateStream {
                 // Call the appropriate method on each aggregator with
                 // the entire input row and the relevant group indexes
                 match self.mode {
-                    AggregateMode::Partial | AggregateMode::Single => {
+                    AggregateMode::Partial | AggregateMode::Single | AggregateMode::SinglePartitioned => {
                         acc.update_batch(
                             values,
                             group_indices,
