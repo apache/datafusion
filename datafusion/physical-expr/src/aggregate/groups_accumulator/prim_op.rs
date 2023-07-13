@@ -47,6 +47,9 @@ where
     /// The output type (needed for Decimal precision and scale)
     data_type: DataType,
 
+    /// The starting value for new groups
+    starting_value: T::Native,
+
     /// Track nulls in the input / filters
     null_state: NullState,
 
@@ -64,8 +67,15 @@ where
             values: vec![],
             data_type: data_type.clone(),
             null_state: NullState::new(),
+            starting_value: T::default_value(),
             prim_fn,
         }
+    }
+
+    /// Set the starting values for new groups
+    pub fn with_starting_value(mut self, starting_value: T::Native) -> Self {
+        self.starting_value = starting_value;
+        self
     }
 }
 
@@ -85,7 +95,7 @@ where
         let values = values[0].as_primitive::<T>();
 
         // update values
-        self.values.resize(total_num_groups, T::default_value());
+        self.values.resize(total_num_groups, self.starting_value);
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
