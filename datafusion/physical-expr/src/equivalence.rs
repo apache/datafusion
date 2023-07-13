@@ -23,6 +23,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 
+use arrow_schema::Fields;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -350,6 +351,25 @@ impl OrderingEquivalenceBuilder {
     }
 }
 
+// Check whether column is still valid after projection
+fn is_column_invalid_in_new_schema(column: &Column, fields: &Fields) -> bool {
+    let idx = column.index();
+    idx >= fields.len() || fields[idx].name() != column.name()
+}
+
+// Get first aliased version found of the `col` among `alias_map`
+fn get_alias_column(
+    col: &Column,
+    alias_map: &HashMap<Column, Vec<Column>>,
+) -> Option<Column> {
+    for (column, columns) in alias_map {
+        if column.eq(col) {
+            return Some(columns[0].clone());
+        }
+    }
+    None
+}
+
 /// This function applies the given projection to the given equivalence
 /// properties to compute the resulting (projected) equivalence properties; e.g.
 /// 1) Adding an alias, which can introduce additional equivalence properties,
@@ -360,10 +380,19 @@ pub fn project_equivalence_properties(
     alias_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut EquivalenceProperties,
 ) {
+    // Get schema and fields of projection output
+    let schema = output_eq.schema();
+    let fields = schema.fields();
+
     let mut eq_classes = input_eq.classes().to_vec();
     for (column, columns) in alias_map {
         let mut find_match = false;
         for class in eq_classes.iter_mut() {
+            if is_column_invalid_in_new_schema(&class.head, fields) {
+                if let Some(alias_col) = get_alias_column(&class.head, alias_map) {
+                    class.head = alias_col;
+                }
+            }
             if class.contains(column) {
                 for col in columns {
                     class.insert(col.clone());
@@ -378,8 +407,6 @@ pub fn project_equivalence_properties(
     }
 
     // Prune columns that are no longer in the schema from equivalences.
-    let schema = output_eq.schema();
-    let fields = schema.fields();
     for class in eq_classes.iter_mut() {
         let columns_to_remove = class
             .iter()

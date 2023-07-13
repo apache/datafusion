@@ -242,7 +242,6 @@ pub fn normalize_sort_requirements(
             )
         })
         .collect::<Vec<_>>();
-    println!("normalized_exprs after eq: {:?}", normalized_exprs);
     for ordering_eq_class in ordering_eq_properties {
         for item in ordering_eq_class.others() {
             let item = item
