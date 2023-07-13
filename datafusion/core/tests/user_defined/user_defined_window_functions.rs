@@ -515,7 +515,7 @@ impl PartitionEvaluator for OddCounter {
         println!("evaluate, values: {values:#?}, range: {range:?}");
 
         self.test_state.inc_evaluate_called();
-        let values: &Int64Array = values.get(0).unwrap().as_primitive();
+        let values: &Int64Array = values[0].as_primitive();
         let values = values.slice(range.start, range.len());
         let scalar = ScalarValue::Int64(
             match (odd_count(&values), self.test_state.null_for_zero) {
@@ -534,10 +534,7 @@ impl PartitionEvaluator for OddCounter {
         println!("evaluate_all, values: {values:#?}, num_rows: {num_rows}");
 
         self.test_state.inc_evaluate_all_called();
-        Ok(odd_count_arr(
-            values.get(0).unwrap().as_primitive(),
-            num_rows,
-        ))
+        Ok(odd_count_arr(values[0].as_primitive(), num_rows))
     }
 
     fn evaluate_all_with_rank(
