@@ -91,8 +91,10 @@ where d3_date > now() + '5 days';
 
 # DATE minus DATE
 # https://github.com/apache/arrow-rs/issues/4383
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Date32 \- Date32 to valid types
+query ?
 SELECT DATE '2023-04-09' - DATE '2023-04-02';
+----
+P7D
 
 # DATE minus Timestamp
 query ?

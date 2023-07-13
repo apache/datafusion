@@ -1233,7 +1233,7 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-query error DataFusion error: Error during planning: Cannot get result type for temporal operation Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\): Invalid argument error: Invalid timestamp arithmetic operation: Timestamp\(Nanosecond, None\) AddWrapping Timestamp\(Nanosecond, None\)
+query error DataFusion error: Error during planning: Cannot get result type for temporal operation Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\): Invalid argument error: Invalid timestamp arithmetic operation: Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\)
 SELECT ts1 + ts2
 FROM foo;
 
