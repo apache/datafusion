@@ -335,11 +335,8 @@ impl ExecutionPlan for SortMergeJoinExec {
                 // side ordering equivalences are still valid.
                 new_properties.extend(left_oeq_properties.classes().iter().cloned());
                 if let Some(output_ordering) = &self.output_ordering {
-                    // We need to add ordering equivalence properties of right
-                    // table as append to the lexicographical ordering to the existing ordering.
-                    // For instance, if right table ordering equivalence contains b ASC
-                    // And output ordering of the SortMergeJoin is a ASC, We should add
-                    // ordering equivalence `b ASC` for right table as `a ASC, b ASC` for `SortMergeJoinExec`.
+                    // Update right table ordering equivalence expression indices,
+                    // (add offset of left table size).
                     let updated_right_oeq_classes =
                         add_offset_to_ordering_equivalence_classes(
                             right_oeq_properties.classes(),
@@ -347,9 +344,13 @@ impl ExecutionPlan for SortMergeJoinExec {
                         )
                         .unwrap();
                     let left_output_ordering = self.left.output_ordering().unwrap_or(&[]);
-                    // Orderings inside right ordering equivalence properties should be prepended with
-                    // ordering of the left table before insertion to the OrderingEquivalenceProperties for
-                    // SortMergeJoin.
+                    // We need to add ordering equivalence properties of right table as postfix to
+                    // the existing ordering. As an example;
+                    //  - if right table ordering equivalence, contains `b ASC`,
+                    //  - and output ordering of the left table is `a ASC`:
+                    //  -> then, Ordering equivalence `b ASC` for the right table should be
+                    //     converted to the `a ASC, b ASC` before added to the ordering equivalence
+                    //     of `SortMergeJoinExec`.
                     for oeq_class in updated_right_oeq_classes {
                         for ordering in oeq_class.others() {
                             // Entries inside ordering equivalence, should be normalized according to

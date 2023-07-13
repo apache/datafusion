@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::{BinaryExpr, Column};
+use crate::expressions::{BinaryExpr, CastExpr, Column};
 use crate::{
     normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
     PhysicalSortExpr,
@@ -487,6 +487,42 @@ pub fn project_ordering_equivalence_properties(
     eq_classes.retain(|props| props.len() > 1);
 
     output_eq.extend(eq_classes);
+}
+
+/// Update `ordering` if it contains cast expression with target column
+/// after projection, if there is no cast expression among `ordering` expressions,
+/// returns `None`.
+fn update_with_cast_exprs(
+    cast_exprs: &[(CastExpr, Column)],
+    mut ordering: LexOrdering,
+) -> Option<LexOrdering> {
+    let mut is_changed = false;
+    for sort_expr in ordering.iter_mut() {
+        for (cast_expr, target_col) in cast_exprs.iter() {
+            if sort_expr.expr.eq(cast_expr.expr()) {
+                sort_expr.expr = Arc::new(target_col.clone()) as _;
+                is_changed = true;
+            }
+        }
+    }
+    is_changed.then_some(ordering)
+}
+
+/// Update cast expressions inside ordering equivalence
+/// properties with its target column after projection
+pub fn update_ordering_equivalence_with_cast(
+    cast_exprs: &[(CastExpr, Column)],
+    input_oeq: &mut OrderingEquivalenceProperties,
+) {
+    for cls in input_oeq.classes.iter_mut() {
+        for ordering in
+            std::iter::once(cls.head().clone()).chain(cls.others().clone().into_iter())
+        {
+            if let Some(updated_ordering) = update_with_cast_exprs(cast_exprs, ordering) {
+                cls.insert(updated_ordering);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
