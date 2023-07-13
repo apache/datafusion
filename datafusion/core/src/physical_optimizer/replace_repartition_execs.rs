@@ -505,26 +505,22 @@ mod tests {
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
         let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
-        let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions, false);
-
         let physical_plan =
-            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+            sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions, false);
 
         let expected_input = vec![
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST]",
-            "    CoalescePartitionsExec",
-            "      RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "SortExec: expr=[a@0 ASC NULLS LAST]",
+            "  CoalescePartitionsExec",
+            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized = vec![
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST]",
-            "    CoalescePartitionsExec",
-            "      RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "SortExec: expr=[a@0 ASC NULLS LAST]",
+            "  CoalescePartitionsExec",
+            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
