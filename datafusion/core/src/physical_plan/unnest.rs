@@ -472,6 +472,7 @@ where
         }
         DataType::FixedSizeList(_, size) => {
             // Handle FixedSizeList as it is not handled by the `length` kernel.
+            // https://github.com/apache/arrow-rs/issues/4517
             let mut lengths = Vec::with_capacity(list_array.len());
             for row in 0..list_array.len() {
                 if list_array.is_null(row) {
