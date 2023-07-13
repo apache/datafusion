@@ -68,6 +68,15 @@ const SEED: RandomState = RandomState::with_seeds(
     0x0eaea5d736d733a4_u64,
 );
 
+impl<T> Default for HyperLogLog<T>
+where
+    T: Hash + ?Sized,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> HyperLogLog<T>
 where
     T: Hash + ?Sized,

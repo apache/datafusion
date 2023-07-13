@@ -1005,7 +1005,7 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
     Arc::new(Schema::new(group_fields))
 }
 
-/// returns physical expressions to evaluate against a batch
+/// returns physical expressions for arguments to evaluate against a batch
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
 /// * Final: columns of `AggregateExpr::state_fields()`
