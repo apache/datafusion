@@ -116,22 +116,22 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
 }
 
 // Helper function to calculate column info recursively
-fn get_column_indices_helper(
-    indices: &mut Vec<(usize, String)>,
-    expr: &Arc<dyn PhysicalExpr>,
+fn get_columns_in_the_expr_helper<'b>(
+    indices: &mut Vec<&'b Column>,
+    expr: &'b Arc<dyn PhysicalExpr>,
 ) {
     if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-        indices.push((col.index(), col.name().to_string()))
+        indices.push(col)
     } else if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        get_column_indices_helper(indices, binary_expr.left());
-        get_column_indices_helper(indices, binary_expr.right());
+        get_columns_in_the_expr_helper(indices, binary_expr.left());
+        get_columns_in_the_expr_helper(indices, binary_expr.right());
     };
 }
 
-/// Get index and name of each column that is in the expression (Can return multiple entries for `BinaryExpr`s)
-fn get_column_indices(expr: &Arc<dyn PhysicalExpr>) -> Vec<(usize, String)> {
+/// Get columns that is in the expression (Can return multiple entries for `BinaryExpr`s)
+fn get_columns_in_the_expr(expr: &Arc<dyn PhysicalExpr>) -> Vec<&Column> {
     let mut result = vec![];
-    get_column_indices_helper(&mut result, expr);
+    get_columns_in_the_expr_helper(&mut result, expr);
     result
 }
 
@@ -266,11 +266,9 @@ impl OrderingEquivalentClass {
         fields: &Fields,
     ) {
         let is_head_invalid = self.head.iter().any(|sort_expr| {
-            get_column_indices(&sort_expr.expr)
+            get_columns_in_the_expr(&sort_expr.expr)
                 .iter()
-                .any(|(idx, name)| {
-                    is_column_invalid_in_new_schema(&Column::new(name, *idx), fields)
-                })
+                .any(|col| is_column_invalid_in_new_schema(col, fields))
         });
         // If head is invalidated, update head with alias expressions
         if is_head_invalid {
@@ -468,12 +466,12 @@ pub fn project_ordering_equivalence_properties(
             .iter()
             .filter(|sort_exprs| {
                 sort_exprs.iter().any(|sort_expr| {
-                    let col_infos = get_column_indices(&sort_expr.expr);
+                    let cols_in_expr = get_columns_in_the_expr(&sort_expr.expr);
                     // If any one of the columns, used in Expression is invalid, remove expression
                     // from ordering equivalences
-                    col_infos.into_iter().any(|(idx, name)| {
-                        idx >= fields.len() || fields[idx].name() != &name
-                    })
+                    cols_in_expr
+                        .into_iter()
+                        .any(|col| is_column_invalid_in_new_schema(col, fields))
                 })
             })
             .cloned()
@@ -627,13 +625,19 @@ mod tests {
     #[test]
     fn test_get_column_infos() -> Result<()> {
         let expr1 = Arc::new(Column::new("col1", 2)) as _;
-        assert_eq!(get_column_indices(&expr1), vec![(2, "col1".to_string())]);
+        assert_eq!(
+            get_columns_in_the_expr(&expr1),
+            vec![&Column::new("col1", 2)]
+        );
         let expr2 = Arc::new(Column::new("col2", 5)) as _;
-        assert_eq!(get_column_indices(&expr2), vec![(5, "col2".to_string())]);
+        assert_eq!(
+            get_columns_in_the_expr(&expr2),
+            vec![&Column::new("col2", 5)]
+        );
         let expr3 = Arc::new(BinaryExpr::new(expr1, Operator::Plus, expr2)) as _;
         assert_eq!(
-            get_column_indices(&expr3),
-            vec![(2, "col1".to_string()), (5, "col2".to_string())]
+            get_columns_in_the_expr(&expr3),
+            vec![&Column::new("col1", 2), &Column::new("col2", 5)]
         );
         Ok(())
     }
