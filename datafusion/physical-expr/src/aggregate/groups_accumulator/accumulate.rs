@@ -50,38 +50,27 @@ use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 /// [`GroupsAccumulator`]: crate::GroupsAccumulator
 #[derive(Debug)]
 pub struct NullState {
-    /// Tracks if a null input value has been seen for `group_index`,
-    /// if there were any nulls in the input.
-    ///
-    /// If `null_inputs[i]` is true, have not seen any null values for
-    /// group `i`, or have not seen any values
-    ///
-    /// If `null_inputs[i]` is false, saw at least one null value for
-    /// group `i`
-    null_inputs: Option<BooleanBufferBuilder>,
-
-    /// If there has been an `opt_filter`, has it seen any
-    /// non-filtered input values for `group_index`?
+    /// Have we seen any non-filtered input values for `group_index`?
     ///
     /// If `seen_values[i]` is true, have seen at least one non null
     /// value for group `i`
     ///
     /// If `seen_values[i]` is false, have not seen any values that
     /// pass the filter yet for group `i`
-    seen_values: Option<BooleanBufferBuilder>,
+    seen_values: BooleanBufferBuilder,
 }
 
 impl NullState {
     pub fn new() -> Self {
         Self {
-            null_inputs: None,
-            seen_values: None,
+            seen_values: BooleanBufferBuilder::new(0),
         }
     }
 
     /// return the size of all buffers allocated by this null state, not including self
     pub fn size(&self) -> usize {
-        builder_size(self.null_inputs.as_ref()) + builder_size(self.seen_values.as_ref())
+        // capacity is in bits, so convert to bytes
+        self.seen_values.capacity() / 8
     }
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
@@ -126,9 +115,7 @@ impl NullState {
     ///
     /// It also sets
     ///
-    /// 1. `self.seen_values[group_index]` to true for all rows that had a value if there is a filter
-    ///
-    /// 2. `self.null_inputs[group_index]` to true for all rows that had a null in input
+    /// 1. `self.seen_values[group_index]` to true for all rows that had a non null vale
     pub fn accumulate<T, F>(
         &mut self,
         group_indices: &[usize],
@@ -143,27 +130,23 @@ impl NullState {
         let data: &[T::Native] = values.values();
         assert_eq!(data.len(), group_indices.len());
 
+        // ensure the seen_values is big enough (start everything at
+        // "not seen" valid)
+        let seen_values =
+            initialize_builder(&mut self.seen_values, total_num_groups, false);
+
         match (values.null_count() > 0, opt_filter) {
             // no nulls, no filter,
             (false, None) => {
-                // if we have previously seen nulls, ensure the null
-                // buffer is big enough (start everything at valid)
-                if self.null_inputs.is_some() {
-                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
-                }
                 let iter = group_indices.iter().zip(data.iter());
                 for (&group_index, &new_value) in iter {
-                    value_fn(group_index, new_value)
+                    seen_values.set_bit(group_index, true);
+                    value_fn(group_index, new_value);
                 }
             }
             // nulls, no filter
             (true, None) => {
                 let nulls = values.nulls().unwrap();
-                // All groups start as valid (true), and are set to
-                // null if we see a null in the input)
-                let null_inputs =
-                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
-
                 // This is based on (ahem, COPY/PASTE) arrow::compute::aggregate::sum
                 // iterate over in chunks of 64 bits for more efficient null checking
                 let group_indices_chunks = group_indices.chunks_exact(64);
@@ -181,13 +164,11 @@ impl NullState {
                         let mut index_mask = 1;
                         group_index_chunk.iter().zip(data_chunk.iter()).for_each(
                             |(&group_index, &new_value)| {
-                                // valid bit was set, real vale
+                                // valid bit was set, real value
                                 let is_valid = (mask & index_mask) != 0;
                                 if is_valid {
+                                    seen_values.set_bit(group_index, true);
                                     value_fn(group_index, new_value);
-                                } else {
-                                    // input null means this group is now null
-                                    null_inputs.set_bit(group_index, false);
                                 }
                                 index_mask <<= 1;
                             },
@@ -203,20 +184,14 @@ impl NullState {
                     .for_each(|(i, (&group_index, &new_value))| {
                         let is_valid = remainder_bits & (1 << i) != 0;
                         if is_valid {
+                            seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
-                        } else {
-                            // input null means this group is now null
-                            null_inputs.set_bit(group_index, false);
                         }
                     });
             }
             // no nulls, but a filter
             (false, Some(filter)) => {
                 assert_eq!(filter.len(), group_indices.len());
-
-                // default seen to false (we fill it in as we go)
-                let seen_values =
-                    initialize_builder(&mut self.seen_values, total_num_groups, false);
                 // The performance with a filter could be improved by
                 // iterating over the filter in chunks, rather than a single
                 // iterator. TODO file a ticket
@@ -226,19 +201,13 @@ impl NullState {
                     .zip(filter.iter())
                     .for_each(|((&group_index, &new_value), filter_value)| {
                         if let Some(true) = filter_value {
-                            value_fn(group_index, new_value);
-                            // remember we have seen a value for this index
                             seen_values.set_bit(group_index, true);
+                            value_fn(group_index, new_value);
                         }
                     })
             }
             // both null values and filters
             (true, Some(filter)) => {
-                let null_inputs =
-                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
-                let seen_values =
-                    initialize_builder(&mut self.seen_values, total_num_groups, false);
-
                 assert_eq!(filter.len(), group_indices.len());
                 // The performance with a filter could be improved by
                 // iterating over the filter in chunks, rather than using
@@ -247,16 +216,12 @@ impl NullState {
                     .iter()
                     .zip(group_indices.iter())
                     .zip(values.iter())
-                    .for_each(|((filter_value, group_index), new_value)| {
+                    .for_each(|((filter_value, &group_index), new_value)| {
                         if let Some(true) = filter_value {
                             if let Some(new_value) = new_value {
-                                value_fn(*group_index, new_value)
-                            } else {
-                                // input null means this group is now null
-                                null_inputs.set_bit(*group_index, false);
+                                seen_values.set_bit(group_index, true);
+                                value_fn(group_index, new_value)
                             }
-                            // remember we have seen a value for this index
-                            seen_values.set_bit(*group_index, true);
                         }
                     })
             }
@@ -286,37 +251,35 @@ impl NullState {
         let data = values.values();
         assert_eq!(data.len(), group_indices.len());
 
+        // ensure the seen_values is big enough (start everything at
+        // "not seen" valid)
+        let seen_values =
+            initialize_builder(&mut self.seen_values, total_num_groups, false);
+
         // These could be made more performant by iterating in chunks of 64 bits at a time
         match (values.null_count() > 0, opt_filter) {
             // no nulls, no filter,
             (false, None) => {
                 // if we have previously seen nulls, ensure the null
                 // buffer is big enough (start everything at valid)
-                if self.null_inputs.is_some() {
-                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
-                }
                 group_indices.iter().zip(data.iter()).for_each(
-                    |(&group_index, new_value)| value_fn(group_index, new_value),
+                    |(&group_index, new_value)| {
+                        seen_values.set_bit(group_index, true);
+                        value_fn(group_index, new_value)
+                    },
                 )
             }
             // nulls, no filter
             (true, None) => {
                 let nulls = values.nulls().unwrap();
-                // All groups start as valid (true), and are set to
-                // null if we see a null in the input)
-                let null_inputs =
-                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
-
                 group_indices
                     .iter()
                     .zip(data.iter())
                     .zip(nulls.iter())
                     .for_each(|((&group_index, new_value), is_valid)| {
                         if is_valid {
+                            seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
-                        } else {
-                            // input null means this group is now null
-                            null_inputs.set_bit(group_index, false);
                         }
                     })
             }
@@ -324,44 +287,30 @@ impl NullState {
             (false, Some(filter)) => {
                 assert_eq!(filter.len(), group_indices.len());
 
-                // default seen to false (we fill it in as we go)
-                let seen_values =
-                    initialize_builder(&mut self.seen_values, total_num_groups, false);
-
                 group_indices
                     .iter()
                     .zip(data.iter())
                     .zip(filter.iter())
                     .for_each(|((&group_index, new_value), filter_value)| {
                         if let Some(true) = filter_value {
-                            value_fn(group_index, new_value);
-                            // remember we have seen a value for this index
                             seen_values.set_bit(group_index, true);
+                            value_fn(group_index, new_value);
                         }
                     })
             }
             // both null values and filters
             (true, Some(filter)) => {
-                let null_inputs =
-                    initialize_builder(&mut self.null_inputs, total_num_groups, true);
-                let seen_values =
-                    initialize_builder(&mut self.seen_values, total_num_groups, false);
-
                 assert_eq!(filter.len(), group_indices.len());
                 filter
                     .iter()
                     .zip(group_indices.iter())
                     .zip(values.iter())
-                    .for_each(|((filter_value, group_index), new_value)| {
+                    .for_each(|((filter_value, &group_index), new_value)| {
                         if let Some(true) = filter_value {
                             if let Some(new_value) = new_value {
-                                value_fn(*group_index, new_value)
-                            } else {
-                                // input null means this group is now null
-                                null_inputs.set_bit(*group_index, false);
+                                seen_values.set_bit(group_index, true);
+                                value_fn(group_index, new_value)
                             }
-                            // remember we have seen a value for this index
-                            seen_values.set_bit(*group_index, true);
                         }
                     })
             }
@@ -369,41 +318,12 @@ impl NullState {
     }
 
     /// Creates the final [`NullBuffer`] representing which
-    /// group_indices should have null values (because they saw a null
-    /// input, or because they never saw any values)
+    /// group_indices should have null values (because they never saw
+    /// any values)
     ///
     /// resets the internal state to empty
-    pub fn build(&mut self) -> Option<NullBuffer> {
-        // nulls (validity) set false for any group that saw a null
-        //
-        // seen_values (validity) set true for any group that saw a value
-        let nulls = self
-            .null_inputs
-            .as_mut()
-            .map(|null_inputs| NullBuffer::new(null_inputs.finish()))
-            .and_then(|nulls| {
-                if nulls.null_count() > 0 {
-                    Some(nulls)
-                } else {
-                    None
-                }
-            });
-
-        // if we had filters, some groups may never have seen a value
-        // so they are only non-null if we have seen values
-        let seen_values = self
-            .seen_values
-            .as_mut()
-            .map(|seen_values| NullBuffer::new(seen_values.finish()));
-
-        match (nulls, seen_values) {
-            (None, None) => None,
-            (Some(nulls), None) => Some(nulls),
-            (None, Some(seen_values)) => Some(seen_values),
-            (Some(seen_values), Some(nulls)) => {
-                NullBuffer::union(Some(&seen_values), Some(&nulls))
-            }
-        }
+    pub fn build(&mut self) -> NullBuffer {
+        NullBuffer::new(self.seen_values.finish())
     }
 }
 
@@ -503,29 +423,15 @@ pub fn accumulate_indices<F>(
 ///
 /// All new entries are initialized to `default_value`
 fn initialize_builder(
-    builder: &mut Option<BooleanBufferBuilder>,
+    builder: &mut BooleanBufferBuilder,
     total_num_groups: usize,
     default_value: bool,
 ) -> &mut BooleanBufferBuilder {
-    if builder.is_none() {
-        *builder = Some(BooleanBufferBuilder::new(total_num_groups));
-    }
-    let builder = builder.as_mut().unwrap();
-
     if builder.len() < total_num_groups {
         let new_groups = total_num_groups - builder.len();
         builder.append_n(new_groups, default_value);
     }
     builder
-}
-
-fn builder_size(builder: Option<&BooleanBufferBuilder>) -> usize {
-    builder
-        .map(|null_inputs| {
-            // capacity is in bits, so convert to bytes
-            null_inputs.capacity() / 8
-        })
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -752,11 +658,9 @@ mod test {
             match opt_filter {
                 None => group_indices.iter().zip(values.iter()).for_each(
                     |(&group_index, value)| {
-                        mock.saw_value(group_index);
                         if let Some(value) = value {
+                            mock.saw_value(group_index);
                             expected_values.push((group_index, value));
-                        } else {
-                            mock.saw_null_input(group_index);
                         }
                     },
                 ),
@@ -768,11 +672,9 @@ mod test {
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
                             if let Some(true) = is_included {
-                                mock.saw_value(group_index);
                                 if let Some(value) = value {
+                                    mock.saw_value(group_index);
                                     expected_values.push((group_index, value));
-                                } else {
-                                    mock.saw_null_input(group_index);
                                 }
                             }
                         });
@@ -781,25 +683,11 @@ mod test {
 
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
-
-            if values.null_count() > 0 {
-                let null_inputs =
-                    null_state.null_inputs.as_ref().unwrap().finish_cloned();
-                mock.validate_null_inputs(&null_inputs)
-            }
-
-            if opt_filter.is_some() {
-                let seen_values =
-                    null_state.seen_values.as_ref().unwrap().finish_cloned();
-                mock.validate_seen_values(&seen_values)
-            }
+            let seen_values = null_state.seen_values.finish_cloned();
+            mock.validate_seen_values(&seen_values);
 
             // Validate the final buffer (one value per group)
-            let expected_null_buffer = mock.expected_null_buffer(
-                values.null_count() > 0,
-                opt_filter.is_some(),
-                total_num_groups,
-            );
+            let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
             let null_buffer = null_state.build();
 
@@ -886,11 +774,9 @@ mod test {
             match opt_filter {
                 None => group_indices.iter().zip(values.iter()).for_each(
                     |(&group_index, value)| {
-                        mock.saw_value(group_index);
                         if let Some(value) = value {
+                            mock.saw_value(group_index);
                             expected_values.push((group_index, value));
-                        } else {
-                            mock.saw_null_input(group_index);
                         }
                     },
                 ),
@@ -902,11 +788,9 @@ mod test {
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
                             if let Some(true) = is_included {
-                                mock.saw_value(group_index);
                                 if let Some(value) = value {
+                                    mock.saw_value(group_index);
                                     expected_values.push((group_index, value));
-                                } else {
-                                    mock.saw_null_input(group_index);
                                 }
                             }
                         });
@@ -916,24 +800,11 @@ mod test {
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
 
-            if values.null_count() > 0 {
-                let null_inputs =
-                    null_state.null_inputs.as_ref().unwrap().finish_cloned();
-                mock.validate_null_inputs(&null_inputs)
-            }
-
-            if opt_filter.is_some() {
-                let seen_values =
-                    null_state.seen_values.as_ref().unwrap().finish_cloned();
-                mock.validate_seen_values(&seen_values)
-            }
+            let seen_values = null_state.seen_values.finish_cloned();
+            mock.validate_seen_values(&seen_values);
 
             // Validate the final buffer (one value per group)
-            let expected_null_buffer = mock.expected_null_buffer(
-                values.null_count() > 0,
-                opt_filter.is_some(),
-                total_num_groups,
-            );
+            let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
             let null_buffer = null_state.build();
 
@@ -944,8 +815,6 @@ mod test {
     /// Parallel implementaiton of NullState to check expected values
     #[derive(Debug, Default)]
     struct MockNullState {
-        /// group_indices that have seen null values
-        null_input: HashSet<usize>,
         /// group indices that had values that passed the filter
         seen_values: HashSet<usize>,
     }
@@ -955,33 +824,13 @@ mod test {
             Default::default()
         }
 
-        fn saw_null_input(&mut self, group_index: usize) {
-            self.null_input.insert(group_index);
-        }
-
         fn saw_value(&mut self, group_index: usize) {
             self.seen_values.insert(group_index);
-        }
-
-        /// did this group index see a null input
-        fn expected_null(&self, group_index: usize) -> bool {
-            self.null_input.contains(&group_index)
         }
 
         /// did this group index see any input?
         fn expected_seen(&self, group_index: usize) -> bool {
             self.seen_values.contains(&group_index)
-        }
-
-        /// Validate that the null state matches self.null_input
-        fn validate_null_inputs(&self, null_inputs: &BooleanBuffer) {
-            for (group_index, is_valid) in null_inputs.iter().enumerate() {
-                let expected_valid = !self.expected_null(group_index);
-                assert_eq!(
-                    expected_valid, is_valid,
-                    "mismatch at for group {group_index}"
-                );
-            }
         }
 
         /// Validate that the seen_values matches self.seen_values
@@ -996,47 +845,10 @@ mod test {
         }
 
         /// Create the expected null buffer based on if the input had nulls and a filter
-        fn expected_null_buffer(
-            &self,
-            had_nulls: bool,
-            had_filter: bool,
-            total_num_groups: usize,
-        ) -> Option<NullBuffer> {
-            match (had_nulls, had_filter) {
-                (false, false) => None,
-                // only nulls
-                (true, false) => {
-                    let null_buffer: NullBuffer = (0..total_num_groups)
-                        .map(|group_index| {
-                            // there was and no null inputs
-                            !self.expected_null(group_index)
-                        })
-                        .collect();
-                    Some(null_buffer)
-                }
-                // only filter
-                (false, true) => {
-                    let null_buffer: NullBuffer = (0..total_num_groups)
-                        .map(|group_index| {
-                            // we saw a value
-                            self.expected_seen(group_index)
-                        })
-                        .collect();
-                    Some(null_buffer)
-                }
-                // nulls and filter
-                (true, true) => {
-                    let null_buffer: NullBuffer = (0..total_num_groups)
-                        .map(|group_index| {
-                            // output is valid if there was at least one
-                            // input value and no null inputs
-                            self.expected_seen(group_index)
-                                && !self.expected_null(group_index)
-                        })
-                        .collect();
-                    Some(null_buffer)
-                }
-            }
+        fn expected_null_buffer(&self, total_num_groups: usize) -> NullBuffer {
+            (0..total_num_groups)
+                .map(|group_index| self.expected_seen(group_index))
+                .collect()
         }
     }
 }

@@ -23,7 +23,11 @@ use std::sync::Arc;
 
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::{DataType, TimeUnit, Date32Type, Date64Type, Time32SecondType, Time32MillisecondType, Time64NanosecondType, Time64MicrosecondType, TimestampSecondType, TimestampMillisecondType, TimestampMicrosecondType, TimestampNanosecondType};
+use arrow::datatypes::{
+    DataType, Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use arrow::{
     array::{
         ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
@@ -145,12 +149,23 @@ impl AggregateExpr for Max {
 
     fn groups_accumulator_supported(&self) -> bool {
         use DataType::*;
-        matches!(self.data_type,
-                 Int8 | Int16 | Int32 | Int64 |
-                 UInt8 | UInt16 | UInt32 | UInt64 |
-                 Float32 | Float64 | Decimal128(_,_)|
-                 Date32 | Date64 | Time32(_) | Time64(_)
-                 |Timestamp(_,_)
+        matches!(
+            self.data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
         )
     }
 
@@ -185,23 +200,37 @@ impl AggregateExpr for Max {
             }
             Date32 => instantiate_min_max_accumulator!(self, Date32Type, false),
             Date64 => instantiate_min_max_accumulator!(self, Date64Type, false),
-            Time32(Second) => instantiate_min_max_accumulator!(self, Time32SecondType, false),
-            Time32(Millisecond) => instantiate_min_max_accumulator!(self, Time32MillisecondType, false),
-            Time64(Microsecond) => instantiate_min_max_accumulator!(self, Time64MicrosecondType, false),
-            Time64(Nanosecond) => instantiate_min_max_accumulator!(self, Time64NanosecondType, false),
-            Timestamp(Second, _) => instantiate_min_max_accumulator!(self, TimestampSecondType, false),
-            Timestamp(Millisecond, _) => instantiate_min_max_accumulator!(self, TimestampMillisecondType, false),
-            Timestamp(Microsecond, _) => instantiate_min_max_accumulator!(self, TimestampMicrosecondType, false),
-            Timestamp(Nanosecond, _) => instantiate_min_max_accumulator!(self, TimestampNanosecondType, false),
+            Time32(Second) => {
+                instantiate_min_max_accumulator!(self, Time32SecondType, false)
+            }
+            Time32(Millisecond) => {
+                instantiate_min_max_accumulator!(self, Time32MillisecondType, false)
+            }
+            Time64(Microsecond) => {
+                instantiate_min_max_accumulator!(self, Time64MicrosecondType, false)
+            }
+            Time64(Nanosecond) => {
+                instantiate_min_max_accumulator!(self, Time64NanosecondType, false)
+            }
+            Timestamp(Second, _) => {
+                instantiate_min_max_accumulator!(self, TimestampSecondType, false)
+            }
+            Timestamp(Millisecond, _) => {
+                instantiate_min_max_accumulator!(self, TimestampMillisecondType, false)
+            }
+            Timestamp(Microsecond, _) => {
+                instantiate_min_max_accumulator!(self, TimestampMicrosecondType, false)
+            }
+            Timestamp(Nanosecond, _) => {
+                instantiate_min_max_accumulator!(self, TimestampNanosecondType, false)
+            }
 
             // It would be nice to have a fast implementation for Strings as well
             // https://github.com/apache/arrow-datafusion/issues/6906
-            Decimal128(_, _) => {
-                Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                    Decimal128Type,
-                    false,
-                >::new(&self.data_type)))
-            }
+            Decimal128(_, _) => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                Decimal128Type,
+                false,
+            >::new(&self.data_type))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => Err(DataFusionError::Internal(format!(
                 "MinMaxGroupsPrimitiveAccumulator not supported for max({})",
@@ -912,12 +941,23 @@ impl AggregateExpr for Min {
 
     fn groups_accumulator_supported(&self) -> bool {
         use DataType::*;
-        matches!(self.data_type,
-                 Int8 | Int16 | Int32 | Int64 |
-                 UInt8 | UInt16 | UInt32 | UInt64 |
-                 Float32 | Float64 | Decimal128(_,_)|
-                 Date32 | Date64 | Time32(_) | Time64(_)
-                 |Timestamp(_,_)
+        matches!(
+            self.data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
         )
     }
 
@@ -941,20 +981,34 @@ impl AggregateExpr for Min {
             }
             Date32 => instantiate_min_max_accumulator!(self, Date32Type, true),
             Date64 => instantiate_min_max_accumulator!(self, Date64Type, true),
-            Time32(Second) => instantiate_min_max_accumulator!(self, Time32SecondType, true),
-            Time32(Millisecond) => instantiate_min_max_accumulator!(self, Time32MillisecondType, true),
-            Time64(Microsecond) => instantiate_min_max_accumulator!(self, Time64MicrosecondType, true),
-            Time64(Nanosecond) => instantiate_min_max_accumulator!(self, Time64NanosecondType, true),
-            Timestamp(Second, _) => instantiate_min_max_accumulator!(self, TimestampSecondType, true),
-            Timestamp(Millisecond, _) => instantiate_min_max_accumulator!(self, TimestampMillisecondType, true),
-            Timestamp(Microsecond, _) => instantiate_min_max_accumulator!(self, TimestampMicrosecondType, true),
-            Timestamp(Nanosecond, _) => instantiate_min_max_accumulator!(self, TimestampNanosecondType, true),
-            Decimal128(_, _) => {
-                Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
-                    Decimal128Type,
-                    true,
-                >::new(&self.data_type)))
+            Time32(Second) => {
+                instantiate_min_max_accumulator!(self, Time32SecondType, true)
             }
+            Time32(Millisecond) => {
+                instantiate_min_max_accumulator!(self, Time32MillisecondType, true)
+            }
+            Time64(Microsecond) => {
+                instantiate_min_max_accumulator!(self, Time64MicrosecondType, true)
+            }
+            Time64(Nanosecond) => {
+                instantiate_min_max_accumulator!(self, Time64NanosecondType, true)
+            }
+            Timestamp(Second, _) => {
+                instantiate_min_max_accumulator!(self, TimestampSecondType, true)
+            }
+            Timestamp(Millisecond, _) => {
+                instantiate_min_max_accumulator!(self, TimestampMillisecondType, true)
+            }
+            Timestamp(Microsecond, _) => {
+                instantiate_min_max_accumulator!(self, TimestampMicrosecondType, true)
+            }
+            Timestamp(Nanosecond, _) => {
+                instantiate_min_max_accumulator!(self, TimestampNanosecondType, true)
+            }
+            Decimal128(_, _) => Ok(Box::new(MinMaxGroupsPrimitiveAccumulator::<
+                Decimal128Type,
+                true,
+            >::new(&self.data_type))),
             // This is only reached if groups_accumulator_supported is out of sync
             _ => Err(DataFusionError::Internal(format!(
                 "MinMaxGroupsPrimitiveAccumulator not supported for min({})",
@@ -1353,7 +1407,7 @@ where
         let min_max = std::mem::take(&mut self.min_max);
         let nulls = self.null_state.build();
 
-        let min_max = PrimitiveArray::<T>::new(min_max.into(), nulls); // no copy
+        let min_max = PrimitiveArray::<T>::new(min_max.into(), Some(nulls)); // no copy
         let min_max = adjust_output_array(&self.data_type, Arc::new(min_max))?;
 
         Ok(Arc::new(min_max))
@@ -1364,7 +1418,7 @@ where
         let nulls = self.null_state.build();
 
         let min_max = std::mem::take(&mut self.min_max);
-        let min_max = PrimitiveArray::<T>::new(min_max.into(), nulls); // zero copy
+        let min_max = PrimitiveArray::<T>::new(min_max.into(), Some(nulls)); // zero copy
 
         let min_max = adjust_output_array(&self.data_type, Arc::new(min_max))?;
 

@@ -101,7 +101,7 @@ where
     fn evaluate(&mut self) -> Result<ArrayRef> {
         let values = self.values.finish();
         let nulls = self.null_state.build();
-        let values = BooleanArray::new(values, nulls);
+        let values = BooleanArray::new(values, Some(nulls));
         Ok(Arc::new(values))
     }
 

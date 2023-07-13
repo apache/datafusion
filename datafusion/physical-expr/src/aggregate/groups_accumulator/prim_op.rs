@@ -105,7 +105,7 @@ where
     fn evaluate(&mut self) -> Result<ArrayRef> {
         let values = std::mem::take(&mut self.values);
         let nulls = self.null_state.build();
-        let values = PrimitiveArray::<T>::new(values.into(), nulls); // no copy
+        let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)); // no copy
 
         adjust_output_array(&self.data_type, Arc::new(values))
     }
