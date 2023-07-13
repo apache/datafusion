@@ -19,7 +19,7 @@
 //! type, conceptually is like joining each row with all the values in the list column.
 use arrow::array::{
     new_null_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
-    FixedSizeListArray, LargeListArray, ListArray, PrimitiveArray,
+    FixedSizeListArray, Int32Array, LargeListArray, ListArray, PrimitiveArray,
 };
 use arrow::compute::kernels;
 use arrow::datatypes::{
@@ -288,7 +288,7 @@ where
     //   1, null, 3, null, 2
     //
     // Depending on the list type the result may be Int32Array or Int64Array.
-    let list_lengths = kernels::length::length(list_array)?;
+    let list_lengths = list_lengths(list_array)?;
 
     // Create the indices for the take kernel and then use those indices to create
     // the unnested record batch.
@@ -445,7 +445,7 @@ where
     // Create a vec of ArrayRef from the list elements.
     let arrays = (0..list_array.len())
         .map(|row| {
-            if list_array.value(row).is_empty() {
+            if list_array.is_null(row) {
                 null_row.clone()
             } else {
                 list_array.value(row)
@@ -458,4 +458,33 @@ where
     let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
 
     Ok(kernels::concat::concat(&arrays)?)
+}
+
+/// Returns an array with the lengths of each list in `list_array`. Returns null
+/// for a null value.
+fn list_lengths<T>(list_array: &T) -> Result<Arc<dyn Array + 'static>>
+where
+    T: ArrayAccessor<Item = ArrayRef>,
+{
+    match list_array.data_type() {
+        DataType::List(_) | DataType::LargeList(_) => {
+            Ok(kernels::length::length(list_array)?)
+        }
+        DataType::FixedSizeList(_, size) => {
+            // Handle FixedSizeList as it is not handled by the `length` kernel.
+            let mut lengths = Vec::with_capacity(list_array.len());
+            for row in 0..list_array.len() {
+                if list_array.is_null(row) {
+                    lengths.push(None)
+                } else {
+                    lengths.push(Some(*size));
+                }
+            }
+
+            Ok(Arc::new(Int32Array::from(lengths)))
+        }
+        dt => Err(DataFusionError::Execution(format!(
+            "Invalid type {dt} for list_lengths"
+        ))),
+    }
 }
