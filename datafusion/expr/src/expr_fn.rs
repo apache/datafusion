@@ -501,7 +501,7 @@ scalar_expr!(
 scalar_expr!(Degrees, degrees, num, "converts radians to degrees");
 scalar_expr!(Radians, radians, num, "converts degrees to radians");
 nary_scalar_expr!(Round, round, "round to nearest integer");
-scalar_expr!(Trunc, trunc, num, "truncate toward zero");
+scalar_expr!(Trunc, trunc, num precision, "truncate toward to precision");
 scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
