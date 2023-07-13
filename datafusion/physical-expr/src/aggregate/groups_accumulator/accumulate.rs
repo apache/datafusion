@@ -57,20 +57,21 @@ pub struct NullState {
     ///
     /// If `seen_values[i]` is false, have not seen any values that
     /// pass the filter yet for group `i`
-    seen_values: BooleanBufferBuilder,
+    seen_values: Option<BooleanBufferBuilder>,
 }
 
 impl NullState {
     pub fn new() -> Self {
-        Self {
-            seen_values: BooleanBufferBuilder::new(0),
-        }
+        Self { seen_values: None }
     }
 
     /// return the size of all buffers allocated by this null state, not including self
     pub fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
-        self.seen_values.capacity() / 8
+        self.seen_values
+            .as_ref()
+            .map(|seen_values| seen_values.capacity() / 8)
+            .unwrap_or(0)
     }
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
@@ -130,8 +131,27 @@ impl NullState {
         let data: &[T::Native] = values.values();
         assert_eq!(data.len(), group_indices.len());
 
-        // ensure the seen_values is big enough (start everything at
-        // "not seen" valid)
+        let input_has_nulls = values.null_count() > 0;
+
+        // avoid tracking null state if possible
+        if !input_has_nulls &&
+            self.seen_values.is_none()&& // we have seen values for all previous groups
+            opt_filter.is_none()
+        // we will be looking at all values
+        {
+            // since we know all groups have at least one non
+            // value, there is no need to track seen_values
+            // individually
+            let iter = group_indices.iter().zip(data.iter());
+
+            for (&group_index, &new_value) in iter {
+                value_fn(group_index, new_value);
+            }
+            return;
+        }
+
+        // have been tracking values previously, so we still need to
+        // track them here
         let seen_values =
             initialize_builder(&mut self.seen_values, total_num_groups, false);
 
@@ -139,13 +159,9 @@ impl NullState {
             // no nulls, no filter,
             (false, None) => {
                 let iter = group_indices.iter().zip(data.iter());
-
                 for (&group_index, &new_value) in iter {
-                    value_fn(group_index, new_value);
-                }
-                // update seen values in separate loop
-                for &group_index in group_indices.iter() {
                     seen_values.set_bit(group_index, true);
+                    value_fn(group_index, new_value);
                 }
             }
             // nulls, no filter
@@ -161,7 +177,6 @@ impl NullState {
                 let data_remainder = data_chunks.remainder();
 
                 group_indices_chunks
-                    .clone()
                     .zip(data_chunks)
                     .zip(bit_chunks.iter())
                     .for_each(|((group_index_chunk, data_chunk), mask)| {
@@ -172,27 +187,13 @@ impl NullState {
                                 // valid bit was set, real value
                                 let is_valid = (mask & index_mask) != 0;
                                 if is_valid {
+                                    seen_values.set_bit(group_index, true);
                                     value_fn(group_index, new_value);
                                 }
                                 index_mask <<= 1;
                             },
                         )
                     });
-
-                group_indices_chunks.zip(bit_chunks.iter()).for_each(
-                    |(group_index_chunk, mask)| {
-                        // index_mask has value 1 << i in the loop
-                        let mut index_mask = 1;
-                        group_index_chunk.iter().for_each(|&group_index| {
-                            // valid bit was set, real value
-                            let is_valid = (mask & index_mask) != 0;
-                            if is_valid {
-                                seen_values.set_bit(group_index, true);
-                            }
-                            index_mask <<= 1;
-                        })
-                    },
-                );
 
                 // handle any remaining bits (after the initial 64)
                 let remainder_bits = bit_chunks.remainder_bits();
@@ -203,17 +204,10 @@ impl NullState {
                     .for_each(|(i, (&group_index, &new_value))| {
                         let is_valid = remainder_bits & (1 << i) != 0;
                         if is_valid {
+                            seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
                         }
                     });
-                group_indices_remainder.iter().enumerate().for_each(
-                    |(i, &group_index)| {
-                        let is_valid = remainder_bits & (1 << i) != 0;
-                        if is_valid {
-                            seen_values.set_bit(group_index, true);
-                        }
-                    },
-                );
             }
             // no nulls, but a filter
             (false, Some(filter)) => {
@@ -227,17 +221,10 @@ impl NullState {
                     .zip(filter.iter())
                     .for_each(|((&group_index, &new_value), filter_value)| {
                         if let Some(true) = filter_value {
+                            seen_values.set_bit(group_index, true);
                             value_fn(group_index, new_value);
                         }
-                    });
-
-                group_indices.iter().zip(filter.iter()).for_each(
-                    |(&group_index, filter_value)| {
-                        if let Some(true) = filter_value {
-                            seen_values.set_bit(group_index, true);
-                        }
-                    },
-                )
+                    })
             }
             // both null values and filters
             (true, Some(filter)) => {
@@ -354,9 +341,20 @@ impl NullState {
     /// group_indices should have null values (because they never saw
     /// any values)
     ///
+    /// If all groups are valid, returns None (no NullBuffer)
+    ///
     /// resets the internal state to empty
-    pub fn build(&mut self) -> NullBuffer {
-        NullBuffer::new(self.seen_values.finish())
+    pub fn build(&mut self) -> Option<NullBuffer> {
+        let Some(seen_values) = self.seen_values.as_mut() else {
+            return None;
+        };
+
+        let nulls = NullBuffer::new(seen_values.finish());
+        if nulls.null_count() > 0 {
+            Some(nulls)
+        } else {
+            None
+        }
     }
 }
 
@@ -456,10 +454,15 @@ pub fn accumulate_indices<F>(
 ///
 /// All new entries are initialized to `default_value`
 fn initialize_builder(
-    builder: &mut BooleanBufferBuilder,
+    builder: &mut Option<BooleanBufferBuilder>,
     total_num_groups: usize,
     default_value: bool,
 ) -> &mut BooleanBufferBuilder {
+    if builder.is_none() {
+        *builder = Some(BooleanBufferBuilder::new(total_num_groups));
+    }
+    let builder = builder.as_mut().unwrap();
+
     if builder.len() < total_num_groups {
         let new_groups = total_num_groups - builder.len();
         builder.append_n(new_groups, default_value);
@@ -716,8 +719,11 @@ mod test {
 
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
-            let seen_values = null_state.seen_values.finish_cloned();
-            mock.validate_seen_values(&seen_values);
+
+            if let Some(seen_values) = null_state.seen_values.as_ref() {
+                let seen_values = seen_values.finish_cloned();
+                mock.validate_seen_values(&seen_values);
+            }
 
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
@@ -833,8 +839,10 @@ mod test {
             assert_eq!(accumulated_values, expected_values,
                        "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
 
-            let seen_values = null_state.seen_values.finish_cloned();
-            mock.validate_seen_values(&seen_values);
+            if let Some(seen_values) = null_state.seen_values.as_ref() {
+                let seen_values = seen_values.finish_cloned();
+                mock.validate_seen_values(&seen_values);
+            }
 
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
@@ -878,10 +886,16 @@ mod test {
         }
 
         /// Create the expected null buffer based on if the input had nulls and a filter
-        fn expected_null_buffer(&self, total_num_groups: usize) -> NullBuffer {
-            (0..total_num_groups)
+        fn expected_null_buffer(&self, total_num_groups: usize) -> Option<NullBuffer> {
+            let nulls: NullBuffer = (0..total_num_groups)
                 .map(|group_index| self.expected_seen(group_index))
-                .collect()
+                .collect();
+
+            if nulls.null_count() > 0 {
+                Some(nulls)
+            } else {
+                None
+            }
         }
     }
 }

@@ -1407,7 +1407,7 @@ where
         let min_max = std::mem::take(&mut self.min_max);
         let nulls = self.null_state.build();
 
-        let min_max = PrimitiveArray::<T>::new(min_max.into(), Some(nulls)); // no copy
+        let min_max = PrimitiveArray::<T>::new(min_max.into(), nulls); // no copy
         let min_max = adjust_output_array(&self.data_type, Arc::new(min_max))?;
 
         Ok(Arc::new(min_max))
@@ -1418,7 +1418,7 @@ where
         let nulls = self.null_state.build();
 
         let min_max = std::mem::take(&mut self.min_max);
-        let min_max = PrimitiveArray::<T>::new(min_max.into(), Some(nulls)); // zero copy
+        let min_max = PrimitiveArray::<T>::new(min_max.into(), nulls); // zero copy
 
         let min_max = adjust_output_array(&self.data_type, Arc::new(min_max))?;
 
