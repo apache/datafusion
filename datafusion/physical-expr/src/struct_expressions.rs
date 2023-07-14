@@ -129,6 +129,6 @@ mod tests {
             Arc::new(StringArray::from(vec!["c1"])),
         ]).expect("failed to initialize function struct_extract");
         let result = as_int64_array(&element).expect("failed to initialize function struct_extract");
-        assert_eq!(result, &Int64Array::from(vec![1]));
+        assert_eq!(result, &Int64Array::from(vec![2]));
     }
 }

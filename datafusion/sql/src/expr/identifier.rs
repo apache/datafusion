@@ -138,7 +138,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let nested_name = nested_names[0].to_string();
                     Ok(Expr::GetIndexedField(GetIndexedField::new(
                         Box::new(Expr::Column(field.qualified_column())),
-                        ScalarValue::Utf8(Some(nested_name)),
+                        Box::new(Expr::Literal(ScalarValue::Utf8(Some(nested_name)))),
+                        None
                     )))
                 }
                 // found matching field with no spare identifier(s)

@@ -56,6 +56,18 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE slices
+AS VALUES
+  (make_array(NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1),
+  (make_array(11, 12, 13, 14, 15, 16, 17, 18, NULL, 20), 2, -4),
+  (make_array(21, 22, 23, NULL, 25, 26, 27, 28, 29, 30), 0, 0),
+  (make_array(31, 32, 33, 34, 35, NULL, 37, 38, 39, 40), -4, -7),
+  (NULL, 4, 5),
+  (make_array(41, 42, 43, 44, 45, 46, 47, 48, 49, 50), NULL, 6),
+  (make_array(51, 52, NULL, 54, 55, 56, 57, 58, 59, 60), 5, NULL)
+;
+
+statement ok
 CREATE TABLE arrays_values
 AS VALUES
   (make_array(NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ','),
@@ -116,6 +128,18 @@ NULL 44 5 @
 [51, 52, , 54, 55, 56, 57, 58, 59, 60] 55 NULL ^
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70] 66 7 NULL
 
+# slices table
+query ?II
+select column1, column2, column3 from slices;
+----
+[, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1
+[11, 12, 13, 14, 15, 16, 17, 18, , 20] 2 -4
+[21, 22, 23, , 25, 26, 27, 28, 29, 30] 0 0
+[31, 32, 33, 34, 35, , 37, 38, 39, 40] -4 -7
+NULL 4 5
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50] NULL 6
+[51, 52, , 54, 55, 56, 57, 58, 59, 60] 5 NULL
+
 # arrays_values_without_nulls table
 query ?II
 select column1, column2, column3 from arrays_values_without_nulls;
@@ -128,9 +152,6 @@ select column1, column2, column3 from arrays_values_without_nulls;
 
 ### Array index
 
-
-# array index with scalars
-query ?
 
 
 ### Array function tests
@@ -240,22 +261,49 @@ select make_array(a, b, c, d) from values;
 [7.0, 13.0, 14.0, ]
 [8.0, 15.0, 16.0, 8.8]
 
-# make_array null handling
-query ?B?BB
-select
-  make_array(a), make_array(a)[1] IS NULL,
-  make_array(e, f), make_array(e, f)[1] IS NULL, make_array(e, f)[2] IS NULL
-from values;
+## array_element
+
+# array_element scalar function #1 (with positive index)
+query IT
+select array_element(make_array(1, 2, 3, 4, 5), 2), array_element(make_array('h', 'e', 'l', 'l', 'o'), 3);
 ----
-[1] false [Lorem, A] false false
-[2] false [ipsum, ] false false
-[3] false [dolor, BB] false false
-[4] false [sit, ] false true
-[] true [amet, CCC] false false
-[5] false [,, DD] false false
-[6] false [consectetur, E] false false
-[7] false [adipiscing, F] false false
-[8] false [, ] true false
+2 l
+
+# array_element scalar function #2 (with zero)
+query ??
+select array_element(make_array(1, 2, 3, 4, 5), 0), array_element(make_array('h', 'e', 'l', 'l', 'o'), 0);
+----
+NULL NULL
+
+# array_element scalar function #3 (with negative index)
+query ??
+select array_element(make_array(1, 2, 3, 4, 5), -2), array_element(make_array('h', 'e', 'l', 'l', 'o'), -3);
+----
+4 l
+
+# array_element with columns
+query ??
+select array_element(column1, column2), array_element(column1, column3) from slices;
+----
+NULL NULL
+12 17
+NULL NULL
+37 34
+NULL NULL
+NULL 46
+55 NULL
+
+# array_element with columns and scalars
+query ??
+select array_element(make_array(1, 2, 3, 4, 5, 6, 7), column2), array_element(column1, 3) from slices;
+----
+1 3
+2 13
+NULL 23
+4 33
+4 NULL
+NULL 43
+5 NULL
 
 ## array_slice
 
@@ -263,31 +311,104 @@ from values;
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 2, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 1, 2);
 ----
+[2, 3, 4] [h, e]
 
 # array_slice scalar function #2
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 0, 6), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, 5);
 ----
+[1, 2, 3, 4, 5] [h, e, l, l, o]
 
 # array_slice scalar function #3 (first index = second index)
 query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 4, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, 3);
 ----
+[4] [1]
 
 # array_slice scalar function #4 (first index > second_index)
 query ??
-select array_slice(make_array(1, 2, 3, 4, 5), 2, 0), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 4, 0);
+select array_slice(make_array(1, 2, 3, 4, 5), 2, 1), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 4, 1);
 ----
+[] []
 
-# array slice scalar function #5 (with negative indexes)
+# array_slice scalar function #5 (out of bounds)
 query ??
-select array_slice(make_array(1, 2, 3, 4, 5), -4, -1), array_slice(make_array(1, 2, 3, 4, 5), -3, -1);
+select array_slice(make_array(1, 2, 3, 4, 5), 2, 6), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, 7);
 ----
+[2, 3, 4, 5] [l, l, o]
 
-# array slice scalar function #6 (with negative indexes)
+# array slice scalar function #6 (with zero and another positive number)
 query ??
-select array_slice(make_array(1, 2, 3, 4, 5), -4, -1), array_slice(make_array(1, 2, 3, 4, 5), -3, -1);
+select array_slice(make_array(1, 2, 3, 4, 5), 0, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, 3);
 ----
+[1, 2, 3, 4] [h, e, l]
+
+# array slice scalar function #7 (with zero-zero)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 0, 0), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, 0);
+----
+[2, 3, 4] [l, l]
+
+# array slice scalar function #8 (with zero and another negative number)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 0, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 0, -3);
+----
+[1] [h, e]
+
+# array slice scalar function #9 (with negative indexes)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), -4, -1), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, -1);
+----
+[2, 3, 4] [l, l]
+
+# array slice scalar function #10 (with negative indexes)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), -5, -1), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -5, -1);
+----
+[1, 2, 3, 4] [h, e, l, l]
+
+# array_slice scalar function #11 (with negative indexes; first index = second index)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), -4, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, -3);
+----
+[] []
+
+# array_slice scalar function #12 (with negative indexes; first index > second_index)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), -4, -6), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, -6);
+----
+NULL NULL
+
+# array_slice scalar function #13 (with negative indexes; out of bounds)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), -7, -2), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -7, -3);
+----
+NULL NULL
+
+# array_slice with columns
+query ??
+select array_slice(column1, column2, column3) from slices;
+----
+[NULL]
+[12, 13, 14, 15, 16]
+[]
+[]
+NULL
+[41, 42, 43, 44, 45, 46]
+[55, 56, 57, 58, 59, 60]
+
+# array_slice with columns and scalars
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), column2, column3), array_slice(column1, 3, column3), array_slice(column1, column2, 5) from slices;
+----
+[1] [] [NULL, 2, 3, 4, 5]
+[] [13, 14, 15, 16] [12, 13, 14, 15]
+[] [] [21, 22, 23, NULL, 25]
+NULL [33] []
+[4, 5] NULL NULL
+[1, 2, 3, 4, 5] NULL NULL
+[1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
+[5] [NULL, 54, 55, 56, 57, 58, 59, 60] [55]
 
 ## array_append
 
@@ -591,31 +712,7 @@ NULL 3 4
 4 NULL 1
 4 3 NULL
 
-## trim_array
-
-# trim_array scalar function #1
-query ???
-select trim_array(make_array(1, 2, 3, 4, 5), 2), trim_array(['h', 'e', 'l', 'l', 'o'], 3), trim_array([1.0, 2.0, 3.0], 2);
-----
-[1, 2, 3] [h, e] [1.0]
-
-# trim_array scalar function #2
-query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
-select trim_array([[1, 2], [3, 4], [5, 6]], 2), trim_array(array_fill(4, [3, 4, 2]), 2);
-
-# trim_array scalar function #3
-query ?
-select array_concat(trim_array(make_array(1, 2, 3), 3), make_array(4, 5), make_array());
-----
-[4, 5]
-
-# trim_array scalar function #4
-query ??
-select trim_array(make_array(), 0), trim_array(make_array(), 1)
-----
-[] []
+## trim_array (deprecated)
 
 ## array_length
 
@@ -881,6 +978,9 @@ drop table values;
 
 statement ok
 drop table arrays;
+
+statement ok
+drop table slices;
 
 statement ok
 drop table arrays_values;

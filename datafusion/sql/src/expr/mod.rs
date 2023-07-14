@@ -36,7 +36,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, JsonOperator};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -171,7 +171,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
-                    plan_indexed(col(self.normalizer.normalize(id)), keys)
+                    self.plan_indexed(col(self.normalizer.normalize(id)), keys, schema, planner_context)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {column} instead"
@@ -181,7 +181,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::ArrayIndex { obj, indexes } => {
                 let expr = self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
-                plan_indexed(expr, indexes, schema, planner_context)
+                self.plan_indexed(expr, indexes, schema, planner_context)
             }
 
             SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema, planner_context),
@@ -518,6 +518,62 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )),
         }
     }
+
+    fn plan_indices(
+        &self,
+        expr: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<(Box<Expr>, Option<Box<Expr>>)> {
+        let (key, extra_key) = match expr.clone() {
+            SQLExpr::JsonAccess {
+                left,
+                operator,
+                right,
+            } => match operator {
+                JsonOperator::Colon => {
+                    let left = self.sql_expr_to_logical_expr(*left.clone(), schema, planner_context)?;
+                    let right = self.sql_expr_to_logical_expr(*right.clone(), schema, planner_context)?;
+                    (left, Some(Box::new(right)))
+                }
+                _ => (
+                    self.sql_expr_to_logical_expr(expr.clone(), schema, planner_context)?,
+                    None,
+                ),
+            },
+            _ => (
+                self.sql_expr_to_logical_expr(expr.clone(), schema, planner_context)?,
+                None,
+            ),
+        };
+    
+        Ok((Box::new(key), extra_key))
+    }
+    
+    fn plan_indexed(
+        &self,
+        expr: Expr,
+        mut keys: Vec<SQLExpr>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let indices = keys.pop().ok_or_else(|| {
+            ParserError("Internal error: Missing index key expression".to_string())
+        })?;
+    
+        let expr = if !keys.is_empty() {
+            self.plan_indexed(expr, keys, schema, planner_context)?
+        } else {
+            expr
+        };
+    
+        let (key, extra_key) = self.plan_indices(indices, schema, planner_context)?;
+        Ok(Expr::GetIndexedField(GetIndexedField::new(
+            Box::new(expr),
+            key,
+            extra_key,
+        )))
+    }
 }
 
 // modifies expr if it is a placeholder with datatype of right
@@ -551,60 +607,6 @@ fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
         };
         Ok(Transformed::Yes(expr))
     })
-}
-
-fn plan_indices(
-    expr: SQLExpr,
-    schema: &DFSchema,
-    planner_context: &mut PlannerContext,
-) -> Result<(Expr, Option<Expr>)> {
-    let (key, extra_key) = match expr {
-        SQLExpr::JsonAccess {
-            left,
-            operator,
-            right,
-        } => match operator {
-            JsonOperator::Colon => {
-                left = sql_expr_to_logical_expr(left, schema, planner_context)?;
-                right = sql_expr_to_logical_expr(right, schema, planner_context)?;
-                (left, right)
-            }
-            _ => (
-                sql_expr_to_logical_expr(expr, schema, planner_context)?,
-                None,
-            ),
-        },
-        _ => (
-            sql_expr_to_logical_expr(expr, schema, planner_context)?,
-            None,
-        ),
-    };
-
-    Ok((key, extra_key))
-}
-
-fn plan_indexed(
-    expr: Expr,
-    mut keys: Vec<SQLExpr>,
-    schema: &DFSchema,
-    planner_context: &mut PlannerContext,
-) -> Result<Expr> {
-    let indices = keys.pop().ok_or_else(|| {
-        ParserError("Internal error: Missing index key expression".to_string())
-    })?;
-
-    let expr = if !keys.is_empty() {
-        plan_indexed(expr, keys)?
-    } else {
-        expr
-    };
-
-    let (scalar_key, scalar_extra_key) = plan_indices(indices, schema, planner_context)?;
-    Ok(Expr::GetIndexedField(GetIndexedField::new(
-        Box::new(expr),
-        Box::new(key),
-        Box::new(extra_key),
-    )))
 }
 
 #[cfg(test)]
