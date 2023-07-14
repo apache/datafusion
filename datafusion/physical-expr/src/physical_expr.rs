@@ -240,11 +240,10 @@ fn shrink_boundaries(
     ))
 }
 
-// This function calculates the filter predicate's selectivity by comparing the initial and pruned column boundaries.
-// Selectivity is defined as the ratio of the rows in a table that satisfy the filter's predicate. This function estimates
-// the selectivity by comparing the initial and pruned column boundaries. Exact results of propagation at the root, those are
-// `[true, true]` or `[false, false]`, lead to early exit, returning a selectivity value of either 1.0 or 0.0.
-// `[true, true]` indicates that all data values satisfy the predicate (hence, selectivity is 1.0), and `[false, false]`
+/// This function calculates the filter predicate's selectivity by comparing the initial and pruned column boundaries.
+/// Selectivity is defined as the ratio of rows in a table that satisfy the filter's predicate. An exact propagation result
+// at the root, i.e. `[true, true]` or `[false, false]`, leads to early exit (returning a selectivity value of either 1.0 or 0.0).
+// In such a case, `[true, true]` indicates that all data values satisfy the predicate (hence, selectivity is 1.0), and `[false, false]`
 // suggests that no data value meets the predicate (therefore, selectivity is 0.0).
 fn calculate_selectivity(
     lower_value: &ScalarValue,
