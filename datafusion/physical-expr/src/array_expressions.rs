@@ -21,6 +21,7 @@ use arrow::array::*;
 use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
 use datafusion_common::ScalarValue;
@@ -554,42 +555,65 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     aligned_args
 }
 
+fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let args = align_array_dimensions(args.to_vec())?;
+
+    let list_arrays =
+        downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+
+    // Assume number of rows is the same for all arrays
+    let row_count = list_arrays[0].len();
+    let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
+    let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+    let array_data: Vec<&ArrayData> = array_data.iter().collect();
+
+    let mut mutable = MutableArrayData::with_capacities(array_data, true, capacity);
+
+    let mut array_lens = vec![0; row_count];
+    let mut null_bit_map: Vec<bool> = vec![true; row_count];
+
+    for (i, array_len) in array_lens.iter_mut().enumerate().take(row_count) {
+        let null_count = mutable.null_count();
+        for (j, a) in list_arrays.iter().enumerate() {
+            mutable.extend(j, i, i + 1);
+            *array_len += a.value_length(i);
+        }
+
+        // This means all arrays are null
+        if mutable.null_count() == null_count + list_arrays.len() {
+            null_bit_map[i] = false;
+        }
+    }
+
+    let mut buffer = BooleanBufferBuilder::new(row_count);
+    buffer.append_slice(null_bit_map.as_slice());
+    let nulls = Some(NullBuffer::from(buffer.finish()));
+
+    let offsets: Vec<i32> = std::iter::once(0)
+        .chain(array_lens.iter().scan(0, |state, &x| {
+            *state += x;
+            Some(*state)
+        }))
+        .collect();
+
+    let builder = mutable.into_builder();
+
+    let list = builder
+        .len(row_count)
+        .buffers(vec![Buffer::from_vec(offsets)])
+        .nulls(nulls)
+        .build()?;
+
+    let list = arrow::array::make_array(list);
+    Ok(Arc::new(list))
+}
+
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::List(field) => match field.data_type() {
             DataType::Null => array_concat(&args[1..]),
-            _ => {
-                let args = align_array_dimensions(args.to_vec())?;
-
-                let list_arrays = downcast_vec!(args, ListArray)
-                    .collect::<Result<Vec<&ListArray>>>()?;
-
-                let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-
-                let capacity =
-                    Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-                let array_data: Vec<_> =
-                    list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-
-                let array_data = array_data.iter().collect();
-
-                let mut mutable =
-                    MutableArrayData::with_capacities(array_data, false, capacity);
-
-                for (i, a) in list_arrays.iter().enumerate() {
-                    mutable.extend(i, 0, a.len())
-                }
-
-                let builder = mutable.into_builder();
-                let list = builder
-                    .len(1)
-                    .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
-                    .build()
-                    .unwrap();
-
-                return Ok(Arc::new(arrow::array::make_array(list)));
-            }
+            _ => concat_internal(args),
         },
         data_type => Err(DataFusionError::NotImplemented(format!(
             "Array is not type '{data_type:?}'."
