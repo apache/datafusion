@@ -133,6 +133,21 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 }
 
+/// Attempts to refine column boundaries and compute selectivity value.
+///
+/// The function accepts the boundaries of the input columns in the `context` parameter.
+/// It then tries to tighten these boundaries based on the provided `expr`.
+/// The resulting selectivity value is calculated by comparing the initial and final boundaries.
+/// The computation assumes that the data within the column is uniformly distributed and is not sorted.
+///
+/// # Arguments
+///
+/// * `context` - The context which holds the boundaries of the input columns.
+/// * `expr` - The expression used to shrink the column boundaries.
+///
+/// # Returns
+///
+/// * `AnalysisContext` constructed by pruned boundaries and a selectivity value.
 pub fn analyze(
     expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
@@ -179,6 +194,9 @@ pub fn analyze(
     }
 }
 
+// If the `PropagationResult` returns a success, this function calculates the selectivity by comparing the initial
+// and final column boundaries. Following this, the function constructs and returns a new `AnalysisContext`, with
+// the updated parameters.
 fn shrink_boundaries(
     expr: &Arc<dyn PhysicalExpr>,
     mut graph: ExprIntervalGraph,
@@ -222,6 +240,12 @@ fn shrink_boundaries(
     ))
 }
 
+// This function calculates the filter predicate's selectivity by comparing the initial and pruned column boundaries.
+// Selectivity is defined as the ratio of the rows in a table that satisfy the filter's predicate. This function estimates
+// the selectivity by comparing the initial and pruned column boundaries. Exact results of propagation at the root, those are
+// `[true, true]` or `[false, false]`, lead to early exit, returning a selectivity value of either 1.0 or 0.0.
+// `[true, true]` indicates that all data values satisfy the predicate (hence, selectivity is 1.0), and `[false, false]`
+// suggests that no data value meets the predicate (therefore, selectivity is 0.0).
 fn calculate_selectivity(
     lower_value: &ScalarValue,
     upper_value: &ScalarValue,
