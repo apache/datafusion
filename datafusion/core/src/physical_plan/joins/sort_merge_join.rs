@@ -345,7 +345,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                     // Right side ordering equivalence properties should be prepended with
                     // those of the left side while constructing output ordering equivalence
                     // properties for `SortMergeJoin`. As an example;
-                    // 
+                    //
                     // If the right table ordering equivalences contain `b ASC`, and the output
                     // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
                     // for the right table should be converted to `a ASC, b ASC` before it is added
