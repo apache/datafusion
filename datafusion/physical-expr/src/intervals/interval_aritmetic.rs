@@ -603,7 +603,9 @@ macro_rules! impl_OneTrait{
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, f32, f64}
 
 // if DIR is true it means increment, if it is false it means decrement
-fn next_value<const DIR: bool, T: OneTrait + SubAssign + AddAssign>(mut val: T) -> T {
+fn increment_decrement<const DIR: bool, T: OneTrait + SubAssign + AddAssign>(
+    mut val: T,
+) -> T {
     if DIR {
         val.add_assign(T::one());
     } else {
@@ -614,25 +616,25 @@ fn next_value<const DIR: bool, T: OneTrait + SubAssign + AddAssign>(mut val: T) 
 
 // This function return next or previous value (if `DIR` is `true` next, otherwise previous)
 // according to inner type of the `value`.
-fn get_interval_with_next_value<const DIR: bool>(value: ScalarValue) -> ScalarValue {
+fn get_next_value<const DIR: bool>(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
     match value {
         Float32(Some(val)) => {
-            let incremented_bits = next_value::<DIR, u32>(val.to_bits());
+            let incremented_bits = increment_decrement::<DIR, u32>(val.to_bits());
             Float32(Some(f32::from_bits(incremented_bits)))
         }
         Float64(Some(val)) => {
-            let incremented_bits = next_value::<DIR, u64>(val.to_bits());
+            let incremented_bits = increment_decrement::<DIR, u64>(val.to_bits());
             Float64(Some(f64::from_bits(incremented_bits)))
         }
-        Int8(Some(val)) => Int8(Some(next_value::<DIR, i8>(val))),
-        Int16(Some(val)) => Int16(Some(next_value::<DIR, i16>(val))),
-        Int32(Some(val)) => Int32(Some(next_value::<DIR, i32>(val))),
-        Int64(Some(val)) => Int64(Some(next_value::<DIR, i64>(val))),
-        UInt8(Some(val)) => UInt8(Some(next_value::<DIR, u8>(val))),
-        UInt16(Some(val)) => UInt16(Some(next_value::<DIR, u16>(val))),
-        UInt32(Some(val)) => UInt32(Some(next_value::<DIR, u32>(val))),
-        UInt64(Some(val)) => UInt64(Some(next_value::<DIR, u64>(val))),
+        Int8(Some(val)) => Int8(Some(increment_decrement::<DIR, i8>(val))),
+        Int16(Some(val)) => Int16(Some(increment_decrement::<DIR, i16>(val))),
+        Int32(Some(val)) => Int32(Some(increment_decrement::<DIR, i32>(val))),
+        Int64(Some(val)) => Int64(Some(increment_decrement::<DIR, i64>(val))),
+        UInt8(Some(val)) => UInt8(Some(increment_decrement::<DIR, u8>(val))),
+        UInt16(Some(val)) => UInt16(Some(increment_decrement::<DIR, u16>(val))),
+        UInt32(Some(val)) => UInt32(Some(increment_decrement::<DIR, u32>(val))),
+        UInt64(Some(val)) => UInt64(Some(increment_decrement::<DIR, u64>(val))),
         _ => value, // Infinite bounds or unsupported datatypes
     }
 }
@@ -642,14 +644,13 @@ fn get_interval_with_next_value<const DIR: bool>(value: ScalarValue) -> ScalarVa
 pub fn interval_with_closed_bounds(mut interval: Interval) -> Interval {
     if interval.lower.open {
         // Get next value
-        interval.lower.value = get_interval_with_next_value::<true>(interval.lower.value);
+        interval.lower.value = get_next_value::<true>(interval.lower.value);
         interval.lower.open = false;
     }
 
     if interval.upper.open {
         // Get previous value
-        interval.upper.value =
-            get_interval_with_next_value::<false>(interval.upper.value);
+        interval.upper.value = get_next_value::<false>(interval.upper.value);
         interval.upper.open = false;
     }
 

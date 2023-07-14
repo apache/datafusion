@@ -233,6 +233,10 @@ impl ExecutionPlan for FilterExec {
     }
 }
 
+/// This function ensures that all bounds in the `ExprBoundaries` vector are converted
+/// to closed bounds. If a bound is initially open, it is adjusted by incrementing(if it
+/// is a lower bound) or decrementing(if it is an upper bound) by one unit of its datatype
+/// to make it a closed bound.
 fn collect_new_statistics(
     input_column_stats: Vec<ColumnStatistics>,
     selectivity: f64,
@@ -249,18 +253,11 @@ fn collect_new_statistics(
     ) in analysis_boundaries.into_iter().enumerate()
     {
         let closed_interval = interval_with_closed_bounds(interval);
+        let nonempty_columns = selectivity > 0.0;
         res.push(ColumnStatistics {
             null_count: input_column_stats[i].null_count,
-            max_value: if selectivity > 0.0 {
-                Some(closed_interval.upper.value)
-            } else {
-                None
-            },
-            min_value: if selectivity > 0.0 {
-                Some(closed_interval.lower.value)
-            } else {
-                None
-            },
+            max_value: nonempty_columns.then_some(closed_interval.upper.value),
+            min_value: nonempty_columns.then_some(closed_interval.lower.value),
             distinct_count,
         });
     }
