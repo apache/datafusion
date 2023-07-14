@@ -2277,22 +2277,19 @@ mod tests {
             right_decimal_array.data_type(),
         )
         .unwrap();
-        let result = divide_dyn_checked_decimal(
+        let result = divide_dyn_opt_decimal(
             &left_decimal_array,
             &right_decimal_array,
             &result_type,
         )?;
         let result = as_decimal128_array(&result)?;
-        assert_eq!(&expect, result);
-        let result = divide_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
-        let result = as_decimal128_array(&result)?;
         let expect = create_decimal_array(
             &[
                 Some(12345670000000000000000000000000000),
                 None,
-                Some(12345670000000000000000000000000000),
-                Some(12345670000000000000000000000000000),
-                Some(12345670000000000000000000000000000),
+                Some(2244667272727272727272727272727272),
+                Some(-1003713008130081300813008130081300),
+                None,
             ],
             38,
             29,

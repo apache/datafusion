@@ -953,6 +953,7 @@ mod tests {
         assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
         let result =
             decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
+        assert_eq!(DataType::Decimal128(35, 24), result.unwrap());
         let op = Operator::DivideUnchecked;
         let result = coercion_decimal_mathematics_type(
             &op,
