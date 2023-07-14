@@ -602,7 +602,7 @@ macro_rules! impl_OneTrait{
 }
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, f32, f64}
 
-// if DIR is true it means increment, if it is false it means decrement
+/// This function either increments or decrements its argument, depending on the `DIR` value. If `true`, it increments; otherwise it decrements the argument.
 fn next_value<const DIR: bool, T: OneTrait + SubAssign + AddAssign>(mut val: T) -> T {
     if DIR {
         val.add_assign(T::one());
