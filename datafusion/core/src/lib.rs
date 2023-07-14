@@ -468,11 +468,6 @@ pub mod physical_expr {
     pub use datafusion_physical_expr::*;
 }
 
-/// re-export of [`datafusion_row`] crate
-pub mod row {
-    pub use datafusion_row::*;
-}
-
 /// re-export of [`datafusion_sql`] crate
 pub mod sql {
     pub use datafusion_sql::*;
