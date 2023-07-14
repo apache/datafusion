@@ -333,8 +333,8 @@ impl ExecutionPlan for SortMergeJoinExec {
                 // side ordering equivalences are still valid.
                 new_properties.extend(left_oeq_properties.classes().iter().cloned());
                 if let Some(output_ordering) = &self.output_ordering {
-                    // Update right table ordering equivalence expression indices,
-                    // (add offset of left table size).
+                    // Update right table ordering equivalence expression indices; i.e.
+                    // add left table size as an offset.
                     let updated_right_oeq_classes =
                         add_offset_to_ordering_equivalence_classes(
                             right_oeq_properties.classes(),
@@ -345,11 +345,11 @@ impl ExecutionPlan for SortMergeJoinExec {
                     // Right side ordering equivalence properties should be prepended with
                     // those of the left side while constructing output ordering equivalence
                     // properties for `SortMergeJoin`. As an example;
-                    //  - if right table ordering equivalence, contains `b ASC`,
-                    //  - and output ordering of the left table is `a ASC`:
-                    //  -> then, Ordering equivalence `b ASC` for the right table should be
-                    //     converted to the `a ASC, b ASC` before added to the ordering equivalence
-                    //     of `SortMergeJoinExec`.
+                    // 
+                    // If the right table ordering equivalences contain `b ASC`, and the output
+                    // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
+                    // for the right table should be converted to `a ASC, b ASC` before it is added
+                    // to the ordering equivalences of `SortMergeJoinExec`.
                     for oeq_class in updated_right_oeq_classes {
                         for ordering in oeq_class.others() {
                             // Entries inside ordering equivalence should be normalized before insertion.

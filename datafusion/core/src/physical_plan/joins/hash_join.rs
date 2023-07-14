@@ -382,13 +382,14 @@ impl ExecutionPlan for HashJoinExec {
         let right_oeq_properties = self.right.ordering_equivalence_properties();
         match self.join_type {
             JoinType::RightAnti | JoinType::RightSemi => {
-                // In RightAnti and RightSemi join right table schema is still valid,
-                // hence ordering equivalence properties of right table can be used as is.
+                // For `RightAnti` and `RightSemi` joins, the right table schema remains valid.
+                // Hence, its ordering equivalence properties can be used as is.
                 new_properties.extend(right_oeq_properties.classes().iter().cloned());
             }
             JoinType::Inner => {
-                // In Inner join right table schema is no longer valid, in the join output schema
-                // offset (left table size) is added to the right table schema Columns.
+                // For `Inner` joins, the right table schema is no longer valid.
+                // Size of the left table is added as an offset to the right table
+                // columns when constructing the join output schema.
                 let updated_right_classes = add_offset_to_ordering_equivalence_classes(
                     right_oeq_properties.classes(),
                     left_columns_len,

@@ -248,13 +248,12 @@ impl ExecutionPlan for ProjectionExec {
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
         if self.output_ordering.is_none() {
-            // Early exit, if there is no output ordering
-            // there is nothing ordering equivalent to it.
+            // If there is no output ordering, return an "empty" equivalence set:
             return new_properties;
         }
 
         let mut input_oeq = self.input().ordering_equivalence_properties();
-        // Stores cast expression and its Column version in the output.
+        // Stores cast expression and its `Column` version in the output:
         let mut cast_exprs: Vec<(CastExpr, Column)> = vec![];
         for (idx, (expr, name)) in self.expr.iter().enumerate() {
             if let Some(cast_expr) = expr.as_any().downcast_ref::<CastExpr>() {
