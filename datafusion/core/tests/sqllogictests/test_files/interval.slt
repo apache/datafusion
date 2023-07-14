@@ -522,5 +522,40 @@ true false false false false true
 true true false false true true
 true true false false false true
 
+### interval (array) cmp interval (array)
+query BBBBBB
+select i = i, i != i, i < i, i <= i, i > i, i >= i from t;
+----
+true false false true false true
+true false false true false true
+true false false true false true
+
+### interval (array) cmp interval (scalar)
+query BBBBBB
+select
+    (interval '1 day') = i,
+    (interval '1 day') != i,
+    i < (interval '1 day'),
+    i <= (interval '1 day'),
+    i > (interval '1 day'),
+    i >= (interval '1 day')
+from t;
+----
+false true false false true true
+true false false true false true
+false true true true false false
+
+### interval (scalar) cmp interval (scalar)
+query BBBBBB
+select
+    (interval '1 day') = (interval '1 day'),
+    (interval '1 month') != (interval '1 day'),
+    (interval '1 minute') < (interval '1 day'),
+    (interval '1 hour') <= (interval '1 day'),
+    (interval '1 year') > (interval '1 day'),
+    (interval '1 day') >= (interval '1 day');
+----
+true true true true true true
+
 statement ok
 drop table t

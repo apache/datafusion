@@ -645,6 +645,9 @@ pub trait ExprSchema: std::fmt::Debug {
 
     /// What is the datatype of this column?
     fn data_type(&self, col: &Column) -> Result<&DataType>;
+
+    /// Returns the column's optional metadata.
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -656,6 +659,10 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         self.as_ref().data_type(col)
     }
+
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+        ExprSchema::metadata(self.as_ref(), col)
+    }
 }
 
 impl ExprSchema for DFSchema {
@@ -665,6 +672,10 @@ impl ExprSchema for DFSchema {
 
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         Ok(self.field_from_column(col)?.data_type())
+    }
+
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+        Ok(self.field_from_column(col)?.metadata())
     }
 }
 
@@ -725,6 +736,10 @@ impl DFField {
         self.field.is_nullable()
     }
 
+    pub fn metadata(&self) -> &HashMap<String, String> {
+        self.field.metadata()
+    }
+
     /// Returns a string to the `DFField`'s qualified name
     pub fn qualified_name(&self) -> String {
         if let Some(qualifier) = &self.qualifier {
@@ -769,6 +784,13 @@ impl DFField {
     /// Return field with nullable specified
     pub fn with_nullable(mut self, nullable: bool) -> Self {
         let f = self.field().as_ref().clone().with_nullable(nullable);
+        self.field = f.into();
+        self
+    }
+
+    /// Return field with new metadata
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        let f = self.field().as_ref().clone().with_metadata(metadata);
         self.field = f.into();
         self
     }

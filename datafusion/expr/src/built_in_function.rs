@@ -480,14 +480,16 @@ impl BuiltinScalarFunction {
                 Ok(List(Arc::new(Field::new("item", expr_type, true))))
             }
             BuiltinScalarFunction::ArrayContains => Ok(Boolean),
-            BuiltinScalarFunction::ArrayDims => Ok(UInt8),
+            BuiltinScalarFunction::ArrayDims => {
+                Ok(List(Arc::new(Field::new("item", UInt64, true))))
+            }
             BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
                 "item",
                 input_expr_types[1].clone(),
                 true,
             )))),
-            BuiltinScalarFunction::ArrayLength => Ok(UInt8),
-            BuiltinScalarFunction::ArrayNdims => Ok(UInt8),
+            BuiltinScalarFunction::ArrayLength => Ok(UInt64),
+            BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
             BuiltinScalarFunction::ArrayPositions => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))

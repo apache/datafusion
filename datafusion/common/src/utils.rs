@@ -177,9 +177,10 @@ where
     Ok(low)
 }
 
-/// This function finds the partition points according to `partition_columns`.
-/// If there are no sort columns, then the result will be a single element
-/// vector containing one partition range spanning all data.
+/// Given a list of 0 or more already sorted columns, finds the
+/// partition ranges that would partition equally across columns.
+///
+/// See [`lexicographical_partition_ranges`] for more details.
 pub fn evaluate_partition_ranges(
     num_rows: usize,
     partition_columns: &[SortColumn],

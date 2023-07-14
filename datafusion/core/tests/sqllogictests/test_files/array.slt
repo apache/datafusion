@@ -29,17 +29,18 @@ CREATE TABLE values(
   b INT,
   c INT,
   d FLOAT,
-  e VARCHAR
+  e VARCHAR,
+  f VARCHAR
 ) AS VALUES
-  (1, 1, 2, 1.1, 'Lorem'),
-  (2, 3, 4, 2.2, 'ipsum'),
-  (3, 5, 6, 3.3, 'dolor'),
-  (4, 7, 8, 4.4, 'sit'),
-  (NULL, 9, 10, 5.5, 'amet'),
-  (5, NULL, 12, 6.6, ','),
-  (6, 11, NULL, 7.7, 'consectetur'),
-  (7, 13, 14, NULL, 'adipiscing'),
-  (8, 15, 16, 8.8, NULL)
+  (1,    1,    2,    1.1,  'Lorem',       'A'),
+  (2,    3,    4,    2.2,  'ipsum',       ''),
+  (3,    5,    6,    3.3,  'dolor',       'BB'),
+  (4,    7,    8,    4.4,  'sit',          NULL),
+  (NULL, 9,    10,   5.5,  'amet',        'CCC'),
+  (5,    NULL, 12,   6.6,  ',',           'DD'),
+  (6,    11,   NULL, 7.7,  'consectetur', 'E'),
+  (7,    13,   14,   NULL, 'adipiscing',  'F'),
+  (8,    15,   16,   8.8,   NULL,          '')
 ;
 
 statement ok
@@ -189,21 +190,35 @@ select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NUL
 ----
 [] [] [[], []]
 
-# make_array with columns #1
-query ????
-select make_array(a), make_array(b, c), make_array(d), make_array(e) from values;
+# make_array with 1 columns
+query ???
+select make_array(a), make_array(d), make_array(e) from values;
 ----
-[1] [1, 2] [1.1] [Lorem]
-[2] [3, 4] [2.2] [ipsum]
-[3] [5, 6] [3.3] [dolor]
-[4] [7, 8] [4.4] [sit]
-[0] [9, 10] [5.5] [amet]
-[5] [0, 12] [6.6] [,]
-[6] [11, 0] [7.7] [consectetur]
-[7] [13, 14] [0.0] [adipiscing]
-[8] [15, 16] [8.8] []
+[1] [1.1] [Lorem]
+[2] [2.2] [ipsum]
+[3] [3.3] [dolor]
+[4] [4.4] [sit]
+[] [5.5] [amet]
+[5] [6.6] [,]
+[6] [7.7] [consectetur]
+[7] [] [adipiscing]
+[8] [8.8] []
 
-# make_array with columns #2
+# make_array with 2 columns #1
+query ??
+select make_array(b, c), make_array(e, f) from values;
+----
+[1, 2] [Lorem, A]
+[3, 4] [ipsum, ]
+[5, 6] [dolor, BB]
+[7, 8] [sit, ]
+[9, 10] [amet, CCC]
+[, 12] [,, DD]
+[11, ] [consectetur, E]
+[13, 14] [adipiscing, F]
+[15, 16] [, ]
+
+# make_array with 4 columns
 query ?
 select make_array(a, b, c, d) from values;
 ----
@@ -211,11 +226,30 @@ select make_array(a, b, c, d) from values;
 [2.0, 3.0, 4.0, 2.2]
 [3.0, 5.0, 6.0, 3.3]
 [4.0, 7.0, 8.0, 4.4]
-[0.0, 9.0, 10.0, 5.5]
-[5.0, 0.0, 12.0, 6.6]
-[6.0, 11.0, 0.0, 7.7]
-[7.0, 13.0, 14.0, 0.0]
+[, 9.0, 10.0, 5.5]
+[5.0, , 12.0, 6.6]
+[6.0, 11.0, , 7.7]
+[7.0, 13.0, 14.0, ]
 [8.0, 15.0, 16.0, 8.8]
+
+# make_array null handling
+query ?B?BB
+select
+  make_array(a), make_array(a)[1] IS NULL,
+  make_array(e, f), make_array(e, f)[1] IS NULL, make_array(e, f)[2] IS NULL
+from values;
+----
+[1] false [Lorem, A] false false
+[2] false [ipsum, ] false false
+[3] false [dolor, BB] false false
+[4] false [sit, ] false true
+[] true [amet, CCC] false false
+[5] false [,, DD] false false
+[6] false [consectetur, E] false false
+[7] false [adipiscing, F] false false
+[8] false [, ] true false
+
+
 
 ## array_append
 
@@ -365,6 +399,30 @@ select array_concat(make_array(), make_array(2, 3));
 ----
 [2, 3]
 
+# array_concat with different dimensions #1 (2D + 1D)
+query ?
+select array_concat(make_array([1,2], [3,4]), make_array(5, 6))
+----
+[[1, 2], [3, 4], [5, 6]]
+
+# array_concat with different dimensions #2 (1D + 2D)
+query ?
+select array_concat(make_array(5, 6), make_array([1,2], [3,4]))
+----
+[[5, 6], [1, 2], [3, 4]]
+
+# array_concat with different dimensions #3 (2D + 1D + 1D)
+query ?
+select array_concat(make_array([1,2], [3,4]), make_array(5, 6), make_array(7,8))
+----
+[[1, 2], [3, 4], [5, 6], [7, 8]]
+
+# array_concat with different dimensions #4 (1D + 2D + 3D)
+query ?
+select array_concat(make_array(10, 20), make_array([30, 40]), make_array([[50, 60]]))
+----
+[[[10, 20]], [[30, 40]], [[50, 60]]]
+
 ## array_position
 
 # array_position scalar function #1
@@ -481,7 +539,19 @@ select cardinality(make_array([1, 2], [3, 4], [5, 6])), cardinality(array_fill(3
 query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
-0 0
+NULL 0
+
+# cardinality with columns
+query III
+select cardinality(column1), cardinality(column2), cardinality(column3) from arrays;
+----
+4 3 5
+4 3 5
+4 3 5
+4 3 3
+NULL 3 4
+4 NULL 1
+4 3 NULL
 
 ## trim_array
 
@@ -541,13 +611,39 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 ----
 0 0 NULL
 
+# array_length with columns
+query I
+select array_length(column1, column3) from arrays_values;
+----
+10
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# array_length with columns and scalars
+query II
+select array_length(array[array[1, 2], array[3, 4]], column3), array_length(column1, 1) from arrays_values;
+----
+2 10
+2 10
+NULL 10
+NULL 10
+NULL NULL
+NULL 10
+NULL 10
+NULL 10
+
 ## array_dims
 
 # array_dims scalar function
-query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
+query ???
 select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
 
 # array_dims scalar function #2
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
@@ -556,10 +652,22 @@ Error during planning: Cannot automatically convert List\(Field \{ name: "item",
 select array_dims(array_fill(2, [1, 2, 3])), array_dims(array_fill(3, [2, 5, 4]));
 
 # array_dims scalar function #3
-query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
-caused by
-Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
+query ??
 select array_dims(make_array()), array_dims(make_array(make_array()))
+----
+NULL [1, 0]
+
+# array_dims with columns
+query ???
+select array_dims(column1), array_dims(column2), array_dims(column3) from arrays;
+----
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [5]
+[2, 2] [3] [3]
+NULL [3] [4]
+[2, 2] NULL [1]
+[2, 2] [3] NULL
 
 ## array_ndims
 
@@ -579,7 +687,19 @@ select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-1 2
+NULL 2
+
+# array_ndims with columns
+query III
+select array_ndims(column1), array_ndims(column2), array_ndims(column3) from arrays;
+----
+2 1 1
+2 1 1
+2 1 1
+2 1 1
+NULL 1 1
+2 NULL 1
+2 1 NULL
 
 ## array_contains
 
