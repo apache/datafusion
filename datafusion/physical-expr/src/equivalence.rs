@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::{BinaryExpr, CastExpr, Column};
+use crate::expressions::{CastExpr, Column};
 use crate::{
     normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
     PhysicalSortExpr,
@@ -24,6 +24,7 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
 
+use crate::utils::collect_columns;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -113,26 +114,6 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
             _ => {}
         }
     }
-}
-
-// Helper function to calculate column info recursively
-fn get_columns_in_the_expr_helper<'b>(
-    indices: &mut Vec<&'b Column>,
-    expr: &'b Arc<dyn PhysicalExpr>,
-) {
-    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-        indices.push(col)
-    } else if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        get_columns_in_the_expr_helper(indices, binary_expr.left());
-        get_columns_in_the_expr_helper(indices, binary_expr.right());
-    };
-}
-
-/// Get columns that is in the expression (Can return multiple entries for `BinaryExpr`s)
-fn get_columns_in_the_expr(expr: &Arc<dyn PhysicalExpr>) -> Vec<&Column> {
-    let mut result = vec![];
-    get_columns_in_the_expr_helper(&mut result, expr);
-    result
 }
 
 /// `OrderingEquivalenceProperties` keeps track of columns that describe the
@@ -266,7 +247,7 @@ impl OrderingEquivalentClass {
         fields: &Fields,
     ) {
         let is_head_invalid = self.head.iter().any(|sort_expr| {
-            get_columns_in_the_expr(&sort_expr.expr)
+            collect_columns(&sort_expr.expr)
                 .iter()
                 .any(|col| is_column_invalid_in_new_schema(col, fields))
         });
@@ -466,11 +447,11 @@ pub fn project_ordering_equivalence_properties(
             .iter()
             .filter(|sort_exprs| {
                 sort_exprs.iter().any(|sort_expr| {
-                    let cols_in_expr = get_columns_in_the_expr(&sort_expr.expr);
+                    let cols_in_expr = collect_columns(&sort_expr.expr);
                     // If any one of the columns, used in Expression is invalid, remove expression
                     // from ordering equivalences
                     cols_in_expr
-                        .into_iter()
+                        .iter()
                         .any(|col| is_column_invalid_in_new_schema(col, fields))
                 })
             })
@@ -528,7 +509,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
 
-    use datafusion_expr::Operator;
     use std::sync::Arc;
 
     #[test]
@@ -619,26 +599,6 @@ mod tests {
         assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
         assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_column_infos() -> Result<()> {
-        let expr1 = Arc::new(Column::new("col1", 2)) as _;
-        assert_eq!(
-            get_columns_in_the_expr(&expr1),
-            vec![&Column::new("col1", 2)]
-        );
-        let expr2 = Arc::new(Column::new("col2", 5)) as _;
-        assert_eq!(
-            get_columns_in_the_expr(&expr2),
-            vec![&Column::new("col2", 5)]
-        );
-        let expr3 = Arc::new(BinaryExpr::new(expr1, Operator::Plus, expr2)) as _;
-        assert_eq!(
-            get_columns_in_the_expr(&expr3),
-            vec![&Column::new("col1", 2), &Column::new("col2", 5)]
-        );
         Ok(())
     }
 }
