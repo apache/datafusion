@@ -115,7 +115,7 @@ pub(crate) struct RankEvaluator {
 }
 
 impl PartitionEvaluator for RankEvaluator {
-    /// evaluate window function result inside given range
+    /// Evaluates the window function inside the given range.
     fn evaluate(
         &mut self,
         values: &[ArrayRef],
