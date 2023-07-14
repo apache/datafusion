@@ -196,13 +196,10 @@ fn shrink_boundaries(
             };
         }
     });
-    let node_data = graph
-        .gather_node_indices(&[expr.clone()])
-        .first()
-        .ok_or_else(|| {
-            DataFusionError::Internal("Error in constructing predicate graph".to_string())
-        })?;
-    let (_, root_index) = node_data;
+    let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
+    let (_, root_index) = graph_nodes.first().ok_or_else(|| {
+        DataFusionError::Internal("Error in constructing predicate graph".to_string())
+    })?;
     let final_result = graph.get_interval(*root_index);
 
     let selectivity = calculate_selectivity(

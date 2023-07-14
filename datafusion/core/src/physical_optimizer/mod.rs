@@ -31,6 +31,7 @@ pub mod optimizer;
 pub mod pipeline_checker;
 pub mod pruning;
 pub mod repartition;
+pub mod replace_repartition_execs;
 pub mod sort_enforcement;
 mod sort_pushdown;
 mod utils;
