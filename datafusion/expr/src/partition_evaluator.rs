@@ -69,27 +69,10 @@ use crate::window_state::WindowAggState;
 /// capabilities described by [`supports_bounded_execution`],
 /// [`uses_window_frame`], and [`include_rank`],
 ///
-/// # Stateless `PartitionEvaluator`s
-///
-/// In this case, `PartitionEvaluator` holds no state, and either
-/// [`evaluate_all`] or [`evaluate_all_with_rank`] is called with
-/// values for the entire partition.
-///
-/// # Stateful `PartitionEvaluator`s
-///
-/// In this case, [`Self::evaluate`] is called to calculate the window
-/// function incrementally for each new batch.
-///
-/// For example, when computing `ROW_NUMBER` incrementally,
-/// [`Self::evaluate`] will be called multiple times with
-/// different batches. For all batches after the first, the output
-/// `row_number` must start from last `row_number` produced for the
-/// previous batch. The previous row number is saved and restored as
-/// the state.
-///
 /// When implementing a new `PartitionEvaluator`, implement
 /// corresponding evaluator according to table below.
 ///
+/// # Implementation Table
 ///
 /// |[`uses_window_frame`]|[`supports_bounded_execution`]|[`include_rank`]|function_to_implement|
 /// |---|---|----|----|
