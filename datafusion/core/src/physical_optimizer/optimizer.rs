@@ -24,7 +24,6 @@ use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
-use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
@@ -91,12 +90,6 @@ impl PhysicalOptimizer {
             //   introduce additional repartitioning while EnforceDistribution aims to
             //   reduce unnecessary repartitioning.
             Arc::new(Repartition::new()),
-            // - Currently it will depend on the partition number to decide whether to change the
-            // single node sort to parallel local sort and merge. Therefore, GlobalSortSelection
-            // should run after the Repartition.
-            // - Since it will change the output ordering of some operators, it should run
-            // before JoinSelection and EnforceSorting, which may depend on that.
-            Arc::new(GlobalSortSelection::new()),
             // The EnforceDistribution rule is for adding essential repartition to satisfy the required
             // distribution. Please make sure that the whole plan tree is determined before this rule.
             Arc::new(EnforceDistribution::new()),
