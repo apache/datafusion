@@ -637,8 +637,8 @@ fn get_interval_with_next_value<const DIR: bool>(value: ScalarValue) -> ScalarVa
     }
 }
 
-/// This function takes an interval, and if it has open bound/s, the function
-/// converts them to closed bounds preserving the interval values.
+/// This function takes an interval, and if it has any open bound(s), it
+/// converts them to closed bound(s) preserving the interval endpoints.
 pub fn interval_with_closed_bounds(mut interval: Interval) -> Interval {
     if interval.lower.open {
         // Get next value
