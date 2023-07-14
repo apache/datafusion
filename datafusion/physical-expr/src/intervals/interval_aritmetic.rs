@@ -471,12 +471,12 @@ impl Interval {
                     )))
                 }
             }
-            // Since the floating point numbers are ordered in the same order as their binary representation,
-            // we only need to take the difference of the integer value of the binary representation
+            // Since the floating-point numbers are ordered in the same order as their binary representation,
+            // we can consider their binary representations as "indices" and subtract them.
             // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
             Ok(data_type) if data_type.is_floating() => {
-                // If the min value is a negative number, we need to
-                // switch the sides to always have an unsigned result.
+                // If the minimum value is a negative number, we need to
+                // switch sides to ensure an unsigned result.
                 let (min, max) = if self.lower.value
                     < ScalarValue::new_zero(&self.lower.value.get_datatype())?
                 {
@@ -602,7 +602,7 @@ macro_rules! impl_OneTrait{
 }
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, f32, f64}
 
-// if DIR is true it means increment, if it is false it means decrement
+/// This function either increments or decrements its argument, depending on the `DIR` value. If `true`, it increments; otherwise it decrements the argument.
 fn increment_decrement<const DIR: bool, T: OneTrait + SubAssign + AddAssign>(
     mut val: T,
 ) -> T {
@@ -614,8 +614,8 @@ fn increment_decrement<const DIR: bool, T: OneTrait + SubAssign + AddAssign>(
     val
 }
 
-// This function return next or previous value (if `DIR` is `true` next, otherwise previous)
-// according to inner type of the `value`.
+/// This function returns the next/previous value depending on the `DIR` value.
+/// If `true`, it returns the next value; otherwise it returns the previous value.
 fn get_next_value<const DIR: bool>(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
     match value {
@@ -639,8 +639,8 @@ fn get_next_value<const DIR: bool>(value: ScalarValue) -> ScalarValue {
     }
 }
 
-/// This function takes an interval, and if it has open bound/s, the function
-/// converts them to closed bounds preserving the interval values.
+/// This function takes an interval, and if it has any open bound(s), it
+/// converts them to closed bound(s) preserving the interval endpoints.
 pub fn interval_with_closed_bounds(mut interval: Interval) -> Interval {
     if interval.lower.open {
         // Get next value
