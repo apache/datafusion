@@ -518,9 +518,7 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Float64 => match _precision {
             ColumnarValue::Scalar(Int32(Some(_precision))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float64Array, {
-                    |value: f64| f64::trunc(value)
-                }),
+                make_function_scalar_inputs!(num, "num", Float64Array, { f64::trunc }),
             )
                 as ArrayRef),
             ColumnarValue::Array(_precision) => Ok(Arc::new(make_function_inputs2!(
@@ -538,9 +536,7 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
         },
         DataType::Float32 => match _precision {
             ColumnarValue::Scalar(Int32(Some(_precision))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float32Array, {
-                    |value: f32| f32::trunc(value)
-                }),
+                make_function_scalar_inputs!(num, "num", Float32Array, { f32::trunc }),
             )
                 as ArrayRef),
             ColumnarValue::Array(_precision) => Ok(Arc::new(make_function_inputs2!(
@@ -565,9 +561,7 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn compute_truncate32(x: f32, y: usize) -> f32 {
     let s = format!("{:.precision$}", x, precision = y);
     match parse_float32(&s) {
-        Ok(f) => {
-            return f;
-        }
+        Ok(f) => f,
         _ => x,
     }
 }
@@ -575,9 +569,7 @@ fn compute_truncate32(x: f32, y: usize) -> f32 {
 fn compute_truncate64(x: f64, y: usize) -> f64 {
     let s = format!("{:.precision$}", x, precision = y);
     match parse_float64(&s) {
-        Ok(f) => {
-            return f;
-        }
+        Ok(f) => f,
         _ => x,
     }
 }
@@ -838,10 +830,10 @@ mod tests {
         let args: Vec<ArrayRef> = vec![
             Arc::new(Float32Array::from(vec![
                 15.0,
-                1234.267812,
-                1233.12345,
-                2123.3129793132,
-                -21.1234,
+                1_234.267_8,
+                1_233.123_4,
+                3.312_979_2,
+                -21.123_4,
             ])),
             Arc::new(Int32Array::from(vec![0, 3, 2, 5, 6])),
         ];
@@ -852,10 +844,10 @@ mod tests {
 
         assert_eq!(floats.len(), 5);
         assert_eq!(floats.value(0), 15.0);
-        assert_eq!(floats.value(1), 1234.268);
-        assert_eq!(floats.value(2), 1233.12);
-        assert_eq!(floats.value(3), 2123.31298);
-        assert_eq!(floats.value(4), -21.1234);
+        assert_eq!(floats.value(1), 1_234.268);
+        assert_eq!(floats.value(2), 1_233.12);
+        assert_eq!(floats.value(3), 3.312_98);
+        assert_eq!(floats.value(4), -21.123_4);
     }
 
     #[test]
@@ -863,10 +855,10 @@ mod tests {
         let args: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from(vec![
                 5.0,
-                234.267812,
-                123.12345,
-                123.3129793132,
-                -321.123,
+                234.267_812_176,
+                123.123_456_789,
+                123.312_979_313_2,
+                -321.123_1,
             ])),
             Arc::new(Int32Array::from(vec![0, 3, 2, 5, 6])),
         ];
@@ -879,17 +871,17 @@ mod tests {
         assert_eq!(floats.value(0), 5.0);
         assert_eq!(floats.value(1), 234.268);
         assert_eq!(floats.value(2), 123.12);
-        assert_eq!(floats.value(3), 123.31298);
-        assert_eq!(floats.value(4), -321.123);
+        assert_eq!(floats.value(3), 123.312_98);
+        assert_eq!(floats.value(4), -321.123_1);
     }
 
     #[test]
     fn test_truncate_64_one_arg() {
         let args: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
             5.0,
-            234.267812,
-            123.12345,
-            123.3129793132,
+            234.267_812,
+            123.123_45,
+            123.312_979_313_2,
             -321.123,
         ]))];
 
