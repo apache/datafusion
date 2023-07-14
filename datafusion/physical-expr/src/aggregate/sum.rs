@@ -19,10 +19,20 @@
 
 use std::any::Any;
 use std::convert::TryFrom;
+use std::ops::AddAssign;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
+use super::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
+use crate::aggregate::utils::down_cast_any_ref;
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use arrow::array::Array;
+use arrow::array::Decimal128Array;
 use arrow::compute;
+use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use arrow::{
     array::{
@@ -31,17 +41,12 @@ use arrow::{
     },
     datatypes::Field,
 };
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type,
+    UInt64Type,
+};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
-
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
-use arrow::array::Array;
-use arrow::array::Decimal128Array;
-use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
 
 /// SUM aggregate expression
@@ -86,6 +91,19 @@ impl Sum {
     }
 }
 
+/// Creates a [`PrimitiveGroupsAccumulator`] with the specified
+/// [`ArrowPrimitiveType`] which applies `$FN` to each element
+///
+/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
+macro_rules! instantiate_primitive_accumulator {
+    ($SELF:expr, $PRIMTYPE:ident, $FN:expr) => {{
+        Ok(Box::new(PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
+            &$SELF.data_type,
+            $FN,
+        )))
+    }};
+}
+
 impl AggregateExpr for Sum {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -124,6 +142,10 @@ impl AggregateExpr for Sum {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -132,6 +154,44 @@ impl AggregateExpr for Sum {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        // instantiate specialized accumulator
+        match self.data_type {
+            DataType::UInt64 => {
+                instantiate_primitive_accumulator!(self, UInt64Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Int64 => {
+                instantiate_primitive_accumulator!(self, Int64Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::UInt32 => {
+                instantiate_primitive_accumulator!(self, UInt32Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Int32 => {
+                instantiate_primitive_accumulator!(self, Int32Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Float32 => {
+                instantiate_primitive_accumulator!(self, Float32Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Float64 => {
+                instantiate_primitive_accumulator!(self, Float64Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Decimal128(_, _) => {
+                instantiate_primitive_accumulator!(self, Decimal128Type, |x, y| x
+                    .add_assign(y))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "GroupsAccumulator not supported for {}: {}",
+                self.name, self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {

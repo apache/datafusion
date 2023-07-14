@@ -37,13 +37,6 @@ use datafusion_sql::{
 
 use rstest::rstest;
 
-#[cfg(test)]
-#[ctor::ctor]
-fn init() {
-    // Enable RUST_LOG logging configuration for tests
-    let _ = env_logger::try_init();
-}
-
 #[test]
 fn parse_decimals() {
     let test_data = [
@@ -4160,4 +4153,11 @@ impl TableSource for EmptyTable {
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
     }
+}
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for tests
+    let _ = env_logger::try_init();
 }
