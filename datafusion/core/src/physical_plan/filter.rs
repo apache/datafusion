@@ -846,27 +846,15 @@ mod tests {
                 Arc::new(Column::new("b", 1)),
             )),
         ));
+        // Since filter predicate passes all entries, statistics after filter shouldn't change.
+        let expected = input.statistics().column_statistics;
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
         let statistics = filter.statistics();
 
         assert_eq!(statistics.num_rows, Some(1000));
         assert_eq!(statistics.total_byte_size, Some(4000));
-        assert_eq!(
-            statistics.column_statistics,
-            Some(vec![
-                ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(100))),
-                    ..Default::default()
-                },
-                ColumnStatistics {
-                    min_value: Some(ScalarValue::Int32(Some(1))),
-                    max_value: Some(ScalarValue::Int32(Some(3))),
-                    ..Default::default()
-                },
-            ])
-        );
+        assert_eq!(statistics.column_statistics, expected);
 
         Ok(())
     }
