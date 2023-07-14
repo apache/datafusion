@@ -47,6 +47,8 @@ pub enum Operator {
     Multiply,
     /// Division operator, like `/`
     Divide,
+    /// Same as the Division operator except divide by zero is unchecked
+    DivideUnchecked,
     /// Remainder operator, like `%`
     Modulo,
     /// Logical AND, like `&&`
@@ -96,6 +98,7 @@ impl Operator {
             | Operator::Minus
             | Operator::Multiply
             | Operator::Divide
+            | Operator::DivideUnchecked
             | Operator::Modulo
             | Operator::And
             | Operator::Or
@@ -123,6 +126,7 @@ impl Operator {
                 | Operator::Minus
                 | Operator::Multiply
                 | Operator::Divide
+                | Operator::DivideUnchecked
                 | Operator::Modulo
         )
     }
@@ -173,6 +177,7 @@ impl Operator {
             | Operator::Minus
             | Operator::Multiply
             | Operator::Divide
+            | Operator::DivideUnchecked
             | Operator::Modulo
             | Operator::And
             | Operator::Or
@@ -202,7 +207,10 @@ impl Operator {
             | Operator::Gt
             | Operator::GtEq => 20,
             Operator::Plus | Operator::Minus => 30,
-            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
+            Operator::Multiply
+            | Operator::Divide
+            | Operator::DivideUnchecked
+            | Operator::Modulo => 40,
             Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
             | Operator::RegexMatch
@@ -232,6 +240,7 @@ impl fmt::Display for Operator {
             Operator::Minus => "-",
             Operator::Multiply => "*",
             Operator::Divide => "/",
+            Operator::DivideUnchecked => "DIVIDE BY UNCHECKED",
             Operator::Modulo => "%",
             Operator::And => "AND",
             Operator::Or => "OR",

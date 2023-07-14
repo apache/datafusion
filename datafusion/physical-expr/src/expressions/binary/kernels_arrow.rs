@@ -19,8 +19,8 @@
 //! destined for arrow-rs but are in datafusion until they are ported.
 
 use arrow::compute::{
-    add_dyn, add_scalar_dyn, divide_dyn_checked, divide_scalar_dyn, modulus_dyn,
-    modulus_scalar_dyn, multiply_fixed_point, multiply_scalar_checked_dyn,
+    add_dyn, add_scalar_dyn, divide_dyn_checked, divide_dyn_opt, divide_scalar_dyn,
+    modulus_dyn, modulus_scalar_dyn, multiply_fixed_point, multiply_scalar_checked_dyn,
     multiply_scalar_dyn, subtract_dyn, subtract_scalar_dyn, try_unary,
 };
 use arrow::datatypes::{Date32Type, Date64Type, Decimal128Type};
@@ -716,6 +716,24 @@ pub(crate) fn divide_dyn_checked_decimal(
     right: &dyn Array,
     result_type: &DataType,
 ) -> Result<ArrayRef> {
+    divide_dyn_decimal(left, right, result_type, true)
+}
+
+pub(crate) fn divide_dyn_opt_decimal(
+    left: &dyn Array,
+    right: &dyn Array,
+    result_type: &DataType,
+) -> Result<ArrayRef> {
+    divide_dyn_decimal(left, right, result_type, false)
+}
+
+#[inline]
+fn divide_dyn_decimal(
+    left: &dyn Array,
+    right: &dyn Array,
+    result_type: &DataType,
+    checked: bool,
+) -> Result<ArrayRef> {
     let (precision, scale) = get_precision_scale(result_type)?;
 
     let mul = 10_i128.pow(scale as u32);
@@ -724,7 +742,11 @@ pub(crate) fn divide_dyn_checked_decimal(
     // Restore to original precision and scale (metadata only)
     let (org_precision, org_scale) = get_precision_scale(right.data_type())?;
     let array = decimal_array_with_precision_scale(array, org_precision, org_scale)?;
-    let array = divide_dyn_checked(&array, right)?;
+    let array = if checked {
+        divide_dyn_checked(&array, right)?
+    } else {
+        divide_dyn_opt(&array, right)?
+    };
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
@@ -2233,6 +2255,34 @@ mod tests {
             38,
             29,
         );
+        assert_eq!(&expect, result);
+        let result = divide_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
+        let result = as_decimal128_array(&result)?;
+        let expect = create_decimal_array(
+            &[
+                Some(12345670000000000000000000000000000),
+                None,
+                Some(12345670000000000000000000000000000),
+                Some(12345670000000000000000000000000000),
+                Some(12345670000000000000000000000000000),
+            ],
+            38,
+            29,
+        );
+        assert_eq!(&expect, result);
+        // divide unchecked
+        let result_type = decimal_op_mathematics_type(
+            &Operator::DivideUnchecked,
+            left_decimal_array.data_type(),
+            right_decimal_array.data_type(),
+        )
+        .unwrap();
+        let result = divide_dyn_checked_decimal(
+            &left_decimal_array,
+            &right_decimal_array,
+            &result_type,
+        )?;
+        let result = as_decimal128_array(&result)?;
         assert_eq!(&expect, result);
         let result = divide_decimal_dyn_scalar(&left_decimal_array, 10, &result_type)?;
         let result = as_decimal128_array(&result)?;

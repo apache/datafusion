@@ -455,6 +455,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::Minus => "substract",
         Operator::Multiply => "multiply",
         Operator::Divide => "divide",
+        Operator::DivideUnchecked => "divide_unchecked",
         Operator::Modulo => "mod",
         Operator::And => "and",
         Operator::Or => "or",

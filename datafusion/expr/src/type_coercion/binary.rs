@@ -117,6 +117,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         Operator::Minus |
         Operator::Multiply |
         Operator::Divide|
+        Operator::DivideUnchecked |
         Operator::Modulo =>  {
             // TODO: this logic would be easier to follow if the functions were inlined
             if let Some(ret) = mathematics_temporal_result_type(lhs, rhs) {
@@ -537,7 +538,7 @@ pub fn coercion_decimal_mathematics_type(
                 left_decimal_type,
                 right_decimal_type,
             ),
-            Operator::Divide | Operator::Modulo => {
+            Operator::Divide | Operator::DivideUnchecked | Operator::Modulo => {
                 get_wider_decimal_type(left_decimal_type, right_decimal_type)
             }
             _ => None,
@@ -575,7 +576,7 @@ pub fn decimal_op_mathematics_type(
                     let result_precision = *p1 + *p2 + 1;
                     Some(create_decimal_type(result_precision, result_scale))
                 }
-                Operator::Divide => {
+                Operator::Divide | Operator::DivideUnchecked => {
                     // max(6, s1 + p2 + 1)
                     let result_scale = 6.max(*s1 + *p2 as i8 + 1);
                     // p1 - s1 + s2 + max(6, s1 + p2 + 1)
@@ -952,6 +953,15 @@ mod tests {
         assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
         let result =
             decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
+        let op = Operator::DivideUnchecked;
+        let result = coercion_decimal_mathematics_type(
+            &op,
+            &left_decimal_type,
+            &right_decimal_type,
+        );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(35, 24), result.unwrap());
         let op = Operator::Modulo;
         let result = coercion_decimal_mathematics_type(
@@ -1293,6 +1303,16 @@ mod tests {
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Divide,
+            DataType::Decimal128(10, 0),
+            DataType::Decimal128(10, 2),
+            Some(DataType::Decimal128(12, 2)),
+            DataType::Decimal128(23, 11),
+        );
+
+        test_math_decimal_coercion_rule(
+            DataType::Int32,
+            DataType::Decimal128(10, 2),
+            Operator::DivideUnchecked,
             DataType::Decimal128(10, 0),
             DataType::Decimal128(10, 2),
             Some(DataType::Decimal128(12, 2)),
