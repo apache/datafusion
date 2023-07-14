@@ -21,6 +21,7 @@ use arrow::array::*;
 use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
 use datafusion_common::ScalarValue;
@@ -40,6 +41,11 @@ macro_rules! downcast_arg {
     }};
 }
 
+/// Downcasts multiple arguments into a single concrete type
+/// $ARGS:  &[ArrayRef]
+/// $ARRAY_TYPE: type to downcast to
+///
+/// $returns a Vec<$ARRAY_TYPE>
 macro_rules! downcast_vec {
     ($ARGS:expr, $ARRAY_TYPE:ident) => {{
         $ARGS
@@ -66,18 +72,38 @@ macro_rules! new_builder {
     }};
 }
 
+/// Combines multiple arrays into a single ListArray
+///
+/// $ARGS: slice of arrays, each with $ARRAY_TYPE
+/// $ARRAY_TYPE: the type of the list elements
+/// $BUILDER_TYPE: the type of ArrayBuilder for the list elements
+///
+/// Returns: a ListArray where the elements each have the same type as
+/// $ARRAY_TYPE and each element have a length of $ARGS.len()
 macro_rules! array {
     ($ARGS:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
         let builder = new_builder!($BUILDER_TYPE, $ARGS[0].len());
         let mut builder =
             ListBuilder::<$BUILDER_TYPE>::with_capacity(builder, $ARGS.len());
 
+        let num_rows = $ARGS[0].len();
+        assert!(
+            $ARGS.iter().all(|a| a.len() == num_rows),
+            "all arguments must have the same number of rows"
+        );
+
         // for each entry in the array
-        for index in 0..$ARGS[0].len() {
+        for index in 0..num_rows {
+            // for each column
             for arg in $ARGS {
                 match arg.as_any().downcast_ref::<$ARRAY_TYPE>() {
+                    // Copy the source array value into the target ListArray
                     Some(arr) => {
-                        builder.values().append_value(arr.value(index));
+                        if arr.is_valid(index) {
+                            builder.values().append_value(arr.value(index));
+                        } else {
+                            builder.values().append_null();
+                        }
                     }
                     None => match arg.as_any().downcast_ref::<NullArray>() {
                         Some(arr) => {
@@ -179,6 +205,46 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
     }
 }
 
+/// Convert one or more [`ArrayRef`] of the same type into a
+/// `ListArray`
+///
+/// # Example (non nested)
+///
+/// Calling `array(col1, col2)` where col1 and col2 are non nested
+/// would return a single new `ListArray`, where each row was a list
+/// of 2 elements:
+///
+/// ```text
+/// ┌─────────┐   ┌─────────┐           ┌──────────────┐
+/// │ ┌─────┐ │   │ ┌─────┐ │           │ ┌──────────┐ │
+/// │ │  A  │ │   │ │  X  │ │           │ │  [A, X]  │ │
+/// │ ├─────┤ │   │ ├─────┤ │           │ ├──────────┤ │
+/// │ │NULL │ │   │ │  Y  │ │──────────▶│ │[NULL, Y] │ │
+/// │ ├─────┤ │   │ ├─────┤ │           │ ├──────────┤ │
+/// │ │  C  │ │   │ │  Z  │ │           │ │  [C, Z]  │ │
+/// │ └─────┘ │   │ └─────┘ │           │ └──────────┘ │
+/// └─────────┘   └─────────┘           └──────────────┘
+///   col1           col2                    output
+/// ```
+///
+/// # Example (nested)
+///
+/// Calling `array(col1, col2)` where col1 and col2 are lists
+/// would return a single new `ListArray`, where each row was a list
+/// of the corresponding elements of col1 and col2 flattened.
+///
+/// ``` text
+/// ┌──────────────┐   ┌──────────────┐        ┌────────────────────────┐
+/// │ ┌──────────┐ │   │ ┌──────────┐ │        │ ┌────────────────────┐ │
+/// │ │  [A, X]  │ │   │ │    []    │ │        │ │       [A, X]       │ │
+/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────┤ │
+/// │ │[NULL, Y] │ │   │ │[Q, R, S] │ │───────▶│ │ [NULL, Y, Q, R, S] │ │
+/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────┤ │
+/// │ │  [C, Z]  │ │   │ │   NULL   │ │        │ │    [C, Z, NULL]    │ │
+/// │ └──────────┘ │   │ └──────────┘ │        │ └────────────────────┘ │
+/// └──────────────┘   └──────────────┘        └────────────────────────┘
+///      col1               col2                         output
+/// ```
 fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
@@ -200,6 +266,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
             let mut mutable =
                 MutableArrayData::with_capacities(array_data, false, capacity);
 
+            // Copy over all the child data
             for (i, a) in arrays.iter().enumerate() {
                 mutable.extend(i, 0, a.len())
             }
@@ -239,8 +306,11 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
     Ok(res)
 }
 
-/// put values in an array.
-pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
+/// Convert one or more [`ColumnarValue`] of the same type into a
+/// `ListArray`
+///
+/// See [`array_array`] for more details.
+fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays: Vec<ArrayRef> = values
         .iter()
         .map(|x| match x {
@@ -485,42 +555,65 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     aligned_args
 }
 
+fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let args = align_array_dimensions(args.to_vec())?;
+
+    let list_arrays =
+        downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+
+    // Assume number of rows is the same for all arrays
+    let row_count = list_arrays[0].len();
+    let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
+    let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+    let array_data: Vec<&ArrayData> = array_data.iter().collect();
+
+    let mut mutable = MutableArrayData::with_capacities(array_data, true, capacity);
+
+    let mut array_lens = vec![0; row_count];
+    let mut null_bit_map: Vec<bool> = vec![true; row_count];
+
+    for (i, array_len) in array_lens.iter_mut().enumerate().take(row_count) {
+        let null_count = mutable.null_count();
+        for (j, a) in list_arrays.iter().enumerate() {
+            mutable.extend(j, i, i + 1);
+            *array_len += a.value_length(i);
+        }
+
+        // This means all arrays are null
+        if mutable.null_count() == null_count + list_arrays.len() {
+            null_bit_map[i] = false;
+        }
+    }
+
+    let mut buffer = BooleanBufferBuilder::new(row_count);
+    buffer.append_slice(null_bit_map.as_slice());
+    let nulls = Some(NullBuffer::from(buffer.finish()));
+
+    let offsets: Vec<i32> = std::iter::once(0)
+        .chain(array_lens.iter().scan(0, |state, &x| {
+            *state += x;
+            Some(*state)
+        }))
+        .collect();
+
+    let builder = mutable.into_builder();
+
+    let list = builder
+        .len(row_count)
+        .buffers(vec![Buffer::from_vec(offsets)])
+        .nulls(nulls)
+        .build()?;
+
+    let list = arrow::array::make_array(list);
+    Ok(Arc::new(list))
+}
+
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::List(field) => match field.data_type() {
             DataType::Null => array_concat(&args[1..]),
-            _ => {
-                let args = align_array_dimensions(args.to_vec())?;
-
-                let list_arrays = downcast_vec!(args, ListArray)
-                    .collect::<Result<Vec<&ListArray>>>()?;
-
-                let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-
-                let capacity =
-                    Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-                let array_data: Vec<_> =
-                    list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-
-                let array_data = array_data.iter().collect();
-
-                let mut mutable =
-                    MutableArrayData::with_capacities(array_data, false, capacity);
-
-                for (i, a) in list_arrays.iter().enumerate() {
-                    mutable.extend(i, 0, a.len())
-                }
-
-                let builder = mutable.into_builder();
-                let list = builder
-                    .len(1)
-                    .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
-                    .build()
-                    .unwrap();
-
-                return Ok(Arc::new(arrow::array::make_array(list)));
-            }
+            _ => concat_internal(args),
         },
         data_type => Err(DataFusionError::NotImplemented(format!(
             "Array is not type '{data_type:?}'."
