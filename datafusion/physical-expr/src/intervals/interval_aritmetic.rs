@@ -612,8 +612,8 @@ fn next_value<const DIR: bool, T: OneTrait + SubAssign + AddAssign>(mut val: T) 
     val
 }
 
-// This function return next or previous value (if `DIR` is `true` next, otherwise previous)
-// according to inner type of the `value`.
+/// This function returns the next/previous value depending on the `DIR` value.
+/// If `true`, it returns the next value; otherwise it returns the previous value.
 fn get_interval_with_next_value<const DIR: bool>(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
     match value {
