@@ -164,7 +164,7 @@ impl WindowExpr for BuiltInWindowExpr {
 
             let batch_ref = &partition_batch_state.record_batch;
             let mut values = self.evaluate_args(batch_ref)?;
-            let order_bys = if evaluator.uses_window_frame() | evaluator.include_rank() {
+            let order_bys = if evaluator.uses_window_frame() || evaluator.include_rank() {
                 get_orderby_values(self.order_by_columns(batch_ref)?)
             } else {
                 vec![]
