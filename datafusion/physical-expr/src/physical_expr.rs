@@ -194,9 +194,9 @@ pub fn analyze(
     }
 }
 
-// If the `PropagationResult` returns a success, this function calculates the selectivity by comparing the initial
-// and final column boundaries. Following this, the function constructs and returns a new `AnalysisContext`, with
-// the updated parameters.
+/// If the `PropagationResult` indicates success, this function calculates the selectivity value by comparing the initial
+/// and final column boundaries. Following this, it constructs and returns a new `AnalysisContext`, with
+/// the updated parameters.
 fn shrink_boundaries(
     expr: &Arc<dyn PhysicalExpr>,
     mut graph: ExprIntervalGraph,
