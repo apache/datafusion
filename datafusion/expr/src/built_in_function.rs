@@ -150,6 +150,12 @@ pub enum BuiltinScalarFunction {
     /// trim_array
     TrimArray,
 
+    // struct functions
+    /// struct
+    Struct,
+    /// struct_extract
+    StructExtract,
+
     // string functions
     /// ascii
     Ascii,
@@ -247,8 +253,6 @@ pub enum BuiltinScalarFunction {
     Uuid,
     /// regexp_match
     RegexpMatch,
-    /// struct
-    Struct,
     /// arrow_typeof
     ArrowTypeof,
 }
@@ -392,6 +396,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
+            BuiltinScalarFunction::StructExtract => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
 
@@ -749,6 +754,13 @@ impl BuiltinScalarFunction {
                 Ok(Struct(Fields::from(return_fields)))
             }
 
+            BuiltinScalarFunction::StructExtract => match &input_expr_types[0] {
+                Struct(fields) => Ok(fields[0].data_type().clone()),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept struct as the first argument"
+                ))),
+            }
+
             BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
                 Float32 => Ok(Float32),
                 _ => Ok(Float64),
@@ -837,6 +849,7 @@ impl BuiltinScalarFunction {
                 struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
                 self.volatility(),
             ),
+            BuiltinScalarFunction::StructExtract => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Concat
             | BuiltinScalarFunction::ConcatWithSeparator => {
                 Signature::variadic(vec![Utf8], self.volatility())
@@ -1256,7 +1269,6 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Decode => &["decode"],
 
         // other functions
-        BuiltinScalarFunction::Struct => &["struct"],
         BuiltinScalarFunction::ArrowTypeof => &["arrow_typeof"],
 
         // array functions
@@ -1278,6 +1290,10 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array"],
         BuiltinScalarFunction::TrimArray => &["trim_array"],
+
+        // struct functions
+        BuiltinScalarFunction::Struct => &["struct"],
+        BuiltinScalarFunction::StructExtract => &["struct_extract"],
     }
 }
 

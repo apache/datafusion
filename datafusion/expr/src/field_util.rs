@@ -18,7 +18,7 @@
 //! Utility functions for complex field access
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 
 /// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
 /// # Error
@@ -26,28 +26,18 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 /// * the `data_type` is not a Struct or a List,
 /// * the `data_type` of extra key does not match with `data_type` of key
 /// * there is no field key is not of the required index type
-pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue, extra_key: &Option<ScalarValue>) -> Result<Field> {
-    if let Some(extra_key_value) = extra_key {
-        if extra_key_value.data_type() != key.data_type() {
-            return Err(DataFusionError::Plan(format!(
-                "DataType of extra key {extra_key} does not match with datatype of key {key}"
-            )));
-        }
-    }
-
+pub fn get_indexed_field(data_type: &DataType, key: &DataType, extra_key: &Option<DataType>) -> Result<Field> {
     match (data_type, key) {
-        (DataType::List(lt), ScalarValue::Int64(Some(i))) => {
-            Ok(Field::new(i.to_string(), lt.data_type().clone(), true))
-        }
-        (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
-            if s.is_empty() {
-                Err(DataFusionError::Plan(
-                    "Struct based indexed access requires a non empty string".to_string(),
-                ))
-            } else {
-                let field = fields.iter().find(|f| f.name() == s);
-                field.ok_or(DataFusionError::Plan(format!("Field {s} not found in struct"))).map(|f| f.as_ref().clone())
+        (DataType::List(lt), DataType::Int64) => {
+            match extra_key {
+                Some(DataType::Int64) | None => Ok(Field::new("list", lt.data_type().clone(), true)),
+                _ => Err(DataFusionError::Plan(
+                    "Only ints are valid as an indexed field in a list".to_string(),
+                )),
             }
+        }
+        (DataType::Struct(fields), DataType::Utf8) => {
+            Ok(fields[0].as_ref().clone())
         }
         (DataType::Struct(_), _) => Err(DataFusionError::Plan(
             "Only utf8 strings are valid as an indexed field in a struct".to_string(),

@@ -362,14 +362,14 @@ pub struct GetIndexedField {
     /// the expression to take the field from
     pub expr: Box<Expr>,
     /// The name of the field to take
-    pub key: ScalarValue,
+    pub key: Box<Expr>,
     /// The right border of the field to take
-    pub extra_key: Option<ScalarValue>,
+    pub extra_key: Option<Box<Expr>>,
 }
 
 impl GetIndexedField {
     /// Create a new GetIndexedField expression
-    pub fn new(expr: Box<Expr>, key: ScalarValue, extra_key: Option<ScalarValue>) -> Self {
+    pub fn new(expr: Box<Expr>, key: Box<Expr>, extra_key: Option<Box<Expr>>) -> Self {
         Self { expr, key, extra_key }
     }
 }
@@ -1136,9 +1136,10 @@ impl fmt::Display for Expr {
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{qualifier}.*"),
             Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
-                match extra_key {
-                    Some(extra_key) => write!(f, "({expr})[{key}:{extra_key}]"),
-                    None => write!(f, "({expr})[{key}]"),
+                if let Some(extra_key) = extra_key {
+                    write!(f, "({expr})[{key}:{extra_key}]")
+                } else {
+                    write!(f, "({expr})[{key}]")
                 }
             }
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
@@ -1347,9 +1348,12 @@ fn create_name(e: &Expr) -> Result<String> {
         }
         Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
             let expr = create_name(expr)?;
-            match extra_key {
-                Some(extra_key) => Ok(format!("{expr}[{key}:{extra_key}]")),
-                None => Ok(format!("{expr}[{key}]")),
+            let key = create_name(key)?;
+            if let Some(extra_key) = extra_key {
+                let extra_key = create_name(extra_key)?;
+                Ok(format!("{expr}[{key}:{extra_key}]"))
+            } else {
+                Ok(format!("{expr}[{key}]"))
             }
         }
         Expr::ScalarFunction(func) => {

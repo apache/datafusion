@@ -152,9 +152,14 @@ impl ExprSchemable for Expr {
                 Ok(DataType::Null)
             }
             Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
-                let data_type = expr.get_type(schema)?;
-
-                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
+                let expr_dt = expr.get_type(schema)?;
+                let key_dt = key.get_type(schema)?;
+                let extra_key_dt = if let Some(extra_key) = extra_key {
+                    Some(extra_key.get_type(schema)?)
+                } else {
+                    None
+                };
+                get_indexed_field(&expr_dt, &key_dt, &extra_key_dt).map(|x| x.data_type().clone())
             }
         }
     }
@@ -263,9 +268,15 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(input_schema)?;
-                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
+                let expr_dt = expr.get_type(input_schema)?;
+                let key_dt = key.get_type(input_schema)?;
+                let extra_key_dt = if let Some(extra_key) = extra_key {
+                    Some(extra_key.get_type(input_schema)?)
+                } else {
+                    None
+                };
+                get_indexed_field(&expr_dt, &key_dt, &extra_key_dt).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
@@ -363,7 +374,7 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::{Column, ScalarValue};
+    use datafusion_common::{Column};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{

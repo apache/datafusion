@@ -452,8 +452,11 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function(array_expressions::trim_array)(args))
         }
 
-        // string functions
+        // struct functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
+        BuiltinScalarFunction::StructExtract => Arc::new(|args| make_scalar_function(struct_expressions::struct_extract)(args)),
+
+        // string functions
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::ascii::<i32>)(args)

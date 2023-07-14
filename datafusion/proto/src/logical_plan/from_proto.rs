@@ -514,6 +514,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
             ScalarFunction::StructFun => Self::Struct,
+            ScalarFunctions::StructExtract => Self::StructExtract,
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,

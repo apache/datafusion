@@ -1441,6 +1441,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Pi => Self::Pi,
             BuiltinScalarFunction::Power => Self::Power,
             BuiltinScalarFunction::Struct => Self::StructFun,
+            BuiltinScalarFunction::StructExtract => Self::StructExtract,
             BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
             BuiltinScalarFunction::Atan2 => Self::Atan2,
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,

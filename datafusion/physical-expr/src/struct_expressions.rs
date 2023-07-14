@@ -20,6 +20,7 @@
 use arrow::array::*;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_common::cast::{as_generic_string_array, as_struct_array};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
@@ -77,4 +78,57 @@ pub fn struct_expr(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         })
         .collect();
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
+}
+
+pub fn struct_extract(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let struct_array = as_struct_array(&args[0])?;
+    let key = as_generic_string_array::<i32>(&args[1])?.value(0);
+    match struct_array.column_by_name(key) {
+        None => Err(DataFusionError::Execution(
+            format!("get indexed field {key} not found in struct"))),
+        Some(col) => Ok(col.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::cast::{as_int64_array, as_struct_array};
+    use datafusion_common::ScalarValue;
+
+    #[test]
+    fn test_struct() {
+        // struct(1, 2, 3) = {"c0": 1, "c1": 2, "c2": 3}
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+        ];
+        let struc = struct_expr(&args)
+            .expect("failed to initialize function struct")
+            .into_array(1);
+        let result = as_struct_array(&struc).expect("failed to initialize function struct");
+        assert_eq!(&Int64Array::from(vec![1]), result.column_by_name("c0").unwrap().clone().as_any().downcast_ref::<Int64Array>().unwrap());
+        assert_eq!(&Int64Array::from(vec![2]), result.column_by_name("c1").unwrap().clone().as_any().downcast_ref::<Int64Array>().unwrap());
+        assert_eq!(&Int64Array::from(vec![3]), result.column_by_name("c2").unwrap().clone().as_any().downcast_ref::<Int64Array>().unwrap());
+    }
+
+    #[test]
+    fn test_struct_extract() {
+        // struct_extract({"c0": 1, "c1": 2, "c2": 3}, 'c1') = 2
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+        ];
+        let struc = struct_expr(&args)
+            .expect("failed to initialize function struct")
+            .into_array(1);
+        let element = struct_extract(&[
+            struc,
+            Arc::new(StringArray::from(vec!["c1"])),
+        ]).expect("failed to initialize function struct_extract");
+        let result = as_int64_array(&element).expect("failed to initialize function struct_extract");
+        assert_eq!(result, &Int64Array::from(vec![1]));
+    }
 }

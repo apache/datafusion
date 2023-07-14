@@ -553,11 +553,11 @@ fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     })
 }
 
-fn plan_key(
+fn plan_indices(
     expr: SQLExpr,
     schema: &DFSchema,
     planner_context: &mut PlannerContext,
-) -> Result<(ScalarValue, Option<ScalarValue>)> {
+) -> Result<(Expr, Option<Expr>)> {
     let (key, extra_key) = match expr {
         SQLExpr::JsonAccess {
             left,
@@ -580,35 +580,7 @@ fn plan_key(
         ),
     };
 
-    let (scalar_key, scalar_extra_key) = match (key, extra_key) {
-        (SQLExpr::Value(Value::Number(s, _)), SQLExpr::Value(Value::Number(es, _))) => {
-            ScalarValue::Int64(Some((
-                s.parse()
-                    .map_err(|_| ParserError(format!("Cannot parse {s} as i64.")))?,
-                es.parse()
-                    .map_err(|_| ParserError(format!("Cannot parse {es} as i64.")))?,
-            )))
-        }
-        (SQLExpr::Value(Value::Number(s, _)), None) => ScalarValue::Int64(Some((
-            s.parse()
-                .map_err(|_| ParserError(format!("Cannot parse {s} as i64.")))?,
-            None,
-        ))),
-        (SQLExpr::Value(Value::SingleQuotedString(s)), None)
-        | (Value::DoubleQuotedString(s), None) => (ScalarValue::Utf8(Some(s)), None),
-        _ => {
-            if let Some(extra_key) = extra_key {
-                return Err(DataFusionError::SQL(ParserError(format!(
-                    "Unsupported index keys expression: {key:?}:{extra_key:?}"
-                ))));
-            }
-            return Err(DataFusionError::SQL(ParserError(format!(
-                "Unsupported index key expression: {key:?}"
-            ))));
-        }
-    };
-
-    Ok((scalar_key, scalar_extra_key))
+    Ok((key, extra_key))
 }
 
 fn plan_indexed(
@@ -617,7 +589,7 @@ fn plan_indexed(
     schema: &DFSchema,
     planner_context: &mut PlannerContext,
 ) -> Result<Expr> {
-    let key = keys.pop().ok_or_else(|| {
+    let indices = keys.pop().ok_or_else(|| {
         ParserError("Internal error: Missing index key expression".to_string())
     })?;
 
@@ -627,11 +599,11 @@ fn plan_indexed(
         expr
     };
 
-    let (scalar_key, scalar_extra_key) = plan_key(key, schema, planner_context)?;
+    let (scalar_key, scalar_extra_key) = plan_indices(indices, schema, planner_context)?;
     Ok(Expr::GetIndexedField(GetIndexedField::new(
         Box::new(expr),
-        scalar_key,
-        scalar_extra_key,
+        Box::new(key),
+        Box::new(extra_key),
     )))
 }
 
