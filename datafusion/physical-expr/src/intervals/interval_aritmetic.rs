@@ -470,6 +470,9 @@ impl Interval {
                     )))
                 }
             }
+            // Since the floating point numbers are ordered in the same order as their binary representation,
+            // we only need to take the difference of the integer value of the binary representation
+            // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
             Ok(data_type) if data_type.is_floating() => {
                 // If the min value is a negative number, we need to
                 // switch the sides to always have an unsigned result.
