@@ -133,16 +133,16 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 }
 
-/// Attempts to refine column boundaries and compute selectivity value.
+/// Attempts to refine column boundaries and compute a selectivity value.
 ///
-/// The function accepts the boundaries of the input columns in the `context` parameter.
+/// The function accepts boundaries of the input columns in the `context` parameter.
 /// It then tries to tighten these boundaries based on the provided `expr`.
 /// The resulting selectivity value is calculated by comparing the initial and final boundaries.
-/// The computation assumes that the data within the column is uniformly distributed and is not sorted.
+/// The computation assumes that the data within the column is uniformly distributed and not sorted.
 ///
 /// # Arguments
 ///
-/// * `context` - The context which holds the boundaries of the input columns.
+/// * `context` - The context holding input column boundaries.
 /// * `expr` - The expression used to shrink the column boundaries.
 ///
 /// # Returns
