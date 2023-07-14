@@ -22,7 +22,6 @@ use std::fmt::Debug;
 use std::ops::BitAnd;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
@@ -36,7 +35,6 @@ use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use datafusion_row::accessor::RowAccessor;
 
 use crate::expressions::format_state_name;
 
@@ -247,21 +245,10 @@ impl AggregateExpr for Count {
         &self.name
     }
 
-    fn row_accumulator_supported(&self) -> bool {
-        true
-    }
-
     fn groups_accumulator_supported(&self) -> bool {
         // groups accumulator only supports `COUNT(c1)`, not
         // `COUNT(c1, c2)`, etc
         self.exprs.len() == 1
-    }
-
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(CountRowAccumulator::new(start_index)))
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -345,79 +332,6 @@ impl Accumulator for CountAccumulator {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
-    }
-}
-
-#[derive(Debug)]
-struct CountRowAccumulator {
-    state_index: usize,
-}
-
-impl CountRowAccumulator {
-    pub fn new(index: usize) -> Self {
-        Self { state_index: index }
-    }
-}
-
-impl RowAccumulator for CountRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let array = &values[0];
-        let delta = (array.len() - null_count_for_multiple_cols(values)) as u64;
-        accessor.add_u64(self.state_index, delta);
-        Ok(())
-    }
-
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        if !values.iter().any(|s| matches!(s, ScalarValue::Null)) {
-            accessor.add_u64(self.state_index, 1)
-        }
-        Ok(())
-    }
-
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        match value {
-            ScalarValue::Null => {
-                // do not update the accumulator
-            }
-            _ => accessor.add_u64(self.state_index, 1),
-        }
-        Ok(())
-    }
-
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let counts = downcast_value!(states[0], Int64Array);
-        let delta = &compute::sum(counts);
-        if let Some(d) = delta {
-            accessor.add_i64(self.state_index, *d);
-        }
-        Ok(())
-    }
-
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(
-            accessor.get_u64_opt(self.state_index()).unwrap_or(0) as i64,
-        )))
-    }
-
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.state_index
     }
 }
 
