@@ -188,7 +188,7 @@ impl ExecutionPlan for FilterExec {
         let predicate = self.predicate();
 
         if let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() {
-            let columns = collect_columns(predicate).into_iter().collect::<Vec<_>>();
+            let columns = collect_columns(predicate);
             if !is_operator_supported(binary.op()) || columns.is_empty() {
                 return Statistics::default();
             }
@@ -210,66 +210,61 @@ impl ExecutionPlan for FilterExec {
 
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
 
-        let (num_rows, total_byte_size, column_statistics) = collect_new_statistics(
-            input_stats.num_rows,
-            input_stats.total_byte_size,
-            input_column_stats,
-            selectivity,
-            analysis_ctx.boundaries,
-        );
+        let num_rows = input_stats
+            .num_rows
+            .map(|num| (num as f64 * selectivity).ceil() as usize);
+        let total_byte_size = input_stats
+            .total_byte_size
+            .map(|size| (size as f64 * selectivity).ceil() as usize);
+
+        let column_statistics = if let Some(analysis_boundaries) = analysis_ctx.boundaries
+        {
+            collect_new_statistics(input_column_stats, selectivity, analysis_boundaries)
+        } else {
+            input_column_stats
+        };
 
         Statistics {
             num_rows,
             total_byte_size,
-            column_statistics,
+            column_statistics: Some(column_statistics),
             is_exact: Default::default(),
         }
     }
 }
 
 fn collect_new_statistics(
-    num_rows: Option<usize>,
-    total_byte_size: Option<usize>,
     input_column_stats: Vec<ColumnStatistics>,
     selectivity: f64,
-    analysis_result: Option<Vec<ExprBoundaries>>,
-) -> (Option<usize>, Option<usize>, Option<Vec<ColumnStatistics>>) {
-    let num_rows = num_rows.map(|num| (num as f64 * selectivity).ceil() as usize);
-    let total_byte_size =
-        total_byte_size.map(|size| (size as f64 * selectivity).ceil() as usize);
-
-    let column_statistics = if let Some(new_boundaries) = analysis_result {
-        let mut res = Vec::with_capacity(new_boundaries.len());
-        for (
-            i,
-            ExprBoundaries {
-                interval,
-                distinct_count,
-                ..
+    analysis_boundaries: Vec<ExprBoundaries>,
+) -> Vec<ColumnStatistics> {
+    let mut res = Vec::with_capacity(analysis_boundaries.len());
+    for (
+        i,
+        ExprBoundaries {
+            interval,
+            distinct_count,
+            ..
+        },
+    ) in analysis_boundaries.into_iter().enumerate()
+    {
+        let closed_interval = interval_with_closed_bounds(interval);
+        res.push(ColumnStatistics {
+            null_count: input_column_stats[i].null_count,
+            max_value: if selectivity > 0.0 {
+                Some(closed_interval.upper.value)
+            } else {
+                None
             },
-        ) in new_boundaries.into_iter().enumerate()
-        {
-            let closed_interval = interval_with_closed_bounds(interval);
-            res.push(ColumnStatistics {
-                null_count: input_column_stats[i].null_count,
-                max_value: if selectivity > 0.0 {
-                    Some(closed_interval.upper.value)
-                } else {
-                    None
-                },
-                min_value: if selectivity > 0.0 {
-                    Some(closed_interval.lower.value)
-                } else {
-                    None
-                },
-                distinct_count,
-            });
-        }
-        Some(res)
-    } else {
-        Some(input_column_stats)
-    };
-    (num_rows, total_byte_size, column_statistics)
+            min_value: if selectivity > 0.0 {
+                Some(closed_interval.lower.value)
+            } else {
+                None
+            },
+            distinct_count,
+        });
+    }
+    res
 }
 
 /// The FilterExec streams wraps the input iterator and applies the predicate expression to
