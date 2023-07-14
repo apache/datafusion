@@ -2548,6 +2548,7 @@ mod roundtrip_tests {
                 Box::new(col("col")),
                 Box::new(lit("[0-9]+")),
                 escape_char,
+                true,
             ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
@@ -2561,11 +2562,12 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_ilike() {
         fn ilike(negated: bool, escape_char: Option<char>) {
-            let test_expr = Expr::ILike(Like::new(
+            let test_expr = Expr::Like(Like::new(
                 negated,
                 Box::new(col("col")),
                 Box::new(lit("[0-9]+")),
                 escape_char,
+                false,
             ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
@@ -2584,6 +2586,7 @@ mod roundtrip_tests {
                 Box::new(col("col")),
                 Box::new(lit("[0-9]+")),
                 escape_char,
+                true,
             ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);

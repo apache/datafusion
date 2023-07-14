@@ -361,19 +361,27 @@ impl Not for Expr {
                 expr,
                 pattern,
                 escape_char,
-            }) => Expr::Like(Like::new(!negated, expr, pattern, escape_char)),
-            Expr::ILike(Like {
-                negated,
+                case_sensitive,
+            }) => Expr::Like(Like::new(
+                !negated,
                 expr,
                 pattern,
                 escape_char,
-            }) => Expr::ILike(Like::new(!negated, expr, pattern, escape_char)),
+                case_sensitive,
+            )),
             Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            }) => Expr::SimilarTo(Like::new(!negated, expr, pattern, escape_char)),
+                case_sensitive,
+            }) => Expr::SimilarTo(Like::new(
+                !negated,
+                expr,
+                pattern,
+                escape_char,
+                case_sensitive,
+            )),
             _ => Expr::Not(Box::new(self)),
         }
     }

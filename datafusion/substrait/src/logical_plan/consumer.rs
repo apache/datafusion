@@ -1333,19 +1333,11 @@ async fn make_datafusion_like(
         )))
     };
 
-    if case_insensitive {
-        Ok(Arc::new(Expr::ILike(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(pattern),
-            escape_char: escape_char.map(|c| c.chars().next().unwrap()),
-        })))
-    } else {
-        Ok(Arc::new(Expr::Like(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(pattern),
-            escape_char: escape_char.map(|c| c.chars().next().unwrap()),
-        })))
-    }
+    Ok(Arc::new(Expr::Like(Like {
+        negated: false,
+        expr: Box::new(expr),
+        pattern: Box::new(pattern),
+        escape_char: escape_char.map(|c| c.chars().next().unwrap()),
+        case_sensitive: !case_insensitive,
+    })))
 }

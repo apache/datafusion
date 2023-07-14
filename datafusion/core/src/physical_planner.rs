@@ -296,37 +296,20 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             expr,
             pattern,
             escape_char,
+            case_sensitive,
         }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
+            let op_name = if *case_sensitive { "LIKE" } else { "ILIKE" };
             let escape = if let Some(char) = escape_char {
                 format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{expr} NOT LIKE {pattern}{escape}"))
+                Ok(format!("{expr} NOT {op_name} {pattern}{escape}"))
             } else {
-                Ok(format!("{expr} LIKE {pattern}{escape}"))
-            }
-        }
-        Expr::ILike(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let escape = if let Some(char) = escape_char {
-                format!("CHAR '{char}'")
-            } else {
-                "".to_string()
-            };
-            if *negated {
-                Ok(format!("{expr} NOT ILIKE {pattern}{escape}"))
-            } else {
-                Ok(format!("{expr} ILIKE {pattern}{escape}"))
+                Ok(format!("{expr} {op_name} {pattern}{escape}"))
             }
         }
         Expr::SimilarTo(Like {
@@ -334,6 +317,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             expr,
             pattern,
             escape_char,
+            case_sensitive: _,
         }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
