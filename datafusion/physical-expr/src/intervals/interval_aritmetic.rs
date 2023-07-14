@@ -475,8 +475,8 @@ impl Interval {
             // we can consider their binary representations as "indices" and subtract them.
             // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
             Ok(data_type) if data_type.is_floating() => {
-                // If the min value is a negative number, we need to
-                // switch the sides to always have an unsigned result.
+                // If the minimum value is a negative number, we need to
+                // switch sides to ensure an unsigned result.
                 let (min, max) = if self.lower.value
                     < ScalarValue::new_zero(&self.lower.value.get_datatype())?
                 {
