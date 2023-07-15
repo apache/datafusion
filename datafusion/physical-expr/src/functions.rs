@@ -438,9 +438,9 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::ArrayRemove => Arc::new(array_expressions::array_remove),
         BuiltinScalarFunction::ArrayReplace => Arc::new(array_expressions::array_replace),
-        BuiltinScalarFunction::ArraySlice => Arc::new(|args| {
-            make_scalar_function(array_expressions::array_slice)(args)
-        }),
+        BuiltinScalarFunction::ArraySlice => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_slice)(args))
+        }
         BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
             make_scalar_function(array_expressions::array_to_string)(args)
         }),
@@ -454,7 +454,9 @@ pub fn create_physical_fun(
 
         // struct functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
-        BuiltinScalarFunction::StructExtract => Arc::new(|args| make_scalar_function(struct_expressions::struct_extract)(args)),
+        BuiltinScalarFunction::StructExtract => Arc::new(|args| {
+            make_scalar_function(struct_expressions::struct_extract)(args)
+        }),
 
         // string functions
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {

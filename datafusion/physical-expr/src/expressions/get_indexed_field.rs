@@ -20,9 +20,9 @@
 use crate::PhysicalExpr;
 use arrow::array::Array;
 
-use crate::struct_expressions::struct_extract;
 use crate::array_expressions::{array_element, array_slice};
 use crate::physical_expr::down_cast_any_ref;
+use crate::struct_expressions::struct_extract;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -46,8 +46,16 @@ pub struct GetIndexedFieldExpr {
 
 impl GetIndexedFieldExpr {
     /// Create new get field expression
-    pub fn new(arg: Arc<dyn PhysicalExpr>, key: Arc<dyn PhysicalExpr>, extra_key: Option<Arc<dyn PhysicalExpr>>) -> Self {
-        Self { arg, key, extra_key }
+    pub fn new(
+        arg: Arc<dyn PhysicalExpr>,
+        key: Arc<dyn PhysicalExpr>,
+        extra_key: Option<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        Self {
+            arg,
+            key,
+            extra_key,
+        }
     }
 
     /// Get the input key
@@ -89,7 +97,8 @@ impl PhysicalExpr for GetIndexedFieldExpr {
         } else {
             None
         };
-        get_data_type_field(&arg_dt, &key_dt, &extra_key_dt).map(|f| f.data_type().clone())
+        get_data_type_field(&arg_dt, &key_dt, &extra_key_dt)
+            .map(|f| f.data_type().clone())
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -166,10 +175,14 @@ impl PartialEq<dyn Any> for GetIndexedFieldExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| if let Some(extra_key) = &self.extra_key {
-                self.arg.eq(&x.arg) && self.key.eq(&x.key) && extra_key.eq(&x.extra_key)
-            } else {
-                self.arg.eq(&x.arg) && self.key.eq(&x.key)
+            .map(|x| {
+                if let Some(extra_key) = &self.extra_key {
+                    self.arg.eq(&x.arg)
+                        && self.key.eq(&x.key)
+                        && extra_key.eq(&x.extra_key)
+                } else {
+                    self.arg.eq(&x.arg) && self.key.eq(&x.key)
+                }
             })
             .unwrap_or(false)
     }
@@ -185,10 +198,14 @@ mod tests {
     };
     use arrow::datatypes::{Float64Type, Int64Type};
     use arrow::{array::StringArray, datatypes::Field};
-    use datafusion_common::cast::{as_int64_array, as_string_array, as_list_array};
+    use datafusion_common::cast::{as_int64_array, as_list_array, as_string_array};
     use datafusion_common::Result;
 
-    fn build_list_arguments(list_of_lists: Vec<Vec<Option<&str>>>, list_of_keys: Vec<Option<i64>>, list_of_extra_keys: Vec<Option<i64>>) -> (GenericListArray<i32>, Int64Array, Int64Array) {
+    fn build_list_arguments(
+        list_of_lists: Vec<Vec<Option<&str>>>,
+        list_of_keys: Vec<Option<i64>>,
+        list_of_extra_keys: Vec<Option<i64>>,
+    ) -> (GenericListArray<i32>, Int64Array, Int64Array) {
         let builder = StringBuilder::with_capacity(list_of_lists.len(), 1024);
         let mut list_builder = ListBuilder::new(builder);
         for values in list_of_lists {
@@ -214,11 +231,19 @@ mod tests {
         expected: Vec<Option<&str>>,
     ) -> Result<()> {
         let schema = list_schema(&["l", "k", "ek"]);
-        let (list_col, key_col, extra_key_col) = build_list_arguments(list_of_lists, list_of_keys, list_of_extra_keys);
+        let (list_col, key_col, extra_key_col) =
+            build_list_arguments(list_of_lists, list_of_keys, list_of_extra_keys);
         let expr = col("l", &schema).unwrap();
         let key = col("k", &schema).unwrap();
         let extra_key = col("ek", &schema).unwrap();
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_col), Arc::new(key_col), Arc::new(extra_key_col)])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(list_col),
+                Arc::new(key_col),
+                Arc::new(extra_key_col),
+            ],
+        )?;
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key, Some(extra_key)));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = as_string_array(&result).expect("failed to downcast to StringArray");
@@ -229,21 +254,9 @@ mod tests {
 
     fn list_schema(cols: &[&str]) -> Schema {
         Schema::new(vec![
-            Field::new_list(
-                cols[0],
-                Field::new("item", DataType::Utf8, true),
-                true,
-            ),
-            Field::new(
-                cols[1],
-                DataType::Int64,
-                true,
-            ),
-            Field::new(
-                cols[2],
-                DataType::Int64,
-                true,
-            )
+            Field::new_list(cols[0], Field::new("item", DataType::Utf8, true), true),
+            Field::new(cols[1], DataType::Int64, true),
+            Field::new(cols[2], DataType::Int64, true),
         ])
     }
 
@@ -263,7 +276,12 @@ mod tests {
         ];
 
         for expected in expected_list.into_iter() {
-            get_indexed_field_test(list_of_lists.clone(), list_of_keys.clone(), list_of_extra_keys.clone(), expected)?;
+            get_indexed_field_test(
+                list_of_lists.clone(),
+                list_of_keys.clone(),
+                list_of_extra_keys.clone(),
+                expected,
+            )?;
         }
         Ok(())
     }
@@ -276,7 +294,10 @@ mod tests {
         let key_array = Int64Array::from(vec![Some(1), Some(2), None]);
         let expr = col("l", &schema).unwrap();
         let key = col("k", &schema).unwrap();
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_builder.finish()), Arc::new(key_array)])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(list_builder.finish()), Arc::new(key_array)],
+        )?;
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key, None));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         assert!(result.is_empty());
@@ -293,7 +314,10 @@ mod tests {
         let builder = StringBuilder::with_capacity(3, 1024);
         let mut list_builder = ListBuilder::new(builder);
         let key_array = Int64Array::from(vec![key]);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_builder.finish()), Arc::new(key_array)])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(list_builder.finish()), Arc::new(key_array)],
+        )?;
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key_expr, None));
         let r = expr.evaluate(&batch).map(|_| ());
         assert!(r.is_err());
@@ -356,7 +380,12 @@ mod tests {
         let foo_key_array = StringArray::from(vec![Some("foo")]);
         let bar_key_array = StringArray::from(vec![Some("bar")]);
         let list_key_array = Int64Array::from(vec![Some(1), Some(2), Some(3)]);
-        (builder.finish(), foo_key_array, bar_key_array, list_key_array)
+        (
+            builder.finish(),
+            foo_key_array,
+            bar_key_array,
+            list_key_array,
+        )
     }
 
     fn get_indexed_field_mixed_test(
@@ -376,11 +405,7 @@ mod tests {
                 DataType::Struct(fields.clone().into()),
                 true,
             ),
-            Field::new(
-                key_col_name,
-                DataType::Utf8,
-                true,
-            ),
+            Field::new(key_col_name, DataType::Utf8, true),
         ]);
         let int64_schema = Schema::new(vec![
             Field::new(
@@ -388,19 +413,25 @@ mod tests {
                 DataType::Struct(fields.clone().into()),
                 true,
             ),
-            Field::new(
-                key_col_name,
-                DataType::Int64,
-                true,
-            )
+            Field::new(key_col_name, DataType::Int64, true),
         ]);
-        let (struct_col, foo_key_col, bar_key_col, list_key_col) = build_struct_arguments(fields, list_of_tuples.clone());
+        let (struct_col, foo_key_col, bar_key_col, list_key_col) =
+            build_struct_arguments(fields, list_of_tuples.clone());
 
         let struct_col_expr = col("s", &utf8_schema).unwrap();
         let key_col_expr = col("i", &utf8_schema).unwrap();
-        let foo_batch = RecordBatch::try_new(Arc::new(utf8_schema.clone()), vec![Arc::new(struct_col.clone()), Arc::new(foo_key_col)])?;
-        let bar_batch = RecordBatch::try_new(Arc::new(utf8_schema.clone()), vec![Arc::new(struct_col.clone()), Arc::new(bar_key_col)])?;
-        let list_batch = RecordBatch::try_new(Arc::new(int64_schema), vec![Arc::new(struct_col.clone()), Arc::new(list_key_col)])?;
+        let foo_batch = RecordBatch::try_new(
+            Arc::new(utf8_schema.clone()),
+            vec![Arc::new(struct_col.clone()), Arc::new(foo_key_col)],
+        )?;
+        let bar_batch = RecordBatch::try_new(
+            Arc::new(utf8_schema.clone()),
+            vec![Arc::new(struct_col.clone()), Arc::new(bar_key_col)],
+        )?;
+        let list_batch = RecordBatch::try_new(
+            Arc::new(int64_schema),
+            vec![Arc::new(struct_col.clone()), Arc::new(list_key_col)],
+        )?;
 
         let get_field_expr = Arc::new(GetIndexedFieldExpr::new(
             struct_col_expr.clone(),
@@ -414,12 +445,20 @@ mod tests {
         let expected = &Int64Array::from(expected_ints);
         assert_eq!(expected, result);
 
-        let get_list_expr =
-            Arc::new(GetIndexedFieldExpr::new(struct_col_expr, key_col_expr.clone(), None));
-        let result = get_list_expr.evaluate(&bar_batch)?.into_array(bar_batch.num_rows());
+        let get_list_expr = Arc::new(GetIndexedFieldExpr::new(
+            struct_col_expr,
+            key_col_expr.clone(),
+            None,
+        ));
+        let result = get_list_expr
+            .evaluate(&bar_batch)?
+            .into_array(bar_batch.num_rows());
         let result = as_list_array(&result)?;
-        let (expected, _, _) =
-            &build_list_arguments(list_of_tuples.into_iter().map(|t| t.1).collect(), vec![], vec![]);
+        let (expected, _, _) = &build_list_arguments(
+            list_of_tuples.into_iter().map(|t| t.1).collect(),
+            vec![],
+            vec![],
+        );
         assert_eq!(expected, result);
 
         for expected in expected_strings.into_iter() {
@@ -482,14 +521,23 @@ mod tests {
         let key_array = Int64Array::from(vec![Some(0), Some(1), Some(3), Some(100)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(int_builder.finish()), Arc::new(list_builder.finish()), Arc::new(key_array)],
+            vec![
+                Arc::new(int_builder.finish()),
+                Arc::new(list_builder.finish()),
+                Arc::new(key_array),
+            ],
         )
         .unwrap();
 
         let col_a = col("a", &schema).unwrap();
         let col_k = col("k", &schema).unwrap();
         // out of bounds index
-        verify_index_evaluation(&batch, col_a.clone(), col_k.clone(), float64_array(None));
+        verify_index_evaluation(
+            &batch,
+            col_a.clone(),
+            col_k.clone(),
+            float64_array(None),
+        );
 
         /*verify_index_evaluation(&batch, col_a.clone(), 1, float64_array(Some(1.0)));
         verify_index_evaluation(&batch, col_a.clone(), 2, float64_array(None));
@@ -505,11 +553,7 @@ mod tests {
         key: Arc<dyn PhysicalExpr>,
         expected_result: ArrayRef,
     ) {
-        let expr = Arc::new(GetIndexedFieldExpr::new(
-            arg,
-            key,
-            None,
-        ));
+        let expr = Arc::new(GetIndexedFieldExpr::new(arg, key, None));
         let result = expr.evaluate(batch).unwrap().into_array(batch.num_rows());
         assert!(
             result == expected_result.clone(),
