@@ -431,7 +431,6 @@ macro_rules! slice {
                 .iter()
                 .map(|a| a.as_ref())
                 .collect::<Vec<&dyn Array>>();
-            println!("{:#?}", vec);
             let mut i: i32 = 0;
             let mut offsets = vec![i];
             offsets.extend(
@@ -444,7 +443,6 @@ macro_rules! slice {
             );
             let values = compute::concat(vec.as_slice()).unwrap();
 
-            println!("{:#?}", values);
             if $RETURN_ELEMENT {
                 Ok(values)
             } else {
