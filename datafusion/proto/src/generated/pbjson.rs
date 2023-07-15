@@ -4194,7 +4194,7 @@ impl serde::Serialize for CsvFormat {
         if !self.quote.is_empty() {
             len += 1;
         }
-        if self.escape.is_some() {
+        if self.optional_escape.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvFormat", len)?;
@@ -4207,8 +4207,12 @@ impl serde::Serialize for CsvFormat {
         if !self.quote.is_empty() {
             struct_ser.serialize_field("quote", &self.quote)?;
         }
-        if let Some(v) = self.escape.as_ref() {
-            struct_ser.serialize_field("escape", v)?;
+        if let Some(v) = self.optional_escape.as_ref() {
+            match v {
+                csv_format::OptionalEscape::Escape(v) => {
+                    struct_ser.serialize_field("escape", v)?;
+                }
+            }
         }
         struct_ser.end()
     }
@@ -4280,7 +4284,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                 let mut has_header__ = None;
                 let mut delimiter__ = None;
                 let mut quote__ = None;
-                let mut escape__ = None;
+                let mut optional_escape__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -4302,10 +4306,10 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                             quote__ = Some(map.next_value()?);
                         }
                         GeneratedField::Escape => {
-                            if escape__.is_some() {
+                            if optional_escape__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("escape"));
                             }
-                            escape__ = map.next_value()?;
+                            optional_escape__ = map.next_value::<::std::option::Option<_>>()?.map(csv_format::OptionalEscape::Escape);
                         }
                     }
                 }
@@ -4313,7 +4317,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                     has_header: has_header__.unwrap_or_default(),
                     delimiter: delimiter__.unwrap_or_default(),
                     quote: quote__.unwrap_or_default(),
-                    escape: escape__,
+                    optional_escape: optional_escape__,
                 })
             }
         }
@@ -4340,7 +4344,7 @@ impl serde::Serialize for CsvScanExecNode {
         if !self.quote.is_empty() {
             len += 1;
         }
-        if self.escape.is_some() {
+        if self.optional_escape.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvScanExecNode", len)?;
@@ -4356,8 +4360,12 @@ impl serde::Serialize for CsvScanExecNode {
         if !self.quote.is_empty() {
             struct_ser.serialize_field("quote", &self.quote)?;
         }
-        if let Some(v) = self.escape.as_ref() {
-            struct_ser.serialize_field("escape", v)?;
+        if let Some(v) = self.optional_escape.as_ref() {
+            match v {
+                csv_scan_exec_node::OptionalEscape::Escape(v) => {
+                    struct_ser.serialize_field("escape", v)?;
+                }
+            }
         }
         struct_ser.end()
     }
@@ -4434,7 +4442,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut has_header__ = None;
                 let mut delimiter__ = None;
                 let mut quote__ = None;
-                let mut escape__ = None;
+                let mut optional_escape__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -4462,10 +4470,10 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             quote__ = Some(map.next_value()?);
                         }
                         GeneratedField::Escape => {
-                            if escape__.is_some() {
+                            if optional_escape__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("escape"));
                             }
-                            escape__ = map.next_value()?;
+                            optional_escape__ = map.next_value::<::std::option::Option<_>>()?.map(csv_scan_exec_node::OptionalEscape::Escape);
                         }
                     }
                 }
@@ -4474,7 +4482,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                     has_header: has_header__.unwrap_or_default(),
                     delimiter: delimiter__.unwrap_or_default(),
                     quote: quote__.unwrap_or_default(),
-                    escape: escape__,
+                    optional_escape: optional_escape__,
                 })
             }
         }

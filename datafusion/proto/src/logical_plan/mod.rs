@@ -349,13 +349,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                             has_header,
                             delimiter,
                             quote,
-                            escape
+                            optional_escape
                         }) => {
                             let mut csv = CsvFormat::default()
                             .with_has_header(*has_header)
                             .with_delimiter(str_to_byte(delimiter)?)
                             .with_quote(str_to_byte(quote)?);
-                            if let Some(escape) = escape {
+                            if let Some(protobuf::csv_format::OptionalEscape::Escape(escape)) = optional_escape {
                                 csv = csv.with_quote(str_to_byte(escape)?);
                             }
                             Arc::new(csv)},
@@ -853,8 +853,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             delimiter: byte_to_string(csv.delimiter())?,
                             has_header: csv.has_header(),
                             quote: byte_to_string(csv.quote())?,
-                            escape: if let Some(escape) = csv.escape() {
-                                Some(byte_to_string(escape)?)
+                            optional_escape: if let Some(escape) = csv.escape() {
+                                Some(protobuf::csv_format::OptionalEscape::Escape(byte_to_string(escape)?))
                             } else {
                                 None
                             },

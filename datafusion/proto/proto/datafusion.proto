@@ -89,7 +89,9 @@ message CsvFormat {
   bool has_header = 1;
   string delimiter = 2;
   string quote = 3;
-  optional string escape = 4;
+  oneof optional_escape {
+    string escape = 4;
+  }
 }
 
 message ParquetFormat {
@@ -1262,7 +1264,9 @@ message CsvScanExecNode {
   bool has_header = 2;
   string delimiter = 3;
   string quote = 4;
-  optional string escape = 5;
+  oneof optional_escape {
+    string escape = 5;
+  }
 }
 
 message AvroScanExecNode {
