@@ -46,7 +46,6 @@ async fn main() -> Result<()> {
         true,
         b',',
         b'"',
-        None,
         object_store,
     );
 

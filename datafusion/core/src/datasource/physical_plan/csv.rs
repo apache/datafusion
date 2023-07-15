@@ -265,7 +265,6 @@ impl CsvConfig {
         has_header: bool,
         delimiter: u8,
         quote: u8,
-        escape: Option<u8>,
         object_store: Arc<dyn ObjectStore>,
     ) -> Self {
         Self {
@@ -275,7 +274,7 @@ impl CsvConfig {
             has_header,
             delimiter,
             quote,
-            escape,
+            escape: None,
             object_store,
         }
     }
