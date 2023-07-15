@@ -75,7 +75,7 @@ impl CsvExec {
         has_header: bool,
         delimiter: u8,
         quote: u8,
-        escape:Option<u8>,
+        escape: Option<u8>,
         file_compression_type: FileCompressionType,
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
@@ -117,7 +117,7 @@ impl CsvExec {
     pub fn escape(&self) -> Option<u8> {
         self.escape
     }
-    
+
     /// Redistribute files across partitions according to their size
     /// See comments on `repartition_file_groups()` for more detail.
     ///
@@ -683,8 +683,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.projection = Some(vec![0, 2, 4]);
 
-        let csv =
-            CsvExec::new(config, true, b',', b'"', None, file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -740,8 +746,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.projection = Some(vec![4, 0, 2]);
 
-        let csv =
-            CsvExec::new(config, true, b',', b'"', None, file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -797,8 +809,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.limit = Some(5);
 
-        let csv =
-            CsvExec::new(config, true, b',', b'"', None, file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(13, csv.projected_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
@@ -854,8 +872,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.limit = Some(5);
 
-        let csv =
-            CsvExec::new(config, true, b',', b'"', None, file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(14, csv.base_config.file_schema.fields().len());
         assert_eq!(14, csv.projected_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
@@ -909,8 +933,14 @@ mod tests {
 
         // we don't have `/date=xx/` in the path but that is ok because
         // partitions are resolved during scan anyway
-        let csv =
-            CsvExec::new(config, true, b',', b'"', None, file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(2, csv.projected_schema.fields().len());
         assert_eq!(2, csv.schema().fields().len());
@@ -996,8 +1026,14 @@ mod tests {
         .unwrap();
 
         let config = partitioned_csv_config(file_schema, file_groups).unwrap();
-        let csv =
-            CsvExec::new(config, true, b',', b'"', None, file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();
