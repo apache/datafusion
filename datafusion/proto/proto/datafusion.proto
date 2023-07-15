@@ -568,6 +568,7 @@ enum ScalarFunction {
   ArrayContains = 100;
   Encode = 101;
   Decode = 102;
+  Cot = 103;
 }
 
 message ScalarFunctionNode {
@@ -1325,6 +1326,7 @@ enum AggregateMode {
   FINAL = 1;
   FINAL_PARTITIONED = 2;
   SINGLE = 3;
+  SINGLE_PARTITIONED = 4;
 }
 
 message WindowAggExecNode {

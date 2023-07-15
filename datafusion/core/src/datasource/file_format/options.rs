@@ -508,6 +508,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 impl ReadOptions<'_> for NdJsonReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let file_format = JsonFormat::default()
+            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))

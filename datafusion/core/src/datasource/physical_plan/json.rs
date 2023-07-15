@@ -733,4 +733,34 @@ mod tests {
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
         Ok(())
     }
+
+    #[tokio::test]
+    async fn ndjson_schema_infer_max_records() -> Result<()> {
+        async fn read_test_data(schema_infer_max_records: usize) -> Result<SchemaRef> {
+            let ctx = SessionContext::new();
+
+            let options = NdJsonReadOptions {
+                schema_infer_max_records,
+                ..Default::default()
+            };
+
+            let batches = ctx
+                .read_json("tests/data/4.json", options)
+                .await?
+                .collect()
+                .await?;
+
+            Ok(batches[0].schema())
+        }
+
+        // Use only the first 2 rows to infer the schema, those have 2 fields.
+        let schema = read_test_data(2).await?;
+        assert_eq!(schema.fields().len(), 2);
+
+        // Use all rows to infer the schema, those have 5 fields.
+        let schema = read_test_data(10).await?;
+        assert_eq!(schema.fields().len(), 5);
+
+        Ok(())
+    }
 }

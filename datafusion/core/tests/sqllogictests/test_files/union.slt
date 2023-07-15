@@ -347,7 +347,7 @@ Projection: COUNT(UInt8(1))
 --------TableScan: t2 projection=[name]
 physical_plan
 ProjectionExec: expr=[COUNT(UInt8(1))@1 as COUNT(UInt8(1))]
---AggregateExec: mode=Single, gby=[name@0 as name], aggr=[COUNT(UInt8(1))]
+--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[COUNT(UInt8(1))]
 ----InterleaveExec
 ------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 --------CoalesceBatchesExec: target_batch_size=8192

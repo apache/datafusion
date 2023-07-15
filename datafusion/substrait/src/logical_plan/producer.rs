@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use datafusion::logical_expr::Like;
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -913,6 +914,36 @@ pub fn to_substrait_rex(
                 bounds,
             ))
         }
+        Expr::Like(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        }) => make_substrait_like_expr(
+            false,
+            *negated,
+            expr,
+            pattern,
+            *escape_char,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
+        Expr::ILike(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        }) => make_substrait_like_expr(
+            true,
+            *negated,
+            expr,
+            pattern,
+            *escape_char,
+            schema,
+            col_ref_offset,
+            extension_info,
+        ),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported expression: {expr:?}"
         ))),
@@ -1127,6 +1158,71 @@ fn make_substrait_window_function(
             upper_bound: Some(bounds.1),
             args: vec![],
         })),
+    }
+}
+
+#[allow(deprecated)]
+#[allow(clippy::too_many_arguments)]
+fn make_substrait_like_expr(
+    ignore_case: bool,
+    negated: bool,
+    expr: &Expr,
+    pattern: &Expr,
+    escape_char: Option<char>,
+    schema: &DFSchemaRef,
+    col_ref_offset: usize,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Expression> {
+    let function_anchor = if ignore_case {
+        _register_function("ilike".to_string(), extension_info)
+    } else {
+        _register_function("like".to_string(), extension_info)
+    };
+    let expr = to_substrait_rex(expr, schema, col_ref_offset, extension_info)?;
+    let pattern = to_substrait_rex(pattern, schema, col_ref_offset, extension_info)?;
+    let escape_char =
+        to_substrait_literal(&ScalarValue::Utf8(escape_char.map(|c| c.to_string())))?;
+    let arguments = vec![
+        FunctionArgument {
+            arg_type: Some(ArgType::Value(expr)),
+        },
+        FunctionArgument {
+            arg_type: Some(ArgType::Value(pattern)),
+        },
+        FunctionArgument {
+            arg_type: Some(ArgType::Value(escape_char)),
+        },
+    ];
+
+    let substrait_like = Expression {
+        rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+            function_reference: function_anchor,
+            arguments,
+            output_type: None,
+            args: vec![],
+            options: vec![],
+        })),
+    };
+
+    if negated {
+        let function_anchor = _register_function("not".to_string(), extension_info);
+
+        Ok(Expression {
+            rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                function_reference: function_anchor,
+                arguments: vec![FunctionArgument {
+                    arg_type: Some(ArgType::Value(substrait_like)),
+                }],
+                output_type: None,
+                args: vec![],
+                options: vec![],
+            })),
+        })
+    } else {
+        Ok(substrait_like)
     }
 }
 

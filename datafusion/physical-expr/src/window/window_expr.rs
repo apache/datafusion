@@ -117,25 +117,6 @@ pub trait WindowExpr: Send + Sync + Debug {
             .collect::<Result<Vec<SortColumn>>>()
     }
 
-    /// Get sort columns that can be used for peer evaluation, empty if absent
-    fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        let order_by_columns = self.order_by_columns(batch)?;
-        Ok(order_by_columns)
-    }
-
-    /// Get values columns (argument of Window Function)
-    /// and order by columns (columns of the ORDER BY expression) used in evaluators
-    fn get_values_orderbys(
-        &self,
-        record_batch: &RecordBatch,
-    ) -> Result<(Vec<ArrayRef>, Vec<ArrayRef>)> {
-        let values = self.evaluate_args(record_batch)?;
-        let order_by_columns = self.order_by_columns(record_batch)?;
-        let order_bys: Vec<ArrayRef> =
-            order_by_columns.iter().map(|s| s.values.clone()).collect();
-        Ok((values, order_bys))
-    }
-
     /// Get the window frame of this [WindowExpr].
     fn get_window_frame(&self) -> &Arc<WindowFrame>;
 
@@ -244,7 +225,8 @@ pub trait AggregateWindowExpr: WindowExpr {
         mut idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
-        let (values, order_bys) = self.get_values_orderbys(record_batch)?;
+        let values = self.evaluate_args(record_batch)?;
+        let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
@@ -276,6 +258,10 @@ pub trait AggregateWindowExpr: WindowExpr {
         }
     }
 }
+/// Get order by expression results inside `order_by_columns`.
+pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<ArrayRef> {
+    order_by_columns.into_iter().map(|s| s.values).collect()
+}
 
 #[derive(Debug)]
 pub enum WindowFn {
@@ -290,6 +276,8 @@ pub struct RankState {
     pub last_rank_data: Vec<ScalarValue>,
     /// The index where last_rank_boundary is started
     pub last_rank_boundary: usize,
+    /// Keep the number of entries in current rank
+    pub current_group_count: usize,
     /// Rank number kept from the start
     pub n_rank: usize,
 }
@@ -321,11 +309,6 @@ pub struct NthValueState {
     // opportunities to prune our datasets.
     pub finalized_result: Option<ScalarValue>,
     pub kind: NthValueKind,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct LeadLagState {
-    pub idx: usize,
 }
 
 /// Key for IndexMap for each unique partition

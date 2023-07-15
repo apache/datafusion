@@ -94,8 +94,7 @@ SortPreservingMergeExec: [s_suppkey@0 ASC NULLS LAST]
 ------------------------------ProjectionExec: expr=[l_suppkey@0 as l_suppkey, l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount]
 --------------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------------FilterExec: l_shipdate@3 >= 9496 AND l_shipdate@3 < 9587
-------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], has_header=false
+------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], has_header=false
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------RepartitionExec: partitioning=Hash([MAX(total_revenue)@0], 4), input_partitions=1
 --------------AggregateExec: mode=Final, gby=[], aggr=[MAX(total_revenue)]
@@ -110,8 +109,7 @@ SortPreservingMergeExec: [s_suppkey@0 ASC NULLS LAST]
 --------------------------------ProjectionExec: expr=[l_suppkey@0 as l_suppkey, l_extendedprice@1 as l_extendedprice, l_discount@2 as l_discount]
 ----------------------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------------------FilterExec: l_shipdate@3 >= 9496 AND l_shipdate@3 < 9587
---------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], has_header=false
+--------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate], has_header=false
 
 
 query ITTTR
