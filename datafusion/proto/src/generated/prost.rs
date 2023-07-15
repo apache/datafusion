@@ -124,6 +124,8 @@ pub struct CsvFormat {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
     pub quote: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "4")]
+    pub escape: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1776,6 +1778,8 @@ pub struct CsvScanExecNode {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag = "4")]
     pub quote: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "5")]
+    pub escape: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

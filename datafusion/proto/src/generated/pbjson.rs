@@ -4191,6 +4191,9 @@ impl serde::Serialize for CsvFormat {
         if !self.quote.is_empty() {
             len += 1;
         }
+        if self.escape.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvFormat", len)?;
         if self.has_header {
             struct_ser.serialize_field("hasHeader", &self.has_header)?;
@@ -4200,6 +4203,9 @@ impl serde::Serialize for CsvFormat {
         }
         if !self.quote.is_empty() {
             struct_ser.serialize_field("quote", &self.quote)?;
+        }
+        if let Some(v) = self.escape.as_ref() {
+            struct_ser.serialize_field("escape", v)?;
         }
         struct_ser.end()
     }
@@ -4215,6 +4221,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
             "hasHeader",
             "delimiter",
             "quote",
+            "escape",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4222,6 +4229,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
             HasHeader,
             Delimiter,
             Quote,
+            Escape,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4246,6 +4254,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                             "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "quote" => Ok(GeneratedField::Quote),
+                            "escape" => Ok(GeneratedField::Escape),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4268,6 +4277,7 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                 let mut has_header__ = None;
                 let mut delimiter__ = None;
                 let mut quote__ = None;
+                let mut escape__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -4288,12 +4298,19 @@ impl<'de> serde::Deserialize<'de> for CsvFormat {
                             }
                             quote__ = Some(map.next_value()?);
                         }
+                        GeneratedField::Escape => {
+                            if escape__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("escape"));
+                            }
+                            escape__ = map.next_value()?;
+                        }
                     }
                 }
                 Ok(CsvFormat {
                     has_header: has_header__.unwrap_or_default(),
                     delimiter: delimiter__.unwrap_or_default(),
                     quote: quote__.unwrap_or_default(),
+                    escape: escape__,
                 })
             }
         }
@@ -4320,6 +4337,9 @@ impl serde::Serialize for CsvScanExecNode {
         if !self.quote.is_empty() {
             len += 1;
         }
+        if self.escape.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CsvScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
@@ -4332,6 +4352,9 @@ impl serde::Serialize for CsvScanExecNode {
         }
         if !self.quote.is_empty() {
             struct_ser.serialize_field("quote", &self.quote)?;
+        }
+        if let Some(v) = self.escape.as_ref() {
+            struct_ser.serialize_field("escape", v)?;
         }
         struct_ser.end()
     }
@@ -4349,6 +4372,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             "hasHeader",
             "delimiter",
             "quote",
+            "escape",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -4357,6 +4381,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             HasHeader,
             Delimiter,
             Quote,
+            Escape,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4382,6 +4407,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             "hasHeader" | "has_header" => Ok(GeneratedField::HasHeader),
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "quote" => Ok(GeneratedField::Quote),
+                            "escape" => Ok(GeneratedField::Escape),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4405,6 +4431,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut has_header__ = None;
                 let mut delimiter__ = None;
                 let mut quote__ = None;
+                let mut escape__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -4431,6 +4458,12 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             }
                             quote__ = Some(map.next_value()?);
                         }
+                        GeneratedField::Escape => {
+                            if escape__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("escape"));
+                            }
+                            escape__ = map.next_value()?;
+                        }
                     }
                 }
                 Ok(CsvScanExecNode {
@@ -4438,6 +4471,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                     has_header: has_header__.unwrap_or_default(),
                     delimiter: delimiter__.unwrap_or_default(),
                     quote: quote__.unwrap_or_default(),
+                    escape: escape__,
                 })
             }
         }

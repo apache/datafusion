@@ -157,6 +157,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 scan.has_header,
                 str_to_byte(&scan.delimiter)?,
                 str_to_byte(&scan.quote)?,
+                if let Some(escape) = &scan.escape {
+                    Some(str_to_byte(escape)?)
+                } else {
+                    None
+                },
                 FileCompressionType::UNCOMPRESSED,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
@@ -1067,6 +1072,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         has_header: exec.has_header(),
                         delimiter: csv_delimiter_to_string(exec.delimiter())?,
                         quote: byte_to_string(exec.quote())?,
+                        escape: if let Some(escape) = exec.escape() {
+                            Some(byte_to_string(escape)?)
+                        } else {
+                            None
+                        },
                     },
                 )),
             })
