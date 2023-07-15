@@ -1309,7 +1309,7 @@ Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[]]
 ------TableScan: join_t1 projection=[t1_id]
 ------TableScan: join_t2 projection=[t2_id]
 physical_plan
-AggregateExec: mode=Single, gby=[t1_id@0 as t1_id], aggr=[]
+AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as t1_id], aggr=[]
 --ProjectionExec: expr=[t1_id@0 as t1_id]
 ----CoalesceBatchesExec: target_batch_size=4096
 ------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)]
@@ -1337,7 +1337,7 @@ Projection: COUNT(UInt8(1))
 --------TableScan: join_t2 projection=[t2_id]
 physical_plan
 ProjectionExec: expr=[COUNT(UInt8(1))@1 as COUNT(UInt8(1))]
---AggregateExec: mode=Single, gby=[t1_id@0 as t1_id], aggr=[COUNT(UInt8(1))]
+--AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as t1_id], aggr=[COUNT(UInt8(1))]
 ----ProjectionExec: expr=[t1_id@0 as t1_id]
 ------CoalesceBatchesExec: target_batch_size=4096
 --------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)]
