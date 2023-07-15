@@ -854,7 +854,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             has_header: csv.has_header(),
                             quote: byte_to_string(csv.quote())?,
                             optional_escape: if let Some(escape) = csv.escape() {
-                                Some(protobuf::csv_format::OptionalEscape::Escape(byte_to_string(escape)?))
+                                Some(protobuf::csv_format::OptionalEscape::Escape(
+                                    byte_to_string(escape)?,
+                                ))
                             } else {
                                 None
                             },

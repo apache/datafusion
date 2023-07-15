@@ -157,7 +157,10 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 scan.has_header,
                 str_to_byte(&scan.delimiter)?,
                 str_to_byte(&scan.quote)?,
-                if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape)) = &scan.optional_escape {
+                if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                    escape,
+                )) = &scan.optional_escape
+                {
                     Some(str_to_byte(escape)?)
                 } else {
                     None
@@ -1079,7 +1082,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         delimiter: csv_delimiter_to_string(exec.delimiter())?,
                         quote: byte_to_string(exec.quote())?,
                         optional_escape: if let Some(escape) = exec.escape() {
-                            Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(byte_to_string(escape)?))
+                            Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                                byte_to_string(escape)?,
+                            ))
                         } else {
                             None
                         },
