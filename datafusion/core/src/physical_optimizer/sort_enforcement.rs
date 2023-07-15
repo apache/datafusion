@@ -421,9 +421,10 @@ fn parallelize_sorts(
         // SortPreservingMergeExec cascade to parallelize sorting.
         let mut prev_layer = plan.clone();
         update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
-        let sort_exprs = get_sort_exprs(&plan)?;
-        add_sort_above(&mut prev_layer, sort_exprs.to_vec())?;
-        let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer);
+        let (sort_exprs, fetch) = get_sort_exprs(&plan)?;
+        add_sort_above(&mut prev_layer, sort_exprs.to_vec(), fetch)?;
+        let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer)
+            .with_fetch(fetch);
         return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
             plan: Arc::new(spm),
             coalesce_onwards: vec![None],
@@ -480,7 +481,7 @@ fn ensure_sorting(
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
                     let sort_expr =
                         PhysicalSortRequirement::to_sort_exprs(required_ordering);
-                    add_sort_above(child, sort_expr)?;
+                    add_sort_above(child, sort_expr, None)?;
                     if is_sort(child) {
                         *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
                     } else {
@@ -491,7 +492,7 @@ fn ensure_sorting(
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
                 let sort_expr = PhysicalSortRequirement::to_sort_exprs(required);
-                add_sort_above(child, sort_expr)?;
+                add_sort_above(child, sort_expr, None)?;
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
             (None, Some(_)) => {
@@ -672,7 +673,7 @@ fn analyze_window_sort_removal(
                     .swap_remove(0)
                     .unwrap_or(vec![]);
                 let sort_expr = PhysicalSortRequirement::to_sort_exprs(reqs);
-                add_sort_above(&mut new_child, sort_expr)?;
+                add_sort_above(&mut new_child, sort_expr, None)?;
             };
             Arc::new(WindowAggExec::try_new(
                 window_expr,
@@ -787,13 +788,18 @@ fn remove_corresponding_sort_from_sub_plan(
 }
 
 /// Converts an [ExecutionPlan] trait object to a [PhysicalSortExpr] slice when possible.
-fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExpr]> {
+fn get_sort_exprs(
+    sort_any: &Arc<dyn ExecutionPlan>,
+) -> Result<(&[PhysicalSortExpr], Option<usize>)> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
-        Ok(sort_exec.expr())
+        Ok((sort_exec.expr(), sort_exec.fetch()))
     } else if let Some(sort_preserving_merge_exec) =
         sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
     {
-        Ok(sort_preserving_merge_exec.expr())
+        Ok((
+            sort_preserving_merge_exec.expr(),
+            sort_preserving_merge_exec.fetch(),
+        ))
     } else {
         Err(DataFusionError::Plan(
             "Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec"
