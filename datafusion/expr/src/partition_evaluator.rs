@@ -69,27 +69,10 @@ use crate::window_state::WindowAggState;
 /// capabilities described by [`supports_bounded_execution`],
 /// [`uses_window_frame`], and [`include_rank`],
 ///
-/// # Stateless `PartitionEvaluator`s
-///
-/// In this case, `PartitionEvaluator` holds no state, and either
-/// [`evaluate_all`] or [`evaluate_all_with_rank`] is called with
-/// values for the entire partition.
-///
-/// # Stateful `PartitionEvaluator`s
-///
-/// In this case, [`Self::evaluate`] is called to calculate the window
-/// function incrementally for each new batch.
-///
-/// For example, when computing `ROW_NUMBER` incrementally,
-/// [`Self::evaluate`] will be called multiple times with
-/// different batches. For all batches after the first, the output
-/// `row_number` must start from last `row_number` produced for the
-/// previous batch. The previous row number is saved and restored as
-/// the state.
-///
 /// When implementing a new `PartitionEvaluator`, implement
 /// corresponding evaluator according to table below.
 ///
+/// # Implementation Table
 ///
 /// |[`uses_window_frame`]|[`supports_bounded_execution`]|[`include_rank`]|function_to_implement|
 /// |---|---|----|----|
@@ -105,25 +88,6 @@ use crate::window_state::WindowAggState;
 /// [`include_rank`]: Self::include_rank
 /// [`supports_bounded_execution`]: Self::supports_bounded_execution
 pub trait PartitionEvaluator: Debug + Send {
-    /// Updates the internal state for window function
-    ///
-    /// Only used for stateful evaluation
-    ///
-    /// `state`: is useful to update internal state for window function.
-    /// `idx`: is the index of last row for which result is calculated.
-    /// `range_columns`: is the result of order by column values. It is used to calculate rank boundaries
-    /// `sort_partition_points`: is the boundaries of each rank in the range_column. It is used to update rank.
-    fn update_state(
-        &mut self,
-        _state: &WindowAggState,
-        _idx: usize,
-        _range_columns: &[ArrayRef],
-        _sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        // If we do not use state, update_state does nothing
-        Ok(())
-    }
-
     /// When the window frame has a fixed beginning (e.g UNBOUNDED
     /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
     /// NTH_VALUE do not need the (unbounded) input once they have
@@ -220,7 +184,10 @@ pub trait PartitionEvaluator: Debug + Send {
     /// trait.
     ///
     /// Returns a [`ScalarValue`] that is the value of the window
-    /// function within `range` for the entire partition
+    /// function within `range` for the entire partition. Argument
+    /// `values` contains the evaluation result of function arguments
+    /// and evaluation results of ORDER BY expressions. If function has a
+    /// single argument, `values[1..]` will contain ORDER BY expression results.
     fn evaluate(
         &mut self,
         _values: &[ArrayRef],
