@@ -564,8 +564,7 @@ pub async fn plan_to_csv(
     path: impl AsRef<str>,
 ) -> Result<()> {
     let path = path.as_ref();
-    let parsed =
-            ListingTableUrl::parse(path)?;
+    let parsed = ListingTableUrl::parse(path)?;
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut buffer;
@@ -574,20 +573,23 @@ pub async fn plan_to_csv(
         let storeref = store.clone();
         let plan: Arc<dyn ExecutionPlan> = plan.clone();
         let filename = format!("{}/part-{i}.csv", parsed.prefix());
-        let file = object_store::path::Path::parse(filename)?;              
+        let file = object_store::path::Path::parse(filename)?;
         buffer = Vec::new();
 
         let stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
             let mut writer = csv::Writer::new(buffer);
             stream
-                .map(|batch| writer.write(&batch?)
-                .map_err(DataFusionError::ArrowError))
+                .map(|batch| writer.write(&batch?).map_err(DataFusionError::ArrowError))
                 .try_collect()
                 .await
                 .map_err(DataFusionError::from)?;
             let write_bytes = Bytes::from_iter(writer.into_inner());
-            storeref.put(&file, write_bytes).await.map_err(DataFusionError::from).map(|_| ())
+            storeref
+                .put(&file, write_bytes)
+                .await
+                .map_err(DataFusionError::from)
+                .map(|_| ())
         });
     }
 
@@ -1031,21 +1033,19 @@ mod tests {
     #[tokio::test]
     async fn write_csv_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
-        
-        // register a local file system object store 
+
+        // register a local file system object store
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new());
         let local_url = Url::parse(&format!("file://local")).unwrap();
-        ctx.runtime_env()
-            .register_object_store(&local_url, local);
+        ctx.runtime_env().register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
-        
+
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", 
-                        &out_dir[1..]);
+        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
         let e = df
             .write_csv(&out_dir_url)
             .await
@@ -1075,14 +1075,12 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let local = Arc::new(LocalFileSystem::new());
         let local_url = Url::parse(&format!("file://local")).unwrap();
-   
-        ctx.runtime_env()
-            .register_object_store(&local_url, local);
+
+        ctx.runtime_env().register_object_store(&local_url, local);
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", 
-                        &out_dir[1..]);
+        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
         df.write_csv(&out_dir_url).await?;
 

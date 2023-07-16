@@ -17,10 +17,10 @@
 
 //! Execution plan for reading line-delimited JSON files
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -37,11 +37,11 @@ use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, stream, StreamExt, TryStreamExt};
+use object_store;
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::io::BufReader;
 use std::path::Path;
-use object_store;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::JoinSet;
@@ -260,8 +260,7 @@ pub async fn plan_to_json(
     path: impl AsRef<str>,
 ) -> Result<()> {
     let path = path.as_ref();
-    let parsed =
-            ListingTableUrl::parse(path)?;
+    let parsed = ListingTableUrl::parse(path)?;
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut buffer;
@@ -270,20 +269,23 @@ pub async fn plan_to_json(
         let storeref = store.clone();
         let plan: Arc<dyn ExecutionPlan> = plan.clone();
         let filename = format!("{}/part-{i}.json", parsed.prefix());
-        let file = object_store::path::Path::parse(filename)?;              
+        let file = object_store::path::Path::parse(filename)?;
         buffer = Vec::new();
 
         let stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
             let mut writer = json::LineDelimitedWriter::new(&mut buffer);
             stream
-                .map(|batch| writer.write(&batch?)
-                .map_err(DataFusionError::ArrowError))
+                .map(|batch| writer.write(&batch?).map_err(DataFusionError::ArrowError))
                 .try_collect()
                 .await
                 .map_err(DataFusionError::from)?;
             let write_bytes = Bytes::from_iter(buffer);
-            storeref.put(&file, write_bytes).await.map_err(DataFusionError::from).map(|_| ())
+            storeref
+                .put(&file, write_bytes)
+                .await
+                .map_err(DataFusionError::from)
+                .map(|_| ())
         });
     }
 
@@ -664,13 +666,11 @@ mod tests {
         // register a local file system object store for /tmp directory
         let local = Arc::new(LocalFileSystem::new());
         let local_url = Url::parse(&format!("file://local")).unwrap();
-        ctx.runtime_env()
-            .register_object_store(&local_url, local);
+        ctx.runtime_env().register_object_store(&local_url, local);
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", 
-                        &out_dir[1..]);
+        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
         let df = ctx.sql("SELECT a, b FROM test").await?;
         df.write_json(&out_dir_url).await?;
 
@@ -733,16 +733,14 @@ mod tests {
         // register a local file system object store for /tmp directory
         let local = Arc::new(LocalFileSystem::new());
         let local_url = Url::parse(&format!("file://local")).unwrap();
-        ctx.runtime_env()
-            .register_object_store(&local_url, local);
+        ctx.runtime_env().register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let tmp_dir = TempDir::new()?;
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", 
-                        &out_dir[1..]);
+        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
         let e = df
             .write_json(&out_dir_url)
             .await

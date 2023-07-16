@@ -21,7 +21,6 @@ use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
-
 //use datafusion::prelude::data;
 use object_store::aws::AmazonS3Builder;
 use std::env;
@@ -59,10 +58,14 @@ async fn main() -> Result<()> {
         .await?;
 
     // execute the query
-    let df = ctx.sql("SELECT testcode, count(1) \
+    let df = ctx
+        .sql(
+            "SELECT testcode, count(1) \
                                 FROM test \
                                 group by testcode \
-                                ").await?;
+                                ",
+        )
+        .await?;
 
     let out_path = format!("s3://{bucket_name}/test_write/");
     df.write_parquet(&out_path, None).await?;
@@ -80,11 +83,15 @@ async fn main() -> Result<()> {
         .with_file_extension(FileType::PARQUET.get_ext());
     ctx.register_listing_table("test2", &out_path, listing_options, None, None)
         .await?;
-    
-    let df = ctx.sql("SELECT * \
+
+    let df = ctx
+        .sql(
+            "SELECT * \
         FROM test2 \
-        ").await?;
-    
+        ",
+        )
+        .await?;
+
     df.show_limit(20).await?;
 
     Ok(())
