@@ -17,6 +17,7 @@
 
 //! Execution plan for reading Parquet files
 
+use tokio::task::JoinSet;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -26,6 +27,7 @@ use crate::datasource::physical_plan::{
 };
 use crate::{
     config::ConfigOptions,
+    datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
     execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
@@ -37,9 +39,9 @@ use crate::{
 };
 use datafusion_physical_expr::PhysicalSortExpr;
 use fmt::Debug;
+use object_store::path::Path;
 use std::any::Any;
 use std::fmt;
-use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -60,7 +62,6 @@ use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMas
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
-use tokio::task::JoinSet;
 
 mod metrics;
 pub mod page_filter;
@@ -633,32 +634,34 @@ pub async fn plan_to_parquet(
     path: impl AsRef<str>,
     writer_properties: Option<WriterProperties>,
 ) -> Result<()> {
+    
     let path = path.as_ref();
-    // create directory to contain the Parquet files (one per partition)
-    let fs_path = std::path::Path::new(path);
-    if let Err(e) = fs::create_dir(fs_path) {
-        return Err(DataFusionError::Execution(format!(
-            "Could not create directory {path}: {e:?}"
-        )));
-    }
-
+    let parsed =
+            ListingTableUrl::parse(path)?;
+    let object_store_url = parsed.object_store();
+    let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut join_set = JoinSet::new();
+    let mut buffer;
     for i in 0..plan.output_partitioning().partition_count() {
-        let plan = plan.clone();
-        let filename = format!("part-{i}.parquet");
-        let path = fs_path.join(filename);
-        let file = fs::File::create(path)?;
-        let mut writer =
-            ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
+        let storeref = store.clone();
+        let plan: Arc<dyn ExecutionPlan> = plan.clone();
+        let filename = format!("{}/part-{i}.parquet", parsed.prefix());
+        let file = Path::parse(filename)?;              
+        buffer = Vec::new();
+        let propclone = writer_properties.clone();
+
         let stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
+            let mut writer = ArrowWriter::try_new(&mut buffer, plan.schema(), propclone)?;
             stream
-                .map(|batch| writer.write(&batch?).map_err(DataFusionError::ParquetError))
+                .map(|batch| writer.write(&batch?)
+                .map_err(DataFusionError::ParquetError))
                 .try_collect()
                 .await
                 .map_err(DataFusionError::from)?;
-
-            writer.close().map_err(DataFusionError::from).map(|_| ())
+            writer.close().map_err(DataFusionError::from)?;
+            let write_bytes = Bytes::from_iter(buffer);
+            storeref.put(&file, write_bytes).await.map_err(DataFusionError::from).map(|_| ())
         });
     }
 
@@ -757,6 +760,7 @@ mod tests {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
+    use url::Url;
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
@@ -908,14 +912,22 @@ mod tests {
     #[tokio::test]
     async fn write_parquet_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
+        // register a local file system object store for /tmp directory
+        let local = Arc::new(LocalFileSystem::new_with_prefix("/tmp").unwrap());
+        let local_url = Url::parse(&"file://tmp").unwrap();
+        ctx.runtime_env()
+            .register_object_store(&local_url, local);
+
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let tmp_dir = TempDir::new()?;
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let out_dir_url = format!("file://{}", 
+                        &out_dir[1..]);
         let e = df
-            .write_parquet(&out_dir, None)
+            .write_parquet(&out_dir_url, None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -1927,10 +1939,18 @@ mod tests {
         )
         .await?;
 
+        // register a local file system object store for /tmp directory
+        let local = Arc::new(LocalFileSystem::new_with_prefix("/tmp").unwrap());
+        let local_url = Url::parse(&"file://tmp").unwrap();
+        ctx.runtime_env()
+            .register_object_store(&local_url, local);
+
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let out_dir_url = format!("file://{}", 
+                        &out_dir[1..]);
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_parquet(&out_dir, None).await?;
+        df.write_parquet(&out_dir_url, None).await?;
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
