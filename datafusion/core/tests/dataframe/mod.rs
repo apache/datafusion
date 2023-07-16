@@ -685,7 +685,8 @@ async fn test_grouping_sets() -> Result<()> {
 
 #[tokio::test]
 async fn test_grouping_sets_count() -> Result<()> {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::with_config(config);
 
     let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
         vec![col("c1")],
@@ -725,7 +726,8 @@ async fn test_grouping_sets_count() -> Result<()> {
 
 #[tokio::test]
 async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::with_config(config);
 
     let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
         vec![col("c1")],
@@ -792,6 +794,18 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
     ];
     assert_batches_eq!(expected, &results);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_read_partitioned() -> Result<()> {
+    let config = SessionConfig::new().with_target_partitions(4);
+    let ctx = SessionContext::with_config(config);
+
+    let df = aggregates_table(&ctx).await?;
+    let plan = df.create_physical_plan().await?;
+
+    assert_eq!(plan.output_partitioning().partition_count(), 4);
     Ok(())
 }
 

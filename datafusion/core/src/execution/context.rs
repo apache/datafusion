@@ -32,7 +32,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
+    DescribeTable, Partitioning, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -917,11 +917,16 @@ impl SessionContext {
     /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
     /// [`ListingTable`] or a custom user defined provider.
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
-        Ok(DataFrame::new(
-            self.state(),
-            LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
-                .build()?,
-        ))
+        let state = self.state();
+        let mut builder =
+            LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?;
+        let target_partitions = state.config.target_partitions();
+        if target_partitions > 1 {
+            // Keep the data in the target number of partitions
+            builder =
+                builder.repartition(Partitioning::RoundRobinBatch(target_partitions))?;
+        }
+        Ok(DataFrame::new(state, builder.build()?))
     }
 
     /// Creates a [`DataFrame`] for reading a [`RecordBatch`]
