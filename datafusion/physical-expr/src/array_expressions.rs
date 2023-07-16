@@ -1321,6 +1321,7 @@ macro_rules! contains {
         for x in second_array.values().iter().dedup() {
             if !first_array.values().contains(x) {
                 res = false;
+                break;
             }
         }
 
