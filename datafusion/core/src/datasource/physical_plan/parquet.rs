@@ -913,8 +913,8 @@ mod tests {
     async fn write_parquet_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
         // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new_with_prefix("/tmp").unwrap());
-        let local_url = Url::parse(&"file://tmp").unwrap();
+        let local = Arc::new(LocalFileSystem::new());
+        let local_url = Url::parse(&format!("file://local")).unwrap();
         ctx.runtime_env()
             .register_object_store(&local_url, local);
 
@@ -924,7 +924,7 @@ mod tests {
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let tmp_dir = TempDir::new()?;
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://{}", 
+        let out_dir_url = format!("file://local/{}", 
                         &out_dir[1..]);
         let e = df
             .write_parquet(&out_dir_url, None)
@@ -1940,14 +1940,14 @@ mod tests {
         .await?;
 
         // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new_with_prefix("/tmp").unwrap());
-        let local_url = Url::parse(&"file://tmp").unwrap();
+        let local = Arc::new(LocalFileSystem::new());
+        let local_url = Url::parse(&format!("file://local")).unwrap();
         ctx.runtime_env()
             .register_object_store(&local_url, local);
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://{}", 
+        let out_dir_url = format!("file://local/{}", 
                         &out_dir[1..]);
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
         df.write_parquet(&out_dir_url, None).await?;
