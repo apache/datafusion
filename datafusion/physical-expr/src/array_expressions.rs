@@ -1079,7 +1079,6 @@ macro_rules! to_string {
                 }
             }
         }
-
         Ok($ARG)
     }};
 }
@@ -1087,9 +1086,10 @@ macro_rules! to_string {
 /// Array_to_string SQL function
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = &args[0];
-    let delimeter = as_generic_string_array::<i32>(&args[1])?
-        .value(0)
-        .to_string();
+
+    let delimeters = as_generic_string_array::<i32>(&args[1])?;
+    let delimeters: Vec<Option<&str>> = delimeters.iter().collect();
+
     let mut null_string = String::from("");
     let mut with_null_string = false;
     if args.len() == 3 {
@@ -1234,21 +1234,56 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let mut arg = String::from("");
-    let mut res = compute_array_to_string(
-        &mut arg,
-        arr.clone(),
-        delimeter.clone(),
-        null_string,
-        with_null_string,
-    )?
-    .clone();
-    match res.as_str() {
-        "" => Ok(Arc::new(StringArray::from(vec![Some(res)]))),
+    let mut res: Vec<Option<String>> = Vec::new();
+
+    match arr.data_type() {
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            let list_array = arr.as_list::<i32>();
+            for (arr, &delimeter) in list_array.iter().zip(delimeters.iter()) {
+                if let (Some(arr), Some(delimeter)) = (arr, delimeter) {
+                    arg = String::from("");
+                    let s = compute_array_to_string(
+                        &mut arg,
+                        arr,
+                        delimeter.to_string(),
+                        null_string.clone(),
+                        with_null_string,
+                    )?
+                    .clone();
+
+                    if let Some(s) = s.strip_suffix(delimeter) {
+                        res.push(Some(s.to_string()));
+                    } else {
+                        res.push(Some(s));
+                    }
+                } else {
+                    res.push(None);
+                }
+            }
+        }
         _ => {
-            res.truncate(res.len() - delimeter.len());
-            Ok(Arc::new(StringArray::from(vec![Some(res)])))
+            // delimeter length is 1
+            assert_eq!(delimeters.len(), 1);
+            let delimeter = delimeters[0].unwrap();
+            let s = compute_array_to_string(
+                &mut arg,
+                arr.clone(),
+                delimeter.to_string(),
+                null_string,
+                with_null_string,
+            )?
+            .clone();
+
+            if !s.is_empty() {
+                let s = s.strip_suffix(delimeter).unwrap().to_string();
+                res.push(Some(s));
+            } else {
+                res.push(Some(s));
+            }
         }
     }
+
+    Ok(Arc::new(StringArray::from(res)))
 }
 
 /// Trim_array SQL function
