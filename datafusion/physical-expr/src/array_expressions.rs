@@ -1390,9 +1390,10 @@ macro_rules! contains {
     }};
 }
 
-
 /// Convert nested list arry to 1d lsit array without offset preserve.
-fn flatten_list_array<OffsetSize: OffsetSizeTrait>(array: ArrayRef) -> Result<GenericListArray<OffsetSize>> {
+fn flatten_list_array<OffsetSize: OffsetSizeTrait>(
+    array: ArrayRef,
+) -> Result<GenericListArray<OffsetSize>> {
     let list_array = array.as_list::<OffsetSize>();
     match array.data_type() {
         DataType::List(field) => match field.data_type() {
@@ -1418,9 +1419,7 @@ fn flatten_list_array<OffsetSize: OffsetSizeTrait>(array: ArrayRef) -> Result<Ge
 
                 Ok(list_array)
             }
-            _ => {
-                Ok(list_array.clone())
-            }
+            _ => Ok(list_array.clone()),
         },
         _ => Err(DataFusionError::Internal(format!("array should be list"))),
     }
@@ -1456,7 +1455,7 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
                 (DataType::UInt64, DataType::UInt64) => contains!(arr, sub_arr, UInt64Array),
                 (first_array_data_type, second_array_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Array_contains is not implemented for types '{first_array_data_type:?}' and '{second_array_data_type:?}'."
+                        "Array_has_all is not implemented for types '{first_array_data_type:?}' and '{second_array_data_type:?}'."
                     )))
                 }
             };
