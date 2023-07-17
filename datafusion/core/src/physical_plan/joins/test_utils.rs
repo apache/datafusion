@@ -18,9 +18,7 @@
 //! This file has test utils for hash joins
 
 use crate::physical_plan::joins::utils::{JoinFilter, JoinOn};
-use crate::physical_plan::joins::{
-    HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
-};
+use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{common, ExecutionPlan, Partitioning};
@@ -98,7 +96,6 @@ pub async fn partitioned_sym_join_with_filter(
         filter,
         join_type,
         null_equals_null,
-        StreamJoinPartitionMode::Partitioned,
     )?;
 
     let mut batches = vec![];

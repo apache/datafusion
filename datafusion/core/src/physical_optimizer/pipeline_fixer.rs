@@ -27,9 +27,7 @@ use crate::error::Result;
 use crate::physical_optimizer::join_selection::swap_hash_join;
 use crate::physical_optimizer::pipeline_checker::PipelineStatePropagator;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::{
-    HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
-};
+use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
 use crate::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::DataFusionError;
@@ -103,7 +101,6 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.filter().cloned(),
                 hash_join.join_type(),
                 hash_join.null_equals_null(),
-                StreamJoinPartitionMode::Partitioned,
             )
             .map(|exec| {
                 input.plan = Arc::new(exec) as _;

@@ -57,7 +57,6 @@ use crate::physical_plan::joins::hash_join_utils::{
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, record_visited_indices, IntervalCalculatorInnerState,
 };
-use crate::physical_plan::joins::StreamJoinPartitionMode;
 use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     expressions::Column,
@@ -194,8 +193,6 @@ pub struct SymmetricHashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
-    /// Partition Mode
-    mode: StreamJoinPartitionMode,
 }
 
 #[derive(Debug)]
@@ -271,7 +268,6 @@ impl SymmetricHashJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
-        mode: StreamJoinPartitionMode,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -312,7 +308,6 @@ impl SymmetricHashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
-            mode,
         })
     }
 
@@ -417,22 +412,15 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match self.mode {
-            StreamJoinPartitionMode::Partitioned => {
-                let (left_expr, right_expr) = self
-                    .on
-                    .iter()
-                    .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
-                    .unzip();
-                vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
-                ]
-            }
-            StreamJoinPartitionMode::SinglePartition => {
-                vec![Distribution::SinglePartition, Distribution::SinglePartition]
-            }
-        }
+        let (left_expr, right_expr) = self
+            .on
+            .iter()
+            .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+            .unzip();
+        vec![
+            Distribution::HashPartitioned(left_expr),
+            Distribution::HashPartitioned(right_expr),
+        ]
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -477,7 +465,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.filter.clone(),
             &self.join_type,
             self.null_equals_null,
-            self.mode,
         )?))
     }
 
@@ -708,10 +695,7 @@ fn determine_prune_length(
 /// JoinType::Left, JoinType::LeftAnti, JoinType::Full or JoinType::LeftSemi.
 /// If the build side is JoinSide::Right, the result will be true if the join type
 /// is one of JoinType::Right, JoinType::RightAnti, JoinType::Full, or JoinType::RightSemi.
-pub fn need_to_produce_result_in_final(
-    build_side: JoinSide,
-    join_type: JoinType,
-) -> bool {
+fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) -> bool {
     if build_side == JoinSide::Left {
         matches!(
             join_type,

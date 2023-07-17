@@ -45,12 +45,3 @@ pub enum PartitionMode {
     /// It will also consider swapping the left and right inputs for the Join
     Auto,
 }
-
-/// Partitioning mode to use for symmetric hash join
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StreamJoinPartitionMode {
-    /// Left/right children are partitioned using the left and right keys
-    Partitioned,
-    /// Both sides will collected into one partition
-    SinglePartition,
-}
