@@ -191,9 +191,7 @@ impl GroupOrderingPartial {
     pub fn input_done(&mut self) {
         self.state = match self.state {
             State::Taken => unreachable!("State previously taken"),
-            State::Start => State::Complete,
-            State::InProgress { .. } => State::Complete,
-            State::Complete => State::Complete,
+            _ => State::Complete,
         };
     }
 

@@ -118,11 +118,7 @@ impl GroupOrderingFull {
 
     /// Note that the input is complete so any outstanding groups are done as well
     pub fn input_done(&mut self) {
-        self.state = match self.state {
-            State::Start => State::Complete,
-            State::InProgress { .. } => State::Complete,
-            State::Complete => State::Complete,
-        };
+        self.state = State::Complete;
     }
 
     /// Called when new groups are added in a batch. See documentation
