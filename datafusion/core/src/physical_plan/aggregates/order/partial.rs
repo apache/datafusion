@@ -44,13 +44,16 @@ use datafusion_physical_expr::PhysicalSortExpr;
 ///     │└───┘│    │ └──────────────┘  │ │
 ///     │ ... │    │    ...            │ │      current_sort tracks the most
 ///     │┌───┐│    │ ┌──────────────┐  │ │      recent group index that had
-///     ││12 ││    │ │  765, "MA"   │  │ │      the same sort_key as current
+///     ││ 8 ││    │ │  765, "MA"   │  │ │      the same sort_key as current
 ///     │├───┤│    │ ├──────────────┤  │ │
-///     ││12 ││    │ │  923, "MD"   │◀─┼─┘
+///     ││ 9 ││    │ │  923, "MD"   │◀─┼─┘
 ///     │├───┤│    │ ├──────────────┤  │        ┏━━━━━━━━━━━━━━┓
-///     ││13 ││    │ │  345, "MD"   │◀─┼────────┃      12      ┃
-///     │└───┘│    │ └──────────────┘  │        ┗━━━━━━━━━━━━━━┛
-///     └─────┘    └───────────────────┘            current
+///     ││10 ││    │ │  345, "MD"   │  │  ┌─────┃      11      ┃
+///     │├───┤│    │ ├──────────────┤  │  │     ┗━━━━━━━━━━━━━━┛
+///     ││11 ││    │ │  124, "MD"   │◀─┼──┘         current
+///     │└───┘│    │ └──────────────┘  │
+///     └─────┘    └───────────────────┘
+///
 ///  group indices
 /// (in group value  group_values               current tracks the most
 ///      order)                                    recent group index
