@@ -18,46 +18,15 @@
 //! Defines the join plan for executing partitions in parallel and then joining the results
 //! into a set of partitions.
 
-use ahash::RandomState;
-use arrow::array::Array;
-use arrow::array::{
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
-};
-use arrow::buffer::BooleanBuffer;
-use arrow::compute::{and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
-use arrow::datatypes::{ArrowNativeType, DataType};
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow::{
-    array::{
-        ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        DictionaryArray, FixedSizeBinaryArray, LargeStringArray, PrimitiveArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampSecondArray, UInt32BufferBuilder, UInt64BufferBuilder,
-    },
-    datatypes::{
-        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-        UInt8Type,
-    },
-    util::bit_util,
-};
-use arrow_array::cast::downcast_array;
-use arrow_schema::ArrowError;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
 use std::fmt;
 use std::mem::size_of;
 use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, usize, vec};
 
-use datafusion_common::cast::{as_dictionary_array, as_string_array};
-use datafusion_execution::memory_pool::MemoryReservation;
-
 use crate::physical_plan::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
+    add_offset_to_ordering_equivalence_classes, adjust_indices_by_join_type,
+    apply_join_filter_to_indices, build_batch_from_indices,
     calculate_hash_join_output_order, get_final_indices_from_bit_map,
     need_produce_result_in_final, JoinSide,
 };
@@ -68,6 +37,7 @@ use crate::physical_plan::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
+    joins::hash_join_utils::JoinHashMap,
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         combine_join_equivalence_properties, estimate_join_statistics,
@@ -78,17 +48,42 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use arrow::array::BooleanBufferBuilder;
-use arrow::datatypes::TimeUnit;
-use datafusion_common::JoinType;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_execution::{memory_pool::MemoryConsumer, TaskContext};
 
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
-use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
+
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::{and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
+use arrow::record_batch::RecordBatch;
+use arrow::{
+    array::{
+        Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Date32Array, Date64Array,
+        Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
+        PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        UInt16Array, UInt32Array, UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
+        UInt8Array,
+    },
+    datatypes::{
+        ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema,
+        SchemaRef, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    },
+    util::bit_util,
+};
+use arrow_array::cast::downcast_array;
+use arrow_schema::ArrowError;
+use datafusion_common::cast::{as_dictionary_array, as_string_array};
+use datafusion_common::{DataFusionError, JoinType, Result};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
+
+use ahash::RandomState;
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
 
@@ -379,6 +374,34 @@ impl ExecutionPlan for HashJoinExec {
             self.on(),
             self.schema(),
         )
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        let left_columns_len = self.left.schema().fields.len();
+        let right_oeq_properties = self.right.ordering_equivalence_properties();
+        match self.join_type {
+            JoinType::RightAnti | JoinType::RightSemi => {
+                // For `RightAnti` and `RightSemi` joins, the right table schema remains valid.
+                // Hence, its ordering equivalence properties can be used as is.
+                new_properties.extend(right_oeq_properties.classes().iter().cloned());
+            }
+            JoinType::Inner => {
+                // For `Inner` joins, the right table schema is no longer valid.
+                // Size of the left table is added as an offset to the right table
+                // columns when constructing the join output schema.
+                let updated_right_classes = add_offset_to_ordering_equivalence_classes(
+                    right_oeq_properties.classes(),
+                    left_columns_len,
+                )
+                .unwrap();
+                new_properties.extend(updated_right_classes);
+            }
+            // In other cases, we cannot propagate ordering equivalences as
+            // the output ordering is not preserved.
+            _ => {}
+        }
+        new_properties
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
