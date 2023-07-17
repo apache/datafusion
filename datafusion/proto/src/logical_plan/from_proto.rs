@@ -37,13 +37,11 @@ use datafusion_common::{
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
-    array_has,
-    array_has_any,
-    array_has_all, array_length, array_ndims, array_position, array_positions,
-    array_prepend, array_remove, array_replace, array_to_string, ascii, asin, asinh,
-    atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
-    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, current_date,
-    current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
+    array_has, array_has_all, array_has_any, array_length, array_ndims, array_position,
+    array_positions, array_prepend, array_remove, array_replace, array_to_string, ascii,
+    asin, asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},

@@ -1197,25 +1197,29 @@ select array_has_all([true, true, false, true, false], [true, false, false]), ar
 true true
 
 # array_has_all scalar function #6
-query BB
-select array_has_all(make_array(true, true, true), make_array(false, false)), array_has_all([false, false, false], [true, true]);
+query BBB
+select array_has_all(make_array(true, true, true), make_array(false, false)),
+       array_has_all([false, false, false], [true, true]),
+       array_has_all(make_array(true, true, true), make_array(true, false));
 ----
-false false
+false false false
 
-query ??
-select column1, column2 from arrays;
-----
-[[, 2], [3, ]] [1.1, 2.2, 3.3]
-[[3, 4], [5, 6]] [, 5.5, 6.6]
-[[5, 6], [7, 8]] [7.7, 8.8, 9.9]
-[[7, ], [9, 10]] [10.1, , 12.2]
-NULL [13.3, 14.4, 15.5]
-[[11, 12], [13, 14]] NULL
-[[15, 16], [, 18]] [16.6, 17.7, 18.8]
+# For reference
+# query ??
+# select column1, column2 from arrays;
+# ----
+# [[, 2], [3, ]] [1.1, 2.2, 3.3]
+# [[3, 4], [5, 6]] [, 5.5, 6.6]
+# [[5, 6], [7, 8]] [7.7, 8.8, 9.9]
+# [[7, ], [9, 10]] [10.1, , 12.2]
+# NULL [13.3, 14.4, 15.5]
+# [[11, 12], [13, 14]] NULL
+# [[15, 16], [, 18]] [16.6, 17.7, 18.8]
 
 # array_has_all column-wise #1
 query BB
-select array_has_all(column1, make_array(7)), array_has_all(column1, make_array(3, 4, 5, 6)) from arrays;
+select array_has_all(column1, make_array(7)),
+       array_has_all(column1, make_array(3, 4, 5, 6)) from arrays;
 ----
 false false
 false true
@@ -1226,8 +1230,51 @@ false false
 false false
 
 # array_has column-wise #1
-# query B
-# select array_has(column1, 7) from arrays;
+query B
+select array_has(column1, 7) from arrays;
+----
+false
+false
+true
+true
+false
+false
+false
+
+# array_has_any column-wise #1
+query B
+select array_has_any(column1, make_array(3, 5, 7, 11)) from arrays;
+----
+true
+true
+true
+true
+false
+true
+false
+
+# array_has_any column-wise #2
+query BBBBB
+select array_has_any(make_array(true, true, true), make_array(false)), 
+       array_has_any(make_array(true, true, true), make_array(true)),
+       array_has_any(make_array(true, false), make_array(true)),
+       array_has_any(make_array(true, false), make_array(false)),
+       array_has_any(make_array(false, false), make_array(true, false));
+----
+false true true true true
+
+# array_has_any column-wise #3
+query BBB
+select array_has_any(column2, make_array(1.0, 1.2, 1.4)),
+       array_has_any(column2, make_array(1.1, 1.2, 1.4)),
+       array_has_any(column2, make_array(1.1, 16.6, 1.4)) from arrays;
+----
+false true true
+false false false
+false false false
+false false false
+false false false
+false false true
 
 ### Array operators tests
 ## array concatenate operator
