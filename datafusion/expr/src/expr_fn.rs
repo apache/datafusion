@@ -520,7 +520,7 @@ scalar_expr!(
     num,
     "returns the hexdecimal representation of an integer"
 );
-scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
+scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 // array functions
@@ -535,8 +535,7 @@ scalar_expr!(
     ArrayContains,
     array_contains,
     first_array second_array,
-"returns true, if each element of the second array appe
-    aring in the first array, otherwise false."
+    "returns true, if each element of the second array appearing in the first array, otherwise false."
 );
 scalar_expr!(
     ArrayDims,
