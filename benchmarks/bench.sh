@@ -18,7 +18,9 @@
 
 # This script is meant for developers of DataFusion -- it is runnable
 # from the standard DataFusion development environment and uses cargo,
-# etc.
+# etc and orchestrates gathering data and run the benchmark binary in
+# different configurations.
+
 
 # Exit on error
 set -e
@@ -64,12 +66,14 @@ compare:      Comares results from benchmark runs
 * Benchmarks
 **********
 all(default): Data/Run/Compare for all benchmarks
-tpch:         TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table
-tpch_mem:     TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
-tpch10:       TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table
-tpch10_mem:   TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
-parquet:      Benchmark of parquet reader's filtering speed
-sort:         Benchmark of sorting speed
+tpch:                   TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table
+tpch_mem:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
+tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table
+tpch10_mem:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
+parquet:                Benchmark of parquet reader's filtering speed
+sort:                   Benchmark of sorting speed
+clickbench_1:           ClickBench queries against a single parquet file
+clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
 
 **********
 * Supported Configuration (Environment Variables)
@@ -118,7 +122,7 @@ main() {
         data)
             BENCHMARK=${ARG2:-"${BENCHMARK}"}
             echo "***************************"
-            echo "DataFusion Benchmark Data Generation"
+            echo "DataFusion Benchmark Runner and Data Generator"
             echo "COMMAND: ${COMMAND}"
             echo "BENCHMARK: ${BENCHMARK}"
             echo "DATA_DIR: ${DATA_DIR}"
@@ -128,6 +132,8 @@ main() {
                 all)
                     data_tpch "1"
                     data_tpch "10"
+                    data_clickbench_1
+                    data_clickbench_partitioned
                     ;;
                 tpch)
                     data_tpch "1"
@@ -142,6 +148,12 @@ main() {
                 tpch_mem10)
                     # same data as for tpch10
                     data_tpch "10"
+                    ;;
+                clickbench_1)
+                    data_clickbench_1
+                    ;;
+                clickbench_partitioned)
+                    data_clickbench_partitioned
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -178,6 +190,8 @@ main() {
                     run_tpch_mem "10"
                     run_parquet
                     run_sort
+                    run_clickbench_1
+                    run_clickbench_partitioned
                     ;;
                 tpch)
                     run_tpch "1"
@@ -196,6 +210,12 @@ main() {
                     ;;
                 sort)
                     run_sort
+                    ;;
+                clickbench_1)
+                    run_clickbench_1
+                    ;;
+                clickbench_partitioned)
+                    run_clickbench_partitioned
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -316,6 +336,62 @@ run_sort() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort benchmark..."
     $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --scale-factor 1.0 --iterations 10 -o ${RESULTS_FILE}
+}
+
+
+# Downloads the single file hits.parquet ClickBench datasets from
+# https://github.com/ClickHouse/ClickBench/tree/main#data-loading
+#
+# Creates data in $DATA_DIR/hits.parquet
+data_clickbench_1() {
+    pushd "${DATA_DIR}" > /dev/null
+
+    # Avoid downloading if it already exists and is the right size
+    OUTPUT_SIZE=`wc -c hits.parquet  2>/dev/null  | awk '{print $1}' || true`
+    echo -n "Checking hits.parquet..."
+    if test "${OUTPUT_SIZE}" = "14779976446"; then
+        echo -n "... found ${OUTPUT_SIZE} bytes ..."
+    else
+        URL="https://datasets.clickhouse.com/hits_compatible/hits.parquet"
+        echo -n "... downloading ${URL} (14GB) ... "
+        wget --continue ${URL}
+    fi
+    echo " Done"
+    popd > /dev/null
+}
+
+# Downloads the 100 file partitioned ClickBench datasets from
+# https://github.com/ClickHouse/ClickBench/tree/main#data-loading
+#
+# Creates data in $DATA_DIR/hits_partitioned
+data_clickbench_partitioned() {
+    MAX_CONCURRENT_DOWNLOADS=10
+
+    mkdir -p "${DATA_DIR}/hits_partitioned"
+    pushd "${DATA_DIR}/hits_partitioned" > /dev/null
+
+    echo -n "Checking hits_partitioned..."
+    OUTPUT_SIZE=`wc -c * 2>/dev/null | tail -n 1  | awk '{print $1}' || true`
+    if test "${OUTPUT_SIZE}" = "14737666736"; then
+        echo -n "... found ${OUTPUT_SIZE} KB ..."
+    else
+        echo -n " downloading with ${MAX_CONCURRENT_DOWNLOADS} parallel workers"
+        seq 0 99 | xargs -P${MAX_CONCURRENT_DOWNLOADS} -I{} bash -c 'wget -q --continue https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_{}.parquet && echo -n "."'
+    fi
+
+    echo " Done"
+    popd > /dev/null
+}
+
+
+# Runs the clickbench benchmark with a single large parquet file
+run_clickbench_1() {
+    echo "NOTICE: ClickBench (1 parquet file) is not yet supported"
+}
+
+ # Runs the clickbench benchmark with a single large parquet file
+run_clickbench_partitioned() {
+    echo "NOTICE: ClickBench (1 parquet file) is not yet supported"
 }
 
 compare_benchmarks() {
