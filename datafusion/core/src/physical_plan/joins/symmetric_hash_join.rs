@@ -57,6 +57,7 @@ use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalB
 
 use crate::physical_plan::common::SharedMemoryReservation;
 use crate::physical_plan::joins::hash_join_utils::convert_sort_expr_with_filter_schema;
+use crate::physical_plan::joins::StreamJoinPartitionMode;
 use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     expressions::Column,
@@ -192,6 +193,8 @@ pub struct SymmetricHashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
+    /// Partition Mode
+    mode: StreamJoinPartitionMode,
 }
 
 struct IntervalCalculatorInnerState {
@@ -280,6 +283,7 @@ impl SymmetricHashJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
+        mode: StreamJoinPartitionMode,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -324,6 +328,7 @@ impl SymmetricHashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
+            mode,
         })
     }
 
@@ -428,16 +433,22 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        let (left_expr, right_expr) = self
-            .on
-            .iter()
-            .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
-            .unzip();
-        // TODO:  This will change when we extend collected executions.
-        vec![
-            Distribution::HashPartitioned(left_expr),
-            Distribution::HashPartitioned(right_expr),
-        ]
+        match self.mode {
+            StreamJoinPartitionMode::Partitioned => {
+                let (left_expr, right_expr) = self
+                    .on
+                    .iter()
+                    .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+                    .unzip();
+                vec![
+                    Distribution::HashPartitioned(left_expr),
+                    Distribution::HashPartitioned(right_expr),
+                ]
+            }
+            StreamJoinPartitionMode::SinglePartition => {
+                vec![Distribution::SinglePartition, Distribution::SinglePartition]
+            }
+        }
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -482,6 +493,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.filter.clone(),
             &self.join_type,
             self.null_equals_null,
+            self.mode,
         )?))
     }
 
@@ -1818,6 +1830,7 @@ mod tests {
             filter,
             join_type,
             null_equals_null,
+            StreamJoinPartitionMode::Partitioned,
         )?;
 
         let mut batches = vec![];
