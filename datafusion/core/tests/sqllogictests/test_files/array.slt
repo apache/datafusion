@@ -1202,6 +1202,29 @@ select array_has_all(make_array(true, true, true), make_array(false, false)), ar
 ----
 false false
 
+query ??
+select column1, column2 from arrays;
+----
+[[, 2], [3, ]] [1.1, 2.2, 3.3]
+[[3, 4], [5, 6]] [, 5.5, 6.6]
+[[5, 6], [7, 8]] [7.7, 8.8, 9.9]
+[[7, ], [9, 10]] [10.1, , 12.2]
+NULL [13.3, 14.4, 15.5]
+[[11, 12], [13, 14]] NULL
+[[15, 16], [, 18]] [16.6, 17.7, 18.8]
+
+# array_has_all column-wise #1
+query BB
+select array_has_all(column1, column1), array_has_all(column1, make_array(7)) from arrays;
+----
+true false
+true false
+true true
+true true
+true false
+true false
+true false
+
 
 ### Array operators tests
 
@@ -1311,6 +1334,9 @@ drop table arrays;
 
 statement ok
 drop table arrays_values;
+
+statement ok
+drop table arrays_values_v2;
 
 statement ok
 drop table arrays_values_without_nulls;

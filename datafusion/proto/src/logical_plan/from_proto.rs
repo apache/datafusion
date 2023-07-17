@@ -36,8 +36,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
-    abs, acos, acosh, array, array_append, array_concat, array_has_all, array_dims,
-    array_fill, array_length, array_ndims, array_position, array_positions,
+    abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
+    array_has_all, array_length, array_ndims, array_position, array_positions,
     array_prepend, array_remove, array_replace, array_to_string, ascii, asin, asinh,
     atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
     chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, current_date,
