@@ -44,7 +44,7 @@ pub enum PartitionMode {
 }
 
 /// Partitioning mode to use for symmetric hash join
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StreamJoinPartitionMode {
     /// Left/right children are partitioned using the left and right keys
     Partitioned,
