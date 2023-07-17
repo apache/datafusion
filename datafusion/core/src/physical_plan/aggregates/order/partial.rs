@@ -27,7 +27,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 /// the group keys.
 ///
 /// Once the next *sort key* value is seen, never see groups with that
-/// sort key again, so we can emit all groups wtih the previous sort
+/// sort key again, so we can emit all groups with the previous sort
 /// key and earlier.
 ///
 /// For example, given `SUM(amt) GROUP BY id, state` if the input is
@@ -131,7 +131,7 @@ impl GroupOrderingPartial {
     /// Creates sort keys from the group values
     ///
     /// For example, if group_values had `A, B, C` but the input was
-    /// only sorted on `B` and `C` this sould return rows for (`B`,
+    /// only sorted on `B` and `C` this should return rows for (`B`,
     /// `C`)
     fn compute_sort_keys(&mut self, group_values: &[ArrayRef]) -> Result<Rows> {
         // Take only the columns that are in the sort key

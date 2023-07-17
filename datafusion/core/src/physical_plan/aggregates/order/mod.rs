@@ -33,7 +33,7 @@ pub(crate) use partial::GroupOrderingPartial;
 pub(crate) enum GroupOrdering {
     /// Groups are not ordered
     None,
-    /// Groups are orderd by some pre-set of the group keys
+    /// Groups are ordered by some pre-set of the group keys
     Partial(GroupOrderingPartial),
     /// Groups are entirely contiguous,
     Full(GroupOrderingFull),
