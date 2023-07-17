@@ -43,12 +43,13 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, JoinType, Result, ScalarValue, SharedResult};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
-    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalentClass, PhysicalExpr,
-    PhysicalSortExpr,
+    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalenceProperties,
+    OrderingEquivalentClass, PhysicalExpr, PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
+use itertools::Itertools;
 use parking_lot::Mutex;
 
 /// The on clause of the join, as vector of (left, right) columns.
@@ -281,6 +282,144 @@ pub fn cross_join_equivalence_properties(
         .collect::<Vec<_>>();
     new_properties.extend(new_right_properties);
     new_properties
+}
+
+#[derive(PartialEq, Clone, Hash, Debug)]
+pub enum StreamSide {
+    Left,
+    Right,
+    Alternating,
+}
+
+fn get_updated_right_ordering_equivalence_properties(
+    join_type: &JoinType,
+    right_oeq_classes: &[OrderingEquivalentClass],
+    left_columns_len: usize,
+) -> Result<Vec<OrderingEquivalentClass>> {
+    match join_type {
+        // In these modes, indices of right schema changes with offset of left table size.
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+            add_offset_to_ordering_equivalence_classes(
+                right_oeq_classes,
+                left_columns_len,
+            )
+        }
+        _ => Ok(right_oeq_classes.to_vec()),
+    }
+}
+
+/// Merge left and right sort expressions, checking for duplicates.
+fn merge_vectors(
+    left: &[PhysicalSortExpr],
+    right: &[PhysicalSortExpr],
+) -> Vec<PhysicalSortExpr> {
+    left.iter()
+        .cloned()
+        .chain(right.iter().cloned())
+        .unique()
+        .collect()
+}
+
+/// Calculate ordering equivalence Properties for Join Node.
+pub fn combine_join_ordering_equivalence_properties(
+    join_type: &JoinType,
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    schema: SchemaRef,
+    maintains_input_order: &[bool],
+    stream_side: StreamSide,
+    on: &[(Column, Column)],
+    output_ordering: LexOrderingRef,
+) -> Result<OrderingEquivalenceProperties> {
+    let mut new_properties = OrderingEquivalenceProperties::new(schema);
+    let left_columns_len = left.schema().fields.len();
+    let left_oeq_properties = left.ordering_equivalence_properties();
+    let right_oeq_properties = right.ordering_equivalence_properties();
+    // All joins have 2 children
+    assert_eq!(maintains_input_order.len(), 2);
+    let left_maintains = maintains_input_order[0];
+    let right_maintains = maintains_input_order[1];
+    match (left_maintains, right_maintains) {
+        (true, true) => {
+            return Err(DataFusionError::Execution(
+                "Cannot maintain ordering of both sides".to_string(),
+            ))
+        }
+        (true, false) => {
+            new_properties.extend(left_oeq_properties.classes().iter().cloned());
+            if stream_side == StreamSide::Left && right.output_ordering().is_some() {
+                let right_oeq_classes =
+                    get_updated_right_ordering_equivalence_properties(
+                        join_type,
+                        right_oeq_properties.classes(),
+                        left_columns_len,
+                    )?;
+                let left_output_ordering = left.output_ordering().unwrap_or(&[]);
+                // Right side ordering equivalence properties should be prepended with
+                // those of the left side while constructing output ordering equivalence
+                // properties, since stream side is LEFT;
+                //
+                // If the right table ordering equivalences contain `b ASC`, and the output
+                // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
+                // for the right table should be converted to `a ASC, b ASC` before it is added
+                // to the ordering equivalences of Join.
+                for oeq_class in right_oeq_classes {
+                    for ordering in oeq_class.others() {
+                        // // Entries inside ordering equivalence should be normalized before insertion.
+                        // let normalized_ordering = normalize_sort_exprs(
+                        //     ordering,
+                        //     self.equivalence_properties().classes(),
+                        //     &[],
+                        // );
+                        let new_oeq_ordering =
+                            merge_vectors(left_output_ordering, ordering);
+                        new_properties.add_equal_conditions((
+                            &output_ordering.to_vec(),
+                            &new_oeq_ordering,
+                        ));
+                    }
+                }
+            }
+        }
+        (false, true) => {
+            let right_oeq_classes = get_updated_right_ordering_equivalence_properties(
+                join_type,
+                right_oeq_properties.classes(),
+                left_columns_len,
+            )?;
+            new_properties.extend(right_oeq_classes);
+            if stream_side == StreamSide::Right && left.output_ordering().is_some() {
+                let left_oeq_classes = right_oeq_properties.classes();
+                let right_output_ordering = right.output_ordering().unwrap_or(&[]);
+                // Left side ordering equivalence properties should be prepended with
+                // those of the right side while constructing output ordering equivalence
+                // properties, since stream side is RIGHt;
+                //
+                // If the right table ordering equivalences contain `b ASC`, and the output
+                // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
+                // for the right table should be converted to `a ASC, b ASC` before it is added
+                // to the ordering equivalences of Join.
+                for oeq_class in left_oeq_classes {
+                    for ordering in oeq_class.others() {
+                        // // Entries inside ordering equivalence should be normalized before insertion.
+                        // let normalized_ordering = normalize_sort_exprs(
+                        //     ordering,
+                        //     self.equivalence_properties().classes(),
+                        //     &[],
+                        // );
+                        let new_oeq_ordering =
+                            merge_vectors(right_output_ordering, ordering);
+                        new_properties.add_equal_conditions((
+                            &output_ordering.to_vec(),
+                            &new_oeq_ordering,
+                        ));
+                    }
+                }
+            }
+        }
+        (false, false) => {}
+    }
+    Ok(new_properties)
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is

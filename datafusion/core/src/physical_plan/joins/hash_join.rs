@@ -25,10 +25,9 @@ use std::task::Poll;
 use std::{any::Any, usize, vec};
 
 use crate::physical_plan::joins::utils::{
-    add_offset_to_ordering_equivalence_classes, adjust_indices_by_join_type,
-    apply_join_filter_to_indices, build_batch_from_indices,
-    calculate_hash_join_output_order, get_final_indices_from_bit_map,
-    need_produce_result_in_final, JoinSide,
+    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
+    calculate_hash_join_output_order, combine_join_ordering_equivalence_properties,
+    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide, StreamSide,
 };
 use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
@@ -377,31 +376,17 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
-        let left_columns_len = self.left.schema().fields.len();
-        let right_oeq_properties = self.right.ordering_equivalence_properties();
-        match self.join_type {
-            JoinType::RightAnti | JoinType::RightSemi => {
-                // For `RightAnti` and `RightSemi` joins, the right table schema remains valid.
-                // Hence, its ordering equivalence properties can be used as is.
-                new_properties.extend(right_oeq_properties.classes().iter().cloned());
-            }
-            JoinType::Inner => {
-                // For `Inner` joins, the right table schema is no longer valid.
-                // Size of the left table is added as an offset to the right table
-                // columns when constructing the join output schema.
-                let updated_right_classes = add_offset_to_ordering_equivalence_classes(
-                    right_oeq_properties.classes(),
-                    left_columns_len,
-                )
-                .unwrap();
-                new_properties.extend(updated_right_classes);
-            }
-            // In other cases, we cannot propagate ordering equivalences as
-            // the output ordering is not preserved.
-            _ => {}
-        }
-        new_properties
+        combine_join_ordering_equivalence_properties(
+            &self.join_type,
+            &self.left,
+            &self.right,
+            self.schema(),
+            &self.maintains_input_order(),
+            StreamSide::Right,
+            &self.on,
+            self.output_ordering().unwrap_or(&[]),
+        )
+        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
