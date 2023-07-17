@@ -119,8 +119,12 @@ pub enum BuiltinScalarFunction {
     ArrayAppend,
     /// array_concat
     ArrayConcat,
+    /// array_has
+    ArrayHas,
     /// array_has_all
     ArrayHasAll,
+    /// array_has_any
+    ArrayHasAny,
     /// array_dims
     ArrayDims,
     /// array_fill
@@ -331,6 +335,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
@@ -501,7 +507,9 @@ impl BuiltinScalarFunction {
 
                 Ok(expr_type)
             }
-            BuiltinScalarFunction::ArrayHasAll => Ok(Boolean),
+            BuiltinScalarFunction::ArrayHasAll
+            | BuiltinScalarFunction::ArrayHasAny
+            | BuiltinScalarFunction::ArrayHas => Ok(Boolean),
             BuiltinScalarFunction::ArrayDims => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
@@ -808,7 +816,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::ArrayHasAll => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayHasAll
+            | BuiltinScalarFunction::ArrayHasAny
+            | BuiltinScalarFunction::ArrayHas => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayFill => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayLength => {
@@ -1280,6 +1290,8 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         }
         BuiltinScalarFunction::ArrayHasAll => &["array_has_all"],
         BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
+        BuiltinScalarFunction::ArrayHasAny => &["array_has_any"],
+        BuiltinScalarFunction::ArrayHas => &["array_has"],
         BuiltinScalarFunction::ArrayFill => &["array_fill"],
         BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],

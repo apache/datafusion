@@ -1425,6 +1425,20 @@ fn flatten_list_array<OffsetSize: OffsetSizeTrait>(
     }
 }
 
+/// Array_has_any SQL function
+pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
+    assert_eq!(args.len(), 2);
+    let array = flatten_list_array::<i32>(args[0].clone())?;
+    Ok(Arc::new(array) as ArrayRef)
+}
+
+/// Array_has SQL function
+pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
+    assert_eq!(args.len(), 2);
+    let array = flatten_list_array::<i32>(args[0].clone())?;
+    Ok(Arc::new(array) as ArrayRef)
+}
+
 /// Array_has_all SQL function
 pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     assert_eq!(args.len(), 2);

@@ -419,6 +419,12 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayHasAll => {
             Arc::new(|args| make_scalar_function(array_expressions::array_has_all)(args))
         }
+        BuiltinScalarFunction::ArrayHasAny => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_has_any)(args))
+        }
+        BuiltinScalarFunction::ArrayHas => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_has)(args))
+        }
         BuiltinScalarFunction::ArrayDims => {
             Arc::new(|args| make_scalar_function(array_expressions::array_dims)(args))
         }

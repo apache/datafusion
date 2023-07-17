@@ -1225,6 +1225,10 @@ false false
 false false
 false false
 
+# array_has column-wise #1
+# query B
+# select array_has(column1, 7) from arrays;
+
 ### Array operators tests
 ## array concatenate operator
 
