@@ -1391,8 +1391,8 @@ macro_rules! contains {
     }};
 }
 
-/// Array_contains SQL function
-pub fn array_contains(args: &[ArrayRef]) -> Result<ArrayRef> {
+/// Array_has_all SQL function
+pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn concat_inner_lists(arg: ArrayRef) -> Result<ArrayRef> {
         match arg.data_type() {
             DataType::List(field) => match field.data_type() {
@@ -2071,57 +2071,57 @@ mod tests {
     }
 
     #[test]
-    fn test_array_contains() {
-        // array_contains([1, 2, 3, 4], array_append([1, 2, 3, 4], 3)) = t
+    fn test_array_has_all() {
+        // array_has_all([1, 2, 3, 4], array_append([1, 2, 3, 4], 3)) = t
         let first_array = return_array().into_array(1);
         let second_array = array_append(&[
             first_array.clone(),
             Arc::new(Int64Array::from(vec![Some(3)])),
         ])
-        .expect("failed to initialize function array_contains");
+        .expect("failed to initialize function array_has_all");
 
-        let arr = array_contains(&[first_array.clone(), second_array])
-            .expect("failed to initialize function array_contains");
+        let arr = array_has_all(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_has_all");
         let result = as_boolean_array(&arr);
 
         assert_eq!(result, &BooleanArray::from(vec![true]));
 
-        // array_contains([1, 2, 3, 4], array_append([1, 2, 3, 4], 5)) = f
+        // array_has_all([1, 2, 3, 4], array_append([1, 2, 3, 4], 5)) = f
         let second_array = array_append(&[
             first_array.clone(),
             Arc::new(Int64Array::from(vec![Some(5)])),
         ])
-        .expect("failed to initialize function array_contains");
+        .expect("failed to initialize function array_has_all");
 
-        let arr = array_contains(&[first_array.clone(), second_array])
-            .expect("failed to initialize function array_contains");
+        let arr = array_has_all(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_has_all");
         let result = as_boolean_array(&arr);
 
         assert_eq!(result, &BooleanArray::from(vec![false]));
     }
 
     #[test]
-    fn test_nested_array_contains() {
-        // array_contains([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 3)) = t
+    fn test_nested_array_has_all() {
+        // array_has_all([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 3)) = t
         let first_array = return_nested_array().into_array(1);
         let array = return_array().into_array(1);
         let second_array =
             array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(3)]))])
-                .expect("failed to initialize function array_contains");
+                .expect("failed to initialize function array_has_all");
 
-        let arr = array_contains(&[first_array.clone(), second_array])
-            .expect("failed to initialize function array_contains");
+        let arr = array_has_all(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_has_all");
         let result = as_boolean_array(&arr);
 
         assert_eq!(result, &BooleanArray::from(vec![true]));
 
-        // array_contains([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 9)) = f
+        // array_has_all([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 9)) = f
         let second_array =
             array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(9)]))])
-                .expect("failed to initialize function array_contains");
+                .expect("failed to initialize function array_has_all");
 
-        let arr = array_contains(&[first_array.clone(), second_array])
-            .expect("failed to initialize function array_contains");
+        let arr = array_has_all(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_has_all");
         let result = as_boolean_array(&arr);
 
         assert_eq!(result, &BooleanArray::from(vec![false]));

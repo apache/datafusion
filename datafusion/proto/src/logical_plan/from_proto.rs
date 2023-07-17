@@ -36,7 +36,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
-    abs, acos, acosh, array, array_append, array_concat, array_contains, array_dims,
+    abs, acos, acosh, array, array_append, array_concat, array_has_all, array_dims,
     array_fill, array_length, array_ndims, array_position, array_positions,
     array_prepend, array_remove, array_replace, array_to_string, ascii, asin, asinh,
     atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
@@ -451,7 +451,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
-            ScalarFunction::ArrayContains => Self::ArrayContains,
+            ScalarFunction::ArrayContains => Self::ArrayHasAll,
             ScalarFunction::ArrayDims => Self::ArrayDims,
             ScalarFunction::ArrayFill => Self::ArrayFill,
             ScalarFunction::ArrayLength => Self::ArrayLength,
@@ -1219,7 +1219,7 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
-                ScalarFunction::ArrayContains => Ok(array_contains(
+                ScalarFunction::ArrayHasAll => Ok(array_has_all(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
