@@ -22,8 +22,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::util::pretty::pretty_format_batches;
 use arrow::{
     array::{
-        ArrayRef, Int32Array, Int32Builder, ListBuilder, StringArray, StringBuilder,
-        StructBuilder, UInt32Array, UInt32Builder,
+        ArrayRef, FixedSizeListBuilder, Int32Array, Int32Builder, ListBuilder,
+        StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder,
     },
     record_batch::RecordBatch,
 };
@@ -1040,6 +1040,76 @@ async fn unnest_columns() -> Result<()> {
         .count()
         .await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_fixed_list() -> Result<()> {
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
+
+    for idx in 0..6 {
+        // Append shape id.
+        shape_id_builder.append_value(idx as u32 + 1);
+
+        if idx % 3 != 0 {
+            tags_builder
+                .values()
+                .append_value(format!("tag{}1", idx + 1));
+            tags_builder
+                .values()
+                .append_value(format!("tag{}2", idx + 1));
+            tags_builder.append(true);
+        } else {
+            tags_builder.values().append_null();
+            tags_builder.values().append_null();
+            tags_builder.append(false);
+        }
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df.clone().collect().await?;
+    let expected = vec![
+        "+----------+----------------+",
+        "| shape_id | tags           |",
+        "+----------+----------------+",
+        "| 1        |                |",
+        "| 2        | [tag21, tag22] |",
+        "| 3        | [tag31, tag32] |",
+        "| 4        |                |",
+        "| 5        | [tag51, tag52] |",
+        "| 6        | [tag61, tag62] |",
+        "+----------+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    let results = df.unnest_column("tags")?.collect().await?;
+    let expected = vec![
+        "+----------+-------+",
+        "| shape_id | tags  |",
+        "+----------+-------+",
+        "| 1        |       |",
+        "| 2        | tag21 |",
+        "| 2        | tag22 |",
+        "| 3        | tag31 |",
+        "| 3        | tag32 |",
+        "| 4        |       |",
+        "| 5        | tag51 |",
+        "| 5        | tag52 |",
+        "| 6        | tag61 |",
+        "| 6        | tag62 |",
+        "+----------+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
 }

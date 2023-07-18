@@ -24,19 +24,16 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
+use crate::physical_plan::common::transpose;
 use crate::physical_plan::hash_utils::create_hashes;
+use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::repartition::distributor_channels::{
     channels, partition_aware_channels,
 };
+use crate::physical_plan::sorts::streaming_merge;
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
-use log::trace;
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
@@ -45,14 +42,18 @@ use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 
-use crate::physical_plan::common::transpose;
-use crate::physical_plan::metrics::BaselineMetrics;
-use crate::physical_plan::sorts::streaming_merge;
+use arrow::array::{ArrayRef, UInt64Builder};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalExpr};
+
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
+use log::trace;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
@@ -359,10 +360,12 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(RepartitionExec::try_new(
-            children[0].clone(),
-            self.partitioning.clone(),
-        )?))
+        let mut repartition =
+            RepartitionExec::try_new(children[0].clone(), self.partitioning.clone())?;
+        if self.preserve_order {
+            repartition = repartition.with_preserve_order();
+        }
+        Ok(Arc::new(repartition))
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
@@ -395,6 +398,10 @@ impl ExecutionPlan for RepartitionExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn execute(

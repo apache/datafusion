@@ -1464,4 +1464,24 @@ mod tests {
         assert_eq!(collapse_vec(vec![3, 1, 2, 3, 2, 3]), vec![3, 1, 2]);
         Ok(())
     }
+
+    #[test]
+    fn test_collect_columns() -> Result<()> {
+        let expr1 = Arc::new(Column::new("col1", 2)) as _;
+        let mut expected = HashSet::new();
+        expected.insert(Column::new("col1", 2));
+        assert_eq!(collect_columns(&expr1), expected);
+
+        let expr2 = Arc::new(Column::new("col2", 5)) as _;
+        let mut expected = HashSet::new();
+        expected.insert(Column::new("col2", 5));
+        assert_eq!(collect_columns(&expr2), expected);
+
+        let expr3 = Arc::new(BinaryExpr::new(expr1, Operator::Plus, expr2)) as _;
+        let mut expected = HashSet::new();
+        expected.insert(Column::new("col1", 2));
+        expected.insert(Column::new("col2", 5));
+        assert_eq!(collect_columns(&expr3), expected);
+        Ok(())
+    }
 }

@@ -566,9 +566,9 @@ enum ScalarFunction {
   ArrayContains = 100;
   Encode = 101;
   Decode = 102;
-  ArrayElement = 103;
-  ArraySlice = 104;
-  StructExtract = 105;
+  Cot = 103;
+  ArrayElement = 104;
+  ArraySlice = 105;
 }
 
 message ScalarFunctionNode {
@@ -1324,6 +1324,7 @@ enum AggregateMode {
   FINAL = 1;
   FINAL_PARTITIONED = 2;
   SINGLE = 3;
+  SINGLE_PARTITIONED = 4;
 }
 
 message WindowAggExecNode {

@@ -26,6 +26,7 @@ use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// trait to allow expr to typable with respect to a schema
@@ -35,6 +36,9 @@ pub trait ExprSchemable {
 
     /// given a schema, return the nullability of the expr
     fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool>;
+
+    /// given a schema, return the expr's optional metadata
+    fn metadata<S: ExprSchema>(&self, schema: &S) -> Result<HashMap<String, String>>;
 
     /// convert to a field with respect to a schema
     fn to_field(&self, input_schema: &DFSchema) -> Result<DFField>;
@@ -286,6 +290,14 @@ impl ExprSchemable for Expr {
         }
     }
 
+    fn metadata<S: ExprSchema>(&self, schema: &S) -> Result<HashMap<String, String>> {
+        match self {
+            Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
+            Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
+            _ => Ok(HashMap::new()),
+        }
+    }
+
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
@@ -297,12 +309,14 @@ impl ExprSchemable for Expr {
                 &c.name,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
-            )),
+            )
+            .with_metadata(self.metadata(input_schema)?)),
             _ => Ok(DFField::new_unqualified(
                 &self.display_name()?,
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
-            )),
+            )
+            .with_metadata(self.metadata(input_schema)?)),
         }
     }
 
@@ -476,11 +490,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_expr_metadata() {
+        let mut meta = HashMap::new();
+        meta.insert("bar".to_string(), "buzz".to_string());
+        let expr = col("foo");
+        let schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_metadata(meta.clone());
+
+        // col and alias should be metadata-preserving
+        assert_eq!(meta, expr.metadata(&schema).unwrap());
+        assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
+
+        // cast should drop input metadata since the type has changed
+        assert_eq!(
+            HashMap::new(),
+            expr.clone()
+                .cast_to(&DataType::Int64, &schema)
+                .unwrap()
+                .metadata(&schema)
+                .unwrap()
+        );
+
+        let schema = DFSchema::new_with_metadata(
+            vec![DFField::new_unqualified("foo", DataType::Int32, true)
+                .with_metadata(meta.clone())],
+            HashMap::new(),
+        )
+        .unwrap();
+
+        // verify to_field method populates metadata
+        assert_eq!(&meta, expr.to_field(&schema).unwrap().metadata());
+    }
+
     #[derive(Debug)]
     struct MockExprSchema {
         nullable: bool,
         data_type: DataType,
         error_on_nullable: bool,
+        metadata: HashMap<String, String>,
     }
 
     impl MockExprSchema {
@@ -489,6 +538,7 @@ mod tests {
                 nullable: false,
                 data_type: DataType::Null,
                 error_on_nullable: false,
+                metadata: HashMap::new(),
             }
         }
 
@@ -506,6 +556,11 @@ mod tests {
             self.error_on_nullable = error_on_nullable;
             self
         }
+
+        fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+            self.metadata = metadata;
+            self
+        }
     }
 
     impl ExprSchema for MockExprSchema {
@@ -519,6 +574,10 @@ mod tests {
 
         fn data_type(&self, _col: &Column) -> Result<&DataType> {
             Ok(&self.data_type)
+        }
+
+        fn metadata(&self, _col: &Column) -> Result<&HashMap<String, String>> {
+            Ok(&self.metadata)
         }
     }
 }

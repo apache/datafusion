@@ -47,7 +47,9 @@ pub mod var_provider;
 pub mod window;
 
 // reexport this to maintain compatibility with anything that used from_slice previously
+pub use aggregate::groups_accumulator::{GroupsAccumulator, GroupsAccumulatorAdapter};
 pub use aggregate::AggregateExpr;
+
 pub use equivalence::{
     project_equivalence_properties, project_ordering_equivalence_properties,
     EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
@@ -57,7 +59,8 @@ pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalE
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
-    LexOrdering, LexOrderingReq, PhysicalSortExpr, PhysicalSortRequirement,
+    LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order,
