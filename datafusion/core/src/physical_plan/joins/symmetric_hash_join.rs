@@ -57,6 +57,7 @@ use crate::physical_plan::joins::hash_join_utils::{
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, record_visited_indices, IntervalCalculatorInnerState,
 };
+use crate::physical_plan::joins::StreamJoinPartitionMode;
 use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     expressions::Column,
@@ -193,6 +194,8 @@ pub struct SymmetricHashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
+    /// Partition Mode
+    mode: StreamJoinPartitionMode,
 }
 
 #[derive(Debug)]
@@ -268,6 +271,7 @@ impl SymmetricHashJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
+        mode: StreamJoinPartitionMode,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -308,6 +312,7 @@ impl SymmetricHashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
+            mode,
         })
     }
 
@@ -386,8 +391,8 @@ impl DisplayAs for SymmetricHashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "SymmetricHashJoinExec: join_type={:?}, on=[{}]{}",
-                    self.join_type, on, display_filter
+                    "SymmetricHashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}",
+                    self.mode, self.join_type, on, display_filter
                 )
             }
         }
@@ -412,15 +417,22 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        let (left_expr, right_expr) = self
-            .on
-            .iter()
-            .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
-            .unzip();
-        vec![
-            Distribution::HashPartitioned(left_expr),
-            Distribution::HashPartitioned(right_expr),
-        ]
+        match self.mode {
+            StreamJoinPartitionMode::Partitioned => {
+                let (left_expr, right_expr) = self
+                    .on
+                    .iter()
+                    .map(|(l, r)| (Arc::new(l.clone()) as _, Arc::new(r.clone()) as _))
+                    .unzip();
+                vec![
+                    Distribution::HashPartitioned(left_expr),
+                    Distribution::HashPartitioned(right_expr),
+                ]
+            }
+            StreamJoinPartitionMode::SinglePartition => {
+                vec![Distribution::SinglePartition, Distribution::SinglePartition]
+            }
+        }
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -465,6 +477,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.filter.clone(),
             &self.join_type,
             self.null_equals_null,
+            self.mode,
         )?))
     }
 
@@ -1845,7 +1858,7 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
         let expected = {
             [
-                "SymmetricHashJoinExec: join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
+                "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
                 "  CoalesceBatchesExec: target_batch_size=8192",
                 "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
@@ -1898,7 +1911,7 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
         let expected = {
             [
-                "SymmetricHashJoinExec: join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
+                "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
                 "  CoalesceBatchesExec: target_batch_size=8192",
                 "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
