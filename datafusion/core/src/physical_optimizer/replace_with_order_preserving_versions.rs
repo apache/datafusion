@@ -17,86 +17,167 @@
 
 //! Repartition optimizer that replaces `SortExec`s and their suitable `RepartitionExec` children with `SortPreservingRepartitionExec`s.
 use crate::error::Result;
-use crate::physical_optimizer::sort_enforcement::unbounded_output;
+use crate::physical_optimizer::sort_enforcement::{unbounded_output, ExecTree};
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use super::utils::is_repartition;
 
-use datafusion_common::tree_node::Transformed;
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_physical_expr::utils::ordering_satisfy;
 
-use itertools::enumerate;
+use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
 
-/// Creates a `SortPreservingRepartitionExec` from given `RepartitionExec`
-fn sort_preserving_repartition(
-    repartition: &RepartitionExec,
-) -> Result<Arc<RepartitionExec>> {
-    Ok(Arc::new(
-        RepartitionExec::try_new(
-            repartition.input().clone(),
-            repartition.partitioning().clone(),
-        )?
-        .with_preserve_order(),
-    ))
+#[derive(Debug, Clone)]
+pub(crate) struct PlanWithPipelineFixer {
+    pub(crate) plan: Arc<dyn ExecutionPlan>,
+    ordering_onwards: Vec<Option<ExecTree>>,
 }
 
-fn does_plan_maintain_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.maintains_input_order().iter().any(|flag| *flag)
-}
-
-/// Check the children nodes of a `SortExec` until ordering is lost (e.g. until
-/// another `SortExec` or a `CoalescePartitionsExec` which doesn't maintain ordering)
-/// and replace `RepartitionExec`s that do not maintain ordering (e.g. those whose
-/// input partition counts are larger than unity) with `SortPreservingRepartitionExec`s.
-/// Note that doing this may render the `SortExec` in question unneccessary, which will
-/// be removed later on.
-///
-/// For example, we transform the plan below
-/// "FilterExec: c@2 > 3",
-/// "  RepartitionExec: partitioning=Hash(\[b@0], 16), input_partitions=16",
-/// "    RepartitionExec: partitioning=Hash(\[a@0], 16), input_partitions=1",
-/// "      MemoryExec: partitions=1, partition_sizes=\[(<depends_on_batch_size>)], output_ordering: \[PhysicalSortExpr { expr: Column { name: \"a\", index: 0 }, options: SortOptions { descending: false, nulls_first: false } }]",
-/// into
-/// "FilterExec: c@2 > 3",
-/// "  SortPreservingRepartitionExec: partitioning=Hash(\[b@0], 16), input_partitions=16",
-/// "    RepartitionExec: partitioning=Hash(\[a@0], 16), input_partitions=1",
-/// "      MemoryExec: partitions=1, partition_sizes=\[<depends_on_batch_size>], output_ordering: \[PhysicalSortExpr { expr: Column { name: \"a\", index: 0 }, options: SortOptions { descending: false, nulls_first: false } }]",
-/// where the `FilterExec` in the latter has output ordering `a ASC`. This ordering will
-/// potentially remove a `SortExec` at the top of `FilterExec`. If this doesn't help remove
-/// a `SortExec`, the old version is used.
-fn replace_sort_children(
-    plan: &Arc<dyn ExecutionPlan>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    if plan.children().is_empty() {
-        return Ok(plan.clone());
+impl PlanWithPipelineFixer {
+    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+        let length = plan.children().len();
+        PlanWithPipelineFixer {
+            plan,
+            ordering_onwards: vec![None; length],
+        }
     }
 
-    let mut children = plan.children();
-    for (idx, child) in enumerate(plan.children()) {
-        if !is_repartition(&child) && !does_plan_maintain_input_order(&child) {
-            break;
-        }
+    pub fn new_from_children_nodes(
+        children_nodes: Vec<PlanWithPipelineFixer>,
+        parent_plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Self> {
+        let children_plans = children_nodes
+            .iter()
+            .map(|item| item.plan.clone())
+            .collect();
+        let ordering_onwards = children_nodes
+            .into_iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                // Leaves of the `coalesce_onwards` tree are `CoalescePartitionsExec`
+                // operators. This tree collects all the intermediate executors that
+                // maintain a single partition. If we just saw a `CoalescePartitionsExec`
+                // operator, we reset the tree and start accumulating.
+                let plan = item.plan;
+                let ordering_onwards = item.ordering_onwards;
+                if plan.children().is_empty() {
+                    // Plan has no children, there is nothing to propagate.
+                    None
+                } else if (is_repartition(&plan)
+                    && !plan.maintains_input_order()[0]
+                    && ordering_onwards[0].is_none())
+                    || (is_coalesce_partitions(&plan)
+                        && plan.children()[0].output_ordering().is_some()
+                        && ordering_onwards[0].is_none())
+                {
+                    Some(ExecTree::new(plan, idx, vec![]))
+                } else {
+                    let children = ordering_onwards
+                        .into_iter()
+                        .flatten()
+                        .filter(|item| {
+                            // Only consider operators that maintains ordering
+                            plan.maintains_input_order()[item.idx]
+                                || is_coalesce_partitions(&plan)
+                                || is_repartition(&plan)
+                        })
+                        .collect::<Vec<_>>();
+                    if children.is_empty() {
+                        None
+                    } else {
+                        Some(ExecTree::new(plan, idx, children))
+                    }
+                }
+            })
+            .collect();
+        let plan = with_new_children_if_necessary(parent_plan, children_plans)?.into();
+        Ok(PlanWithPipelineFixer {
+            plan,
+            ordering_onwards,
+        })
+    }
 
-        if let Some(repartition) = child.as_any().downcast_ref::<RepartitionExec>() {
-            // Replace this `RepartitionExec` with a `SortPreservingRepartitionExec`
-            // if it doesn't preserve ordering and its input is unbounded. Doing
-            // so avoids breaking the pipeline.
-            if !repartition.maintains_input_order()[0] && unbounded_output(&child) {
-                let spr = sort_preserving_repartition(repartition)?
-                    .with_new_children(repartition.children())?;
-                // Perform the replacement and recurse into this plan's children:
-                children[idx] = replace_sort_children(&spr)?;
-                continue;
+    pub fn children(&self) -> Vec<PlanWithPipelineFixer> {
+        self.plan
+            .children()
+            .into_iter()
+            .map(|child| PlanWithPipelineFixer::new(child))
+            .collect()
+    }
+}
+
+impl TreeNode for PlanWithPipelineFixer {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        let children = self.children();
+        for child in children {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
             }
         }
 
-        children[idx] = replace_sort_children(&child)?;
+        Ok(VisitRecursion::Continue)
     }
 
-    plan.clone().with_new_children(children)
+    fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let children = self.children();
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            let children_nodes = children
+                .into_iter()
+                .map(transform)
+                .collect::<Result<Vec<_>>>()?;
+            PlanWithPipelineFixer::new_from_children_nodes(children_nodes, self.plan)
+        }
+    }
+}
+
+fn get_updated_sort_input(
+    coalesce_onwards: &ExecTree,
+    is_spr_better: bool,
+    is_spm_better: bool,
+    fix_pipeline: bool,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let plan = coalesce_onwards.plan.clone();
+
+    let mut children = plan.children();
+    for item in &coalesce_onwards.children {
+        children[item.idx] =
+            get_updated_sort_input(item, is_spr_better, is_spm_better, fix_pipeline)?;
+    }
+    let mut plan = plan.with_new_children(children)?;
+    if is_repartition(&plan)
+        && !plan.maintains_input_order()[0]
+        && (is_spr_better || fix_pipeline)
+    {
+        let child = plan.children()[0].clone();
+        plan = Arc::new(
+            RepartitionExec::try_new(child, plan.output_partitioning())?
+                .with_preserve_order(),
+        ) as _
+    }
+    if is_coalesce_partitions(&plan)
+        && plan.children()[0].output_ordering().is_some()
+        && (is_spm_better || fix_pipeline)
+    {
+        let child = plan.children()[0].clone();
+        plan = Arc::new(SortPreservingMergeExec::new(
+            child.output_ordering().unwrap_or(&[]).to_vec(),
+            child,
+        )) as _
+    }
+    Ok(plan)
 }
 
 /// The `replace_repartition_execs` optimizer sub-rule searches for `SortExec`s
@@ -122,29 +203,51 @@ fn replace_sort_children(
 /// 5_1. If the `SortExec` in question turns out to be unnecessary, remove it and use
 ///      updated plan. Otherwise, use the original plan.
 /// 6. Continue the top-down iteration until another `SortExec` is seen, or the iterations finish.
-pub fn replace_repartition_execs(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let changed_plan = replace_sort_children(&plan)?;
-        // Since we have a `SortExec` here, it's guaranteed that it has a single child.
-        let input = &changed_plan.children()[0];
-        // Check if any child is changed, if so remove the `SortExec`. If the ordering
-        // is being satisfied with the child, then it means `SortExec` is unnecessary.
-        if ordering_satisfy(
-            input.output_ordering(),
-            sort_exec.output_ordering(),
-            || input.equivalence_properties(),
-            || input.ordering_equivalence_properties(),
-        ) {
-            Ok(Transformed::Yes(input.clone()))
+pub(crate) fn replace_with_order_preserving_versions(
+    requirements: PlanWithPipelineFixer,
+    // If `true` it means that, changing repartition_exec with
+    // `sort_preserving_repartition_exec` is desirable when it helps
+    // to remove SortExec from plan.
+    // `false` means that, above conversion is not beneficial to do,
+    // this conversion should only be used to fix pipeline (streaming).
+    is_spr_better: bool,
+    // If `true` it means that, changing coalesce_partitions_exec with
+    // `sort_preserving_merge_exec` is desirable when it helps
+    // to remove `SortExec` from plan.
+    // `false` means that, above conversion is not beneficial to do,
+    // this conversion should only be used to fix pipeline (streaming).
+    is_spm_better: bool,
+) -> Result<Transformed<PlanWithPipelineFixer>> {
+    let plan = &requirements.plan;
+    let ordering_onwards = &requirements.ordering_onwards;
+    if is_sort(plan) {
+        let exec_tree = if let Some(exec_tree) = &ordering_onwards[0] {
+            exec_tree
         } else {
-            Ok(Transformed::No(plan))
+            return Ok(Transformed::No(requirements));
+        };
+        let is_unbounded = unbounded_output(plan);
+        let updated_sort_input = get_updated_sort_input(
+            exec_tree,
+            is_spr_better,
+            is_spm_better,
+            is_unbounded,
+        )?;
+        // If this sort is unnecessary, we should remove it:
+        if ordering_satisfy(
+            updated_sort_input.output_ordering(),
+            plan.output_ordering(),
+            || updated_sort_input.equivalence_properties(),
+            || updated_sort_input.ordering_equivalence_properties(),
+        ) {
+            return Ok(Transformed::Yes(PlanWithPipelineFixer {
+                plan: updated_sort_input,
+                ordering_onwards: vec![None],
+            }));
         }
-    } else {
-        // We don't have anything to do until we get to the `SortExec` parent.
-        Ok(Transformed::No(plan))
     }
+
+    Ok(Transformed::No(requirements))
 }
 
 #[cfg(test)]
@@ -197,7 +300,10 @@ mod tests {
             let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES.iter().map(|s| *s).collect();
 
             // Run the rule top-down
-            let optimized_physical_plan = physical_plan.transform_down(&replace_repartition_execs)?;
+            // let optimized_physical_plan = physical_plan.transform_down(&replace_repartition_execs)?;
+            let plan_with_pipeline_fixer = PlanWithPipelineFixer::new(physical_plan);
+            let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_versions(plan_with_pipeline_fixer, false, false))?;
+            let optimized_physical_plan = parallel.plan;
 
             // Get string representation of the plan
             let actual = get_plan_string(&optimized_physical_plan);
@@ -276,11 +382,10 @@ mod tests {
             "  FilterExec: c@2 > 3",
             "    SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        SortExec: expr=[a@0 ASC]",
-            "          CoalescePartitionsExec",
-            "            RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
-            "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC], has_header=true",
+            "        SortPreservingMergeExec: [a@0 ASC]",
+            "          SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC], has_header=true",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
@@ -516,11 +621,10 @@ mod tests {
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized = vec![
-            "SortExec: expr=[a@0 ASC NULLS LAST]",
-            "  CoalescePartitionsExec",
-            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
