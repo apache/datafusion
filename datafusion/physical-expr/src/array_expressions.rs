@@ -21,6 +21,7 @@ use arrow::array::*;
 use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow_array::types::Int64Type;
 use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
@@ -1521,19 +1522,91 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(BooleanArray::from(boolean_array)))
 }
 
+fn verify_list_contains(array: &ListArray, sub_array: ArrayRef) -> Result<bool> {
+    match sub_array.data_type() {
+        DataType::List(_) => {
+
+            for arr in array.iter().flatten() {
+                if arr == sub_array.clone() {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        } 
+        DataType::Int64 => {
+            let sub_array = sub_array.as_primitive::<Int64Type>();
+
+            for arr in array.iter().flatten() {
+                let arr = arr.as_primitive::<Int64Type>();
+                if arr == sub_array {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        
+        data_type=> {
+            Err(DataFusionError::NotImplemented(format!(
+                "verify_list_contains is not implemented for types '{data_type:?}'"
+            )))
+        }
+    }
+}
+
+fn verify_non_list_contains(array: &ListArray, sub_array: ArrayRef) -> Result<BooleanArray> {
+    match sub_array.data_type() {
+        DataType::Int64 => {
+            let sub_array = sub_array.as_primitive::<Int64Type>();
+            let mut boolean_array = Vec::with_capacity(array.len());
+
+            for (arr, elem) in array.iter().zip(sub_array.iter()) {
+                if let (Some(arr), Some(elem)) = (arr, elem) {
+                    let arr = arr.as_primitive::<Int64Type>();
+                    boolean_array.push(arr.values().contains(&elem));
+                }
+            }
+            Ok(BooleanArray::from(boolean_array))
+        }
+        
+        data_type=> {
+            Err(DataFusionError::NotImplemented(format!(
+                "verify_non_list_contains is not implemented for types '{data_type:?}'"
+            )))
+        }
+    }
+}
+
 /// Array_has SQL function
 pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
     assert_eq!(args.len(), 2);
-    let array = flatten_list_array::<i32>(args[0].clone())?;
-    let sub_array = args[1].clone();
-    let mut boolean_array = Vec::with_capacity(array.len());
 
-    for arr in array.iter().flatten() {
-        let res = contains_internal(arr.clone(), sub_array.clone())?;
-        boolean_array.push(res);
+    let array = args[0].as_list::<i32>();
+
+    match args[1].data_type() {
+        DataType::List(_) => {
+            let sub_array = args[1].as_list::<i32>();
+            let mut boolean_array = Vec::with_capacity(array.len());
+
+            for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
+                if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
+                    let arr = arr.as_list::<i32>();
+                    let res = verify_list_contains(arr, sub_arr)?;
+                    boolean_array.push(res);
+                }
+            }
+            Ok(Arc::new(BooleanArray::from(boolean_array)))
+        }
+        DataType::Int64 => {
+            let boolean_array = verify_non_list_contains(array, args[1].clone())?;
+            Ok(Arc::new(boolean_array))
+        }
+        _ => {
+            todo!(
+                "array_has not implemented for type: {:?}",
+                args[1].data_type()
+            )
+        }
     }
-
-    Ok(Arc::new(BooleanArray::from(boolean_array)))
 }
 
 /// Array_has_all SQL function
