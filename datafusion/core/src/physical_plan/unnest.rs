@@ -485,23 +485,23 @@ where
     T: ArrayAccessor<Item = ArrayRef>,
     P: ArrowPrimitiveType,
 {
-    // For `FixedSizeList` the values array contains fixed length arrays, even if there are null values.
-    // Therefor we must use the take kernel with take indices purpose built for `FixedSizeList`.
-    match list_array.data_type() {
-        DataType::FixedSizeList(_, value_length) => {
-            let take_indices = create_fixed_size_unnest_take_indices(
-                list_lengths,
-                *value_length as usize,
-            );
-            Ok(kernels::take::take(list_array_values, &take_indices, None)?)
-        }
-        _ => {
-            if list_array.null_count() > 0 {
+    if list_array.null_count() == 0 {
+        Ok(list_array_values.clone())
+    } else {
+        // For `FixedSizeList` the values array contains fixed length arrays, even if there are null values.
+        // Therefor we need to calculate take indices accordingly.
+        match list_array.data_type() {
+            DataType::FixedSizeList(_, value_length) => {
+                let take_indices = create_fixed_size_unnest_take_indices(
+                    list_lengths,
+                    *value_length as usize,
+                );
+                Ok(kernels::take::take(list_array_values, &take_indices, None)?)
+            }
+            _ => {
                 let capacity = list_array_values.len() + list_array.null_count();
                 let take_indices = create_unnest_take_indices(list_lengths, capacity);
                 Ok(kernels::take::take(list_array_values, &take_indices, None)?)
-            } else {
-                Ok(list_array_values.clone())
             }
         }
     }
