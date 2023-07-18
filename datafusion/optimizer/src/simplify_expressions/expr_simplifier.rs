@@ -1070,7 +1070,8 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
             Expr::Case(case)
-                if !case.when_then_expr.is_empty()
+                if case.expr.is_none() &&
+                !case.when_then_expr.is_empty()
                 && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
                 && info.is_boolean_type(&case.when_then_expr[0].1)? =>
             {
@@ -2819,9 +2820,9 @@ mod tests {
 
     #[test]
     fn simplify_expr_case_when_then_else() {
-        // CASE WHERE c2 != false THEN "ok" == "not_ok" ELSE c2 == true
+        // CASE WHEN c2 != false THEN "ok" == "not_ok" ELSE c2 == true
         // -->
-        // CASE WHERE c2 THEN false ELSE c2
+        // CASE WHEN c2 THEN false ELSE c2
         // -->
         // false
         assert_eq!(
@@ -2836,9 +2837,9 @@ mod tests {
             col("c2").not().and(col("c2")) // #1716
         );
 
-        // CASE WHERE c2 != false THEN "ok" == "ok" ELSE c2
+        // CASE WHEN c2 != false THEN "ok" == "ok" ELSE c2
         // -->
-        // CASE WHERE c2 THEN true ELSE c2
+        // CASE WHEN c2 THEN true ELSE c2
         // -->
         // c2
         //
@@ -2856,7 +2857,7 @@ mod tests {
             col("c2").or(col("c2").not().and(col("c2"))) // #1716
         );
 
-        // CASE WHERE ISNULL(c2) THEN true ELSE c2
+        // CASE WHEN ISNULL(c2) THEN true ELSE c2
         // -->
         // ISNULL(c2) OR c2
         //
@@ -2873,7 +2874,7 @@ mod tests {
                 .or(col("c2").is_not_null().and(col("c2")))
         );
 
-        // CASE WHERE c1 then true WHERE c2 then false ELSE true
+        // CASE WHEN c1 then true WHEN c2 then false ELSE true
         // --> c1 OR (NOT(c1) AND c2 AND FALSE) OR (NOT(c1 OR c2) AND TRUE)
         // --> c1 OR (NOT(c1) AND NOT(c2))
         // --> c1 OR NOT(c2)
@@ -2892,7 +2893,7 @@ mod tests {
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
 
-        // CASE WHERE c1 then true WHERE c2 then true ELSE false
+        // CASE WHEN c1 then true WHEN c2 then true ELSE false
         // --> c1 OR (NOT(c1) AND c2 AND TRUE) OR (NOT(c1 OR c2) AND FALSE)
         // --> c1 OR (NOT(c1) AND c2)
         // --> c1 OR c2
