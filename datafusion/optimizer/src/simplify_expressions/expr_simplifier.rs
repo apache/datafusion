@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter}
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
-    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
-    Volatility,
+    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
+    Like, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -1069,18 +1069,20 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Expr::Case(case)
-                if case.expr.is_none() &&
-                !case.when_then_expr.is_empty()
-                && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
-                && info.is_boolean_type(&case.when_then_expr[0].1)? =>
+            Expr::Case(Case {
+                expr: None,
+                when_then_expr,
+                else_expr,
+            }) if !when_then_expr.is_empty()
+                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&when_then_expr[0].1)? =>
             {
                 // The disjunction of all the when predicates encountered so far
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
                 let mut out_expr = lit(false);
 
-                for (when, then) in case.when_then_expr {
+                for (when, then) in when_then_expr {
                     let case_expr = when
                         .as_ref()
                         .clone()
@@ -1091,7 +1093,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     filter_expr = filter_expr.or(*when);
                 }
 
-                if let Some(else_expr) = case.else_expr {
+                if let Some(else_expr) = else_expr {
                     let case_expr = filter_expr.not().and(*else_expr);
                     out_expr = out_expr.or(case_expr);
                 }
