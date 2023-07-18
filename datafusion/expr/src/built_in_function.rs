@@ -430,14 +430,13 @@ impl BuiltinScalarFunction {
         )
     }
 
-    /// Returns the dimension [`DataType`] of [`List`]
+    /// Returns the dimension [`DataType`] of [`DataType::List`]
     fn return_dimension(self, input_expr_type: DataType) -> u64 {
-        use DataType::List;
         let mut res: u64 = 1;
         let mut current_data_type = input_expr_type;
         loop {
             match current_data_type {
-                List(field) => {
+                DataType::List(field) => {
                     current_data_type = field.data_type().clone();
                     res += 1;
                 }
