@@ -65,8 +65,7 @@ impl BuiltInWindowFunctionExpr for Ntile {
     }
 
     fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
-        // The built-in RowNumber window function introduces a new
-        // ordering:
+        // The built-in Ntile window function introduces a new ordering
         if let Some((idx, field)) = schema.column_with_name(self.name()) {
             let expr = Arc::new(Column::new(field.name(), idx));
             let options = SortOptions {

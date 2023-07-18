@@ -110,8 +110,7 @@ impl BuiltInWindowFunctionExpr for Rank {
     }
 
     fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
-        // The built-in RANK window function (all of the modes) introduces a new
-        // ordering:
+        // The built-in RANK window function (all of the modes) introduces a new ordering
         if let Some((idx, field)) = schema.column_with_name(self.name()) {
             let expr = Arc::new(Column::new(field.name(), idx));
             let options = SortOptions {
