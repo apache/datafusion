@@ -912,6 +912,12 @@ select trunc(a), trunc(b), trunc(c) from small_floats;
 0 0 0
 0 0 1
 
+# trunc with precision
+query RRR rowsort
+select trunc(4.267, 3), trunc(1.1234, 2), trunc(-1.1231, 6);
+----
+4 1.12 -1.1231
+
 ## bitwise and
 
 # bitwise and with column and scalar

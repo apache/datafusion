@@ -159,7 +159,6 @@ math_unary_function!("acosh", acosh);
 math_unary_function!("atanh", atanh);
 math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
-math_unary_function!("trunc", trunc);
 math_unary_function!("abs", abs);
 math_unary_function!("signum", signum);
 math_unary_function!("exp", exp);
@@ -542,22 +541,22 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     //if only one arg then invoke toolchain trunc(num) and precision = 0 by default
     //or then invoke the compute_truncate method to process precision
-    let mut _precision = ColumnarValue::Scalar(Int32(Some(0)));
-
     let num = &args[0];
-    if args.len() == 2 {
-        _precision = ColumnarValue::Array(args[1].clone());
-    }
+    let precision = if args.len() == 1 {
+        ColumnarValue::Scalar(Int32(Some(0)))
+    } else {
+        ColumnarValue::Array(args[1].clone())
+    };
 
     match args[0].data_type() {
-        DataType::Float64 => match _precision {
-            ColumnarValue::Scalar(Int32(Some(_precision))) => Ok(Arc::new(
+        DataType::Float64 => match precision {
+            ColumnarValue::Scalar(Int32(Some(0))) => Ok(Arc::new(
                 make_function_scalar_inputs!(num, "num", Float64Array, { f64::trunc }),
             )
                 as ArrayRef),
-            ColumnarValue::Array(_precision) => Ok(Arc::new(make_function_inputs2!(
+            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
                 num,
-                _precision,
+                precision,
                 "x",
                 "y",
                 Float64Array,
@@ -568,14 +567,14 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 "trunc function requires a scalar or array for precision".to_string(),
             )),
         },
-        DataType::Float32 => match _precision {
-            ColumnarValue::Scalar(Int32(Some(_precision))) => Ok(Arc::new(
+        DataType::Float32 => match precision {
+            ColumnarValue::Scalar(Int32(Some(0))) => Ok(Arc::new(
                 make_function_scalar_inputs!(num, "num", Float32Array, { f32::trunc }),
             )
                 as ArrayRef),
-            ColumnarValue::Array(_precision) => Ok(Arc::new(make_function_inputs2!(
+            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
                 num,
-                _precision,
+                precision,
                 "x",
                 "y",
                 Float32Array,
@@ -592,28 +591,14 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn compute_truncate32(x: f32, y: usize) -> f32 {
-    let s = format!("{:.precision$}", x, precision = y);
-    match parse_float32(&s) {
-        Ok(f) => f,
-        _ => x,
-    }
+fn compute_truncate32(x: f32, y: i32) -> f32 {
+    let factor = 10.0_f32.powi(y);
+    (x * factor).round() / factor
 }
 
-fn compute_truncate64(x: f64, y: usize) -> f64 {
-    let s = format!("{:.precision$}", x, precision = y);
-    match parse_float64(&s) {
-        Ok(f) => f,
-        _ => x,
-    }
-}
-
-fn parse_float32(string: &str) -> Result<f32, std::num::ParseFloatError> {
-    string.parse::<f32>()
-}
-
-fn parse_float64(string: &str) -> Result<f64, std::num::ParseFloatError> {
-    string.parse::<f64>()
+fn compute_truncate64(x: f64, y: i32) -> f64 {
+    let factor = 10.0_f64.powi(y);
+    (x * factor).round() / factor
 }
 
 #[cfg(test)]
