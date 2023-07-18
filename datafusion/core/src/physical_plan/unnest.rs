@@ -341,6 +341,33 @@ where
     builder.finish()
 }
 
+fn create_fixed_size_unnest_take_indices<T>(
+    list_lengths: &PrimitiveArray<T>,
+    value_length: usize,
+) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+{
+    let capacity =
+        value_length * list_lengths.len() - list_lengths.null_count() * value_length;
+    let mut builder = PrimitiveArray::<T>::builder(capacity);
+
+    for row in 0..list_lengths.len() {
+        if list_lengths.is_null(row) {
+            builder.append_null();
+        } else {
+            let fixed_length_offset = row * value_length;
+            // Both `repeat` and `index` are positive intergers.
+            (fixed_length_offset..fixed_length_offset + value_length).for_each(|r| {
+                let index = T::Native::from_usize(r).unwrap();
+                builder.append_value(index);
+            });
+        };
+    }
+
+    builder.finish()
+}
+
 fn create_unnest_take_indices<T>(
     list_lengths: &PrimitiveArray<T>,
     capacity: usize,
@@ -435,6 +462,20 @@ where
 /// ```ignore
 /// 1, null, 2, 3, 4, null, 5, 6
 /// ```
+///
+/// For [`DataType::FixedSizeList`] the values array will look like:   
+///
+/// ```ignore
+/// 1, 2, 3, null, null, null, 4, 5, 6
+/// ```
+///
+/// While the other cases will omit nulls from the values array:
+///
+/// ```ignore
+/// 1, 2, 3, 4, 5, 6
+/// ```
+/// Therefor we calculate take indices based on the underlying datatype.
+///  
 fn unnest_array<T, P>(
     list_array: &T,
     list_array_values: &Arc<dyn Array>,
@@ -444,12 +485,25 @@ where
     T: ArrayAccessor<Item = ArrayRef>,
     P: ArrowPrimitiveType,
 {
-    if list_array.null_count() > 0 {
-        let capacity = list_array_values.len() + list_array.null_count();
-        let take_indices = create_unnest_take_indices(list_lengths, capacity);
-        Ok(kernels::take::take(list_array_values, &take_indices, None)?)
-    } else {
-        Ok(list_array_values.clone())
+    // For `FixedSizeList` the values array contains fixed length arrays, even if there are null values.
+    // Therefor we must use the take kernel with take indices purpose built for `FixedSizeList`.
+    match list_array.data_type() {
+        DataType::FixedSizeList(_, value_length) => {
+            let take_indices = create_fixed_size_unnest_take_indices(
+                list_lengths,
+                *value_length as usize,
+            );
+            Ok(kernels::take::take(list_array_values, &take_indices, None)?)
+        }
+        _ => {
+            if list_array.null_count() > 0 {
+                let capacity = list_array_values.len() + list_array.null_count();
+                let take_indices = create_unnest_take_indices(list_lengths, capacity);
+                Ok(kernels::take::take(list_array_values, &take_indices, None)?)
+            } else {
+                Ok(list_array_values.clone())
+            }
+        }
     }
 }
 
@@ -491,30 +545,36 @@ where
     }
 }
 
-#[test]
-fn calculate_unnest_take_indices() {
-    let test_groups = PrimitiveArray::<Int32Type>::from(vec![
-        Some(3),
-        None,
-        Some(1),
-        None,
-        Some(2),
-        None,
-    ]);
+#[cfg(test)]
+mod tests {
 
-    let res = create_unnest_take_indices(&test_groups, 9);
+    use super::*;
 
-    let expected = PrimitiveArray::<Int32Type>::from(vec![
-        Some(0),
-        Some(1),
-        Some(2),
-        None,
-        Some(3),
-        None,
-        Some(4),
-        Some(5),
-        None,
-    ]);
+    #[test]
+    fn calculate_unnest_take_indices() {
+        let test_groups = PrimitiveArray::<Int32Type>::from(vec![
+            Some(3),
+            None,
+            Some(1),
+            None,
+            Some(2),
+            None,
+        ]);
 
-    assert_eq!(expected, res)
+        let res = create_unnest_take_indices(&test_groups, 9);
+
+        let expected = PrimitiveArray::<Int32Type>::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            None,
+            Some(3),
+            None,
+            Some(4),
+            Some(5),
+            None,
+        ]);
+
+        assert_eq!(expected, res)
+    }
 }
