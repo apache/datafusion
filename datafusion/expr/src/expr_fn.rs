@@ -476,6 +476,7 @@ scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
 scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
 scalar_expr!(Tan, tan, num, "tangent");
+scalar_expr!(Cot, cot, num, "cotangent");
 scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
 scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
 scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
@@ -519,7 +520,7 @@ scalar_expr!(
     num,
     "returns the hexdecimal representation of an integer"
 );
-scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
+scalar_expr!(Uuid, uuid, , "returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 // array functions
@@ -534,8 +535,7 @@ scalar_expr!(
     ArrayContains,
     array_contains,
     first_array second_array,
-"returns true, if each element of the second array appe
-    aring in the first array, otherwise false."
+    "returns true, if each element of the second array appearing in the first array, otherwise false."
 );
 scalar_expr!(
     ArrayDims,
@@ -912,6 +912,7 @@ mod test {
         test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
         test_unary_scalar_expr!(Tan, tan);
+        test_unary_scalar_expr!(Cot, cot);
         test_unary_scalar_expr!(Sinh, sinh);
         test_unary_scalar_expr!(Cosh, cosh);
         test_unary_scalar_expr!(Tanh, tanh);

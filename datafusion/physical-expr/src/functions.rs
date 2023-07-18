@@ -405,6 +405,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Log => {
             Arc::new(|args| make_scalar_function(math_expressions::log)(args))
         }
+        BuiltinScalarFunction::Cot => {
+            Arc::new(|args| make_scalar_function(math_expressions::cot)(args))
+        }
 
         // array functions
         BuiltinScalarFunction::ArrayAppend => {
