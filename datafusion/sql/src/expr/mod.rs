@@ -36,7 +36,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, JsonOperator};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -532,8 +532,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 right,
             } => match operator {
                 JsonOperator::Colon => {
-                    let left = self.sql_expr_to_logical_expr(*left.clone(), schema, planner_context)?;
-                    let right = self.sql_expr_to_logical_expr(*right.clone(), schema, planner_context)?;
+                    let left = self.sql_expr_to_logical_expr(
+                        *left.clone(),
+                        schema,
+                        planner_context,
+                    )?;
+                    let right = self.sql_expr_to_logical_expr(
+                        *right.clone(),
+                        schema,
+                        planner_context,
+                    )?;
                     (left, Some(Box::new(right)))
                 }
                 _ => (
@@ -546,10 +554,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 None,
             ),
         };
-    
+
         Ok((Box::new(key), extra_key))
     }
-    
+
     fn plan_indexed(
         &self,
         expr: Expr,
@@ -560,13 +568,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let indices = keys.pop().ok_or_else(|| {
             ParserError("Internal error: Missing index key expression".to_string())
         })?;
-    
+
         let expr = if !keys.is_empty() {
             self.plan_indexed(expr, keys, schema, planner_context)?
         } else {
             expr
         };
-    
+
         let (key, extra_key) = self.plan_indices(indices, schema, planner_context)?;
         Ok(Expr::GetIndexedField(GetIndexedField::new(
             Box::new(expr),

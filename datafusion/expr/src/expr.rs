@@ -370,7 +370,11 @@ pub struct GetIndexedField {
 impl GetIndexedField {
     /// Create a new GetIndexedField expression
     pub fn new(expr: Box<Expr>, key: Box<Expr>, extra_key: Option<Box<Expr>>) -> Self {
-        Self { expr, key, extra_key }
+        Self {
+            expr,
+            key,
+            extra_key,
+        }
     }
 }
 
@@ -1135,7 +1139,11 @@ impl fmt::Display for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{qualifier}.*"),
-            Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
+            Expr::GetIndexedField(GetIndexedField {
+                key,
+                extra_key,
+                expr,
+            }) => {
                 if let Some(extra_key) = extra_key {
                     write!(f, "({expr})[{key}:{extra_key}]")
                 } else {
@@ -1346,7 +1354,11 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField {
+            key,
+            extra_key,
+            expr,
+        }) => {
             let expr = create_name(expr)?;
             let key = create_name(key)?;
             if let Some(extra_key) = extra_key {

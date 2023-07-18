@@ -139,7 +139,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(Expr::GetIndexedField(GetIndexedField::new(
                         Box::new(Expr::Column(field.qualified_column())),
                         Box::new(Expr::Literal(ScalarValue::Utf8(Some(nested_name)))),
-                        None
+                        None,
                     )))
                 }
                 // found matching field with no spare identifier(s)

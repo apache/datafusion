@@ -457,9 +457,6 @@ pub fn create_physical_fun(
 
         // struct functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
-        BuiltinScalarFunction::StructExtract => Arc::new(|args| {
-            make_scalar_function(struct_expressions::struct_extract)(args)
-        }),
 
         // string functions
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {

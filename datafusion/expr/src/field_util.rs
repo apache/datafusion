@@ -26,7 +26,11 @@ use datafusion_common::{DataFusionError, Result};
 /// * the `data_type` is not a Struct or a List,
 /// * the `data_type` of extra key does not match with `data_type` of key
 /// * there is no field key is not of the required index type
-pub fn get_indexed_field(data_type: &DataType, key: &DataType, extra_key: &Option<DataType>) -> Result<Field> {
+pub fn get_indexed_field(
+    data_type: &DataType,
+    key: &DataType,
+    extra_key: &Option<DataType>,
+) -> Result<Field> {
     match (data_type, key) {
         (DataType::List(lt), DataType::Int64) => {
             match extra_key {

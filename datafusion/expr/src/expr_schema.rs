@@ -155,7 +155,11 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
+            Expr::GetIndexedField(GetIndexedField {
+                key,
+                extra_key,
+                expr,
+            }) => {
                 let expr_dt = expr.get_type(schema)?;
                 let key_dt = key.get_type(schema)?;
                 let extra_key_dt = if let Some(extra_key) = extra_key {
@@ -163,7 +167,8 @@ impl ExprSchemable for Expr {
                 } else {
                     None
                 };
-                get_indexed_field(&expr_dt, &key_dt, &extra_key_dt).map(|x| x.data_type().clone())
+                get_indexed_field(&expr_dt, &key_dt, &extra_key_dt)
+                    .map(|x| x.data_type().clone())
             }
         }
     }
@@ -272,7 +277,11 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField(GetIndexedField { key, extra_key, expr }) => {
+            Expr::GetIndexedField(GetIndexedField {
+                key,
+                extra_key,
+                expr,
+            }) => {
                 let expr_dt = expr.get_type(input_schema)?;
                 let key_dt = key.get_type(input_schema)?;
                 let extra_key_dt = if let Some(extra_key) = extra_key {
@@ -280,7 +289,8 @@ impl ExprSchemable for Expr {
                 } else {
                     None
                 };
-                get_indexed_field(&expr_dt, &key_dt, &extra_key_dt).map(|x| x.is_nullable())
+                get_indexed_field(&expr_dt, &key_dt, &extra_key_dt)
+                    .map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
@@ -388,7 +398,7 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::{Column};
+    use datafusion_common::Column;
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
