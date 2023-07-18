@@ -423,8 +423,10 @@ impl GroupedHashAggregateStream {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                group_rows.row_unchecked(row)
-                    == self.group_values.row_unchecked(*group_idx)
+                unsafe {
+                    group_rows.row_unchecked(row)
+                        == self.group_values.row_unchecked(*group_idx)
+                }
             });
 
             let group_idx = match entry {
@@ -434,7 +436,9 @@ impl GroupedHashAggregateStream {
                 None => {
                     // Add new entry to aggr_state and save newly created index
                     let group_idx = self.group_values.num_rows();
-                    self.group_values.push(group_rows.row_unchecked(row));
+                    unsafe {
+                        self.group_values.push(group_rows.row_unchecked(row));
+                    }
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
