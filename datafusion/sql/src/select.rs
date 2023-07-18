@@ -20,7 +20,7 @@ use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs,
 };
-use datafusion_common::{DataFusionError, PrimaryKeyGroup, Result};
+use datafusion_common::{DataFusionError, IdentifierKeyGroup, Result};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
@@ -432,7 +432,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         let schema = input.schema();
-        let primary_keys = schema.primary_keys();
+        let primary_keys = schema.identifier_key_groups();
 
         let field_names = schema
             .fields()
@@ -440,8 +440,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|elem| elem.qualified_name())
             .collect::<Vec<_>>();
         let mut new_group_by_exprs = group_by_exprs.clone();
-        for PrimaryKeyGroup {
-            primary_key_indices,
+        for IdentifierKeyGroup {
+            identifier_key_indices: primary_key_indices,
             associated_indices,
             ..
         } in primary_keys

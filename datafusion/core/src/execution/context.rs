@@ -87,7 +87,7 @@ use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_common::{
-    DFSchema, OwnedTableReference, PrimaryKeyGroup, SchemaReference,
+    DFSchema, IdentifierKeyGroup, OwnedTableReference, SchemaReference,
 };
 use datafusion_sql::{
     parser::DFParser,
@@ -519,13 +519,13 @@ impl SessionContext {
 
                 // all of the primary keys are associated with all of the fields (since it is source).
                 let association_indices = (0..fields.len()).collect::<Vec<_>>();
-                let primary_keys_with_associations = vec![PrimaryKeyGroup::new(
+                let primary_keys_with_associations = vec![IdentifierKeyGroup::new(
                     primary_keys.clone(),
                     association_indices,
                 )];
                 let updated_schema =
                     DFSchema::new_with_metadata(fields, df_schema.metadata().clone())?
-                        .with_primary_keys(primary_keys_with_associations);
+                        .with_identifier_key_groups(primary_keys_with_associations);
 
                 let schema = Arc::new(updated_schema.into());
 

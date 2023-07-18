@@ -33,25 +33,27 @@ use std::fmt::{Display, Formatter};
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
 
-/// Stores primary keys and their associated indices
-/// (where primary key property holds, this changes during intermediate
-/// schemas)
+/// Stores identifier keys and their associated indices
+/// (where identifier key property holds, this may change during intermediate
+/// schemas, such as join)
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrimaryKeyGroup {
-    pub primary_key_indices: Vec<usize>,
-    /// Flag indicating whether primary_key is exactly unique
-    /// if `false` it means that primary key isn't necessarily unique.
-    /// When primary_key is non-unique, all the associated fields at `associated_indices`
-    /// are same also. Primary key still refers to the unique set of associated fields, however same result
-    /// may occur replicated.
+pub struct IdentifierKeyGroup {
+    pub identifier_key_indices: Vec<usize>,
+    /// Flag indicating whether identifiers are unique
+    /// if `true` it means that, these indices are primary keys.
+    /// if `false` it means that identifier still uniquely identifies its associated column
+    /// results. However, same results may occur replicated.
     pub is_unique: bool,
     pub associated_indices: Vec<usize>,
 }
 
-impl PrimaryKeyGroup {
-    pub fn new(primary_key_indices: Vec<usize>, associated_indices: Vec<usize>) -> Self {
+impl IdentifierKeyGroup {
+    pub fn new(
+        identifier_key_indices: Vec<usize>,
+        associated_indices: Vec<usize>,
+    ) -> Self {
         Self {
-            primary_key_indices,
+            identifier_key_indices,
             is_unique: true,
             associated_indices,
         }
@@ -63,7 +65,7 @@ impl PrimaryKeyGroup {
     }
 }
 
-pub type PrimaryKeyGroups = Vec<PrimaryKeyGroup>;
+pub type IdentifierKeyGroups = Vec<IdentifierKeyGroup>;
 
 /// DFSchema wraps an Arrow schema and adds relation names
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,8 +74,8 @@ pub struct DFSchema {
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
-    /// Stores distinct primary key groups
-    primary_keys: PrimaryKeyGroups,
+    /// Stores distinct identifier key groups
+    identifier_key_groups: IdentifierKeyGroups,
 }
 
 impl DFSchema {
@@ -82,7 +84,7 @@ impl DFSchema {
         Self {
             fields: vec![],
             metadata: HashMap::new(),
-            primary_keys: vec![],
+            identifier_key_groups: vec![],
         }
     }
 
@@ -135,7 +137,7 @@ impl DFSchema {
         Ok(Self {
             fields,
             metadata,
-            primary_keys: vec![],
+            identifier_key_groups: vec![],
         })
     }
 
@@ -155,9 +157,12 @@ impl DFSchema {
         )
     }
 
-    /// Assing primary key
-    pub fn with_primary_keys(mut self, primary_keys: PrimaryKeyGroups) -> Self {
-        self.primary_keys = primary_keys;
+    /// Assign identifier key groups
+    pub fn with_identifier_key_groups(
+        mut self,
+        identifier_key_groups: IdentifierKeyGroups,
+    ) -> Self {
+        self.identifier_key_groups = identifier_key_groups;
         self
     }
 
@@ -168,21 +173,24 @@ impl DFSchema {
         let mut metadata = self.metadata.clone();
         fields.extend_from_slice(schema.fields().as_slice());
         metadata.extend(schema.metadata.clone());
-        let mut primary_keys = self.primary_keys.clone();
-        primary_keys
-            .iter_mut()
-            .for_each(|PrimaryKeyGroup { is_unique, .. }| {
-                *is_unique = false;
-            });
-        let mut other_primary_keys =
-            add_offset_to_primary_key(schema.primary_keys(), self.fields.len());
-        other_primary_keys.iter_mut().for_each(
-            |PrimaryKeyGroup { is_unique, .. }| {
+        let mut identifier_key_groups = self.identifier_key_groups.clone();
+        identifier_key_groups.iter_mut().for_each(
+            |IdentifierKeyGroup { is_unique, .. }| {
                 *is_unique = false;
             },
         );
-        primary_keys.extend(other_primary_keys);
-        Ok(Self::new_with_metadata(fields, metadata)?.with_primary_keys(primary_keys))
+        let mut other_identifier_key_groups = add_offset_to_identifier_key_groups(
+            schema.identifier_key_groups(),
+            self.fields.len(),
+        );
+        other_identifier_key_groups.iter_mut().for_each(
+            |IdentifierKeyGroup { is_unique, .. }| {
+                *is_unique = false;
+            },
+        );
+        identifier_key_groups.extend(other_identifier_key_groups);
+        Ok(Self::new_with_metadata(fields, metadata)?
+            .with_identifier_key_groups(identifier_key_groups))
     }
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
@@ -531,9 +539,9 @@ impl DFSchema {
         &self.metadata
     }
 
-    /// Get primary keys
-    pub fn primary_keys(&self) -> &PrimaryKeyGroups {
-        &self.primary_keys
+    /// Get Identifier key groups
+    pub fn identifier_key_groups(&self) -> &IdentifierKeyGroups {
+        &self.identifier_key_groups
     }
 }
 
@@ -839,21 +847,22 @@ impl SchemaExt for Schema {
     }
 }
 
-/// Add offset value to primary_keys and its associated indices
-pub fn add_offset_to_primary_key(
-    primary_keys: &PrimaryKeyGroups,
+/// Add offset value to identifier key indices and its associated indices
+/// for each identifier key group
+pub fn add_offset_to_identifier_key_groups(
+    identifier_key_groups: &IdentifierKeyGroups,
     offset: usize,
-) -> PrimaryKeyGroups {
-    primary_keys
+) -> IdentifierKeyGroups {
+    identifier_key_groups
         .iter()
         .map(
-            |PrimaryKeyGroup {
-                 primary_key_indices,
+            |IdentifierKeyGroup {
+                 identifier_key_indices,
                  is_unique,
                  associated_indices,
              }| {
-                PrimaryKeyGroup {
-                    primary_key_indices: primary_key_indices
+                IdentifierKeyGroup {
+                    identifier_key_indices: identifier_key_indices
                         .iter()
                         .map(|pk_idx| pk_idx + offset)
                         .collect(),
@@ -865,7 +874,7 @@ pub fn add_offset_to_primary_key(
                 }
             },
         )
-        .collect::<PrimaryKeyGroups>()
+        .collect::<IdentifierKeyGroups>()
 }
 
 #[cfg(test)]

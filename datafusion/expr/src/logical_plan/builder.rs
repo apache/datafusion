@@ -41,9 +41,9 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    add_offset_to_primary_key, display::ToStringifiedPlan, Column, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, OwnedTableReference, PrimaryKeyGroup, PrimaryKeyGroups,
-    Result, ScalarValue, TableReference, ToDFSchema,
+    add_offset_to_identifier_key_groups, display::ToStringifiedPlan, Column, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, IdentifierKeyGroup, IdentifierKeyGroups,
+    OwnedTableReference, Result, ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -264,19 +264,19 @@ impl LogicalPlanBuilder {
         }
 
         let schema = table_source.schema();
-        let mut primary_keys = vec![];
+        let mut id_key_groups = vec![];
         if let Some(pks) = table_source.primary_keys() {
             let n_field = schema.fields.len();
             // All the field indices are associated, since it is source,
             let associated_indices = (0..n_field).collect::<Vec<_>>();
-            primary_keys.push(PrimaryKeyGroup::new(pks.to_vec(), associated_indices));
+            id_key_groups.push(IdentifierKeyGroup::new(pks.to_vec(), associated_indices));
         }
 
         let projected_schema = projection
             .as_ref()
             .map(|p| {
-                let projected_primary_keys =
-                    project_primary_key_indices(&primary_keys, p, p.len());
+                let projected_id_key_groups =
+                    project_identifier_key_indices(&id_key_groups, p, p.len());
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
@@ -288,11 +288,13 @@ impl LogicalPlanBuilder {
                         .collect(),
                     schema.metadata().clone(),
                 )
-                .map(|df_schema| df_schema.with_primary_keys(projected_primary_keys))
+                .map(|df_schema| {
+                    df_schema.with_identifier_key_groups(projected_id_key_groups)
+                })
             })
             .unwrap_or_else(|| {
                 DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
-                    .map(|df_schema| df_schema.with_primary_keys(primary_keys))
+                    .map(|df_schema| df_schema.with_identifier_key_groups(id_key_groups))
             })?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
@@ -1099,45 +1101,48 @@ pub fn build_join_schema(
         }
     };
 
-    let mut right_primary_keys =
-        add_offset_to_primary_key(right.primary_keys(), left_fields.len());
+    let mut right_id_key_groups = add_offset_to_identifier_key_groups(
+        right.identifier_key_groups(),
+        left_fields.len(),
+    );
 
-    let mut left_primary_keys = left.primary_keys().clone();
+    let mut left_id_key_groups = left.identifier_key_groups().clone();
 
-    // After join, primary key may no longer be unique
+    // After join, identifier key may no longer be unique
     // (However, it still defines unique set of column values, just same values may be replicated).
     // reset is_unique flag to false.
-    left_primary_keys
+    left_id_key_groups
         .iter_mut()
         .for_each(|pk_group| pk_group.is_unique = false);
-    right_primary_keys
+    right_id_key_groups
         .iter_mut()
         .for_each(|pk_group| pk_group.is_unique = false);
-    let primary_keys = match join_type {
+    let id_key_groups = match join_type {
         JoinType::Inner => {
             // left then right
-            left_primary_keys
+            left_id_key_groups
                 .into_iter()
-                .chain(right_primary_keys.into_iter())
+                .chain(right_id_key_groups.into_iter())
                 .collect()
         }
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            left_primary_keys
+            left_id_key_groups
         }
         JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            right_primary_keys
+            right_id_key_groups
         }
         JoinType::Full => {
-            // primary key is not preserved
+            // identifier keys are not preserved
             vec![]
         }
     };
 
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    Ok(DFSchema::new_with_metadata(fields, metadata)?.with_primary_keys(primary_keys))
+    Ok(DFSchema::new_with_metadata(fields, metadata)?
+        .with_identifier_key_groups(id_key_groups))
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1273,27 +1278,27 @@ fn update_elements_with_matching_indices(
         .collect()
 }
 
-/// Update primary key indices, with index of the number in `field_indices`
-/// If `proj_indices` is \[2, 5, 8\], primary key groups is \[5\] -> \[5, 8\] in the `df_schema`.
-/// return value will be \[1\] -> \[1, 2\]. This means that 1st index of the `field_indices`(5) is primary key,
-/// and this primary key is associated with columns at indices 1 and 2 (in the updated schema).
+/// Update identifier key indices, with index of the number in `field_indices`
+/// If `proj_indices` is \[2, 5, 8\], and identifier key groups is \[5\] -> \[5, 8\] in the `df_schema`.
+/// return value will be \[1\] -> \[1, 2\]. This means that 1st index of the `field_indices`(5) is identifier key,
+/// and this identifier key is associated with columns at indices 1 and 2 (in the updated schema).
 /// In the updated schema, fields at the indices \[2, 5, 8\] will be at \[0, 1, 2\].
-pub fn project_primary_key_indices(
-    primary_key_groups: &PrimaryKeyGroups,
+pub fn project_identifier_key_indices(
+    id_key_groups: &IdentifierKeyGroups,
     proj_indices: &[usize],
-    // If is_unique flag of primary key group is true. Association covers whole table. `n_out`
+    // If is_unique flag of identifier key group is true. Association covers whole table. `n_out`
     // stores schema field length to be able to correctly associate with whole table.
     n_out: usize,
-) -> PrimaryKeyGroups {
-    let mut updated_primary_groups = vec![];
-    for PrimaryKeyGroup {
-        primary_key_indices,
+) -> IdentifierKeyGroups {
+    let mut updated_id_key_groups = vec![];
+    for IdentifierKeyGroup {
+        identifier_key_indices,
         is_unique,
         associated_indices,
-    } in primary_key_groups
+    } in id_key_groups
     {
-        let new_pk_indices =
-            update_elements_with_matching_indices(primary_key_indices, proj_indices);
+        let new_id_key_indices =
+            update_elements_with_matching_indices(identifier_key_indices, proj_indices);
         let new_association_indices = if *is_unique {
             // Associate with all of the fields in the schema
             (0..n_out).collect()
@@ -1301,22 +1306,22 @@ pub fn project_primary_key_indices(
             // Update associations according to projection
             update_elements_with_matching_indices(associated_indices, proj_indices)
         };
-        if !new_pk_indices.is_empty() {
-            let new_pk_group =
-                PrimaryKeyGroup::new(new_pk_indices, new_association_indices)
+        if !new_id_key_indices.is_empty() {
+            let new_id_key_group =
+                IdentifierKeyGroup::new(new_id_key_indices, new_association_indices)
                     .with_is_unique(*is_unique);
-            updated_primary_groups.push(new_pk_group);
+            updated_id_key_groups.push(new_id_key_group);
         }
     }
-    updated_primary_groups
+    updated_id_key_groups
 }
 
-/// This function projects primary key of the
+/// This function projects identifier key groups of the
 /// `input`, according to projection expressions `exprs`
-pub(crate) fn project_primary_keys(
+pub(crate) fn project_identifier_keys(
     exprs: &[Expr],
     input: &LogicalPlan,
-) -> Result<PrimaryKeyGroups> {
+) -> Result<IdentifierKeyGroups> {
     let input_fields = input.schema().fields();
     // Calculate expression indices (if found) in the input schema.
     let proj_indices = exprs
@@ -1333,8 +1338,8 @@ pub(crate) fn project_primary_keys(
                 .position(|item| item.qualified_name() == expr_name)
         })
         .collect::<Vec<_>>();
-    Ok(project_primary_key_indices(
-        input.schema().primary_keys(),
+    Ok(project_identifier_key_indices(
+        input.schema().identifier_key_groups(),
         &proj_indices,
         exprs.len(),
     ))
@@ -1366,13 +1371,13 @@ pub fn project(
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
-    // Update input primary keys according to projection.
-    let primary_keys = project_primary_keys(&projected_expr, &plan)?;
+    // Update input identifier keys according to projection.
+    let id_key_groups = project_identifier_keys(&projected_expr, &plan)?;
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?
-    .with_primary_keys(primary_keys);
+    .with_identifier_key_groups(id_key_groups);
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,
@@ -1537,8 +1542,8 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
     let schema = Arc::new(
         DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
-            // we can use existing primary key,
-            .with_primary_keys(input_schema.primary_keys().clone()),
+            // we can use existing identifier key groups,
+            .with_identifier_key_groups(input_schema.identifier_key_groups().clone()),
     );
 
     Ok(LogicalPlan::Unnest(Unnest {
@@ -2060,10 +2065,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_updated_primary_keys() {
-        let primary_keys = vec![PrimaryKeyGroup::new(vec![1], vec![0, 1, 2])];
-        let res = project_primary_key_indices(&primary_keys, &[1, 2], 2);
-        let expected = vec![PrimaryKeyGroup::new(vec![0], vec![0, 1])];
+    fn test_get_updated_id_keys() {
+        let identifier_key_groups = vec![IdentifierKeyGroup::new(vec![1], vec![0, 1, 2])];
+        let res = project_identifier_key_indices(&identifier_key_groups, &[1, 2], 2);
+        let expected = vec![IdentifierKeyGroup::new(vec![0], vec![0, 1])];
         assert_eq!(res, expected);
     }
 }

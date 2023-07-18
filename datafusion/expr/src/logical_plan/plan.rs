@@ -36,7 +36,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, PrimaryKeyGroup, Result, ScalarValue,
+    IdentifierKeyGroup, OwnedTableReference, Result, ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -44,7 +44,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 // backwards compatibility
-use crate::builder::project_primary_keys;
+use crate::builder::project_identifier_keys;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -1255,13 +1255,13 @@ impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
         // update primary key of `input` according to projection exprs.
-        let primary_keys = project_primary_keys(&expr, &input)?;
+        let primary_keys = project_identifier_keys(&expr, &input)?;
         let schema = Arc::new(
             DFSchema::new_with_metadata(
                 exprlist_to_fields(&expr, &input)?,
                 input.schema().metadata().clone(),
             )?
-            .with_primary_keys(primary_keys),
+            .with_identifier_key_groups(primary_keys),
         );
         Self::try_new_with_schema(expr, input, schema)
     }
@@ -1326,10 +1326,10 @@ impl SubqueryAlias {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
         // Since schema is same, other than qualifier, we can use existing primary keys
-        let primary_keys = plan.schema().primary_keys().clone();
+        let primary_keys = plan.schema().identifier_key_groups().clone();
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(&alias, &schema)?
-                .with_primary_keys(primary_keys),
+                .with_identifier_key_groups(primary_keys),
         );
         Ok(SubqueryAlias {
             input: Arc::new(plan),
@@ -1414,11 +1414,11 @@ impl Window {
         let metadata = input.schema().metadata().clone();
 
         // Update primary key for window
-        let mut primary_keys = input.schema().primary_keys().clone();
+        let mut primary_keys = input.schema().identifier_key_groups().clone();
         let n_input_fields = input.schema().fields().len();
         let new_associated_fields: Vec<usize> =
             (n_input_fields..window_fields.len()).collect();
-        for PrimaryKeyGroup {
+        for IdentifierKeyGroup {
             is_unique,
             associated_indices,
             ..
@@ -1436,7 +1436,7 @@ impl Window {
             window_expr,
             schema: Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
-                    .with_primary_keys(primary_keys),
+                    .with_identifier_key_groups(primary_keys),
             ),
         })
     }
