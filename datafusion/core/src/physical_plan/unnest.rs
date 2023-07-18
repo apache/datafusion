@@ -444,17 +444,6 @@ where
     T: ArrayAccessor<Item = ArrayRef>,
     P: ArrowPrimitiveType,
 {
-    let _elem_type = match list_array.data_type() {
-        DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
-            f.data_type()
-        }
-        dt => {
-            return Err(DataFusionError::Execution(format!(
-                "Cannot unnest array of type {dt}"
-            )))
-        }
-    };
-
     if list_array.null_count() > 0 {
         let capacity = list_array_values.len() + list_array.null_count();
         let take_indices = create_unnest_take_indices(list_lengths, capacity);
