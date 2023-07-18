@@ -145,18 +145,6 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn update_state(
-        &mut self,
-        state: &WindowAggState,
-        _idx: usize,
-        _range_columns: &[ArrayRef],
-        _sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        // If we do not use state, update_state does nothing
-        self.state.range.clone_from(&state.window_frame_range);
-        Ok(())
-    }
-
     /// When the window frame has a fixed beginning (e.g UNBOUNDED
     /// PRECEDING), for some functions such as FIRST_VALUE, LAST_VALUE and
     /// NTH_VALUE we can memoize result.  Once result is calculated it

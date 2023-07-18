@@ -497,6 +497,39 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+///cot SQL function
+pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::Float64 => Ok(Arc::new(make_function_scalar_inputs!(
+            &args[0],
+            "x",
+            Float64Array,
+            { compute_cot64 }
+        )) as ArrayRef),
+
+        DataType::Float32 => Ok(Arc::new(make_function_scalar_inputs!(
+            &args[0],
+            "x",
+            Float32Array,
+            { compute_cot32 }
+        )) as ArrayRef),
+
+        other => Err(DataFusionError::Internal(format!(
+            "Unsupported data type {other:?} for function cot"
+        ))),
+    }
+}
+
+fn compute_cot32(x: f32) -> f32 {
+    let a = f32::tan(x);
+    1.0 / a
+}
+
+fn compute_cot64(x: f64) -> f64 {
+    let a = f64::tan(x);
+    1.0 / a
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -738,5 +771,51 @@ mod tests {
         assert_eq!(ints.value(1), 6);
         assert_eq!(ints.value(2), 75);
         assert_eq!(ints.value(3), 16);
+    }
+
+    #[test]
+    fn test_cot_f32() {
+        let args: Vec<ArrayRef> =
+            vec![Arc::new(Float32Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
+        let result = cot(&args).expect("failed to initialize function cot");
+        let floats =
+            as_float32_array(&result).expect("failed to initialize function cot");
+
+        let expected = Float32Array::from(vec![
+            -1.986_460_4,
+            -0.156_119_96,
+            -0.501_202_8,
+            0.156_119_96,
+        ]);
+
+        let eps = 1e-6;
+        assert_eq!(floats.len(), 4);
+        assert!((floats.value(0) - expected.value(0)).abs() < eps);
+        assert!((floats.value(1) - expected.value(1)).abs() < eps);
+        assert!((floats.value(2) - expected.value(2)).abs() < eps);
+        assert!((floats.value(3) - expected.value(3)).abs() < eps);
+    }
+
+    #[test]
+    fn test_cot_f64() {
+        let args: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
+        let result = cot(&args).expect("failed to initialize function cot");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function cot");
+
+        let expected = Float64Array::from(vec![
+            -1.986_458_685_881_4,
+            -0.156_119_952_161_6,
+            -0.501_202_783_380_1,
+            0.156_119_952_161_6,
+        ]);
+
+        let eps = 1e-12;
+        assert_eq!(floats.len(), 4);
+        assert!((floats.value(0) - expected.value(0)).abs() < eps);
+        assert!((floats.value(1) - expected.value(1)).abs() < eps);
+        assert!((floats.value(2) - expected.value(2)).abs() < eps);
+        assert!((floats.value(3) - expected.value(3)).abs() < eps);
     }
 }
