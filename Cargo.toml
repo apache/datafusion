@@ -57,3 +57,13 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
+
+
+[patch.crates-io]
+arrow = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
+arrow-array = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
+arrow-buffer = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
+arrow-flight = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
+arrow-schema = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
+arrow-cast = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
+parquet = {  git = "https://github.com/alamb/arrow-rs.git",branch="alamb/peephole" }
