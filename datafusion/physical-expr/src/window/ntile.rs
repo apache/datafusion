@@ -21,11 +21,13 @@
 use crate::expressions::Column;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::Field;
 use arrow_schema::{DataType, SchemaRef, SortOptions};
 use datafusion_common::Result;
 use datafusion_expr::PartitionEvaluator;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -65,18 +67,15 @@ impl BuiltInWindowFunctionExpr for Ntile {
     }
 
     fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
-        // The built-in Ntile window function introduces a new ordering
-        if let Some((idx, field)) = schema.column_with_name(self.name()) {
+        // The built-in NTILE window function introduces a new ordering:
+        schema.column_with_name(self.name()).map(|(idx, field)| {
             let expr = Arc::new(Column::new(field.name(), idx));
             let options = SortOptions {
                 descending: false,
                 nulls_first: false,
             }; // ASC, NULLS LAST
-            let rhs = PhysicalSortExpr { expr, options };
-            Some(rhs)
-        } else {
-            None
-        }
+            PhysicalSortExpr { expr, options }
+        })
     }
 }
 

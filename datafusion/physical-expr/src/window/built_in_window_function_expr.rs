@@ -16,12 +16,14 @@
 // under the License.
 
 use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::PartitionEvaluator;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -80,9 +82,10 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         None
     }
 
-    /// Window function result may have ordering. If this is the case, this method should return
-    /// ordering of the window function (This information is used to update ordering equivalence)
-    /// By default result doesn't introduce ordering e.g None.
+    /// Returns the ordering introduced by the window function, if applicable.
+    /// Most window functions don't introduce an ordering, hence the default
+    /// value is `None`. Note that this information is used to update ordering
+    /// equivalences.
     fn get_result_ordering(&self, _schema: &SchemaRef) -> Option<PhysicalSortExpr> {
         None
     }

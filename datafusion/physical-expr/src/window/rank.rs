@@ -22,6 +22,7 @@ use crate::expressions::Column;
 use crate::window::window_expr::RankState;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
@@ -29,6 +30,7 @@ use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
+
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
@@ -110,18 +112,15 @@ impl BuiltInWindowFunctionExpr for Rank {
     }
 
     fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
-        // The built-in RANK window function (all of the modes) introduces a new ordering
-        if let Some((idx, field)) = schema.column_with_name(self.name()) {
+        // The built-in RANK window function (in all modes) introduces a new ordering:
+        schema.column_with_name(self.name()).map(|(idx, field)| {
             let expr = Arc::new(Column::new(field.name(), idx));
             let options = SortOptions {
                 descending: false,
                 nulls_first: false,
             }; // ASC, NULLS LAST
-            let rhs = PhysicalSortExpr { expr, options };
-            Some(rhs)
-        } else {
-            None
-        }
+            PhysicalSortExpr { expr, options }
+        })
     }
 }
 
