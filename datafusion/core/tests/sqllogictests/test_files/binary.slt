@@ -110,14 +110,19 @@ ff0102 FixedSizeBinary(3)
 000102 FixedSizeBinary(3)
 
 # Comparison
-# https://github.com/apache/arrow-rs/pull/4492
-query error DataFusion error: Arrow error: Compute error: eq_dyn_binary_scalar only supports Binary or LargeBinary arrays
+query ??BB
 SELECT
   column1,
   column2,
   column1 = arrow_cast(X'000102', 'FixedSizeBinary(3)'),
   column1 = column2
 FROM t
+----
+000102 000102 true true
+003102 000102 false false
+NULL 000102 NULL NULL
+ff0102 000102 false false
+000102 000102 true true
 
 
 # Comparison to different sized field
