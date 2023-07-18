@@ -653,8 +653,6 @@ mod tests {
     #[tokio::test]
     async fn write_json_results() -> Result<()> {
         // create partitioned input file and context
-        let tmp_dir = TempDir::new()?;
-        println!("TEMP DIRECTORY: {:?}", tmp_dir);
         let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
@@ -665,13 +663,15 @@ mod tests {
             .await?;
 
         // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new());
+        let tmp_dir = TempDir::new()?;
+        println!("TEMP DIRECTORY: {:?}", tmp_dir);
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse(&format!("file://local")).unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
+        let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT a, b FROM test").await?;
         df.write_json(&out_dir_url).await?;
 
