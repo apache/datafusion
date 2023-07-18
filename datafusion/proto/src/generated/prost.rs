@@ -2262,12 +2262,12 @@ pub enum ScalarFunction {
     ArrayToString = 97,
     Cardinality = 98,
     TrimArray = 99,
-    ArrayHasAll = 100,    
     Encode = 101,
     Decode = 102,
     Cot = 103,
     ArrayHas = 104,
     ArrayHasAny = 105,
+    ArrayHasAll = 106,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2376,12 +2376,12 @@ impl ScalarFunction {
             ScalarFunction::ArrayToString => "ArrayToString",
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::TrimArray => "TrimArray",
-            ScalarFunction::ArrayHasAll => "ArrayHasAll",
-            ScalarFunction::ArrayHasAny => "ArrayHasAny",
-            ScalarFunction::ArrayHas => "ArrayHas",
             ScalarFunction::Encode => "Encode",
             ScalarFunction::Decode => "Decode",
             ScalarFunction::Cot => "Cot",
+            ScalarFunction::ArrayHas => "ArrayHas",
+            ScalarFunction::ArrayHasAny => "ArrayHasAny",
+            ScalarFunction::ArrayHasAll => "ArrayHasAll",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2487,12 +2487,12 @@ impl ScalarFunction {
             "ArrayToString" => Some(Self::ArrayToString),
             "Cardinality" => Some(Self::Cardinality),
             "TrimArray" => Some(Self::TrimArray),
-            "ArrayHasAll" => Some(Self::ArrayHasAll),
-            "ArrayHasAny" => Some(Self::ArrayHasAny),
-            "ArrayHas" => Some(Self::ArrayHas),
             "Encode" => Some(Self::Encode),
             "Decode" => Some(Self::Decode),
             "Cot" => Some(Self::Cot),
+            "ArrayHas" => Some(Self::ArrayHas),
+            "ArrayHasAny" => Some(Self::ArrayHasAny),
+            "ArrayHasAll" => Some(Self::ArrayHasAll),
             _ => None,
         }
     }
