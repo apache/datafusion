@@ -16,7 +16,7 @@
 # under the License.
 
 #############
-## Array expressions Tests
+## Array Expressions Tests
 #############
 
 
@@ -174,6 +174,85 @@ select column1, column2, column3 from arrays_values_without_nulls;
 ### Array index
 
 
+## array[i]
+
+# single index with scalars #1 (positive index)
+query IRT
+select make_array(1, 2, 3)[1], make_array(1.0, 2.0, 3.0)[2], make_array('h', 'e', 'l', 'l', 'o')[3];
+----
+1 2 l
+
+# single index with scalars #2 (zero index)
+query I
+select make_array(1, 2, 3)[0];
+----
+NULL
+
+# single index with scalars #3 (negative index)
+query IRT
+select make_array(1, 2, 3)[-1], make_array(1.0, 2.0, 3.0)[-2], make_array('h', 'e', 'l', 'l', 'o')[-3];
+----
+3 2 l
+
+# single index with columns #1 (positive index)
+query ?RT
+select column1[2], column2[3], column3[1] from arrays;
+----
+[3, ] 3.3 L
+
+# single index with columns #2 (zero index)
+query ?RT
+select column1[0], column2[0], column3[0] from arrays;
+----
+NULL NULL NULL
+
+# single index with columns #3 (negative index)
+query ?RT
+select column1[-2], column2[-3], column3[-1] from arrays;
+----
+[, 2] 1.1 m
+
+## array[i:j]
+# multiple index with columns #1 (positive index)
+query IRT
+select make_array(1, 2, 3)[1:2], make_array(1.0, 2.0, 3.0)[2:3], make_array('h', 'e', 'l', 'l', 'o')[2:4];
+----
+[1, 2] [2.0, 3.0] [e, l, l]
+
+# multiple index with columns #2 (zero index)
+query IRT
+select make_array(1, 2, 3)[0:0], make_array(1.0, 2.0, 3.0)[0:2], make_array('h', 'e', 'l', 'l', 'o')[0:6];
+----
+[] [1.0, 2.0] [h, e, l, l, o]
+
+# TODO: multiple negative index
+# multiple index with columns #3 (negative index)
+# query II
+# select make_array(1, 2, 3)[-3:-1], make_array(1.0, 2.0, 3.0)[-3:-1], make_array('h', 'e', 'l', 'l', 'o')[-2:0];
+# ----
+
+# multiple index with columns #4 (complex index)
+# query III
+# select make_array(1, 2, 3)[2 + 1 - 1:10], make_array(1.0, 2.0, 3.0)[2 | 2:10], make_array('h', 'e', 'l', 'l', 'o')[6 ^ 6:10];
+# ----
+
+# multiple index with columns #1 (positive index)
+# query ?RT
+# select column1[2:4], column2[1:3], column3[3:5] from arrays;
+# ----
+# [3, ] 3.3 L
+
+# multiple index with columns #2 (zero index)
+# query ?RT
+# select column1[0:5], column2[0:3], column3[0:9] from arrays;
+# ----
+# NULL NULL NULL
+
+# multiple index with columns #3 (negative index)
+# query ?RT
+# select column1[-2:-4], column2[-3:-5], column3[-1:-4] from arrays;
+# ----
+# [, 2] 1.1 m
 
 ### Array function tests
 
