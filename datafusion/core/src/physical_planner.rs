@@ -296,11 +296,11 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             expr,
             pattern,
             escape_char,
-            case_sensitive,
+            case_insensitive,
         }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
-            let op_name = if *case_sensitive { "LIKE" } else { "ILIKE" };
+            let op_name = if *case_insensitive { "ILIKE" } else { "LIKE" };
             let escape = if let Some(char) = escape_char {
                 format!("CHAR '{char}'")
             } else {
@@ -317,7 +317,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             expr,
             pattern,
             escape_char,
-            case_sensitive: _,
+            case_insensitive: _,
         }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;

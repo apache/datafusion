@@ -269,9 +269,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 negated,
             } => self.sql_in_list_to_expr(*expr, list, negated, schema, planner_context),
 
-            SQLExpr::Like { negated, expr, pattern, escape_char } => self.sql_like_to_expr(negated, *expr, *pattern, escape_char, schema, planner_context,true),
+            SQLExpr::Like { negated, expr, pattern, escape_char } => self.sql_like_to_expr(negated, *expr, *pattern, escape_char, schema, planner_context,false),
 
-            SQLExpr::ILike { negated, expr, pattern, escape_char } =>  self.sql_like_to_expr(negated, *expr, *pattern, escape_char, schema, planner_context,false),
+            SQLExpr::ILike { negated, expr, pattern, escape_char } =>  self.sql_like_to_expr(negated, *expr, *pattern, escape_char, schema, planner_context,true),
 
             SQLExpr::SimilarTo { negated, expr, pattern, escape_char } => self.sql_similarto_to_expr(negated, *expr, *pattern, escape_char, schema, planner_context),
 
@@ -398,7 +398,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         escape_char: Option<char>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-        case_sensitive: bool,
+        case_insensitive: bool,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
@@ -412,7 +412,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
             Box::new(pattern),
             escape_char,
-            case_sensitive,
+            case_insensitive,
         )))
     }
 
@@ -437,7 +437,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
             Box::new(pattern),
             escape_char,
-            true,
+            false,
         )))
     }
 

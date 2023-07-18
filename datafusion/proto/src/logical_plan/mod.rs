@@ -2548,7 +2548,7 @@ mod roundtrip_tests {
                 Box::new(col("col")),
                 Box::new(lit("[0-9]+")),
                 escape_char,
-                true,
+                false,
             ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
@@ -2567,7 +2567,7 @@ mod roundtrip_tests {
                 Box::new(col("col")),
                 Box::new(lit("[0-9]+")),
                 escape_char,
-                false,
+                true,
             ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
@@ -2586,7 +2586,7 @@ mod roundtrip_tests {
                 Box::new(col("col")),
                 Box::new(lit("[0-9]+")),
                 escape_char,
-                true,
+                false,
             ));
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);

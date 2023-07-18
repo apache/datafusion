@@ -1162,7 +1162,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 pattern,
                 negated,
                 escape_char: _,
-                case_sensitive: _,
+                case_insensitive: _,
             }) if !is_null(&expr)
                 && matches!(
                     pattern.as_ref(),
@@ -2594,7 +2594,7 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
-            case_sensitive: true,
+            case_insensitive: false,
         })
     }
 
@@ -2604,7 +2604,7 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
-            case_sensitive: true,
+            case_insensitive: false,
         })
     }
 
@@ -2614,7 +2614,7 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
-            case_sensitive: false,
+            case_insensitive: true,
         })
     }
 
@@ -2624,7 +2624,7 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
-            case_sensitive: false,
+            case_insensitive: true,
         })
     }
 

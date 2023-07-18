@@ -1112,7 +1112,7 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
-            true,
+            false,
         ))),
         ExprType::Ilike(like) => Ok(Expr::Like(Like::new(
             like.negated,
@@ -1123,7 +1123,7 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
-            false,
+            true,
         ))),
         ExprType::SimilarTo(like) => Ok(Expr::SimilarTo(Like::new(
             like.negated,
@@ -1134,7 +1134,7 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
-            true,
+            false,
         ))),
         ExprType::Case(case) => {
             let when_then_expr = case

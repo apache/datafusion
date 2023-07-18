@@ -86,7 +86,7 @@ impl OperatorMode {
             expr,
             pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(pattern)))),
             escape_char: None,
-            case_sensitive: !self.i,
+            case_insensitive: self.i,
         };
 
         Expr::Like(like)

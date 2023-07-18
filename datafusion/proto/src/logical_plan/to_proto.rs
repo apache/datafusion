@@ -526,9 +526,22 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 expr,
                 pattern,
                 escape_char,
-                case_sensitive,
+                case_insensitive,
             }) => {
-                if *case_sensitive {
+                if *case_insensitive {
+                    let pb = Box::new(protobuf::ILikeNode {
+                        negated: *negated,
+                        expr: Some(Box::new(expr.as_ref().try_into()?)),
+                        pattern: Some(Box::new(pattern.as_ref().try_into()?)),
+                        escape_char: escape_char
+                            .map(|ch| ch.to_string())
+                            .unwrap_or_default(),
+                    });
+
+                    Self {
+                        expr_type: Some(ExprType::Ilike(pb)),
+                    }
+                } else {
                     let pb = Box::new(protobuf::LikeNode {
                         negated: *negated,
                         expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -541,18 +554,6 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     Self {
                         expr_type: Some(ExprType::Like(pb)),
                     }
-                } else {
-                    let pb = Box::new(protobuf::ILikeNode {
-                        negated: *negated,
-                        expr: Some(Box::new(expr.as_ref().try_into()?)),
-                        pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                        escape_char: escape_char
-                            .map(|ch| ch.to_string())
-                            .unwrap_or_default(),
-                    });
-                    Self {
-                        expr_type: Some(ExprType::Ilike(pb)),
-                    }
                 }
             }
             Expr::SimilarTo(Like {
@@ -560,7 +561,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 expr,
                 pattern,
                 escape_char,
-                case_sensitive: _,
+                case_insensitive: _,
             }) => {
                 let pb = Box::new(protobuf::SimilarToNode {
                     negated: *negated,

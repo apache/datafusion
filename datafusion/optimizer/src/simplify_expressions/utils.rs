@@ -300,7 +300,7 @@ pub fn negate_clause(expr: Expr) -> Expr {
             like.expr,
             like.pattern,
             like.escape_char,
-            like.case_sensitive,
+            like.case_insensitive,
         )),
         // use not clause
         _ => Expr::Not(Box::new(expr)),

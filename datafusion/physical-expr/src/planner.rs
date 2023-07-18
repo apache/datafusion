@@ -228,7 +228,7 @@ pub fn create_physical_expr(
             expr,
             pattern,
             escape_char,
-            case_sensitive,
+            case_insensitive,
         }) => {
             if escape_char.is_some() {
                 return Err(DataFusionError::Execution(
@@ -249,7 +249,7 @@ pub fn create_physical_expr(
             )?;
             like(
                 *negated,
-                !case_sensitive,
+                *case_insensitive,
                 physical_expr,
                 physical_pattern,
                 input_schema,

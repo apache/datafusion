@@ -919,9 +919,9 @@ pub fn to_substrait_rex(
             expr,
             pattern,
             escape_char,
-            case_sensitive,
+            case_insensitive,
         }) => make_substrait_like_expr(
-            !case_sensitive,
+            *case_insensitive,
             *negated,
             expr,
             pattern,

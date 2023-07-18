@@ -206,15 +206,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 expr,
                 pattern,
                 escape_char,
-                case_sensitive,
+                case_insensitive,
             }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
-                    let op_name = if case_sensitive {
-                        "LIKE"
-                    } else {
+                    let op_name = if case_insensitive {
                         "ILIKE"
+                    } else {
+                        "LIKE"
                     };
                     DataFusionError::Plan(format!(
                         "There isn't a common type to coerce {left_type} and {right_type} in {op_name} expression"
@@ -227,7 +227,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     expr,
                     pattern,
                     escape_char,
-                    case_sensitive,
+                    case_insensitive,
                 ));
                 Ok(expr)
             }
@@ -1120,7 +1120,7 @@ mod test {
         // like : utf8 like "abc"
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
-        let like_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let expected = "Projection: a LIKE Utf8(\"abc\")\n  EmptyRelation";
@@ -1128,7 +1128,7 @@ mod test {
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
-        let like_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let expected = "Projection: a LIKE CAST(NULL AS Utf8) AS a LIKE NULL \
@@ -1137,7 +1137,7 @@ mod test {
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
-        let like_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
+        let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
@@ -1149,7 +1149,7 @@ mod test {
         // ilike
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
-        let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
+        let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let expected = "Projection: a ILIKE Utf8(\"abc\")\n  EmptyRelation";
@@ -1157,7 +1157,7 @@ mod test {
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
-        let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
+        let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let expected = "Projection: a ILIKE CAST(NULL AS Utf8) AS a ILIKE NULL \
@@ -1166,7 +1166,7 @@ mod test {
 
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
-        let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
+        let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);

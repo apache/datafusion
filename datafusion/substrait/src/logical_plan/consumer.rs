@@ -1338,6 +1338,6 @@ async fn make_datafusion_like(
         expr: Box::new(expr),
         pattern: Box::new(pattern),
         escape_char: escape_char.map(|c| c.chars().next().unwrap()),
-        case_sensitive: !case_insensitive,
+        case_insensitive,
     })))
 }

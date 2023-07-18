@@ -278,7 +278,8 @@ pub struct Like {
     pub expr: Box<Expr>,
     pub pattern: Box<Expr>,
     pub escape_char: Option<char>,
-    pub case_sensitive: bool,
+    /// Whether to ignore case on comparing
+    pub case_insensitive: bool,
 }
 
 impl Like {
@@ -288,14 +289,14 @@ impl Like {
         expr: Box<Expr>,
         pattern: Box<Expr>,
         escape_char: Option<char>,
-        case_sensitive: bool,
+        case_insensitive: bool,
     ) -> Self {
         Self {
             negated,
             expr,
             pattern,
             escape_char,
-            case_sensitive,
+            case_insensitive,
         }
     }
 }
@@ -762,13 +763,19 @@ impl Expr {
             Box::new(self),
             Box::new(other),
             None,
-            true,
+            false,
         ))
     }
 
     /// Return `self NOT LIKE other`
     pub fn not_like(self, other: Expr) -> Expr {
-        Expr::Like(Like::new(true, Box::new(self), Box::new(other), None, true))
+        Expr::Like(Like::new(
+            true,
+            Box::new(self),
+            Box::new(other),
+            None,
+            false,
+        ))
     }
 
     /// Return `self ILIKE other`
@@ -778,19 +785,13 @@ impl Expr {
             Box::new(self),
             Box::new(other),
             None,
-            false,
+            true,
         ))
     }
 
     /// Return `self NOT ILIKE other`
     pub fn not_ilike(self, other: Expr) -> Expr {
-        Expr::Like(Like::new(
-            true,
-            Box::new(self),
-            Box::new(other),
-            None,
-            false,
-        ))
+        Expr::Like(Like::new(true, Box::new(self), Box::new(other), None, true))
     }
 
     /// Return the name to use for the specific Expr, recursing into
@@ -1095,10 +1096,10 @@ impl fmt::Display for Expr {
                 expr,
                 pattern,
                 escape_char,
-                case_sensitive,
+                case_insensitive,
             }) => {
                 write!(f, "{expr}")?;
-                let op_name = if *case_sensitive { "LIKE" } else { "ILIKE" };
+                let op_name = if *case_insensitive { "ILIKE" } else { "LIKE" };
                 if *negated {
                     write!(f, " NOT")?;
                 }
@@ -1113,7 +1114,7 @@ impl fmt::Display for Expr {
                 expr,
                 pattern,
                 escape_char,
-                case_sensitive: _,
+                case_insensitive: _,
             }) => {
                 write!(f, "{expr}")?;
                 if *negated {
@@ -1216,13 +1217,13 @@ fn create_name(e: &Expr) -> Result<String> {
             expr,
             pattern,
             escape_char,
-            case_sensitive,
+            case_insensitive,
         }) => {
             let s = format!(
                 "{} {}{} {} {}",
                 expr,
                 if *negated { "NOT " } else { "" },
-                if *case_sensitive { "LIKE" } else { "ILIKE" },
+                if *case_insensitive { "ILIKE" } else { "LIKE" },
                 pattern,
                 if let Some(char) = escape_char {
                     format!("CHAR '{char}'")
@@ -1237,7 +1238,7 @@ fn create_name(e: &Expr) -> Result<String> {
             expr,
             pattern,
             escape_char,
-            case_sensitive: _,
+            case_insensitive: _,
         }) => {
             let s = format!(
                 "{} {} {} {}",
