@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::{BinaryExpr, Column};
+use crate::expressions::{CastExpr, Column};
 use crate::{
     normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
     PhysicalSortExpr,
 };
 
 use arrow::datatypes::SchemaRef;
+use arrow_schema::Fields;
 
+use crate::utils::collect_columns;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -112,26 +114,6 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
             _ => {}
         }
     }
-}
-
-// Helper function to calculate column info recursively
-fn get_column_indices_helper(
-    indices: &mut Vec<(usize, String)>,
-    expr: &Arc<dyn PhysicalExpr>,
-) {
-    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-        indices.push((col.index(), col.name().to_string()))
-    } else if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        get_column_indices_helper(indices, binary_expr.left());
-        get_column_indices_helper(indices, binary_expr.right());
-    };
-}
-
-/// Get index and name of each column that is in the expression (Can return multiple entries for `BinaryExpr`s)
-fn get_column_indices(expr: &Arc<dyn PhysicalExpr>) -> Vec<(usize, String)> {
-    let mut result = vec![];
-    get_column_indices_helper(&mut result, expr);
-    result
 }
 
 /// `OrderingEquivalenceProperties` keeps track of columns that describe the
@@ -232,32 +214,52 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
 /// For this case, we say that `vec![a ASC, b ASC]`, and `vec![c DESC, d ASC]` are ordering equivalent.
 pub type OrderingEquivalentClass = EquivalentClass<LexOrdering>;
 
+/// Update each expression in `ordering` with alias expressions. Assume
+/// `ordering` is `a ASC, b ASC` and `c` is alias of `b`. Then, the result
+/// will be `a ASC, c ASC`.
+fn update_with_alias(
+    mut ordering: LexOrdering,
+    oeq_alias_map: &[(Column, Column)],
+) -> LexOrdering {
+    for (source_col, target_col) in oeq_alias_map {
+        let source_col: Arc<dyn PhysicalExpr> = Arc::new(source_col.clone());
+        // Replace invalidated columns with its alias in the ordering expression.
+        let target_col: Arc<dyn PhysicalExpr> = Arc::new(target_col.clone());
+        for item in ordering.iter_mut() {
+            if item.expr.eq(&source_col) {
+                // Change the corresponding entry with alias expression
+                item.expr = target_col.clone();
+            }
+        }
+    }
+    ordering
+}
+
 impl OrderingEquivalentClass {
-    /// This function extends ordering equivalences with alias information.
-    /// For instance, assume column a and b are aliases,
-    /// and column (a ASC), (c DESC) are ordering equivalent. We append (b ASC) to ordering equivalence,
-    /// since b is alias of colum a. After this function (a ASC), (c DESC), (b ASC) would be ordering equivalent.
-    fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
-        for (column, columns) in columns_map {
-            let col_expr = Arc::new(column.clone()) as Arc<dyn PhysicalExpr>;
-            let mut to_insert = vec![];
-            for ordering in std::iter::once(&self.head).chain(self.others.iter()) {
-                for (idx, item) in ordering.iter().enumerate() {
-                    if item.expr.eq(&col_expr) {
-                        for col in columns {
-                            let col_expr = Arc::new(col.clone()) as Arc<dyn PhysicalExpr>;
-                            let mut normalized = self.head.clone();
-                            // Change the corresponding entry in the head with the alias column:
-                            let entry = &mut normalized[idx];
-                            (entry.expr, entry.options) = (col_expr, item.options);
-                            to_insert.push(normalized);
-                        }
-                    }
-                }
-            }
-            for items in to_insert {
-                self.insert(items);
-            }
+    /// This function updates ordering equivalences with alias information.
+    /// For instance, assume columns `a` and `b` are aliases (a as b), and
+    /// orderings `a ASC` and `c DESC` are equivalent. Here, we replace column
+    /// `a` with `b` in ordering equivalence expressions. After this function,
+    /// `a ASC`, `c DESC` will be converted to the `b ASC`, `c DESC`.
+    fn update_with_aliases(
+        &mut self,
+        oeq_alias_map: &[(Column, Column)],
+        fields: &Fields,
+    ) {
+        let is_head_invalid = self.head.iter().any(|sort_expr| {
+            collect_columns(&sort_expr.expr)
+                .iter()
+                .any(|col| is_column_invalid_in_new_schema(col, fields))
+        });
+        // If head is invalidated, update head with alias expressions
+        if is_head_invalid {
+            self.head = update_with_alias(self.head.clone(), oeq_alias_map);
+        } else {
+            let new_oeq_expr = update_with_alias(self.head.clone(), oeq_alias_map);
+            self.insert(new_oeq_expr);
+        }
+        for ordering in self.others.clone().into_iter() {
+            self.insert(update_with_alias(ordering, oeq_alias_map));
         }
     }
 }
@@ -342,6 +344,22 @@ impl OrderingEquivalenceBuilder {
     }
 }
 
+/// Checks whether column is still valid after projection.
+fn is_column_invalid_in_new_schema(column: &Column, fields: &Fields) -> bool {
+    let idx = column.index();
+    idx >= fields.len() || fields[idx].name() != column.name()
+}
+
+/// Gets first aliased version of `col` found in `alias_map`.
+fn get_alias_column(
+    col: &Column,
+    alias_map: &HashMap<Column, Vec<Column>>,
+) -> Option<Column> {
+    alias_map
+        .iter()
+        .find_map(|(column, columns)| column.eq(col).then(|| columns[0].clone()))
+}
+
 /// This function applies the given projection to the given equivalence
 /// properties to compute the resulting (projected) equivalence properties; e.g.
 /// 1) Adding an alias, which can introduce additional equivalence properties,
@@ -352,10 +370,21 @@ pub fn project_equivalence_properties(
     alias_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut EquivalenceProperties,
 ) {
+    // Get schema and fields of projection output
+    let schema = output_eq.schema();
+    let fields = schema.fields();
+
     let mut eq_classes = input_eq.classes().to_vec();
     for (column, columns) in alias_map {
         let mut find_match = false;
         for class in eq_classes.iter_mut() {
+            // If `self.head` is invalidated in the new schema, update head
+            // with this change `self.head` is not randomly assigned by one of the entries from `self.others`
+            if is_column_invalid_in_new_schema(&class.head, fields) {
+                if let Some(alias_col) = get_alias_column(&class.head, alias_map) {
+                    class.head = alias_col;
+                }
+            }
             if class.contains(column) {
                 for col in columns {
                     class.insert(col.clone());
@@ -370,15 +399,10 @@ pub fn project_equivalence_properties(
     }
 
     // Prune columns that are no longer in the schema from equivalences.
-    let schema = output_eq.schema();
-    let fields = schema.fields();
     for class in eq_classes.iter_mut() {
         let columns_to_remove = class
             .iter()
-            .filter(|column| {
-                let idx = column.index();
-                idx >= fields.len() || fields[idx].name() != column.name()
-            })
+            .filter(|column| is_column_invalid_in_new_schema(column, fields))
             .cloned()
             .collect::<Vec<_>>();
         for column in columns_to_remove {
@@ -402,25 +426,33 @@ pub fn project_ordering_equivalence_properties(
     columns_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
+    // Get schema and fields of projection output
+    let schema = output_eq.schema();
+    let fields = schema.fields();
+
     let mut eq_classes = input_eq.classes().to_vec();
+    let mut oeq_alias_map = vec![];
+    for (column, columns) in columns_map {
+        if is_column_invalid_in_new_schema(column, fields) {
+            oeq_alias_map.push((column.clone(), columns[0].clone()));
+        }
+    }
     for class in eq_classes.iter_mut() {
-        class.update_with_aliases(columns_map);
+        class.update_with_aliases(&oeq_alias_map, fields);
     }
 
     // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
-    let schema = output_eq.schema();
-    let fields = schema.fields();
     for class in eq_classes.iter_mut() {
         let sort_exprs_to_remove = class
             .iter()
             .filter(|sort_exprs| {
                 sort_exprs.iter().any(|sort_expr| {
-                    let col_infos = get_column_indices(&sort_expr.expr);
+                    let cols_in_expr = collect_columns(&sort_expr.expr);
                     // If any one of the columns, used in Expression is invalid, remove expression
                     // from ordering equivalences
-                    col_infos.into_iter().any(|(idx, name)| {
-                        idx >= fields.len() || fields[idx].name() != &name
-                    })
+                    cols_in_expr
+                        .iter()
+                        .any(|col| is_column_invalid_in_new_schema(col, fields))
                 })
             })
             .cloned()
@@ -434,6 +466,42 @@ pub fn project_ordering_equivalence_properties(
     output_eq.extend(eq_classes);
 }
 
+/// Update `ordering` if it contains cast expression with target column
+/// after projection, if there is no cast expression among `ordering` expressions,
+/// returns `None`.
+fn update_with_cast_exprs(
+    cast_exprs: &[(CastExpr, Column)],
+    mut ordering: LexOrdering,
+) -> Option<LexOrdering> {
+    let mut is_changed = false;
+    for sort_expr in ordering.iter_mut() {
+        for (cast_expr, target_col) in cast_exprs.iter() {
+            if sort_expr.expr.eq(cast_expr.expr()) {
+                sort_expr.expr = Arc::new(target_col.clone()) as _;
+                is_changed = true;
+            }
+        }
+    }
+    is_changed.then_some(ordering)
+}
+
+/// Update cast expressions inside ordering equivalence
+/// properties with its target column after projection
+pub fn update_ordering_equivalence_with_cast(
+    cast_exprs: &[(CastExpr, Column)],
+    input_oeq: &mut OrderingEquivalenceProperties,
+) {
+    for cls in input_oeq.classes.iter_mut() {
+        for ordering in
+            std::iter::once(cls.head().clone()).chain(cls.others().clone().into_iter())
+        {
+            if let Some(updated_ordering) = update_with_cast_exprs(cast_exprs, ordering) {
+                cls.insert(updated_ordering);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,7 +509,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
 
-    use datafusion_expr::Operator;
     use std::sync::Arc;
 
     #[test]
@@ -532,20 +599,6 @@ mod tests {
         assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
         assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_column_infos() -> Result<()> {
-        let expr1 = Arc::new(Column::new("col1", 2)) as _;
-        assert_eq!(get_column_indices(&expr1), vec![(2, "col1".to_string())]);
-        let expr2 = Arc::new(Column::new("col2", 5)) as _;
-        assert_eq!(get_column_indices(&expr2), vec![(5, "col2".to_string())]);
-        let expr3 = Arc::new(BinaryExpr::new(expr1, Operator::Plus, expr2)) as _;
-        assert_eq!(
-            get_column_indices(&expr3),
-            vec![(2, "col1".to_string()), (5, "col2".to_string())]
-        );
         Ok(())
     }
 }

@@ -41,6 +41,8 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 
+use datafusion_physical_expr::equivalence::update_ordering_equivalence_with_cast;
+use datafusion_physical_expr::expressions::CastExpr;
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, OrderingEquivalenceProperties,
@@ -245,11 +247,29 @@ impl ExecutionPlan for ProjectionExec {
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        if self.output_ordering.is_none() {
+            // If there is no output ordering, return an "empty" equivalence set:
+            return new_properties;
+        }
+
+        let mut input_oeq = self.input().ordering_equivalence_properties();
+        // Stores cast expression and its `Column` version in the output:
+        let mut cast_exprs: Vec<(CastExpr, Column)> = vec![];
+        for (idx, (expr, name)) in self.expr.iter().enumerate() {
+            if let Some(cast_expr) = expr.as_any().downcast_ref::<CastExpr>() {
+                let target_col = Column::new(name, idx);
+                cast_exprs.push((cast_expr.clone(), target_col));
+            }
+        }
+
+        update_ordering_equivalence_with_cast(&cast_exprs, &mut input_oeq);
+
         project_ordering_equivalence_properties(
-            self.input.ordering_equivalence_properties(),
+            input_oeq,
             &self.columns_map,
             &mut new_properties,
         );
+
         new_properties
     }
 
