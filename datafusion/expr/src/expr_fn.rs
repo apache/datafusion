@@ -547,7 +547,7 @@ scalar_expr!(
     ArrayElement,
     array_element,
     array element,
-    ""
+    "extracts the element with the index n from the array."
 );
 scalar_expr!(
     ArrayFill,
@@ -601,7 +601,7 @@ scalar_expr!(
     ArraySlice,
     array_slice,
     array offset length,
-    ""
+    "returns a slice of the array."
 );
 scalar_expr!(
     ArrayToString,

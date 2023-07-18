@@ -185,6 +185,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | array_concat(array[, ..., array_n])       | Concatenates arrays.                                                                             |
 | array_contains(first_array, second_array) | Returns true, if each element of the second array appearing in the first array, otherwise false. |
 | array_dims(array)                         | Returns an array of the array's dimensions.                                                      |
+| array_element(array, index)               | Extracts the element with the index n from the array                                             |
 | array_fill(element, array)                | Returns an array filled with copies of the given value.                                          |
 | array_length(array, dimension)            | Returns the length of the array dimension.                                                       |
 | array_ndims(array)                        | Returns the number of dimensions of the array.                                                   |
@@ -193,6 +194,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | array_prepend(array, element)             | Prepends an element to the beginning of an array.                                                |
 | array_remove(array, element)              | Removes all elements equal to the given value from the array.                                    |
 | array_replace(array, from, to)            | Replaces a specified element with another specified element.                                     |
+| array_slice(array, index)                 | Returns a slice of the array.                                                                    |
 | array_to_string(array, delimeter)         | Converts each element to its text representation.                                                |
 | cardinality(array)                        | Returns the total number of elements in the array.                                               |
 | make_array(value1, [value2 [, ...]])      | Returns an Arrow array using the specified input expressions.                                    |

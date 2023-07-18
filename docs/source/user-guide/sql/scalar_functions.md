@@ -1423,6 +1423,8 @@ from_unixtime(expression)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_element](#array_element)
+- [array_extract](#array_extract)
 - [array_fill](#array_fill)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
@@ -1431,8 +1433,12 @@ from_unixtime(expression)
 - [array_prepend](#array_prepend)
 - [array_remove](#array_remove)
 - [array_replace](#array_replace)
+- [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
+- [list_element](#list_element)
+- [list_extract](#list_extract)
+- [list_slice](#list_slice)
 - [make_array](#make_array)
 - [trim_array](#trim_array)
 
@@ -1491,6 +1497,41 @@ array_dims(array)
 
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
+
+### `array_element`
+
+Extracts the element with the index n from the array.
+
+```
+array_element(array, index)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **index**: Index to extract the element from the array.
+
+#### Example
+
+```
+❯ select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```
+
+#### Aliases
+
+- array_extract
+- list_element
+- list_extract
+
+### `array_extract`
+
+_Alias of [array_element](#array_element)._
 
 ### `array_fill`
 
@@ -1606,6 +1647,36 @@ array_replace(array, from, to)
 - **from**: Initial element.
 - **to**: Final element.
 
+### `array_slice`
+
+Returns a slice of the array.
+
+```
+array_slice(array, begin, end)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **begin**: Right border of the slice
+- **end**: Left border of the slice
+
+#### Example
+
+```
+❯ select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
++--------------------------------------------------------+
+| array_slice(List([1,2,3,4,5,6,7,8]),Int64(3),Int64(6)) |
++--------------------------------------------------------+
+| [3, 4, 5, 6]                                           |
++--------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_slice
+
 ### `array_to_string`
 
 Converts each element to its text representation.
@@ -1632,6 +1703,18 @@ cardinality(array)
 
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
+
+### `list_element`
+
+_Alias of [array_element](#array_element)._
+
+### `list_extract`
+
+_Alias of [array_element](#array_element)._
+
+### `list_slice`
+
+_Alias of [array_slice](#array_slice)._
 
 ### `make_array`
 

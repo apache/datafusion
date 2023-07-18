@@ -237,7 +237,7 @@ mod tests {
             ),
             (
                 Arc::new(Field::new("b", DataType::Int64, true)),
-                Arc::new(int.clone()) as ArrayRef,
+                Arc::new(int) as ArrayRef,
             ),
         ]);
         let expr = col("str", &schema).unwrap();
@@ -252,7 +252,7 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(1);
         let result =
             as_boolean_array(&result).expect("failed to downcast to BooleanArray");
-        assert_eq!(boolean.clone(), result.clone());
+        assert_eq!(boolean, result.clone());
         Ok(())
     }
 

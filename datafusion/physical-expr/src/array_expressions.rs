@@ -497,11 +497,9 @@ fn define_array_slice(
         DataType::UInt64 => {
             slice!(list_array, key, extra_key, return_element, UInt64Array)
         }
-        data_type => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "array is not implemented for types '{data_type:?}'"
-            )))
-        }
+        data_type => Err(DataFusionError::NotImplemented(format!(
+            "array is not implemented for types '{data_type:?}'"
+        ))),
     }
 }
 
@@ -1445,10 +1443,10 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 pub fn trim_array(_args: &[ArrayRef]) -> Result<ArrayRef> {
-    return Err(DataFusionError::Internal(
+    Err(DataFusionError::Internal(
         "`trim_array` function is now deprecated. Please use `array_slice` instead"
             .to_string(),
-    ));
+    ))
 }
 
 /// Cardinality SQL function

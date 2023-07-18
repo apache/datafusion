@@ -194,6 +194,7 @@ select make_array(1, 2, 3)[-1], make_array(1.0, 2.0, 3.0)[-2], make_array('h', '
 ----
 3 2 l
 
+# TODO: support columns for single and multiple indixes
 # single index with columns #1 (positive index)
 query ?RT
 select column1[2], column2[3], column3[1] from arrays;

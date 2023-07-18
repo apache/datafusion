@@ -398,7 +398,7 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::Column;
+    use datafusion_common::{Column, ScalarValue};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
