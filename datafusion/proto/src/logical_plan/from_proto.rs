@@ -918,17 +918,15 @@ pub fn parse_expr(
                 .expect("Binary expression could not be reduced to a single expression."))
         }
         ExprType::GetIndexedField(field) => {
-            let key = field
-                .key
-                .as_ref()
-                .ok_or_else(|| Error::required("value"))?
-                .try_into()?;
-
             let expr = parse_required_expr(field.expr.as_deref(), registry, "expr")?;
+            let key = parse_required_expr(field.key.as_deref(), registry, "key")?;
+            let extra_key =
+                parse_required_expr(field.extra_key.as_deref(), registry, "extra_key")?;
 
             Ok(Expr::GetIndexedField(GetIndexedField::new(
                 Box::new(expr),
-                key,
+                Box::new(key),
+                Some(Box::new(extra_key)),
             )))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
@@ -1268,9 +1266,10 @@ pub fn parse_expr(
                 ScalarFunction::ArrayDims => {
                     Ok(array_dims(parse_expr(&args[0], registry)?))
                 }
-                ScalarFunction::ArrayElement => {
-                    Ok(array_element(parse_expr(&args[0], registry)?))
-                }
+                ScalarFunction::ArrayElement => Ok(array_element(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
                 }

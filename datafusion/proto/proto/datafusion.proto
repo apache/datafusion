@@ -400,7 +400,10 @@ message RollupNode {
 
 message GetIndexedField {
   LogicalExprNode expr = 1;
-  ScalarValue key = 2;
+  LogicalExprNode key = 2;
+  oneof optional_extra_key {
+    LogicalExprNode extra_key = 3;
+  }
 }
 
 message IsNull {
@@ -1467,5 +1470,8 @@ message ColumnStats {
 
 message PhysicalGetIndexedFieldExprNode {
   PhysicalExprNode arg = 1;
-  ScalarValue key = 2;
+  PhysicalExprNode key = 2;
+  oneof optional_extra_key {
+    PhysicalExprNode extra_key = 3;
+  }
 }

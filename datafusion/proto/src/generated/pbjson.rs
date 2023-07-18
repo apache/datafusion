@@ -7066,12 +7066,22 @@ impl serde::Serialize for GetIndexedField {
         if self.key.is_some() {
             len += 1;
         }
+        if self.optional_extra_key.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.GetIndexedField", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
         }
         if let Some(v) = self.key.as_ref() {
             struct_ser.serialize_field("key", v)?;
+        }
+        if let Some(v) = self.optional_extra_key.as_ref() {
+            match v {
+                get_indexed_field::OptionalExtraKey::ExtraKey(v) => {
+                    struct_ser.serialize_field("extraKey", v)?;
+                }
+            }
         }
         struct_ser.end()
     }
@@ -7085,12 +7095,15 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
         const FIELDS: &[&str] = &[
             "expr",
             "key",
+            "extra_key",
+            "extraKey",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Expr,
             Key,
+            ExtraKey,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7114,6 +7127,7 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
                             "key" => Ok(GeneratedField::Key),
+                            "extraKey" | "extra_key" => Ok(GeneratedField::ExtraKey),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7135,6 +7149,7 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
             {
                 let mut expr__ = None;
                 let mut key__ = None;
+                let mut optional_extra_key__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -7149,11 +7164,19 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
                             }
                             key__ = map.next_value()?;
                         }
+                        GeneratedField::ExtraKey => {
+                            if optional_extra_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("extraKey"));
+                            }
+                            optional_extra_key__ = map.next_value::<::std::option::Option<_>>()?.map(get_indexed_field::OptionalExtraKey::ExtraKey)
+;
+                        }
                     }
                 }
                 Ok(GetIndexedField {
                     expr: expr__,
                     key: key__,
+                    optional_extra_key: optional_extra_key__,
                 })
             }
         }
@@ -14571,12 +14594,22 @@ impl serde::Serialize for PhysicalGetIndexedFieldExprNode {
         if self.key.is_some() {
             len += 1;
         }
+        if self.optional_extra_key.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalGetIndexedFieldExprNode", len)?;
         if let Some(v) = self.arg.as_ref() {
             struct_ser.serialize_field("arg", v)?;
         }
         if let Some(v) = self.key.as_ref() {
             struct_ser.serialize_field("key", v)?;
+        }
+        if let Some(v) = self.optional_extra_key.as_ref() {
+            match v {
+                physical_get_indexed_field_expr_node::OptionalExtraKey::ExtraKey(v) => {
+                    struct_ser.serialize_field("extraKey", v)?;
+                }
+            }
         }
         struct_ser.end()
     }
@@ -14590,12 +14623,15 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
         const FIELDS: &[&str] = &[
             "arg",
             "key",
+            "extra_key",
+            "extraKey",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Arg,
             Key,
+            ExtraKey,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14619,6 +14655,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
                         match value {
                             "arg" => Ok(GeneratedField::Arg),
                             "key" => Ok(GeneratedField::Key),
+                            "extraKey" | "extra_key" => Ok(GeneratedField::ExtraKey),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14640,6 +14677,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
             {
                 let mut arg__ = None;
                 let mut key__ = None;
+                let mut optional_extra_key__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Arg => {
@@ -14654,11 +14692,19 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
                             }
                             key__ = map.next_value()?;
                         }
+                        GeneratedField::ExtraKey => {
+                            if optional_extra_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("extraKey"));
+                            }
+                            optional_extra_key__ = map.next_value::<::std::option::Option<_>>()?.map(physical_get_indexed_field_expr_node::OptionalExtraKey::ExtraKey)
+;
+                        }
                     }
                 }
                 Ok(PhysicalGetIndexedFieldExprNode {
                     arg: arg__,
                     key: key__,
+                    optional_extra_key: optional_extra_key__,
                 })
             }
         }

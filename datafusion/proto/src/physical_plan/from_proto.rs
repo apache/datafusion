@@ -317,7 +317,18 @@ pub fn parse_physical_expr(
                     "arg",
                     input_schema,
                 )?,
-                convert_required!(get_indexed_field_expr.key)?,
+                parse_required_physical_expr(
+                    get_indexed_field_expr.key.as_deref(),
+                    registry,
+                    "key",
+                    input_schema,
+                )?,
+                Some(parse_required_physical_expr(
+                    get_indexed_field_expr.extra_key.as_deref(),
+                    registry,
+                    "extra_key",
+                    input_schema,
+                )?),
             ))
         }
     };

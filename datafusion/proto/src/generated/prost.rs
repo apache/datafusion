@@ -601,8 +601,19 @@ pub struct RollupNode {
 pub struct GetIndexedField {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, tag = "2")]
-    pub key: ::core::option::Option<ScalarValue>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(oneof = "get_indexed_field::OptionalExtraKey", tags = "3")]
+    pub optional_extra_key: ::core::option::Option<get_indexed_field::OptionalExtraKey>,
+}
+/// Nested message and enum types in `GetIndexedField`.
+pub mod get_indexed_field {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalExtraKey {
+        #[prost(message, tag = "3")]
+        ExtraKey(::prost::alloc::boxed::Box<super::LogicalExprNode>),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2086,8 +2097,24 @@ pub struct ColumnStats {
 pub struct PhysicalGetIndexedFieldExprNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(message, optional, tag = "2")]
-    pub key: ::core::option::Option<ScalarValue>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(
+        oneof = "physical_get_indexed_field_expr_node::OptionalExtraKey",
+        tags = "3"
+    )]
+    pub optional_extra_key: ::core::option::Option<
+        physical_get_indexed_field_expr_node::OptionalExtraKey,
+    >,
+}
+/// Nested message and enum types in `PhysicalGetIndexedFieldExprNode`.
+pub mod physical_get_indexed_field_expr_node {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalExtraKey {
+        #[prost(message, tag = "3")]
+        ExtraKey(::prost::alloc::boxed::Box<super::PhysicalExprNode>),
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
