@@ -65,7 +65,7 @@ GlobalLimitExec: skip=0, fetch=10
 --------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[COUNT(UInt8(1))]
 ----------------ProjectionExec: expr=[COUNT(orders.o_orderkey)@0 as c_count]
 ------------------ProjectionExec: expr=[COUNT(orders.o_orderkey)@1 as COUNT(orders.o_orderkey)]
---------------------AggregateExec: mode=Single, gby=[c_custkey@0 as c_custkey], aggr=[COUNT(orders.o_orderkey)]
+--------------------AggregateExec: mode=SinglePartitioned, gby=[c_custkey@0 as c_custkey], aggr=[COUNT(orders.o_orderkey)]
 ----------------------ProjectionExec: expr=[c_custkey@0 as c_custkey, o_orderkey@1 as o_orderkey]
 ------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------HashJoinExec: mode=Partitioned, join_type=Left, on=[(c_custkey@0, o_custkey@1)]

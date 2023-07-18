@@ -278,6 +278,9 @@ impl AggregateExpr for BitAnd {
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         use std::ops::BitAndAssign;
+        // Note the default value for BitAnd should be all set
+        // (e.g. `0b11...111`) use MAX / -1 here to get appropriate
+        // bit pattern for each type
         match self.data_type {
             DataType::Int8 => {
                 instantiate_accumulator!(self, -1, Int8Type, |x, y| x.bitand_assign(y))
