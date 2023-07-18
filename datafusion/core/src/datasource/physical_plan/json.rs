@@ -41,7 +41,6 @@ use object_store;
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::io::BufReader;
-use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::JoinSet;
@@ -326,6 +325,7 @@ mod tests {
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
+    use std::path::Path;
 
     use super::*;
 
@@ -654,6 +654,7 @@ mod tests {
     async fn write_json_results() -> Result<()> {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
+        println!("TEMP DIRECTORY: {:?}", tmp_dir);
         let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
