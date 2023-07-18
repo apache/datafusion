@@ -62,8 +62,7 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{add_offset_to_primary_key, DFSchema, ScalarValue};
-use datafusion_expr::builder::project_primary_key_indices;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
@@ -1026,14 +1025,6 @@ impl DefaultPhysicalPlanner {
                                         ))
                                 )
                                 .unzip();
-                            // Update indices of the fields according to filter schema (the index seen in the filter schema).
-                            let left_primary_keys = project_primary_key_indices(left_df_schema.primary_keys(), &left_field_indices, left_field_indices.len());
-                            let right_primary_keys = project_primary_key_indices(right_df_schema.primary_keys(), &right_field_indices, right_field_indices.len());
-
-                            // after join, indices from the right table will increase with the size of the left table. hence add offset
-                            let right_primary_keys = add_offset_to_primary_key(&right_primary_keys, left_field_indices.len());
-
-                            let primary_keys = left_primary_keys.into_iter().chain(right_primary_keys).collect();
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
