@@ -21,9 +21,14 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{
+    DataType, Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use arrow::{
     array::{
         ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
@@ -34,6 +39,10 @@ use arrow::{
         UInt64Array, UInt8Array,
     },
     datatypes::Field,
+};
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
@@ -86,6 +95,48 @@ impl Max {
         }
     }
 }
+/// Creates a [`PrimitiveGroupsAccumulator`] for computing `MAX`
+/// the specified [`ArrowPrimitiveType`].
+///
+/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
+macro_rules! instantiate_max_accumulator {
+    ($SELF:expr, $NATIVE:ident, $PRIMTYPE:ident) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
+                &$SELF.data_type,
+                |cur, new| {
+                    if *cur < new {
+                        *cur = new
+                    }
+                },
+            )
+            // Initialize each accumulator to $NATIVE::MIN
+            .with_starting_value($NATIVE::MIN),
+        ))
+    }};
+}
+
+/// Creates a [`PrimitiveGroupsAccumulator`] for computing `MIN`
+/// the specified [`ArrowPrimitiveType`].
+///
+///
+/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
+macro_rules! instantiate_min_accumulator {
+    ($SELF:expr, $NATIVE:ident, $PRIMTYPE:ident) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
+                &$SELF.data_type,
+                |cur, new| {
+                    if *cur > new {
+                        *cur = new
+                    }
+                },
+            )
+            // Initialize each accumulator to $NATIVE::MAX
+            .with_starting_value($NATIVE::MAX),
+        ))
+    }};
+}
 
 impl AggregateExpr for Max {
     /// Return a reference to Any that can be used for downcasting
@@ -125,6 +176,28 @@ impl AggregateExpr for Max {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
+    fn groups_accumulator_supported(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self.data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
+        )
+    }
+
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -133,6 +206,66 @@ impl AggregateExpr for Max {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use DataType::*;
+        use TimeUnit::*;
+
+        match self.data_type {
+            Int8 => instantiate_max_accumulator!(self, i8, Int8Type),
+            Int16 => instantiate_max_accumulator!(self, i16, Int16Type),
+            Int32 => instantiate_max_accumulator!(self, i32, Int32Type),
+            Int64 => instantiate_max_accumulator!(self, i64, Int64Type),
+            UInt8 => instantiate_max_accumulator!(self, u8, UInt8Type),
+            UInt16 => instantiate_max_accumulator!(self, u16, UInt16Type),
+            UInt32 => instantiate_max_accumulator!(self, u32, UInt32Type),
+            UInt64 => instantiate_max_accumulator!(self, u64, UInt64Type),
+            Float32 => {
+                instantiate_max_accumulator!(self, f32, Float32Type)
+            }
+            Float64 => {
+                instantiate_max_accumulator!(self, f64, Float64Type)
+            }
+            Date32 => instantiate_max_accumulator!(self, i32, Date32Type),
+            Date64 => instantiate_max_accumulator!(self, i64, Date64Type),
+            Time32(Second) => {
+                instantiate_max_accumulator!(self, i32, Time32SecondType)
+            }
+            Time32(Millisecond) => {
+                instantiate_max_accumulator!(self, i32, Time32MillisecondType)
+            }
+            Time64(Microsecond) => {
+                instantiate_max_accumulator!(self, i64, Time64MicrosecondType)
+            }
+            Time64(Nanosecond) => {
+                instantiate_max_accumulator!(self, i64, Time64NanosecondType)
+            }
+            Timestamp(Second, _) => {
+                instantiate_max_accumulator!(self, i64, TimestampSecondType)
+            }
+            Timestamp(Millisecond, _) => {
+                instantiate_max_accumulator!(self, i64, TimestampMillisecondType)
+            }
+            Timestamp(Microsecond, _) => {
+                instantiate_max_accumulator!(self, i64, TimestampMicrosecondType)
+            }
+            Timestamp(Nanosecond, _) => {
+                instantiate_max_accumulator!(self, i64, TimestampNanosecondType)
+            }
+            Decimal128(_, _) => {
+                instantiate_max_accumulator!(self, i128, Decimal128Type)
+            }
+
+            // It would be nice to have a fast implementation for Strings as well
+            // https://github.com/apache/arrow-datafusion/issues/6906
+
+            // This is only reached if groups_accumulator_supported is out of sync
+            _ => Err(DataFusionError::Internal(format!(
+                "GroupsAccumulator not supported for max({})",
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -833,6 +966,83 @@ impl AggregateExpr for Min {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self.data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
+        )
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use DataType::*;
+        use TimeUnit::*;
+        match self.data_type {
+            Int8 => instantiate_min_accumulator!(self, i8, Int8Type),
+            Int16 => instantiate_min_accumulator!(self, i16, Int16Type),
+            Int32 => instantiate_min_accumulator!(self, i32, Int32Type),
+            Int64 => instantiate_min_accumulator!(self, i64, Int64Type),
+            UInt8 => instantiate_min_accumulator!(self, u8, UInt8Type),
+            UInt16 => instantiate_min_accumulator!(self, u16, UInt16Type),
+            UInt32 => instantiate_min_accumulator!(self, u32, UInt32Type),
+            UInt64 => instantiate_min_accumulator!(self, u64, UInt64Type),
+            Float32 => {
+                instantiate_min_accumulator!(self, f32, Float32Type)
+            }
+            Float64 => {
+                instantiate_min_accumulator!(self, f64, Float64Type)
+            }
+            Date32 => instantiate_min_accumulator!(self, i32, Date32Type),
+            Date64 => instantiate_min_accumulator!(self, i64, Date64Type),
+            Time32(Second) => {
+                instantiate_min_accumulator!(self, i32, Time32SecondType)
+            }
+            Time32(Millisecond) => {
+                instantiate_min_accumulator!(self, i32, Time32MillisecondType)
+            }
+            Time64(Microsecond) => {
+                instantiate_min_accumulator!(self, i64, Time64MicrosecondType)
+            }
+            Time64(Nanosecond) => {
+                instantiate_min_accumulator!(self, i64, Time64NanosecondType)
+            }
+            Timestamp(Second, _) => {
+                instantiate_min_accumulator!(self, i64, TimestampSecondType)
+            }
+            Timestamp(Millisecond, _) => {
+                instantiate_min_accumulator!(self, i64, TimestampMillisecondType)
+            }
+            Timestamp(Microsecond, _) => {
+                instantiate_min_accumulator!(self, i64, TimestampMicrosecondType)
+            }
+            Timestamp(Nanosecond, _) => {
+                instantiate_min_accumulator!(self, i64, TimestampNanosecondType)
+            }
+            Decimal128(_, _) => {
+                instantiate_min_accumulator!(self, i128, Decimal128Type)
+            }
+            // This is only reached if groups_accumulator_supported is out of sync
+            _ => Err(DataFusionError::Internal(format!(
+                "GroupsAccumulator not supported for min({})",
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {

@@ -32,8 +32,8 @@ use arrow_schema::DataType;
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    function::PartitionEvaluatorFactory, window_state::WindowAggState,
-    PartitionEvaluator, ReturnTypeFunction, Signature, Volatility, WindowUDF,
+    function::PartitionEvaluatorFactory, PartitionEvaluator, ReturnTypeFunction,
+    Signature, Volatility, WindowUDF,
 };
 
 /// A query with a window function evaluated over the entire partition
@@ -195,7 +195,6 @@ async fn test_stateful_udwf() {
         &execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap()
     );
     assert_eq!(test_state.evaluate_called(), 10);
-    assert_eq!(test_state.update_state_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
 }
 
@@ -229,7 +228,6 @@ async fn test_stateful_udwf_bounded_window() {
     );
     // Evaluate and update_state is called for each input row
     assert_eq!(test_state.evaluate_called(), 10);
-    assert_eq!(test_state.update_state_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
 }
 
@@ -297,6 +295,39 @@ async fn test_udwf_bounded_query_include_rank() {
     assert_eq!(test_state.evaluate_all_with_rank_called(), 2);
 }
 
+/// Basic user defined window function that can return NULL.
+#[tokio::test]
+async fn test_udwf_bounded_window_returns_null() {
+    let test_state = TestState::new()
+        .with_uses_window_frame()
+        .with_null_for_zero();
+    let TestContext { ctx, test_state } = TestContext::new(test_state);
+
+    let expected = vec![
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    "| 1 | a | 0   | 1                                                                                                            |",
+    "| 1 | b | 1   | 1                                                                                                            |",
+    "| 1 | c | 2   | 1                                                                                                            |",
+    "| 2 | d | 3   | 1                                                                                                            |",
+    "| 2 | e | 4   | 2                                                                                                            |",
+    "| 2 | f | 5   | 1                                                                                                            |",
+    "| 2 | g | 6   | 1                                                                                                            |",
+    "| 2 | h | 6   |                                                                                                              |",
+    "| 2 | i | 6   |                                                                                                              |",
+    "| 2 | j | 6   |                                                                                                              |",
+    "+---+---+-----+--------------------------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(
+        expected,
+        &execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap()
+    );
+    // Evaluate is called for each input rows
+    assert_eq!(test_state.evaluate_called(), 10);
+    assert_eq!(test_state.evaluate_all_called(), 0);
+}
+
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }
@@ -355,8 +386,6 @@ struct TestState {
     evaluate_all_called: AtomicUsize,
     /// How many times was `evaluate` called?
     evaluate_called: AtomicUsize,
-    /// How many times was `update_state` called?
-    update_state_called: AtomicUsize,
     /// How many times was `evaluate_all_with_rank` called?
     evaluate_all_with_rank_called: AtomicUsize,
     /// should the functions say they use the window frame?
@@ -365,6 +394,8 @@ struct TestState {
     supports_bounded_execution: bool,
     /// should the functions they need include rank
     include_rank: bool,
+    /// should the functions return NULL for 0s?
+    null_for_zero: bool,
 }
 
 impl TestState {
@@ -390,6 +421,12 @@ impl TestState {
         self
     }
 
+    // Set that this function should return NULL instead of zero.
+    fn with_null_for_zero(mut self) -> Self {
+        self.null_for_zero = true;
+        self
+    }
+
     /// return the evaluate_all_called counter
     fn evaluate_all_called(&self) -> usize {
         self.evaluate_all_called.load(Ordering::SeqCst)
@@ -408,16 +445,6 @@ impl TestState {
     /// update the evaluate_called counter
     fn inc_evaluate_called(&self) {
         self.evaluate_called.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// return the update_state_called counter
-    fn update_state_called(&self) -> usize {
-        self.update_state_called.load(Ordering::SeqCst)
-    }
-
-    /// update the update_state_called counter
-    fn inc_update_state_called(&self) {
-        self.update_state_called.fetch_add(1, Ordering::SeqCst);
     }
 
     /// return the evaluate_all_with_rank_called counter
@@ -474,9 +501,14 @@ impl PartitionEvaluator for OddCounter {
         println!("evaluate, values: {values:#?}, range: {range:?}");
 
         self.test_state.inc_evaluate_called();
-        let values: &Int64Array = values.get(0).unwrap().as_primitive();
+        let values: &Int64Array = values[0].as_primitive();
         let values = values.slice(range.start, range.len());
-        let scalar = ScalarValue::Int64(Some(odd_count(&values)));
+        let scalar = ScalarValue::Int64(
+            match (odd_count(&values), self.test_state.null_for_zero) {
+                (0, true) => None,
+                (n, _) => Some(n),
+            },
+        );
         Ok(scalar)
     }
 
@@ -488,10 +520,7 @@ impl PartitionEvaluator for OddCounter {
         println!("evaluate_all, values: {values:#?}, num_rows: {num_rows}");
 
         self.test_state.inc_evaluate_all_called();
-        Ok(odd_count_arr(
-            values.get(0).unwrap().as_primitive(),
-            num_rows,
-        ))
+        Ok(odd_count_arr(values[0].as_primitive(), num_rows))
     }
 
     fn evaluate_all_with_rank(
@@ -510,17 +539,6 @@ impl PartitionEvaluator for OddCounter {
             .map(|v| (num_rows - v) as i64)
             .collect();
         Ok(Arc::new(array))
-    }
-
-    fn update_state(
-        &mut self,
-        _state: &WindowAggState,
-        _idx: usize,
-        _range_columns: &[ArrayRef],
-        _sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        self.test_state.inc_update_state_called();
-        Ok(())
     }
 
     fn supports_bounded_execution(&self) -> bool {

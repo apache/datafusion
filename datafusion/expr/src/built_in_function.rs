@@ -111,6 +111,8 @@ pub enum BuiltinScalarFunction {
     Tanh,
     /// trunc
     Trunc,
+    /// cot
+    Cot,
 
     // array functions
     /// array_append
@@ -322,6 +324,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Sinh => Volatility::Immutable,
             BuiltinScalarFunction::Sqrt => Volatility::Immutable,
             BuiltinScalarFunction::Cbrt => Volatility::Immutable,
+            BuiltinScalarFunction::Cot => Volatility::Immutable,
             BuiltinScalarFunction::Tan => Volatility::Immutable,
             BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
@@ -480,14 +483,16 @@ impl BuiltinScalarFunction {
                 Ok(List(Arc::new(Field::new("item", expr_type, true))))
             }
             BuiltinScalarFunction::ArrayContains => Ok(Boolean),
-            BuiltinScalarFunction::ArrayDims => Ok(UInt8),
+            BuiltinScalarFunction::ArrayDims => {
+                Ok(List(Arc::new(Field::new("item", UInt64, true))))
+            }
             BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
                 "item",
                 input_expr_types[1].clone(),
                 true,
             )))),
-            BuiltinScalarFunction::ArrayLength => Ok(UInt8),
-            BuiltinScalarFunction::ArrayNdims => Ok(UInt8),
+            BuiltinScalarFunction::ArrayLength => Ok(UInt64),
+            BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
             BuiltinScalarFunction::ArrayPositions => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
@@ -762,7 +767,8 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Cbrt
             | BuiltinScalarFunction::Tan
             | BuiltinScalarFunction::Tanh
-            | BuiltinScalarFunction::Trunc => match input_expr_types[0] {
+            | BuiltinScalarFunction::Trunc
+            | BuiltinScalarFunction::Cot => match input_expr_types[0] {
                 Float32 => Ok(Float32),
                 _ => Ok(Float64),
             },
@@ -1110,7 +1116,8 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Sqrt
             | BuiltinScalarFunction::Tan
             | BuiltinScalarFunction::Tanh
-            | BuiltinScalarFunction::Trunc => {
+            | BuiltinScalarFunction::Trunc
+            | BuiltinScalarFunction::Cot => {
                 // math expressions expect 1 argument of type f64 or f32
                 // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
                 // return the best approximation for it (in f64).
@@ -1140,6 +1147,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Cbrt => &["cbrt"],
         BuiltinScalarFunction::Ceil => &["ceil"],
         BuiltinScalarFunction::Cos => &["cos"],
+        BuiltinScalarFunction::Cot => &["cot"],
         BuiltinScalarFunction::Cosh => &["cosh"],
         BuiltinScalarFunction::Degrees => &["degrees"],
         BuiltinScalarFunction::Exp => &["exp"],

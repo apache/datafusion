@@ -209,6 +209,13 @@ fn get_random_function(
             ),
         );
         window_fn_map.insert(
+            "dense_rank",
+            (
+                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::DenseRank),
+                vec![],
+            ),
+        );
+        window_fn_map.insert(
             "lead",
             (
                 WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
