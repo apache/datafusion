@@ -1889,6 +1889,121 @@ drop table t_source;
 statement ok
 drop table t;
 
+
+# aggregates on strings
+statement ok
+create table t_source
+as values
+ ('Foo', 1),
+ ('Bar', 2),
+ (null,  2),
+ ('Baz', 1);
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Utf8') as utf8,
+  arrow_cast(column1, 'LargeUtf8') as largeutf8,
+  column2 as tag
+from t_source;
+
+# No groupy
+query TTITTI
+SELECT
+  min(utf8),
+  max(utf8),
+  count(utf8),
+  min(largeutf8),
+  max(largeutf8),
+  count(largeutf8)
+FROM t
+----
+Bar Foo 3 Bar Foo 3
+
+
+# with groupby
+query TTITTI
+SELECT
+  min(utf8),
+  max(utf8),
+  count(utf8),
+  min(largeutf8),
+  max(largeutf8),
+  count(largeutf8)
+FROM t
+GROUP BY tag
+ORDER BY tag
+----
+Baz Foo 2 Baz Foo 2
+Bar Bar 1 Bar Bar 1
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
+# aggregates on binary
+statement ok
+create table t_source
+as values
+ ('Foo', 1),
+ ('Bar', 2),
+ (null,  2),
+ ('Baz', 1);
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Binary') as binary,
+  arrow_cast(column1, 'LargeBinary') as largebinary,
+  column2 as tag
+from t_source;
+
+# No groupy
+query error DataFusion error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+SELECT
+  min(binary),
+  max(binary),
+  count(binary),
+  min(largebinary),
+  max(largebinary),
+  count(largebinary)
+FROM t
+
+
+# with groupby
+query error DataFusion error: External error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+SELECT
+  min(binary),
+  max(binary),
+  count(binary),
+  min(largebinary),
+  max(largebinary),
+  count(largebinary)
+FROM t
+GROUP BY tag
+ORDER BY tag
+
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
+
+
+statement error DataFusion error: Execution error: Table 't_source' doesn't exist\.
+drop table t_source;
+
+statement error DataFusion error: Execution error: Table 't' doesn't exist\.
+drop table t;
+
 query I
 select median(a) from (select 1 as a where 1=0);
 ----
