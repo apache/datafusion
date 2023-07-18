@@ -594,6 +594,7 @@ select array_slice(column1, column2, column3) from slices;
 [41, 42, 43, 44, 45, 46]
 [55, 56, 57, 58, 59, 60]
 
+# TODO: support NULLS in output instead of `[]`
 # array_slice with columns and scalars
 query ???
 select array_slice(make_array(1, 2, 3, 4, 5), column2, column3), array_slice(column1, 3, column3), array_slice(column1, column2, 5) from slices;
