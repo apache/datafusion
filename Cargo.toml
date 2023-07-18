@@ -60,10 +60,10 @@ rpath = false
 
 
 [patch.crates-io]
-arrow = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
-arrow-array = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
-arrow-buffer = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
-arrow-flight = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
-arrow-schema = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
-arrow-cast = {  git = "https://github.com/alamb/arrow-rs.git", branch="alamb/peephole" }
-parquet = {  git = "https://github.com/alamb/arrow-rs.git",branch="alamb/peephole" }
+arrow = {  git = "https://github.com/alamb/arrow-rs.git", rev="661caf3" }
+arrow-array = {  git = "https://github.com/alamb/arrow-rs.git", rev="661caf3" }
+arrow-buffer = {  git = "https://github.com/alamb/arrow-rs.git", rev="661caf3" }
+arrow-flight = {  git = "https://github.com/alamb/arrow-rs.git", rev="661caf3" }
+arrow-schema = {  git = "https://github.com/alamb/arrow-rs.git", rev="661caf3" }
+arrow-cast = {  git = "https://github.com/alamb/arrow-rs.git", rev="661caf3" }
+parquet = {  git = "https://github.com/alamb/arrow-rs.git", rev="661caf3" }
