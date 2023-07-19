@@ -239,7 +239,7 @@ impl BatchPartitioner {
     }
 }
 
-/// Maps `N` input partitions to `M output partitions based on a
+/// Maps `N` input partitions to `M` output partitions based on a
 /// [`Partitioning`] scheme.
 ///
 /// # Background
