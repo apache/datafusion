@@ -2203,7 +2203,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {}, primary_keys: [] }, \
+        ], metadata: {}, identifier_key_groups: [] }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \

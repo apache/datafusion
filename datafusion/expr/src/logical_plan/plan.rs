@@ -1254,14 +1254,14 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        // update primary key of `input` according to projection exprs.
-        let primary_keys = project_identifier_keys(&expr, &input)?;
+        // update identifier key groups of `input` according to projection exprs.
+        let id_key_groups = project_identifier_keys(&expr, &input)?;
         let schema = Arc::new(
             DFSchema::new_with_metadata(
                 exprlist_to_fields(&expr, &input)?,
                 input.schema().metadata().clone(),
             )?
-            .with_identifier_key_groups(primary_keys),
+            .with_identifier_key_groups(id_key_groups),
         );
         Self::try_new_with_schema(expr, input, schema)
     }
@@ -1325,11 +1325,11 @@ impl SubqueryAlias {
     ) -> Result<Self> {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
-        // Since schema is same, other than qualifier, we can use existing primary keys
-        let primary_keys = plan.schema().identifier_key_groups().clone();
+        // Since schema is same, other than qualifier, we can use existing identifier key groups
+        let id_key_groups = plan.schema().identifier_key_groups().clone();
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(&alias, &schema)?
-                .with_identifier_key_groups(primary_keys),
+                .with_identifier_key_groups(id_key_groups),
         );
         Ok(SubqueryAlias {
             input: Arc::new(plan),
@@ -1413,8 +1413,8 @@ impl Window {
             .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
         let metadata = input.schema().metadata().clone();
 
-        // Update primary key for window
-        let mut primary_keys = input.schema().identifier_key_groups().clone();
+        // Update identifier key groups for window
+        let mut id_key_groups = input.schema().identifier_key_groups().clone();
         let n_input_fields = input.schema().fields().len();
         let new_associated_fields: Vec<usize> =
             (n_input_fields..window_fields.len()).collect();
@@ -1422,7 +1422,7 @@ impl Window {
             is_unique,
             associated_indices,
             ..
-        } in primary_keys.iter_mut()
+        } in id_key_groups.iter_mut()
         {
             // if unique, extend associations such that they cover
             // new window expressions
@@ -1436,7 +1436,7 @@ impl Window {
             window_expr,
             schema: Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
-                    .with_identifier_key_groups(primary_keys),
+                    .with_identifier_key_groups(id_key_groups),
             ),
         })
     }

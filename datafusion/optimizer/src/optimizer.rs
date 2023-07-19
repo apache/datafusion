@@ -493,12 +493,12 @@ mod tests {
         assert_eq!(
             "get table_scan rule\ncaused by\n\
              Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
-             original schema: DFSchema { fields: [], metadata: {}, primary_keys: [] }, \
+             original schema: DFSchema { fields: [], metadata: {}, identifier_key_groups: [] }, \
              new schema: DFSchema { fields: [\
              DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
              DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
              DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
-             metadata: {}, primary_keys: [] }. \
+             metadata: {}, identifier_key_groups: [] }. \
              This was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
             err.to_string()
