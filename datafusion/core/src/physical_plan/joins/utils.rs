@@ -285,10 +285,14 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
+/// Keeps which side is used as Probe for join operation
 #[derive(PartialEq, Clone, Hash, Debug)]
-pub enum StreamSide {
+pub enum JoinProbeSide {
+    /// left side is ProbeSide
     Left,
+    /// right side is ProbeSide
     Right,
+    /// Probe side alternates between left and right
     Alternating,
 }
 
@@ -353,7 +357,7 @@ pub fn combine_join_ordering_equivalence_properties(
     right: &Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
     maintains_input_order: &[bool],
-    stream_side: StreamSide,
+    probe_side: JoinProbeSide,
     join_eq_properties: EquivalenceProperties,
 ) -> Result<OrderingEquivalenceProperties> {
     let mut new_properties = OrderingEquivalenceProperties::new(schema);
@@ -372,7 +376,7 @@ pub fn combine_join_ordering_equivalence_properties(
         }
         (true, false) => {
             new_properties.extend(left_oeq_properties.classes().iter().cloned());
-            if stream_side == StreamSide::Left
+            if probe_side == JoinProbeSide::Left
                 && right.output_ordering().is_some()
                 && *join_type == JoinType::Inner
             {
@@ -407,7 +411,7 @@ pub fn combine_join_ordering_equivalence_properties(
                 left_columns_len,
             )?;
             new_properties.extend(right_oeq_classes);
-            if stream_side == StreamSide::Right
+            if probe_side == JoinProbeSide::Right
                 && left.output_ordering().is_some()
                 && *join_type == JoinType::Inner
             {
@@ -424,7 +428,7 @@ pub fn combine_join_ordering_equivalence_properties(
                 let updated_left_oeq_classes =
                     prefix_ordering_equivalence_with_existing_ordering(
                         right_output_ordering,
-                        &left_oeq_classes,
+                        left_oeq_classes,
                         join_eq_properties.classes(),
                     );
                 new_properties.extend(updated_left_oeq_classes);

@@ -33,10 +33,10 @@ use std::task::{Context, Poll};
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
-    add_offset_to_lex_ordering, add_offset_to_ordering_equivalence_classes,
-    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
-    combine_join_ordering_equivalence_properties, estimate_join_statistics,
-    partitioned_join_output_partitioning, JoinOn, StreamSide,
+    add_offset_to_lex_ordering, build_join_schema, check_join_is_valid,
+    combine_join_equivalence_properties, combine_join_ordering_equivalence_properties,
+    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
+    JoinProbeSide,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
@@ -53,7 +53,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::utils::normalize_sort_exprs;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 
 use futures::{Stream, StreamExt};
@@ -329,7 +328,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             &self.right,
             self.schema(),
             &self.maintains_input_order(),
-            StreamSide::Left,
+            JoinProbeSide::Left,
             self.equivalence_properties(),
         )
         .unwrap()

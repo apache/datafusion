@@ -27,7 +27,8 @@ use std::{any::Any, usize, vec};
 use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     calculate_hash_join_output_order, combine_join_ordering_equivalence_properties,
-    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide, StreamSide,
+    get_final_indices_from_bit_map, need_produce_result_in_final, JoinProbeSide,
+    JoinSide,
 };
 use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
@@ -382,7 +383,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.right,
             self.schema(),
             &self.maintains_input_order(),
-            StreamSide::Right,
+            JoinProbeSide::Right,
             self.equivalence_properties(),
         )
         .unwrap()
