@@ -410,6 +410,7 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[1];
 
     let res = match (arr.value_type(), element.data_type()) {
+                (DataType::List(_), DataType::List(_)) => concat_internal(args)?,
                 (DataType::Utf8, DataType::Utf8) => append!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => append!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => append!(arr, element, BooleanArray),
@@ -499,6 +500,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[1])?;
 
     let res = match (arr.value_type(), element.data_type()) {
+                (DataType::List(_), DataType::List(_)) => concat_internal(args)?,
                 (DataType::Utf8, DataType::Utf8) => prepend!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => prepend!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => prepend!(arr, element, BooleanArray),
@@ -543,7 +545,18 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
                 let mut aligned_array = array.clone();
                 for _ in 0..(max_ndim - ndim) {
                     let data_type = aligned_array.as_ref().data_type().clone();
-                    aligned_array = array_array(&[aligned_array], data_type)?;
+                    let offsets: Vec<i32> =
+                        (0..downcast_arg!(aligned_array, ListArray).offsets().len())
+                            .map(|i| i as i32)
+                            .collect();
+                    let field = Arc::new(Field::new("item", data_type, true));
+
+                    aligned_array = Arc::new(ListArray::try_new(
+                        field,
+                        OffsetBuffer::new(offsets.into()),
+                        Arc::new(aligned_array.clone()),
+                        None,
+                    )?)
                 }
                 Ok(aligned_array)
             } else {
@@ -761,6 +774,7 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let res = match arr.data_type() {
         DataType::List(field) => match field.data_type() {
+            DataType::List(_) => position!(arr, element, index, ListArray),
             DataType::Utf8 => position!(arr, element, index, StringArray),
             DataType::LargeUtf8 => position!(arr, element, index, LargeStringArray),
             DataType::Boolean => position!(arr, element, index, BooleanArray),
@@ -846,6 +860,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let res = match arr.data_type() {
         DataType::List(field) => match field.data_type() {
+            DataType::List(_) => positions!(arr, element, ListArray),
             DataType::Utf8 => positions!(arr, element, StringArray),
             DataType::LargeUtf8 => positions!(arr, element, LargeStringArray),
             DataType::Boolean => positions!(arr, element, BooleanArray),
@@ -1610,6 +1625,48 @@ mod tests {
             &[1, 2, 3, 4, 5, 6, 7, 8, 9],
             result
                 .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_concat() {
+        // array_concat([1, 2, 3, 4], [1, 2, 3, 4]) = [1, 2, 3, 4, 1, 2, 3, 4]
+        let list_array = return_array().into_array(1);
+        let arr = array_concat(&[list_array.clone(), list_array.clone()])
+            .expect("failed to initialize function array_concat");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_concat");
+
+        assert_eq!(
+            &[1, 2, 3, 4, 1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_concat([[1, 2, 3, 4], [5, 6, 7, 8]], [1, 2, 3, 4]) = [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4]]
+        let list_nested_array = return_nested_array().into_array(1);
+        let list_array = return_array().into_array(1);
+        let arr = array_concat(&[list_nested_array, list_array])
+            .expect("failed to initialize function array_concat");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_concat");
+
+        assert_eq!(
+            &[1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .value(2)
                 .as_any()
                 .downcast_ref::<Int64Array>()
                 .unwrap()

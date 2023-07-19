@@ -93,8 +93,6 @@ pub enum Expr {
     BinaryExpr(BinaryExpr),
     /// LIKE expression
     Like(Like),
-    /// Case-insensitive LIKE expression
-    ILike(Like),
     /// LIKE expression that uses regular expressions
     SimilarTo(Like),
     /// Negation of an expression. The expression's type must be a boolean to make sense.
@@ -280,6 +278,8 @@ pub struct Like {
     pub expr: Box<Expr>,
     pub pattern: Box<Expr>,
     pub escape_char: Option<char>,
+    /// Whether to ignore case on comparing
+    pub case_insensitive: bool,
 }
 
 impl Like {
@@ -289,12 +289,14 @@ impl Like {
         expr: Box<Expr>,
         pattern: Box<Expr>,
         escape_char: Option<char>,
+        case_insensitive: bool,
     ) -> Self {
         Self {
             negated,
             expr,
             pattern,
             escape_char,
+            case_insensitive,
         }
     }
 }
@@ -691,7 +693,6 @@ impl Expr {
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
             Expr::Like { .. } => "Like",
-            Expr::ILike { .. } => "ILike",
             Expr::SimilarTo { .. } => "RLike",
             Expr::IsTrue(..) => "IsTrue",
             Expr::IsFalse(..) => "IsFalse",
@@ -757,22 +758,40 @@ impl Expr {
 
     /// Return `self LIKE other`
     pub fn like(self, other: Expr) -> Expr {
-        Expr::Like(Like::new(false, Box::new(self), Box::new(other), None))
+        Expr::Like(Like::new(
+            false,
+            Box::new(self),
+            Box::new(other),
+            None,
+            false,
+        ))
     }
 
     /// Return `self NOT LIKE other`
     pub fn not_like(self, other: Expr) -> Expr {
-        Expr::Like(Like::new(true, Box::new(self), Box::new(other), None))
+        Expr::Like(Like::new(
+            true,
+            Box::new(self),
+            Box::new(other),
+            None,
+            false,
+        ))
     }
 
     /// Return `self ILIKE other`
     pub fn ilike(self, other: Expr) -> Expr {
-        Expr::ILike(Like::new(false, Box::new(self), Box::new(other), None))
+        Expr::Like(Like::new(
+            false,
+            Box::new(self),
+            Box::new(other),
+            None,
+            true,
+        ))
     }
 
     /// Return `self NOT ILIKE other`
     pub fn not_ilike(self, other: Expr) -> Expr {
-        Expr::ILike(Like::new(true, Box::new(self), Box::new(other), None))
+        Expr::Like(Like::new(true, Box::new(self), Box::new(other), None, true))
     }
 
     /// Return the name to use for the specific Expr, recursing into
@@ -1077,31 +1096,17 @@ impl fmt::Display for Expr {
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive,
             }) => {
                 write!(f, "{expr}")?;
+                let op_name = if *case_insensitive { "ILIKE" } else { "LIKE" };
                 if *negated {
                     write!(f, " NOT")?;
                 }
                 if let Some(char) = escape_char {
-                    write!(f, " LIKE {pattern} ESCAPE '{char}'")
+                    write!(f, " {op_name} {pattern} ESCAPE '{char}'")
                 } else {
-                    write!(f, " LIKE {pattern}")
-                }
-            }
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => {
-                write!(f, "{expr}")?;
-                if *negated {
-                    write!(f, " NOT")?;
-                }
-                if let Some(char) = escape_char {
-                    write!(f, " ILIKE {pattern} ESCAPE '{char}'")
-                } else {
-                    write!(f, " ILIKE {pattern}")
+                    write!(f, " {op_name} {pattern}")
                 }
             }
             Expr::SimilarTo(Like {
@@ -1109,6 +1114,7 @@ impl fmt::Display for Expr {
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive: _,
             }) => {
                 write!(f, "{expr}")?;
                 if *negated {
@@ -1211,30 +1217,13 @@ fn create_name(e: &Expr) -> Result<String> {
             expr,
             pattern,
             escape_char,
+            case_insensitive,
         }) => {
             let s = format!(
-                "{} {} {} {}",
+                "{} {}{} {} {}",
                 expr,
-                if *negated { "NOT LIKE" } else { "LIKE" },
-                pattern,
-                if let Some(char) = escape_char {
-                    format!("CHAR '{char}'")
-                } else {
-                    "".to_string()
-                }
-            );
-            Ok(s)
-        }
-        Expr::ILike(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        }) => {
-            let s = format!(
-                "{} {} {} {}",
-                expr,
-                if *negated { "NOT ILIKE" } else { "ILIKE" },
+                if *negated { "NOT " } else { "" },
+                if *case_insensitive { "ILIKE" } else { "LIKE" },
                 pattern,
                 if let Some(char) = escape_char {
                     format!("CHAR '{char}'")
@@ -1249,6 +1238,7 @@ fn create_name(e: &Expr) -> Result<String> {
             expr,
             pattern,
             escape_char,
+            case_insensitive: _,
         }) => {
             let s = format!(
                 "{} {} {} {}",

@@ -48,6 +48,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 
+use super::groups_accumulator::EmitTo;
 use super::utils::{adjust_output_array, Decimal128Averager};
 
 /// AVG aggregate expression
@@ -560,10 +561,10 @@ where
         Ok(())
     }
 
-    fn evaluate(&mut self) -> Result<ArrayRef> {
-        let counts = std::mem::take(&mut self.counts);
-        let sums = std::mem::take(&mut self.sums);
-        let nulls = self.null_state.build();
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let counts = emit_to.take_needed(&mut self.counts);
+        let sums = emit_to.take_needed(&mut self.sums);
+        let nulls = self.null_state.build(emit_to);
 
         assert_eq!(nulls.len(), sums.len());
         assert_eq!(counts.len(), sums.len());
@@ -598,12 +599,14 @@ where
     }
 
     // return arrays for sums and counts
-    fn state(&mut self) -> Result<Vec<ArrayRef>> {
-        let nulls = Some(self.null_state.build());
-        let counts = std::mem::take(&mut self.counts);
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let nulls = self.null_state.build(emit_to);
+        let nulls = Some(nulls);
+
+        let counts = emit_to.take_needed(&mut self.counts);
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
 
-        let sums = std::mem::take(&mut self.sums);
+        let sums = emit_to.take_needed(&mut self.sums);
         let sums = PrimitiveArray::<T>::new(sums.into(), nulls); // zero copy
         let sums = adjust_output_array(&self.sum_data_type, Arc::new(sums))?;
 

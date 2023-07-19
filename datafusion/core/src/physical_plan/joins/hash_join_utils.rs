@@ -22,17 +22,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{fmt, usize};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{ArrowNativeType, SchemaRef};
 
+use arrow::compute::concat_batches;
+use arrow_array::builder::BooleanBufferBuilder;
+use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::intervals::Interval;
+use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use hashbrown::raw::RawTable;
+use hashbrown::HashSet;
+use parking_lot::Mutex;
 use smallvec::SmallVec;
+use std::fmt::{Debug, Formatter};
 
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
+use crate::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -280,6 +288,105 @@ fn convert_filter_columns(
     })
 }
 
+#[derive(Default)]
+pub struct IntervalCalculatorInnerState {
+    /// Expression graph for interval calculations
+    graph: Option<ExprIntervalGraph>,
+    sorted_exprs: Vec<Option<SortedFilterExpr>>,
+    calculated: bool,
+}
+
+impl Debug for IntervalCalculatorInnerState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Exprs({:?})", self.sorted_exprs)
+    }
+}
+
+pub fn build_filter_expression_graph(
+    interval_state: &Arc<Mutex<IntervalCalculatorInnerState>>,
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    filter: &JoinFilter,
+) -> Result<(
+    Option<SortedFilterExpr>,
+    Option<SortedFilterExpr>,
+    Option<ExprIntervalGraph>,
+)> {
+    // Lock the mutex of the interval state:
+    let mut filter_state = interval_state.lock();
+    // If this is the first partition to be invoked, then we need to initialize our state
+    // (the expression graph for pruning, sorted filter expressions etc.)
+    if !filter_state.calculated {
+        // Interval calculations require each column to exhibit monotonicity
+        // independently. However, a `PhysicalSortExpr` object defines a
+        // lexicographical ordering, so we can only use their first elements.
+        // when deducing column monotonicities.
+        // TODO: Extend the `PhysicalSortExpr` mechanism to express independent
+        //       (i.e. simultaneous) ordering properties of columns.
+
+        // Build sorted filter expressions for the left and right join side:
+        let join_sides = [JoinSide::Left, JoinSide::Right];
+        let children = [left, right];
+        for (join_side, child) in join_sides.iter().zip(children.iter()) {
+            let sorted_expr = child
+                .output_ordering()
+                .and_then(|orders| {
+                    build_filter_input_order(
+                        *join_side,
+                        filter,
+                        &child.schema(),
+                        &orders[0],
+                    )
+                    .transpose()
+                })
+                .transpose()?;
+
+            filter_state.sorted_exprs.push(sorted_expr);
+        }
+
+        // Collect available sorted filter expressions:
+        let sorted_exprs_size = filter_state.sorted_exprs.len();
+        let mut sorted_exprs = filter_state
+            .sorted_exprs
+            .iter_mut()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        // Create the expression graph if we can create sorted filter expressions for both children:
+        filter_state.graph = if sorted_exprs.len() == sorted_exprs_size {
+            let mut graph = ExprIntervalGraph::try_new(filter.expression().clone())?;
+
+            // Gather filter expressions:
+            let filter_exprs = sorted_exprs
+                .iter()
+                .map(|sorted_expr| sorted_expr.filter_expr().clone())
+                .collect::<Vec<_>>();
+
+            // Gather node indices of converted filter expressions in `SortedFilterExpr`s
+            // using the filter columns vector:
+            let child_node_indices = graph.gather_node_indices(&filter_exprs);
+
+            // Update SortedFilterExpr instances with the corresponding node indices:
+            for (sorted_expr, (_, index)) in
+                sorted_exprs.iter_mut().zip(child_node_indices.iter())
+            {
+                sorted_expr.set_node_index(*index);
+            }
+
+            Some(graph)
+        } else {
+            None
+        };
+        filter_state.calculated = true;
+    }
+    // Return the sorted filter expressions for both sides along with the expression graph:
+    Ok((
+        filter_state.sorted_exprs[0].clone(),
+        filter_state.sorted_exprs[1].clone(),
+        filter_state.graph.as_ref().cloned(),
+    ))
+}
+
 /// The [SortedFilterExpr] object represents a sorted filter expression. It
 /// contains the following information: The origin expression, the filter
 /// expression, an interval encapsulating expression bounds, and a stable
@@ -338,6 +445,227 @@ impl SortedFilterExpr {
     /// Node index setter in ExprIntervalGraph
     pub fn set_node_index(&mut self, node_index: usize) {
         self.node_index = node_index;
+    }
+}
+
+/// Calculate the filter expression intervals.
+///
+/// This function updates the `interval` field of each `SortedFilterExpr` based
+/// on the first or the last value of the expression in `build_input_buffer`
+/// and `probe_batch`.
+///
+/// # Arguments
+///
+/// * `build_input_buffer` - The [RecordBatch] on the build side of the join.
+/// * `build_sorted_filter_expr` - Build side [SortedFilterExpr] to update.
+/// * `probe_batch` - The `RecordBatch` on the probe side of the join.
+/// * `probe_sorted_filter_expr` - Probe side `SortedFilterExpr` to update.
+///
+/// ### Note
+/// ```text
+///
+/// Interval arithmetic is used to calculate viable join ranges for build-side
+/// pruning. This is done by first creating an interval for join filter values in
+/// the build side of the join, which spans [-∞, FV] or [FV, ∞] depending on the
+/// ordering (descending/ascending) of the filter expression. Here, FV denotes the
+/// first value on the build side. This range is then compared with the probe side
+/// interval, which either spans [-∞, LV] or [LV, ∞] depending on the ordering
+/// (ascending/descending) of the probe side. Here, LV denotes the last value on
+/// the probe side.
+///
+/// As a concrete example, consider the following query:
+///
+///   SELECT * FROM left_table, right_table
+///   WHERE
+///     left_key = right_key AND
+///     a > b - 3 AND
+///     a < b + 10
+///
+/// where columns "a" and "b" come from tables "left_table" and "right_table",
+/// respectively. When a new `RecordBatch` arrives at the right side, the
+/// condition a > b - 3 will possibly indicate a prunable range for the left
+/// side. Conversely, when a new `RecordBatch` arrives at the left side, the
+/// condition a < b + 10 will possibly indicate prunability for the right side.
+/// Let’s inspect what happens when a new RecordBatch` arrives at the right
+/// side (i.e. when the left side is the build side):
+///
+///         Build      Probe
+///       +-------+  +-------+
+///       | a | z |  | b | y |
+///       |+--|--+|  |+--|--+|
+///       | 1 | 2 |  | 4 | 3 |
+///       |+--|--+|  |+--|--+|
+///       | 3 | 1 |  | 4 | 3 |
+///       |+--|--+|  |+--|--+|
+///       | 5 | 7 |  | 6 | 1 |
+///       |+--|--+|  |+--|--+|
+///       | 7 | 1 |  | 6 | 3 |
+///       +-------+  +-------+
+///
+/// In this case, the interval representing viable (i.e. joinable) values for
+/// column "a" is [1, ∞], and the interval representing possible future values
+/// for column "b" is [6, ∞]. With these intervals at hand, we next calculate
+/// intervals for the whole filter expression and propagate join constraint by
+/// traversing the expression graph.
+/// ```
+pub fn calculate_filter_expr_intervals(
+    build_input_buffer: &RecordBatch,
+    build_sorted_filter_expr: &mut SortedFilterExpr,
+    probe_batch: &RecordBatch,
+    probe_sorted_filter_expr: &mut SortedFilterExpr,
+) -> Result<()> {
+    // If either build or probe side has no data, return early:
+    if build_input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
+        return Ok(());
+    }
+    // Calculate the interval for the build side filter expression (if present):
+    update_filter_expr_interval(
+        &build_input_buffer.slice(0, 1),
+        build_sorted_filter_expr,
+    )?;
+    // Calculate the interval for the probe side filter expression (if present):
+    update_filter_expr_interval(
+        &probe_batch.slice(probe_batch.num_rows() - 1, 1),
+        probe_sorted_filter_expr,
+    )
+}
+
+/// This is a subroutine of the function [`calculate_filter_expr_intervals`].
+/// It constructs the current interval using the given `batch` and updates
+/// the filter expression (i.e. `sorted_expr`) with this interval.
+pub fn update_filter_expr_interval(
+    batch: &RecordBatch,
+    sorted_expr: &mut SortedFilterExpr,
+) -> Result<()> {
+    // Evaluate the filter expression and convert the result to an array:
+    let array = sorted_expr
+        .origin_sorted_expr()
+        .expr
+        .evaluate(batch)?
+        .into_array(1);
+    // Convert the array to a ScalarValue:
+    let value = ScalarValue::try_from_array(&array, 0)?;
+    // Create a ScalarValue representing positive or negative infinity for the same data type:
+    let unbounded = IntervalBound::make_unbounded(value.get_datatype())?;
+    // Update the interval with lower and upper bounds based on the sort option:
+    let interval = if sorted_expr.origin_sorted_expr().options.descending {
+        Interval::new(unbounded, IntervalBound::new(value, false))
+    } else {
+        Interval::new(IntervalBound::new(value, false), unbounded)
+    };
+    // Set the calculated interval for the sorted filter expression:
+    sorted_expr.set_interval(interval);
+    Ok(())
+}
+
+/// Get the anti join indices from the visited hash set.
+///
+/// This method returns the indices from the original input that were not present in the visited hash set.
+///
+/// # Arguments
+///
+/// * `prune_length` - The length of the pruned record batch.
+/// * `deleted_offset` - The offset to the indices.
+/// * `visited_rows` - The hash set of visited indices.
+///
+/// # Returns
+///
+/// A `PrimitiveArray` of the anti join indices.
+pub fn get_pruning_anti_indices<T: ArrowPrimitiveType>(
+    prune_length: usize,
+    deleted_offset: usize,
+    visited_rows: &HashSet<usize>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = BooleanBufferBuilder::new(prune_length);
+    bitmap.append_n(prune_length, false);
+    // mark the indices as true if they are present in the visited hash set
+    for v in 0..prune_length {
+        let row = v + deleted_offset;
+        bitmap.set_bit(v, visited_rows.contains(&row));
+    }
+    // get the anti index
+    (0..prune_length)
+        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(T::Native::from_usize(idx)))
+        .collect()
+}
+
+/// This method creates a boolean buffer from the visited rows hash set
+/// and the indices of the pruned record batch slice.
+///
+/// It gets the indices from the original input that were present in the visited hash set.
+///
+/// # Arguments
+///
+/// * `prune_length` - The length of the pruned record batch.
+/// * `deleted_offset` - The offset to the indices.
+/// * `visited_rows` - The hash set of visited indices.
+///
+/// # Returns
+///
+/// A [PrimitiveArray] of the specified type T, containing the semi indices.
+pub fn get_pruning_semi_indices<T: ArrowPrimitiveType>(
+    prune_length: usize,
+    deleted_offset: usize,
+    visited_rows: &HashSet<usize>,
+) -> PrimitiveArray<T>
+where
+    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
+{
+    let mut bitmap = BooleanBufferBuilder::new(prune_length);
+    bitmap.append_n(prune_length, false);
+    // mark the indices as true if they are present in the visited hash set
+    (0..prune_length).for_each(|v| {
+        let row = &(v + deleted_offset);
+        bitmap.set_bit(v, visited_rows.contains(row));
+    });
+    // get the semi index
+    (0..prune_length)
+        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(T::Native::from_usize(idx)))
+        .collect::<PrimitiveArray<T>>()
+}
+
+pub fn combine_two_batches(
+    output_schema: &SchemaRef,
+    left_batch: Option<RecordBatch>,
+    right_batch: Option<RecordBatch>,
+) -> Result<Option<RecordBatch>> {
+    match (left_batch, right_batch) {
+        (Some(batch), None) | (None, Some(batch)) => {
+            // If only one of the batches are present, return it:
+            Ok(Some(batch))
+        }
+        (Some(left_batch), Some(right_batch)) => {
+            // If both batches are present, concatenate them:
+            concat_batches(output_schema, &[left_batch, right_batch])
+                .map_err(DataFusionError::ArrowError)
+                .map(Some)
+        }
+        (None, None) => {
+            // If neither is present, return an empty batch:
+            Ok(None)
+        }
+    }
+}
+
+/// Records the visited indices from the input `PrimitiveArray` of type `T` into the given hash set `visited`.
+/// This function will insert the indices (offset by `offset`) into the `visited` hash set.
+///
+/// # Arguments
+///
+/// * `visited` - A hash set to store the visited indices.
+/// * `offset` - An offset to the indices in the `PrimitiveArray`.
+/// * `indices` - The input `PrimitiveArray` of type `T` which stores the indices to be recorded.
+///
+pub fn record_visited_indices<T: ArrowPrimitiveType>(
+    visited: &mut HashSet<usize>,
+    offset: usize,
+    indices: &PrimitiveArray<T>,
+) {
+    for i in indices.values() {
+        visited.insert(i.as_usize() + offset);
     }
 }
 

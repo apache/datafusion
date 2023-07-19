@@ -27,6 +27,42 @@ pub(crate) mod prim_op;
 use arrow_array::{ArrayRef, BooleanArray};
 use datafusion_common::Result;
 
+/// Describes how many rows should be emitted during grouping.
+#[derive(Debug, Clone, Copy)]
+pub enum EmitTo {
+    /// Emit all groups
+    All,
+    /// Emit only the first `n` groups and shift all existing group
+    /// indexes down by `n`.
+    ///
+    /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
+    /// and group indexes '`10, 11, 12, ...` become `0, 1, 2, ...`.
+    First(usize),
+}
+
+impl EmitTo {
+    /// Removes the number of rows from `v` required to emit the right
+    /// number of rows, returning a `Vec` with elements taken, and the
+    /// remaining values in `v`.
+    ///
+    /// This avoids copying if Self::All
+    pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
+        match self {
+            Self::All => {
+                // Take the entire vector, leave new (empty) vector
+                std::mem::take(v)
+            }
+            Self::First(n) => {
+                // get end n+1,.. values into t
+                let mut t = v.split_off(*n);
+                // leave n+1,.. in v
+                std::mem::swap(v, &mut t);
+                t
+            }
+        }
+    }
+}
+
 /// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
 ///
@@ -72,17 +108,20 @@ pub trait GroupsAccumulator: Send {
     /// each group, and `evaluate` will produce that running sum as
     /// its output for all groups, in group_index order
     ///
-    /// The accumulator should free to release / reset it is internal
-    /// state after this call to the same as it was after being
-    /// initially created.
-    fn evaluate(&mut self) -> Result<ArrayRef>;
+    /// If `emit_to`` is [`EmitTo::All`], the accumulator should
+    /// return all groups and release / reset its internal state
+    /// equivalent to when it was first created.
+    ///
+    /// If `emit_to` is [`EmitTo::First`], only the first `n` groups
+    /// should be emitted and the state for those first groups
+    /// removed. State for the remaining groups must be retained for
+    /// future use. The group_indices on subsequent calls to
+    /// `update_batch` or `merge_batch` will be shifted down by
+    /// `n`. See [`EmitTo::First`] for more details.
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef>;
 
     /// Returns the intermediate aggregate state for this accumulator,
     /// used for multi-phase grouping, resetting its internal state.
-    ///
-    /// The rows returned *must* be in group_index order: The value
-    /// for group_index 0, followed by 1, etc.  Any group_index that
-    /// did not have values, should be null.
     ///
     /// For example, `AVG` might return two arrays: `SUM` and `COUNT`
     /// but the `MIN` aggregate would just return a single array.
@@ -90,10 +129,9 @@ pub trait GroupsAccumulator: Send {
     /// Note more sophisticated internal state can be passed as
     /// single `StructArray` rather than multiple arrays.
     ///
-    /// The accumulator should free to release / reset its internal
-    /// state after this call to the same as it was after being
-    /// initially created.
-    fn state(&mut self) -> Result<Vec<ArrayRef>>;
+    /// See [`Self::evaluate`] for details on the required output
+    /// order and  `emit_to`.
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
     /// Merges intermediate state (the output from [`Self::state`])
     /// into this accumulator's values.
