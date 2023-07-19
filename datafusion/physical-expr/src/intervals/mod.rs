@@ -19,6 +19,7 @@
 
 pub mod cp_solver;
 pub mod interval_aritmetic;
+pub mod prunability;
 pub mod rounding;
 
 pub mod test_utils;

@@ -22,12 +22,16 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
 use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::intervals::prunability::{ExprPrunabilityGraph, TableSide};
 use datafusion_physical_expr::intervals::{check_support, is_datatype_supported};
+use datafusion_physical_expr::PhysicalSortExpr;
 use std::sync::Arc;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
@@ -138,7 +142,8 @@ pub fn check_finiteness_requirements(
 ) -> Result<Transformed<PipelineStatePropagator>> {
     if let Some(exec) = input.plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
         if !(optimizer_options.allow_symmetric_joins_without_pruning
-            || (exec.check_if_order_information_available()? && is_prunable(exec)))
+            || (exec.check_if_order_information_available()?
+                && is_prunable(exec, &input.children_unbounded)))
         {
             const MSG: &str = "Join operation cannot operate on a non-prunable stream without enabling \
                                the 'allow_symmetric_joins_without_pruning' configuration flag";
@@ -161,15 +166,112 @@ pub fn check_finiteness_requirements(
 ///
 /// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
 /// [`Operator`]: datafusion_expr::Operator
-fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
-    join.filter().map_or(false, |filter| {
+fn is_prunable(join: &SymmetricHashJoinExec, children_unbounded: &[bool]) -> bool {
+    if join.filter().map_or(false, |filter| {
         check_support(filter.expression())
             && filter
                 .schema()
                 .fields()
                 .iter()
                 .all(|f| is_datatype_supported(f.data_type()))
+    }) {
+        if let Some(filter) = join.filter() {
+            if let Ok(mut graph) =
+                ExprPrunabilityGraph::try_new((*filter.expression()).clone())
+            {
+                let left_sort_expr = join.left().output_ordering().map(|s| s[0].clone());
+                let right_sort_expr =
+                    join.right().output_ordering().map(|s| s[0].clone());
+                let new_left_sort = get_sort_expr_in_filter_schema(
+                    &left_sort_expr,
+                    filter,
+                    JoinSide::Left,
+                );
+                let new_right_sort = get_sort_expr_in_filter_schema(
+                    &right_sort_expr,
+                    filter,
+                    JoinSide::Right,
+                );
+                if let Ok((table_side, _)) =
+                    graph.analyze_prunability(&new_left_sort, &new_right_sort)
+                {
+                    return prunability_for_unbounded_tables(
+                        children_unbounded[0],
+                        children_unbounded[1],
+                        &table_side,
+                    );
+                }
+            }
+        }
+    }
+    false
+}
+
+// Updates index of the column with the new index (if PhysicalExpr is Column)
+fn update_column_index(
+    sort_expr: &Option<PhysicalSortExpr>,
+    updated_idx: usize,
+) -> Option<PhysicalSortExpr> {
+    sort_expr.as_ref().and_then(|sort_expr| {
+        sort_expr
+            .expr
+            .as_any()
+            .downcast_ref::<Column>()
+            .map(|column| {
+                let sort_name = column.name();
+                let options = sort_expr.options;
+                let expr = Arc::new(Column::new(sort_name, updated_idx));
+                PhysicalSortExpr { expr, options }
+            })
     })
+}
+
+fn get_sort_expr_in_filter_schema(
+    sort_expr: &Option<PhysicalSortExpr>,
+    filter: &JoinFilter,
+    side: JoinSide,
+) -> Option<PhysicalSortExpr> {
+    let sorted_column_index_in_filter = find_index_in_filter(filter, sort_expr, side);
+    sorted_column_index_in_filter.and_then(|idx| update_column_index(sort_expr, idx))
+}
+
+fn find_index_in_filter(
+    join_filter: &JoinFilter,
+    left_sort_expr: &Option<PhysicalSortExpr>,
+    join_side: JoinSide,
+) -> Option<usize> {
+    for (i, (field, column_index)) in join_filter
+        .schema()
+        .fields()
+        .iter()
+        .zip(join_filter.column_indices())
+        .enumerate()
+    {
+        if let Some(physical_sort) = left_sort_expr {
+            if let Some(column) = physical_sort.expr.as_any().downcast_ref::<Column>() {
+                if column.name() == field.name() && column_index.side == join_side {
+                    return Some(i);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn prunability_for_unbounded_tables(
+    left_unbounded: bool,
+    right_unbounded: bool,
+    table_side: &TableSide,
+) -> bool {
+    let (left_prunable, right_prunable) = match table_side {
+        TableSide::Left => (true, false),
+        TableSide::Right => (false, true),
+        TableSide::Both => (true, true),
+        TableSide::None => (false, false),
+    };
+    // If both sides are either bounded or prunable, return true (Can do calculations with bounded memory)
+    // Otherwise return false (Cannot do calculations with bounded memory)
+    (!left_unbounded || left_prunable) && (!right_unbounded || right_prunable)
 }
 
 #[cfg(test)]

@@ -590,3 +590,56 @@ drop table IF EXISTS full_join_test;
 # batch size
 statement ok
 set datafusion.execution.batch_size = 8192;
+
+# test joins give error with unbounded tables by the analysis of prunability
+statement ok
+CREATE external table t1(a1 integer, a2 integer, a3 integer)
+STORED as CSV
+WITH HEADER ROW
+WITH ORDER (a2 ASC, a3 ASC)
+OPTIONS('infinite_source' 'true')
+LOCATION 'tests/data/empty.csv';
+
+statement ok
+CREATE external table t2(a1 integer, a2 integer, a3 integer)
+STORED as CSV
+WITH HEADER ROW
+WITH ORDER (a2 ASC, a3 ASC)
+OPTIONS('infinite_source' 'true')
+LOCATION 'tests/data/empty.csv';
+
+statement ok
+set datafusion.optimizer.allow_symmetric_joins_without_pruning = false
+
+# query with a filter causing table to be not prunable
+query error DataFusion error: PipelineChecker
+SELECT t1.a1, t1.a2, t1.a3, t2.a1, t2.a2, t2.a3
+FROM t1
+JOIN t2
+ON t1.a1 = t2.a1
+WHERE t1.a3 < t2.a3 AND t1.a3 >= t2.a3
+
+# query with a filter causing table to be prunable
+statement ok
+SELECT t1.a1, t1.a2, t1.a3, t2.a1, t2.a2, t2.a3
+FROM t1
+JOIN t2
+ON t1.a1 = t2.a1
+WHERE t2.a2 >= t1.a2 AND t1.a2 > t2.a2
+
+statement ok
+set datafusion.optimizer.allow_symmetric_joins_without_pruning = true
+
+# query with a filter causing table to be not prunable, but the join is allowed
+statement ok
+SELECT t1.a1, t1.a2, t1.a3, t2.a1, t2.a2, t2.a3
+FROM t1
+JOIN t2
+ON t1.a1 = t2.a1
+WHERE t1.a2 < t2.a2 AND t1.a2 < t2.a2
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
