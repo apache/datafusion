@@ -20,6 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -28,21 +29,25 @@ use crate::{field_not_found, Column, OwnedTableReference, TableReference};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use std::fmt::{Display, Formatter};
 
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
 
-/// Stores identifier keys and their associated indices
-/// (where identifier key property holds, this may change during intermediate
-/// schemas, such as join)
+/// Stores identifier keys and their associated column indices. An identifier key
+/// is a column whose value determines values of some other (dependent) columns.
+/// These dependent columns are the "associated columns" of this identifier key.
+/// If two rows have the same identifier key, associated columns in these rows
+/// are necessarily the same. If the identifier key is unique, the set of
+/// associated columns is equal to the entire schema and the identifier key can
+/// serve as a primary key. Note that a primary key may "downgrade" into an
+/// identifier key due to an operation such as a join, and this object is used to
+/// track dependence relationships in such cases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentifierKeyGroup {
     pub identifier_key_indices: Vec<usize>,
-    /// Flag indicating whether identifiers are unique
-    /// if `true` it means that, these indices are primary keys.
-    /// if `false` it means that identifier still uniquely identifies its associated column
-    /// results. However, same results may occur replicated.
+    /// Flag indicating whether this identifier key is unique.
+    /// If true, these indices constitute a primary key. Otherwise, the
+    /// identifier key still uniquely determines its associated columns.
     pub is_unique: bool,
     pub associated_indices: Vec<usize>,
 }
@@ -173,24 +178,20 @@ impl DFSchema {
         let mut metadata = self.metadata.clone();
         fields.extend_from_slice(schema.fields().as_slice());
         metadata.extend(schema.metadata.clone());
-        let mut identifier_key_groups = self.identifier_key_groups.clone();
-        identifier_key_groups.iter_mut().for_each(
-            |IdentifierKeyGroup { is_unique, .. }| {
-                *is_unique = false;
-            },
-        );
-        let mut other_identifier_key_groups = add_offset_to_identifier_key_groups(
+        let mut id_key_groups = self.identifier_key_groups.clone();
+        for IdentifierKeyGroup { is_unique, .. } in id_key_groups.iter_mut() {
+            *is_unique = false;
+        }
+        let mut other_id_key_groups = add_offset_to_identifier_key_groups(
             schema.identifier_key_groups(),
             self.fields.len(),
         );
-        other_identifier_key_groups.iter_mut().for_each(
-            |IdentifierKeyGroup { is_unique, .. }| {
-                *is_unique = false;
-            },
-        );
-        identifier_key_groups.extend(other_identifier_key_groups);
+        for IdentifierKeyGroup { is_unique, .. } in other_id_key_groups.iter_mut() {
+            *is_unique = false;
+        }
+        id_key_groups.extend(other_id_key_groups);
         Ok(Self::new_with_metadata(fields, metadata)?
-            .with_identifier_key_groups(identifier_key_groups))
+            .with_identifier_key_groups(id_key_groups))
     }
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
@@ -539,7 +540,7 @@ impl DFSchema {
         &self.metadata
     }
 
-    /// Get Identifier key groups
+    /// Get identifier key groups
     pub fn identifier_key_groups(&self) -> &IdentifierKeyGroups {
         &self.identifier_key_groups
     }
@@ -855,8 +856,8 @@ fn add_offset_to_vec<T: Copy + std::ops::Add<Output = T>>(
     in_data.iter().map(|&item| item + offset).collect()
 }
 
-/// Add offset value to identifier key indices and its associated indices
-/// for each identifier key group
+/// Add `offset` value to identifier key indices and its associated indices
+/// for each identifier key group.
 pub fn add_offset_to_identifier_key_groups(
     identifier_key_groups: &IdentifierKeyGroups,
     offset: usize,

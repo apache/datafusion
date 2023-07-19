@@ -267,11 +267,11 @@ impl LogicalPlanBuilder {
         let mut id_key_groups = vec![];
         if let Some(pks) = table_source.primary_keys() {
             let n_field = schema.fields.len();
-            // All the field indices are associated, since it is source,
+            // All the field indices are associated since it is source.
             let associated_indices = (0..n_field).collect::<Vec<_>>();
             id_key_groups.push(
                 IdentifierKeyGroup::new(pks.to_vec(), associated_indices)
-                    // Since primary keys are guaranteed to be unique, set `is_unique` flag to `true`
+                    // As primary keys are guaranteed to be unique, set `is_unique` flag to `true`.
                     .with_is_unique(true),
             );
         }
@@ -1112,33 +1112,33 @@ pub fn build_join_schema(
 
     let mut left_id_key_groups = left.identifier_key_groups().clone();
 
-    // After join, identifier key may no longer be unique
-    // (However, it still defines unique set of column values, just same values may be replicated).
-    // reset is_unique flag to false.
-    left_id_key_groups
-        .iter_mut()
-        .for_each(|pk_group| pk_group.is_unique = false);
-    right_id_key_groups
-        .iter_mut()
-        .for_each(|pk_group| pk_group.is_unique = false);
+    // After a join, a primary key may no longer be unique. However, as it still
+    // defines unique set of column values it is still an identifier key for its
+    // associated columns.
+    for group in left_id_key_groups.iter_mut() {
+        group.is_unique = false;
+    }
+    for group in right_id_key_groups.iter_mut() {
+        group.is_unique = false;
+    }
     let id_key_groups = match join_type {
         JoinType::Inner => {
-            // left then right
+            // Left then right:
             left_id_key_groups
                 .into_iter()
                 .chain(right_id_key_groups.into_iter())
                 .collect()
         }
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-            // Only use the left side for the schema
+            // Only use the left side for the schema:
             left_id_key_groups
         }
         JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-            // Only use the right side for the schema
+            // Only use the right side for the schema:
             right_id_key_groups
         }
         JoinType::Full => {
-            // identifier keys are not preserved
+            // Identifier keys are not preserved.
             vec![]
         }
     };
@@ -1271,7 +1271,8 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }))
 }
 
-// Update entries inside the `entries` vector, with their corresponding index, inside `proj_indices` vector.
+// Update entries inside the `entries` vector with their corresponding index
+// inside the `proj_indices` vector.
 fn update_elements_with_matching_indices(
     entries: &[usize],
     proj_indices: &[usize],
@@ -1282,11 +1283,13 @@ fn update_elements_with_matching_indices(
         .collect()
 }
 
-/// Update identifier key indices, with index of the number in `field_indices`
-/// If `proj_indices` is \[2, 5, 8\], and identifier key groups is \[5\] -> \[5, 8\] in the `df_schema`.
-/// return value will be \[1\] -> \[1, 2\]. This means that 1st index of the `field_indices`(5) is identifier key,
-/// and this identifier key is associated with columns at indices 1 and 2 (in the updated schema).
-/// In the updated schema, fields at the indices \[2, 5, 8\] will be at \[0, 1, 2\].
+/// Update identifier key indices using the index mapping in `proj_indices`.
+/// Assume that `proj_indices` is \[2, 5, 8\] and identifier key groups is
+/// \[5\] -> \[5, 8\] in `df_schema`. Then, the return value will be \[1\] -> \[1, 2\].
+/// This means that the first index of the `proj_indices` (5) is an identifier key,
+/// and this identifier key is associated with columns at indices 1 and 2 (in
+/// the updated schema). In the updated schema, fields at indices \[2, 5, 8\] will
+/// be at \[0, 1, 2\].
 pub fn project_identifier_key_indices(
     id_key_groups: &IdentifierKeyGroups,
     proj_indices: &[usize],
@@ -1304,10 +1307,10 @@ pub fn project_identifier_key_indices(
         let new_id_key_indices =
             update_elements_with_matching_indices(identifier_key_indices, proj_indices);
         let new_association_indices = if *is_unique {
-            // Associate with all of the fields in the schema
+            // Associate with all of the fields in the schema:
             (0..n_out).collect()
         } else {
-            // Update associations according to projection
+            // Update associations according to projection:
             update_elements_with_matching_indices(associated_indices, proj_indices)
         };
         if !new_id_key_indices.is_empty() {
@@ -1320,14 +1323,14 @@ pub fn project_identifier_key_indices(
     updated_id_key_groups
 }
 
-/// This function projects identifier key groups of the
-/// `input`, according to projection expressions `exprs`
+/// This function projects identifier key groups of the plan `input` according
+/// to projection expressions `exprs`.
 pub(crate) fn project_identifier_keys(
     exprs: &[Expr],
     input: &LogicalPlan,
 ) -> Result<IdentifierKeyGroups> {
     let input_fields = input.schema().fields();
-    // Calculate expression indices (if found) in the input schema.
+    // Calculate expression indices (if present) in the input schema.
     let proj_indices = exprs
         .iter()
         .filter_map(|expr| {
@@ -1546,7 +1549,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
     let schema = Arc::new(
         DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
-            // we can use existing identifier key groups,
+            // We can use existing identifier key groups:
             .with_identifier_key_groups(input_schema.identifier_key_groups().clone()),
     );
 

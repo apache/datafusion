@@ -17,6 +17,7 @@
 
 //! Logical plan types
 
+use crate::builder::project_identifier_keys;
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::expr_vec_fmt;
@@ -44,7 +45,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 // backwards compatibility
-use crate::builder::project_identifier_keys;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 

@@ -495,21 +495,19 @@ impl SessionContext {
             )),
             (_, _, Err(_)) => {
                 let df_schema = input.schema();
-                // Get primary key indices in the schema
+                // Get primary key indices in the schema:
                 let primary_keys = primary_key
                     .iter()
                     .map(|pk| {
-                        if let Some(idx) = df_schema
+                        df_schema
                             .fields()
                             .iter()
                             .position(|item| item.qualified_name() == pk.flat_name())
-                        {
-                            Ok(idx)
-                        } else {
-                            Err(DataFusionError::Execution(
-                                "Primary Key doesn't exist".to_string(),
-                            ))
-                        }
+                            .ok_or_else(|| {
+                                DataFusionError::Execution(
+                                    "Primary key doesn't exist".to_string(),
+                                )
+                            })
                     })
                     .collect::<Result<Vec<_>>>()?;
 

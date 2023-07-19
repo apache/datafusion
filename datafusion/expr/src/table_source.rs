@@ -64,9 +64,8 @@ pub trait TableSource: Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
-    /// Get primary key index if any
+    /// Get primary key indices, if one exists.
     fn primary_keys(&self) -> Option<&[usize]> {
-        // By default return None.
         None
     }
 

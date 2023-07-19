@@ -17,12 +17,14 @@
 
 //! Default TableSource implementation used in DataFusion physical plans
 
+use std::any::Any;
+use std::sync::Arc;
+
 use crate::datasource::TableProvider;
+
 use arrow::datatypes::SchemaRef;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
-use std::any::Any;
-use std::sync::Arc;
 
 /// DataFusion default table source, wrapping TableProvider
 ///
@@ -52,7 +54,7 @@ impl TableSource for DefaultTableSource {
         self.table_provider.schema()
     }
 
-    /// Get a reference to the primary key indices
+    /// Get a reference to primary key indices, if a primary key exists.
     fn primary_keys(&self) -> Option<&[usize]> {
         self.table_provider.primary_keys()
     }

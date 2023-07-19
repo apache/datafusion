@@ -41,9 +41,8 @@ pub trait TableProvider: Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
-    /// Get a reference to the primary_key indices
+    /// Get a reference to primary key indices, if a primary key exists.
     fn primary_keys(&self) -> Option<&[usize]> {
-        // By default return None
         None
     }
 

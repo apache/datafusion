@@ -448,7 +448,7 @@ pub fn expand_qualified_wildcard(
     }
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
-            // we can use primary key as is, since it only stores indices
+            // We can use the identifier key as is, since it only stores indices:
             .with_identifier_key_groups(schema.identifier_key_groups().clone());
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
@@ -1021,7 +1021,7 @@ pub fn from_plan(
 
             let schema = Arc::new(
                 DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?
-                    // we can use existing primary keys as is
+                    // We can use the existing identifier keys as is:
                     .with_identifier_key_groups(
                         input.schema().identifier_key_groups().clone(),
                     ),
