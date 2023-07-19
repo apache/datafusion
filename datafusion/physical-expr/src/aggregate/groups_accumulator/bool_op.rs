@@ -19,12 +19,12 @@ use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow_array::{ArrayRef, BooleanArray};
-use arrow_buffer::BooleanBufferBuilder;
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use datafusion_common::Result;
 
 use crate::GroupsAccumulator;
 
-use super::accumulate::NullState;
+use super::{accumulate::NullState, EmitTo};
 
 /// An accumulator that implements a single operation over a
 /// [`BooleanArray`] where the accumulated state is also boolean (such
@@ -98,15 +98,28 @@ where
         Ok(())
     }
 
-    fn evaluate(&mut self) -> Result<ArrayRef> {
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let values = self.values.finish();
-        let nulls = self.null_state.build();
+
+        let values = match emit_to {
+            EmitTo::All => values,
+            EmitTo::First(n) => {
+                let first_n: BooleanBuffer = values.iter().take(n).collect();
+                // put n+1 back into self.values
+                for v in values.iter().skip(n) {
+                    self.values.append(v);
+                }
+                first_n
+            }
+        };
+
+        let nulls = self.null_state.build(emit_to);
         let values = BooleanArray::new(values, Some(nulls));
         Ok(Arc::new(values))
     }
 
-    fn state(&mut self) -> Result<Vec<ArrayRef>> {
-        self.evaluate().map(|arr| vec![arr])
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        self.evaluate(emit_to).map(|arr| vec![arr])
     }
 
     fn merge_batch(

@@ -82,7 +82,7 @@ pub enum LogicalPlan {
     Join(Join),
     /// Apply Cross Join to two logical plans
     CrossJoin(CrossJoin),
-    /// Repartition the plan based on a partitioning scheme.
+    /// Repartition the plan based on a partitioning scheme
     Repartition(Repartition),
     /// Union multiple inputs
     Union(Union),
