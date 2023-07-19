@@ -21,7 +21,7 @@ use std::borrow::Borrow;
 use std::cmp::{max, Ordering};
 use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
-use std::ops::{Add, Sub};
+use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
@@ -47,6 +47,7 @@ use arrow::{
     },
 };
 use arrow_array::timezone::Tz;
+use arrow_array::ArrowNativeTypeOp;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
@@ -3495,6 +3496,22 @@ impl ScalarValue {
                 .iter()
                 .map(|sv| sv.size() - std::mem::size_of_val(sv))
                 .sum::<usize>()
+    }
+
+    /// This function returns the next/previous value depending on the `DIR` value.
+    /// If `true`, it returns the next value; otherwise it returns the previous value.
+    pub fn next_value<const DIR: bool>(self) -> ScalarValue {
+        let one = if let Ok(one) = Self::new_one(&self.get_datatype()) {
+            one
+        } else {
+            return self;
+        };
+
+        if DIR {
+            self.add(one).unwrap_or_else(|_| self)
+        } else {
+            self.sub(one).unwrap_or_else(|_| self)
+        }
     }
 }
 

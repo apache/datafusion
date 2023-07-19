@@ -183,14 +183,12 @@ pub fn analyze(
         PropagationResult::Success => {
             shrink_boundaries(expr, graph, target_boundaries, target_expr_and_indices)
         }
-        PropagationResult::Infeasible => Ok(AnalysisContext::new_with_selectivity(
-            target_boundaries,
-            0.0,
-        )),
-        PropagationResult::CannotPropagate => Ok(AnalysisContext::new_with_selectivity(
-            target_boundaries,
-            1.0,
-        )),
+        PropagationResult::Infeasible => {
+            Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
+        }
+        PropagationResult::CannotPropagate => {
+            Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
+        }
     }
 }
 
@@ -234,10 +232,7 @@ fn shrink_boundaries(
         )));
     }
 
-    Ok(AnalysisContext::new_with_selectivity(
-        target_boundaries,
-        selectivity,
-    ))
+    Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
 }
 
 /// This function calculates the filter predicate's selectivity by comparing the initial and pruned column boundaries.
@@ -255,8 +250,8 @@ fn calculate_selectivity(
         (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Ok(1.0),
         (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => Ok(0.0),
         _ => {
-            // Since the intervals are assumed as uniform and we do not
-            // have the sort information, we need to multiply the selectivities
+            // Since the intervals are assumed as uniform, and the values
+            // are not correlated, we need to multiply the selectivities
             // of multiple columns to get overall selectivity.
             target_boundaries.iter().enumerate().try_fold(
                 1.0,
@@ -300,14 +295,9 @@ impl AnalysisContext {
         }
     }
 
-    pub fn new_with_selectivity(
-        boundaries: Vec<ExprBoundaries>,
-        selectivity: f64,
-    ) -> Self {
-        Self {
-            boundaries: Some(boundaries),
-            selectivity: Some(selectivity),
-        }
+    pub fn with_selectivity(mut self, selectivity: f64) -> Self {
+        self.selectivity = Some(selectivity);
+        self
     }
 
     /// Create a new analysis context from column statistics.

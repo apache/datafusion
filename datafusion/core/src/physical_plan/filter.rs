@@ -38,9 +38,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::intervals::{
-    interval_with_closed_bounds, is_operator_supported,
-};
+use datafusion_physical_expr::intervals::is_operator_supported;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
 };
@@ -252,7 +250,7 @@ fn collect_new_statistics(
         },
     ) in analysis_boundaries.into_iter().enumerate()
     {
-        let closed_interval = interval_with_closed_bounds(interval);
+        let closed_interval = interval.interval_with_closed_bounds();
         let nonempty_columns = selectivity > 0.0;
         res.push(ColumnStatistics {
             null_count: input_column_stats[i].null_count,
