@@ -83,7 +83,7 @@ impl GroupOrdering {
     }
 
     /// remove the first n groups from the internal state, shifting
-    /// all existing indexes down by `n`. Returns stored hash values
+    /// all existing indexes down by `n`
     pub fn remove_groups(&mut self, n: usize) {
         match self {
             GroupOrdering::None => {}
