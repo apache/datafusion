@@ -627,8 +627,9 @@ impl GroupedHashAggregateStream {
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
                     for bucket in self.map.iter() {
-                        if bucket.as_ref().1 < n {
-                            self.map.erase(bucket);
+                        match bucket.as_ref().1.checked_sub(n) {
+                            None => self.map.erase(bucket),
+                            Some(sub) => bucket.as_mut().1 = sub,
                         }
                     }
                 }
