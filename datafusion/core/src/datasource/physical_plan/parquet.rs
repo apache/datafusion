@@ -914,19 +914,18 @@ mod tests {
     async fn write_parquet_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
         // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new());
-        let local_url = Url::parse(&format!("file://local")).unwrap();
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);
 
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
-        let tmp_dir = TempDir::new()?;
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
+        let out_dir_url = "file://local/out";
         let e = df
-            .write_parquet(&out_dir_url, None)
+            .write_parquet(out_dir_url, None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -1939,15 +1938,15 @@ mod tests {
         .await?;
 
         // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new());
-        let local_url = Url::parse(&format!("file://local")).unwrap();
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
+        let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_parquet(&out_dir_url, None).await?;
+        df.write_parquet(out_dir_url, None).await?;
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file

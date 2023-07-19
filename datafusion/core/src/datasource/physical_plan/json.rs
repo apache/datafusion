@@ -41,7 +41,6 @@ use object_store;
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
 use std::io::BufReader;
-use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::JoinSet;
@@ -324,6 +323,7 @@ mod tests {
     use crate::test::partitioned_file_groups;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use rstest::*;
+    use std::path::Path;
     use tempfile::TempDir;
     use url::Url;
 
@@ -653,7 +653,6 @@ mod tests {
     #[tokio::test]
     async fn write_json_results() -> Result<()> {
         // create partitioned input file and context
-        let tmp_dir = TempDir::new()?;
         let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
@@ -664,15 +663,16 @@ mod tests {
             .await?;
 
         // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new());
-        let local_url = Url::parse(&format!("file://local")).unwrap();
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);
 
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
+        let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT a, b FROM test").await?;
-        df.write_json(&out_dir_url).await?;
+        df.write_json(out_dir_url).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();
@@ -731,18 +731,17 @@ mod tests {
     async fn write_json_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
         // register a local file system object store for /tmp directory
-        let local = Arc::new(LocalFileSystem::new());
-        let local_url = Url::parse(&format!("file://local")).unwrap();
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
-        let tmp_dir = TempDir::new()?;
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        let out_dir_url = format!("file://local/{}", &out_dir[1..]);
+        let out_dir_url = "file://local/out";
         let e = df
-            .write_json(&out_dir_url)
+            .write_json(out_dir_url)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
