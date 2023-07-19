@@ -101,6 +101,19 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE array_has_table_3D
+AS VALUES
+  (make_array([[1,2]]), make_array([1])),
+  (make_array([[1,2]]), make_array([1,2])),
+  (make_array([[1,2]]), make_array([1,2,3])),
+  (make_array([[1], [2]]), make_array([2])),
+  (make_array([[1], [2]]), make_array([1], [2])),
+  (make_array([[1], [2]], [[2], [3]]), make_array([1], [2], [3])),
+  (make_array([[1], [2]], [[2], [3]]), make_array([1], [2]))
+;
+
+
+statement ok
 CREATE TABLE arrays_values_without_nulls
 AS VALUES
   (make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ','),
@@ -1180,6 +1193,53 @@ NULL 1 1
 
 ## array_has/array_has_all/array_has_any
 
+query B
+select array_has(make_array(1,2), 1);
+----
+true
+
+query B
+select array_has(make_array([2,3], [3,4]), make_array(2,3));
+----
+true
+
+query BBB
+select array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1], [2,3])),
+       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([4,5], [6])),
+       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1]));
+----
+true true false
+
+query BBB
+select array_has(make_array([[[1]]]), make_array([[1]])),
+       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[2]])),
+       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[1], [2]]));
+----
+true false true
+
+query B
+select array_has(column1, column2) from array_has_table_1D;
+----
+true
+false
+
+query B
+select array_has(column1, column2) from array_has_table_2D;
+----
+false
+true
+
+query B
+select array_has(column1, column2) from array_has_table_3D;
+----
+false
+true
+false
+false
+true
+false
+true
+
 # query ?
 # select column1 from arrays;
 # ----
@@ -1192,9 +1252,16 @@ NULL 1 1
 # [[15, 16], [, 18]]
 
 # array_has scalar function #1
-
-query error DataFusion error: Error during planning: table 'datafusion\.public\.array_has_table' not found
-select array_has(column1, 1) from array_has_table;
+query BB
+select array_has(column1, make_array(5, 6)),
+       array_has(column1, make_array(7, NULL)) from arrays;
+----
+false false
+true false
+true false
+false true
+false false
+false false
 
 query error DataFusion error: Error during planning: table 'datafusion\.public\.array_has_table' not found
 select array_has(column1, 1) from array_has_table;
@@ -1393,41 +1460,6 @@ select make_array(f0) from fixed_size_list_array
 ----
 [[1, 2], [3, 4]]
 
-query B
-select array_has(make_array(1,2), 1);
-----
-true
-
-query B
-select array_has(make_array([2,3], [3,4]), make_array(2,3));
-----
-true
-
-query BBB
-select array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1], [2,3])),
-       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([4,5], [6])),
-       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1]));
-----
-true true false
-
-query BBB
-select array_has(make_array([[[1]]]), make_array([[1]])),
-       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[2]])),
-       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[1], [2]]));
-----
-true false true
-
-query B
-select array_has(column1, column2) from array_has_table_1D;
-----
-true
-false
-
-query B
-select array_has(column1, column2) from array_has_table_2D;
-----
-false
-true
 
 ### Delete tables
 
