@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
-
 use crate::physical_expr::EmitTo;
 
 /// Tracks grouping state when the data is ordered entirely by its
@@ -58,8 +56,6 @@ use crate::physical_expr::EmitTo;
 #[derive(Debug)]
 pub(crate) struct GroupOrderingFull {
     state: State,
-    /// Hash values for groups in 0..current
-    hashes: Vec<u64>,
 }
 
 #[derive(Debug)]
@@ -79,7 +75,6 @@ impl GroupOrderingFull {
     pub fn new() -> Self {
         Self {
             state: State::Start,
-            hashes: vec![],
         }
     }
 
@@ -101,19 +96,17 @@ impl GroupOrderingFull {
     }
 
     /// remove the first n groups from the internal state, shifting
-    /// all existing indexes down by `n`. Returns stored hash values
-    pub fn remove_groups(&mut self, n: usize) -> &[u64] {
+    /// all existing indexes down by `n`
+    pub fn remove_groups(&mut self, n: usize) {
         match &mut self.state {
             State::Start => panic!("invalid state: start"),
             State::InProgress { current } => {
                 // shift down by n
                 assert!(*current >= n);
                 *current -= n;
-                self.hashes.drain(0..n);
             }
             State::Complete { .. } => panic!("invalid state: complete"),
-        };
-        &self.hashes
+        }
     }
 
     /// Note that the input is complete so any outstanding groups are done as well
@@ -123,20 +116,8 @@ impl GroupOrderingFull {
 
     /// Called when new groups are added in a batch. See documentation
     /// on [`super::GroupOrdering::new_groups`]
-    pub fn new_groups(
-        &mut self,
-        group_indices: &[usize],
-        batch_hashes: &[u64],
-        total_num_groups: usize,
-    ) {
+    pub fn new_groups(&mut self, total_num_groups: usize) {
         assert_ne!(total_num_groups, 0);
-        assert_eq!(group_indices.len(), batch_hashes.len());
-
-        // copy any hash values
-        self.hashes.resize(total_num_groups, 0);
-        for (&group_index, &hash) in group_indices.iter().zip(batch_hashes.iter()) {
-            self.hashes[group_index] = hash;
-        }
 
         // Update state
         let max_group_index = total_num_groups - 1;
@@ -158,6 +139,6 @@ impl GroupOrderingFull {
     }
 
     pub(crate) fn size(&self) -> usize {
-        std::mem::size_of::<Self>() + self.hashes.allocated_size()
+        std::mem::size_of::<Self>()
     }
 }

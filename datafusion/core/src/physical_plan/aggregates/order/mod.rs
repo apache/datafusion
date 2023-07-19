@@ -84,9 +84,9 @@ impl GroupOrdering {
 
     /// remove the first n groups from the internal state, shifting
     /// all existing indexes down by `n`. Returns stored hash values
-    pub fn remove_groups(&mut self, n: usize) -> &[u64] {
+    pub fn remove_groups(&mut self, n: usize) {
         match self {
-            GroupOrdering::None => &[],
+            GroupOrdering::None => {}
             GroupOrdering::Partial(partial) => partial.remove_groups(n),
             GroupOrdering::Full(full) => full.remove_groups(n),
         }
@@ -106,7 +106,6 @@ impl GroupOrdering {
         &mut self,
         batch_group_values: &[ArrayRef],
         group_indices: &[usize],
-        batch_hashes: &[u64],
         total_num_groups: usize,
     ) -> Result<()> {
         match self {
@@ -115,13 +114,11 @@ impl GroupOrdering {
                 partial.new_groups(
                     batch_group_values,
                     group_indices,
-                    batch_hashes,
                     total_num_groups,
                 )?;
             }
-
             GroupOrdering::Full(full) => {
-                full.new_groups(group_indices, batch_hashes, total_num_groups);
+                full.new_groups(total_num_groups);
             }
         };
         Ok(())

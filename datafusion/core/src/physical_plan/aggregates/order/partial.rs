@@ -71,9 +71,6 @@ pub(crate) struct GroupOrderingPartial {
     /// Converter for the sort key (used on the group columns
     /// specified in `order_indexes`)
     row_converter: RowConverter,
-
-    /// Hash values for groups in 0..completed
-    hashes: Vec<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -127,7 +124,6 @@ impl GroupOrderingPartial {
             state: State::Start,
             order_indices: order_indices.to_vec(),
             row_converter: RowConverter::new(fields)?,
-            hashes: vec![],
         })
     }
 
@@ -167,8 +163,8 @@ impl GroupOrderingPartial {
     }
 
     /// remove the first n groups from the internal state, shifting
-    /// all existing indexes down by `n`. Returns stored hash values
-    pub fn remove_groups(&mut self, n: usize) -> &[u64] {
+    /// all existing indexes down by `n`
+    pub fn remove_groups(&mut self, n: usize) {
         match &mut self.state {
             State::Taken => unreachable!("State previously taken"),
             State::Start => panic!("invalid state: start"),
@@ -182,12 +178,9 @@ impl GroupOrderingPartial {
                 *current -= n;
                 assert!(*current_sort >= n);
                 *current_sort -= n;
-                // Note sort_key stays the same, we are just translating group indexes
-                self.hashes.drain(0..n);
             }
             State::Complete { .. } => panic!("invalid state: complete"),
-        };
-        &self.hashes
+        }
     }
 
     /// Note that the input is complete so any outstanding groups are done as well
@@ -204,18 +197,15 @@ impl GroupOrderingPartial {
         &mut self,
         batch_group_values: &[ArrayRef],
         group_indices: &[usize],
-        batch_hashes: &[u64],
         total_num_groups: usize,
     ) -> Result<()> {
         assert!(total_num_groups > 0);
         assert!(!batch_group_values.is_empty());
-        assert_eq!(group_indices.len(), batch_hashes.len());
 
         let max_group_index = total_num_groups - 1;
 
         // compute the sort key values for each group
         let sort_keys = self.compute_sort_keys(batch_group_values)?;
-        assert_eq!(sort_keys.num_rows(), batch_hashes.len());
 
         let old_state = std::mem::take(&mut self.state);
         let (mut current_sort, mut sort_key) = match &old_state {
@@ -231,16 +221,9 @@ impl GroupOrderingPartial {
             }
         };
 
-        // copy any hash values, and find latest sort key
-        self.hashes.resize(total_num_groups, 0);
-        let iter = group_indices
-            .iter()
-            .zip(batch_hashes.iter())
-            .zip(sort_keys.iter());
-
-        for ((&group_index, &hash), group_sort_key) in iter {
-            self.hashes[group_index] = hash;
-
+        // Find latest sort key
+        let iter = group_indices.iter().zip(sort_keys.iter());
+        for (&group_index, group_sort_key) in iter {
             // Does this group have seen a new sort_key?
             if sort_key != group_sort_key {
                 current_sort = group_index;
@@ -262,6 +245,5 @@ impl GroupOrderingPartial {
         std::mem::size_of::<Self>()
             + self.order_indices.allocated_size()
             + self.row_converter.size()
-            + self.hashes.allocated_size()
     }
 }
