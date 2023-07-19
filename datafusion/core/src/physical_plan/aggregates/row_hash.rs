@@ -219,8 +219,12 @@ impl GroupValues for GroupValuesRows {
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
                     for bucket in self.map.iter() {
-                        if bucket.as_ref().1 < n {
-                            self.map.erase(bucket)
+                        // Decrement group index by n
+                        match bucket.as_ref().1.checked_sub(n) {
+                            // Group index was >= n, shift value down
+                            Some(sub) => bucket.as_mut().1 = sub,
+                            // Group index was < n, so remove from table
+                            None => self.map.erase(bucket),
                         }
                     }
                 }

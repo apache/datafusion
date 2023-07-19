@@ -117,7 +117,6 @@ impl GroupOrdering {
                     total_num_groups,
                 )?;
             }
-
             GroupOrdering::Full(full) => {
                 full.new_groups(total_num_groups);
             }
