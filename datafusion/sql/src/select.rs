@@ -432,7 +432,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         let schema = input.schema();
-        let primary_keys = schema.identifier_key_groups();
+        let id_key_groups = schema.identifier_key_groups();
 
         let field_names = schema
             .fields()
@@ -441,26 +441,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Vec<_>>();
         let mut new_group_by_exprs = group_by_exprs.clone();
         for IdentifierKeyGroup {
-            identifier_key_indices: primary_key_indices,
+            identifier_key_indices,
             associated_indices,
             ..
-        } in primary_keys
+        } in id_key_groups
         {
-            let field_pk_names = primary_key_indices
+            let id_key_names = identifier_key_indices
                 .iter()
-                .map(|pk_idx| field_names[*pk_idx].as_str())
+                .map(|id_key_idx| field_names[*id_key_idx].as_str())
                 .collect::<Vec<_>>();
             for group_by_expr in &group_by_exprs {
                 let expr_name = format!("{}", group_by_expr);
-                // group by expression is primary key
-                if field_pk_names.contains(&expr_name.as_str()) {
+                // group by expression contains identifier key
+                // In these case, we can use associated fields after aggregation
+                // even if they are not part of group by expressions
+                if id_key_names.contains(&expr_name.as_str()) {
                     let associated_field_names = associated_indices
                         .iter()
                         .map(|idx| field_names[*idx].as_str())
                         .collect::<Vec<_>>();
                     // Expand group by exprs with select_exprs
-                    // If one of the expressions inside group by is primary key and
-                    // select expression is associated with that primary key.
+                    // If one of the expressions inside group by is identifier key, and
+                    // select expression is associated with that identifier key.
                     for expr in select_exprs {
                         let expr_name = format!("{}", expr);
                         if !new_group_by_exprs.contains(expr)
