@@ -136,7 +136,7 @@ pub(crate) fn pushdown_sorts(
                 parent_required.ok_or_else(err)?.iter().cloned(),
             );
             new_plan = sort_exec.input.clone();
-            add_sort_above(&mut new_plan, parent_required_expr)?;
+            add_sort_above(&mut new_plan, parent_required_expr, sort_exec.fetch())?;
         };
         let required_ordering = new_plan
             .output_ordering()
@@ -183,7 +183,7 @@ pub(crate) fn pushdown_sorts(
                 parent_required.ok_or_else(err)?.iter().cloned(),
             );
             let mut new_plan = plan.clone();
-            add_sort_above(&mut new_plan, parent_required_expr)?;
+            add_sort_above(&mut new_plan, parent_required_expr, None)?;
             Ok(Transformed::Yes(SortPushDown::init(new_plan)))
         }
     }
@@ -345,7 +345,7 @@ fn try_pushdown_requirements_to_join(
         }
         RequirementsCompatibility::NonCompatible => {
             // Can not push down, add new SortExec
-            add_sort_above(&mut plan.clone(), sort_expr)?;
+            add_sort_above(&mut plan.clone(), sort_expr, None)?;
             Ok(None)
         }
     }

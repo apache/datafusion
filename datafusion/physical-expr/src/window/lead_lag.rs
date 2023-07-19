@@ -18,7 +18,6 @@
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
 
-use crate::window::window_expr::LeadLagState;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
@@ -26,7 +25,6 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
@@ -105,7 +103,6 @@ impl BuiltInWindowFunctionExpr for WindowShift {
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(WindowShiftEvaluator {
-            state: LeadLagState { idx: 0 },
             shift_offset: self.shift_offset,
             default_value: self.default_value.clone(),
         }))
@@ -124,7 +121,6 @@ impl BuiltInWindowFunctionExpr for WindowShift {
 
 #[derive(Debug)]
 pub(crate) struct WindowShiftEvaluator {
-    state: LeadLagState,
     shift_offset: i64,
     default_value: Option<ScalarValue>,
 }
@@ -179,17 +175,6 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn update_state(
-        &mut self,
-        _state: &WindowAggState,
-        idx: usize,
-        _range_columns: &[ArrayRef],
-        _sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        self.state.idx = idx;
-        Ok(())
-    }
-
     fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
         if self.shift_offset > 0 {
             let offset = self.shift_offset as usize;
@@ -206,11 +191,18 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     fn evaluate(
         &mut self,
         values: &[ArrayRef],
-        _range: &Range<usize>,
+        range: &Range<usize>,
     ) -> Result<ScalarValue> {
         let array = &values[0];
         let dtype = array.data_type();
-        let idx = self.state.idx as i64 - self.shift_offset;
+        // LAG mode
+        let idx = if self.shift_offset > 0 {
+            range.end as i64 - self.shift_offset - 1
+        } else {
+            // LEAD mode
+            range.start as i64 - self.shift_offset
+        };
+
         if idx < 0 || idx as usize >= array.len() {
             get_default_value(self.default_value.as_ref(), dtype)
         } else {
