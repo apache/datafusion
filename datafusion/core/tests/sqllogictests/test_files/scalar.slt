@@ -1090,6 +1090,18 @@ FROM t1
 999
 999
 
+# issue: https://github.com/apache/arrow-datafusion/issues/7004
+query B
+select case c1
+    when 'foo' then TRUE
+    when 'bar' then FALSE
+end from t1
+----
+NULL
+NULL
+NULL
+NULL
+
 statement ok
 drop table t1
 
