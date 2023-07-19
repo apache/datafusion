@@ -86,24 +86,10 @@ impl SimplifyExpressions {
             .expressions()
             .into_iter()
             .map(|e| {
-                // We need to keep original expression name, if any.
-                // Constant folding should not change expression name.
-                let name = &e.display_name();
-
-                // Apply the actual simplification logic
+                // TODO: unify with `rewrite_preserving_name`
+                let original_name = e.name_for_alias()?;
                 let new_e = simplifier.simplify(e)?;
-
-                let new_name = &new_e.display_name();
-
-                if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
-                    if expr_name != new_expr_name {
-                        Ok(new_e.alias(expr_name))
-                    } else {
-                        Ok(new_e)
-                    }
-                } else {
-                    Ok(new_e)
-                }
+                new_e.alias_if_changed(original_name)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -120,6 +106,8 @@ impl SimplifyExpressions {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
+
     use crate::simplify_expressions::utils::for_test::{
         cast_to_int64_expr, now_expr, to_timestamp_expr,
     };
@@ -419,7 +407,7 @@ mod tests {
             .project(proj)?
             .build()?;
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
+        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
@@ -559,7 +547,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS totimestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
+        let expected = r#"Projection: Date32("18636") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
   TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
@@ -653,7 +641,7 @@ mod tests {
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], false).not())?
             .build()?;
         let expected =
-            "Filter: test.d != Int32(3) AND test.d != Int32(2) AND test.d != Int32(1)\
+            "Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -667,7 +655,7 @@ mod tests {
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], true).not())?
             .build()?;
         let expected =
-            "Filter: test.d = Int32(3) OR test.d = Int32(2) OR test.d = Int32(1)\
+            "Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)

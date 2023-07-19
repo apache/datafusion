@@ -20,15 +20,14 @@ use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::from_slice::FromSlice;
 use datafusion::logical_expr::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
-    project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    project_schema, ColumnStatistics, DisplayAs, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use datafusion::scalar::ScalarValue;
 use datafusion::{
@@ -43,6 +42,9 @@ use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+/// Also run all tests that are found in the `custom_sources_cases` directory
+mod custom_sources_cases;
 
 use async_trait::async_trait;
 
@@ -70,8 +72,8 @@ macro_rules! TEST_CUSTOM_RECORD_BATCH {
         RecordBatch::try_new(
             TEST_CUSTOM_SCHEMA_REF!(),
             vec![
-                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
-                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
+                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
             ],
         )
     };
@@ -95,6 +97,20 @@ impl Stream for TestCustomRecordBatchStream {
             Poll::Ready(Some(TEST_CUSTOM_RECORD_BATCH!().map_err(Into::into)))
         } else {
             Poll::Ready(None)
+        }
+    }
+}
+
+impl DisplayAs for CustomExecutionPlan {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
+            }
         }
     }
 }
@@ -134,18 +150,6 @@ impl ExecutionPlan for CustomExecutionPlan {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {
@@ -268,9 +272,9 @@ async fn optimizers_catch_all_statistics() {
             Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
         vec![
-            Arc::new(Int64Array::from_slice([4])),
-            Arc::new(Int32Array::from_slice([1])),
-            Arc::new(Int32Array::from_slice([100])),
+            Arc::new(Int64Array::from(vec![4])),
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![100])),
         ],
     )
     .unwrap();

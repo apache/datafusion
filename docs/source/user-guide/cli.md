@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# `datafusion-cli`
+# Command line SQL console
 
 The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
@@ -358,7 +358,6 @@ Available commands inside DataFusion CLI are:
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 8192    |
 | datafusion.execution.coalesce_batches           | true    |
-| datafusion.execution.coalesce_target_batch_size | 4096    |
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
 | datafusion.explain.physical_plan_only           | false   |
@@ -395,7 +394,6 @@ DataFusion CLI v12.0.0
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 1024    |
 | datafusion.execution.coalesce_batches           | true    |
-| datafusion.execution.coalesce_target_batch_size | 4096    |
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
 | datafusion.explain.physical_plan_only           | false   |

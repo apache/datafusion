@@ -23,6 +23,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 
+use crate::datasource::file_format::arrow::{ArrowFormat, DEFAULT_ARROW_EXTENSION};
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::file_type::FileCompressionType;
@@ -214,6 +215,52 @@ impl<'a> ParquetReadOptions<'a> {
     }
 }
 
+/// Options that control the reading of ARROW files.
+///
+/// Note this structure is supplied when a datasource is created and
+/// can not not vary from statement to statement. For settings that
+/// can vary statement to statement see
+/// [`ConfigOptions`](crate::config::ConfigOptions).
+#[derive(Clone)]
+pub struct ArrowReadOptions<'a> {
+    /// The data source schema.
+    pub schema: Option<&'a Schema>,
+
+    /// File extension; only files with this extension are selected for data input.
+    /// Defaults to `FileType::ARROW.get_ext().as_str()`.
+    pub file_extension: &'a str,
+
+    /// Partition Columns
+    pub table_partition_cols: Vec<(String, DataType)>,
+}
+
+impl<'a> Default for ArrowReadOptions<'a> {
+    fn default() -> Self {
+        Self {
+            schema: None,
+            file_extension: DEFAULT_ARROW_EXTENSION,
+            table_partition_cols: vec![],
+        }
+    }
+}
+
+impl<'a> ArrowReadOptions<'a> {
+    /// Specify table_partition_cols for partition pruning
+    pub fn table_partition_cols(
+        mut self,
+        table_partition_cols: Vec<(String, DataType)>,
+    ) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Specify schema to use for AVRO read
+    pub fn schema(mut self, schema: &'a Schema) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+}
+
 /// Options that control the reading of AVRO files.
 ///
 /// Note this structure is supplied when a datasource is created and
@@ -396,7 +443,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             // TODO: Add file sort order into CsvReadOptions and introduce here.
-            .with_file_sort_order(None)
+            .with_file_sort_order(vec![])
             .with_infinite_source(self.infinite)
     }
 
@@ -442,6 +489,7 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
 impl ReadOptions<'_> for NdJsonReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
         let file_format = JsonFormat::default()
+            .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
@@ -465,7 +513,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
 #[async_trait]
 impl ReadOptions<'_> for AvroReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = AvroFormat::default();
+        let file_format = AvroFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
@@ -481,6 +529,28 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
         self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+            .await
+    }
+}
+
+#[async_trait]
+impl ReadOptions<'_> for ArrowReadOptions<'_> {
+    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
+        let file_format = ArrowFormat;
+
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(config.target_partitions())
+            .with_table_partition_cols(self.table_partition_cols.clone())
+    }
+
+    async fn get_resolved_schema(
+        &self,
+        config: &SessionConfig,
+        state: SessionState,
+        table_path: ListingTableUrl,
+    ) -> Result<SchemaRef> {
+        self._get_resolved_schema(config, state, table_path, self.schema, false)
             .await
     }
 }

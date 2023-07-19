@@ -20,17 +20,17 @@
 //! determined by the [`JoinType`].
 
 use crate::physical_plan::joins::utils::{
-    adjust_right_output_partitioning, append_right_indices, apply_join_filter_to_indices,
-    build_batch_from_indices, build_join_schema, check_join_is_valid,
-    combine_join_equivalence_properties, estimate_join_statistics, get_anti_indices,
-    get_anti_u64_indices, get_final_indices_from_bit_map, get_semi_indices,
-    get_semi_u64_indices, BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinSide,
-    OnceAsync, OnceFut,
+    append_right_indices, apply_join_filter_to_indices, build_batch_from_indices,
+    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
+    estimate_join_statistics, get_anti_indices, get_anti_u64_indices,
+    get_final_indices_from_bit_map, get_semi_indices, get_semi_u64_indices,
+    partitioned_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
+    JoinSide, OnceAsync, OnceFut,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 use arrow::array::{
     BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
@@ -48,10 +48,10 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::error::Result;
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::MemoryConsumer;
 use crate::physical_plan::coalesce_batches::concat_batches;
+use datafusion_common::Result;
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
 
 /// Data of the inner table side
 type JoinLeftData = (RecordBatch, MemoryReservation);
@@ -118,6 +118,44 @@ impl NestedLoopJoinExec {
             metrics: Default::default(),
         })
     }
+
+    /// left (build) side which gets hashed
+    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.left
+    }
+
+    /// right (probe) side which are filtered by the hash table
+    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.right
+    }
+
+    /// Filters applied before join output
+    pub fn filter(&self) -> Option<&JoinFilter> {
+        self.filter.as_ref()
+    }
+
+    /// How the join is performed
+    pub fn join_type(&self) -> &JoinType {
+        &self.join_type
+    }
+}
+
+impl DisplayAs for NestedLoopJoinExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let display_filter = self.filter.as_ref().map_or_else(
+                    || "".to_string(),
+                    |f| format!(", filter={}", f.expression()),
+                );
+                write!(
+                    f,
+                    "NestedLoopJoinExec: join_type={:?}{}",
+                    self.join_type, display_filter
+                )
+            }
+        }
+    }
 }
 
 impl ExecutionPlan for NestedLoopJoinExec {
@@ -131,25 +169,15 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn output_partitioning(&self) -> Partitioning {
         // the partition of output is determined by the rule of `required_input_distribution`
-        // TODO we can replace it by `partitioned_join_output_partitioning`
-        match self.join_type {
-            // use the left partition
-            JoinType::Inner
-            | JoinType::Left
-            | JoinType::LeftSemi
-            | JoinType::LeftAnti
-            | JoinType::Full => self.left.output_partitioning(),
-            // use the right partition
-            JoinType::Right => {
-                // if the partition of right is hash,
-                // and the right partition should be adjusted the column index for the right expr
-                adjust_right_output_partitioning(
-                    self.right.output_partitioning(),
-                    self.left.schema().fields.len(),
-                )
-            }
-            // use the right partition
-            JoinType::RightSemi | JoinType::RightAnti => self.right.output_partitioning(),
+        if self.join_type == JoinType::Full {
+            self.left.output_partitioning()
+        } else {
+            partitioned_join_output_partitioning(
+                self.join_type,
+                self.left.output_partitioning(),
+                self.right.output_partitioning(),
+                self.left.schema().fields.len(),
+            )
         }
     }
 
@@ -247,22 +275,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
             join_metrics,
             reservation,
         }))
-    }
-
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                let display_filter = self.filter.as_ref().map_or_else(
-                    || "".to_string(),
-                    |f| format!(", filter={:?}", f.expression()),
-                );
-                write!(
-                    f,
-                    "NestedLoopJoinExec: join_type={:?}{}",
-                    self.join_type, display_filter
-                )
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -482,8 +494,8 @@ impl NestedLoopJoinStream {
                             &self.schema,
                             left_data,
                             &empty_right_batch,
-                            left_side,
-                            right_side,
+                            &left_side,
+                            &right_side,
                             &self.column_indices,
                             JoinSide::Left,
                         );
@@ -611,8 +623,8 @@ fn join_left_and_right_batch(
                 schema,
                 left_batch,
                 right_batch,
-                left_side,
-                right_side,
+                &left_side,
+                &right_side,
                 column_indices,
                 JoinSide::Left,
             )
@@ -726,6 +738,7 @@ impl RecordBatchStream for NestedLoopJoinStream {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::physical_expr::expressions::BinaryExpr;
     use crate::{
         assert_batches_sorted_eq,
@@ -742,7 +755,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_expr::Operator;
 
-    use super::*;
     use crate::physical_plan::joins::utils::JoinSide;
     use crate::prelude::SessionContext;
     use datafusion_common::ScalarValue;

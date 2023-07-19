@@ -18,17 +18,17 @@
 //! Values execution plan
 
 use super::expressions::PhysicalSortExpr;
-use super::{common, SendableRecordBatchStream, Statistics};
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
+use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
 use crate::physical_plan::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -94,6 +94,20 @@ impl ValuesExec {
     }
 }
 
+impl DisplayAs for ValuesExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "ValuesExec")
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for ValuesExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -143,18 +157,6 @@ impl ExecutionPlan for ValuesExec {
             self.schema.clone(),
             None,
         )?))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "ValuesExec")
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

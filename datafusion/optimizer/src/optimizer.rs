@@ -22,6 +22,7 @@ use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
+use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::eliminate_project::EliminateProjection;
@@ -41,6 +42,7 @@ use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use crate::utils::log_plan;
 use chrono::{DateTime, Utc};
+use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
@@ -79,6 +81,9 @@ pub trait OptimizerConfig {
     /// time is used as the value for now()
     fn query_execution_start_time(&self) -> DateTime<Utc>;
 
+    /// Return alias generator used to generate unique aliases for subqueries
+    fn alias_generator(&self) -> Arc<AliasGenerator>;
+
     fn options(&self) -> &ConfigOptions;
 }
 
@@ -89,6 +94,9 @@ pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
     /// expressions such as `now()` to use a literal value instead
     query_execution_start_time: DateTime<Utc>,
+
+    /// Alias generator used to generate unique aliases for subqueries
+    alias_generator: Arc<AliasGenerator>,
 
     options: ConfigOptions,
 }
@@ -101,6 +109,7 @@ impl OptimizerContext {
 
         Self {
             query_execution_start_time: Utc::now(),
+            alias_generator: Arc::new(AliasGenerator::new()),
             options,
         }
     }
@@ -145,6 +154,10 @@ impl Default for OptimizerContext {
 impl OptimizerConfig for OptimizerContext {
     fn query_execution_start_time(&self) -> DateTime<Utc> {
         self.query_execution_start_time
+    }
+
+    fn alias_generator(&self) -> Arc<AliasGenerator> {
+        self.alias_generator.clone()
     }
 
     fn options(&self) -> &ConfigOptions {
@@ -210,6 +223,7 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
+            Arc::new(EliminateJoin::new()),
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
@@ -361,7 +375,7 @@ impl Optimizer {
             })
             .collect::<Vec<_>>();
 
-        Ok(Some(plan.with_new_inputs(new_inputs.as_slice())?))
+        Ok(Some(plan.with_new_inputs(&new_inputs)?))
     }
 
     /// Use a rule to optimize the whole plan.

@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::parser::{
-    CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
+    CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt, LexOrdering,
+    Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -25,8 +26,8 @@ use crate::utils::normalize_ident;
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
-    OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
+    unqualified_field_not_found, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    ExprSchema, OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -43,9 +44,9 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, OrderByExpr, Query,
-    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
-    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
+    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint,
+    TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 
 use datafusion_expr::expr::Placeholder;
@@ -85,6 +86,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
+            DFStatement::CopyTo(s) => self.copy_to_plan(s),
         }
     }
 
@@ -402,11 +404,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             Statement::Delete {
-                table_name,
+                tables,
                 using,
                 selection,
                 returning,
+                from,
             } => {
+                if !tables.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                        "DELETE <TABLE> not supported".to_string(),
+                    ));
+                }
+
                 if using.is_some() {
                     Err(DataFusionError::Plan(
                         "Using clause not supported".to_owned(),
@@ -417,6 +426,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Delete-returning clause not yet supported".to_owned(),
                     ))?;
                 }
+                let table_name = self.get_delete_target(from)?;
                 self.delete_to_plan(table_name, selection)
             }
 
@@ -491,6 +501,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    fn get_delete_target(&self, mut from: Vec<TableWithJoins>) -> Result<ObjectName> {
+        if from.len() != 1 {
+            return Err(DataFusionError::NotImplemented(format!(
+                "DELETE FROM only supports single table, got {}: {from:?}",
+                from.len()
+            )));
+        }
+        let table_factor = from.pop().unwrap();
+        if !table_factor.joins.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DELETE FROM only supports single table, got: joins".to_string(),
+            ));
+        }
+        let TableFactor::Table{name, ..} = table_factor.relation else {
+            return Err(DataFusionError::NotImplemented(format!(
+                "DELETE FROM only supports single table, got: {table_factor:?}"
+            )))
+        };
+
+        Ok(name)
+    }
+
     /// Generate a logical plan from a "SHOW TABLES" query
     fn show_tables_to_plan(
         &self,
@@ -537,12 +569,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }))
     }
 
+    fn copy_to_plan(&self, _statement: CopyToStatement) -> Result<LogicalPlan> {
+        // TODO: implement as part of https://github.com/apache/arrow-datafusion/issues/5654
+        Err(DataFusionError::NotImplemented(
+            "`COPY .. TO ..` statement is not yet supported".to_string(),
+        ))
+    }
+
     fn build_order_by(
         &self,
-        order_exprs: Vec<OrderByExpr>,
+        order_exprs: Vec<LexOrdering>,
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<datafusion_expr::Expr>> {
+    ) -> Result<Vec<Vec<datafusion_expr::Expr>>> {
         // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
             return Err(DataFusionError::Plan(
@@ -550,25 +589,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_owned(),
             ));
         }
-        // Convert each OrderByExpr to a SortExpr:
-        let result = order_exprs
-            .into_iter()
-            .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-            .collect::<Result<Vec<_>>>()?;
-        // Verify that columns of all SortExprs exist in the schema:
-        for expr in result.iter() {
-            for column in expr.to_columns()?.iter() {
-                if !schema.has_column(column) {
-                    // Return an error if any column is not in the schema:
-                    return Err(DataFusionError::Plan(format!(
-                        "Column {column} is not in schema"
-                    )));
+
+        let mut all_results = vec![];
+        for expr in order_exprs {
+            // Convert each OrderByExpr to a SortExpr:
+            let expr_vec = self.order_by_to_sort_expr(&expr, schema, planner_context)?;
+            // Verify that columns of all SortExprs exist in the schema:
+            for expr in expr_vec.iter() {
+                for column in expr.to_columns()?.iter() {
+                    if !schema.has_column(column) {
+                        // Return an error if any column is not in the schema:
+                        return Err(DataFusionError::Plan(format!(
+                            "Column {column} is not in schema"
+                        )));
+                    }
                 }
             }
+            // If all SortExprs are valid, return them as an expression vector
+            all_results.push(expr_vec)
         }
-
-        // If all SortExprs are valid, return them as an expression vector
-        Ok(result)
+        Ok(all_results)
     }
 
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
@@ -588,6 +628,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if_not_exists,
             file_compression_type,
             order_exprs,
+            unbounded,
             options,
         } = statement;
 
@@ -629,6 +670,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 definition,
                 file_compression_type,
                 order_exprs: ordered_exprs,
+                unbounded,
                 options,
             },
         )))
@@ -778,16 +820,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn delete_to_plan(
         &self,
-        table_factor: TableFactor,
+        table_name: ObjectName,
         predicate_expr: Option<Expr>,
     ) -> Result<LogicalPlan> {
-        let table_name = match &table_factor {
-            TableFactor::Table { name, .. } => name.clone(),
-            _ => Err(DataFusionError::Plan(
-                "Cannot delete from non-table relations!".to_string(),
-            ))?,
-        };
-
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let provider = self.schema_provider.get_table_provider(table_ref.clone())?;
@@ -946,24 +981,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = DFSchema::try_from(arrow_schema)?;
 
-        let fields = if columns.is_empty() {
+        // Get insert fields and index_mapping
+        // The i-th field of the table is `fields[index_mapping[i]]`
+        let (fields, index_mapping) = if columns.is_empty() {
             // Empty means we're inserting into all columns of the table
-            table_schema.fields().clone()
+            (
+                table_schema.fields().clone(),
+                (0..table_schema.fields().len())
+                    .map(Some)
+                    .collect::<Vec<_>>(),
+            )
         } else {
+            let mut mapping = vec![None; table_schema.fields().len()];
             let fields = columns
-                .iter()
-                .map(|c| {
-                    Ok(table_schema
-                        .field_with_unqualified_name(
-                            &self.normalizer.normalize(c.clone()),
-                        )?
-                        .clone())
+                .into_iter()
+                .map(|c| self.normalizer.normalize(c))
+                .enumerate()
+                .map(|(i, c)| {
+                    let column_index = table_schema
+                        .index_of_column_by_name(None, &c)?
+                        .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
+                    if mapping[column_index].is_some() {
+                        return Err(DataFusionError::SchemaError(
+                            datafusion_common::SchemaError::DuplicateUnqualifiedField {
+                                name: c,
+                            },
+                        ));
+                    } else {
+                        mapping[column_index] = Some(i);
+                    }
+                    Ok(table_schema.field(column_index).clone())
                 })
                 .collect::<Result<Vec<DFField>>>()?;
-            // Validate no duplicate fields
-            let table_schema =
-                DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?;
-            table_schema.fields().clone()
+            (fields, mapping)
         };
 
         // infer types for Values clause... other types should be resolvable the regular way
@@ -1001,10 +1051,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Column count doesn't match insert query!".to_owned(),
             ))?;
         }
-        let exprs = fields
-            .iter()
-            .zip(source.schema().fields().iter())
-            .map(|(target_field, source_field)| {
+
+        let exprs = index_mapping
+            .into_iter()
+            .flatten()
+            .map(|i| {
+                let target_field = &fields[i];
+                let source_field = source.schema().field(i);
                 let expr =
                     datafusion_expr::Expr::Column(source_field.unqualified_column())
                         .cast_to(target_field.data_type(), source.schema())?

@@ -61,14 +61,15 @@ impl Data {
 
             df.collect().await?
         };
+        let batches: Vec<_> = batches.iter().collect();
+
         // converts it to serde_json type and then convert that into Rust type
-        let list =
-            datafusion::arrow::json::writer::record_batches_to_json_rows(&batches[..])?
-                .into_iter()
-                .map(|val| serde_json::from_value(serde_json::Value::Object(val)))
-                .take_while(|val| val.is_ok())
-                .map(|val| val.unwrap())
-                .collect();
+        let list = arrow::json::writer::record_batches_to_json_rows(&batches[..])?
+            .into_iter()
+            .map(|val| serde_json::from_value(serde_json::Value::Object(val)))
+            .take_while(|val| val.is_ok())
+            .map(|val| val.unwrap())
+            .collect();
 
         Ok(list)
     }

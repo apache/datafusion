@@ -17,7 +17,7 @@
 
 //! Expression utilities
 
-use crate::expr::{Sort, WindowFunction};
+use crate::expr::{Alias, Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, Distinct, Extension, Filter, Join, Limit, Partitioning, Prepare,
@@ -37,6 +37,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference,
 };
+use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -274,7 +275,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
             Expr::ScalarVariable(_, _)
-            | Expr::Alias(_, _)
+            | Expr::Alias(_)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
@@ -315,10 +316,84 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
     })
 }
 
+/// Find excluded columns in the schema, if any
+/// SELECT * EXCLUDE(col1, col2), would return `vec![col1, col2]`
+fn get_excluded_columns(
+    opt_exclude: Option<ExcludeSelectItem>,
+    opt_except: Option<ExceptSelectItem>,
+    schema: &DFSchema,
+    qualifier: &Option<TableReference>,
+) -> Result<Vec<Column>> {
+    let mut idents = vec![];
+    if let Some(excepts) = opt_except {
+        idents.push(excepts.first_element);
+        idents.extend(excepts.additional_elements);
+    }
+    if let Some(exclude) = opt_exclude {
+        match exclude {
+            ExcludeSelectItem::Single(ident) => idents.push(ident),
+            ExcludeSelectItem::Multiple(idents_inner) => idents.extend(idents_inner),
+        }
+    }
+    // Excluded columns should be unique
+    let n_elem = idents.len();
+    let unique_idents = idents.into_iter().collect::<HashSet<_>>();
+    // if HashSet size, and vector length are different, this means that some of the excluded columns
+    // are not unique. In this case return error.
+    if n_elem != unique_idents.len() {
+        return Err(DataFusionError::Plan(
+            "EXCLUDE or EXCEPT contains duplicate column names".to_string(),
+        ));
+    }
+
+    let mut result = vec![];
+    for ident in unique_idents.into_iter() {
+        let col_name = ident.value.as_str();
+        let field = if let Some(qualifier) = qualifier {
+            schema.field_with_qualified_name(qualifier, col_name)?
+        } else {
+            schema.field_with_unqualified_name(col_name)?
+        };
+        result.push(field.qualified_column())
+    }
+    Ok(result)
+}
+
+/// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
+fn get_exprs_except_skipped(
+    schema: &DFSchema,
+    columns_to_skip: HashSet<Column>,
+) -> Vec<Expr> {
+    if columns_to_skip.is_empty() {
+        schema
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect::<Vec<Expr>>()
+    } else {
+        schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                let col = f.qualified_column();
+                if !columns_to_skip.contains(&col) {
+                    Some(Expr::Column(col))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Expr>>()
+    }
+}
+
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr>> {
+pub fn expand_wildcard(
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+    wildcard_options: Option<WildcardAdditionalOptions>,
+) -> Result<Vec<Expr>> {
     let using_columns = plan.using_columns()?;
-    let columns_to_skip = using_columns
+    let mut columns_to_skip = using_columns
         .into_iter()
         // For each USING JOIN condition, only expand to one of each join column in projection
         .flat_map(|cols| {
@@ -339,33 +414,26 @@ pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr
                 .collect::<Vec<_>>()
         })
         .collect::<HashSet<_>>();
-
-    if columns_to_skip.is_empty() {
-        Ok(schema
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
-            .collect::<Vec<Expr>>())
+    let excluded_columns = if let Some(WildcardAdditionalOptions {
+        opt_exclude,
+        opt_except,
+        ..
+    }) = wildcard_options
+    {
+        get_excluded_columns(opt_exclude, opt_except, schema, &None)?
     } else {
-        Ok(schema
-            .fields()
-            .iter()
-            .filter_map(|f| {
-                let col = f.qualified_column();
-                if !columns_to_skip.contains(&col) {
-                    Some(Expr::Column(col))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Expr>>())
-    }
+        vec![]
+    };
+    // Add each excluded `Column` to columns_to_skip
+    columns_to_skip.extend(excluded_columns);
+    Ok(get_exprs_except_skipped(schema, columns_to_skip))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
 pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
+    wildcard_options: Option<WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
@@ -380,12 +448,20 @@ pub fn expand_qualified_wildcard(
     }
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-    // if qualified, allow all columns in output (i.e. ignore using column check)
-    Ok(qualified_schema
-        .fields()
-        .iter()
-        .map(|f| Expr::Column(f.qualified_column()))
-        .collect::<Vec<Expr>>())
+    let excluded_columns = if let Some(WildcardAdditionalOptions {
+        opt_exclude,
+        opt_except,
+        ..
+    }) = wildcard_options
+    {
+        get_excluded_columns(opt_exclude, opt_except, schema, &Some(qualifier))?
+    } else {
+        vec![]
+    };
+    // Add each excluded `Column` to columns_to_skip
+    let mut columns_to_skip = HashSet::new();
+    columns_to_skip.extend(excluded_columns);
+    Ok(get_exprs_except_skipped(&qualified_schema, columns_to_skip))
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
@@ -648,6 +724,9 @@ where
 /// // create new plan using rewritten_exprs in same position
 /// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
 /// ```
+///
+/// Notice: sometimes [from_plan] will use schema of original plan, it don't change schema!
+/// Such as `Projection/Aggregate/Window`
 pub fn from_plan(
     plan: &LogicalPlan,
     expr: &[Expr],
@@ -708,7 +787,7 @@ pub fn from_plan(
                             // subqueries could contain aliases so we don't recurse into those
                             Ok(RewriteRecursion::Stop)
                         }
-                        Expr::Alias(_, _) => Ok(RewriteRecursion::Mutate),
+                        Expr::Alias(_) => Ok(RewriteRecursion::Mutate),
                         _ => Ok(RewriteRecursion::Continue),
                     }
                 }
@@ -1030,8 +1109,8 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
         Expr::OuterReferenceColumn(_, _) => e,
-        Expr::Alias(inner_expr, name) => {
-            columnize_expr(*inner_expr, input_schema).alias(name)
+        Expr::Alias(Alias { expr, name, .. }) => {
+            columnize_expr(*expr, input_schema).alias(name)
         }
         Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
             expr: Box::new(columnize_expr(*expr, input_schema)),
@@ -1218,6 +1297,7 @@ pub fn find_valid_equijoin_key_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expr_vec_fmt;
     use crate::{
         col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame,
         WindowFunction,
@@ -1423,22 +1503,22 @@ mod tests {
 
         // 1. col
         let sets = enumerate_grouping_sets(vec![simple_col.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[simple_col]", &result);
 
         // 2. cube
         let sets = enumerate_grouping_sets(vec![cube.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[CUBE (col1, col2, col3)]", &result);
 
         // 3. rollup
         let sets = enumerate_grouping_sets(vec![rollup.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[ROLLUP (col1, col2, col3)]", &result);
 
         // 4. col + cube
         let sets = enumerate_grouping_sets(vec![simple_col.clone(), cube.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \
@@ -1454,7 +1534,7 @@ mod tests {
 
         // 5. col + rollup
         let sets = enumerate_grouping_sets(vec![simple_col.clone(), rollup.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \
@@ -1467,7 +1547,7 @@ mod tests {
         // 6. col + grouping_set
         let sets =
             enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col, col1, col2, col3))]",
@@ -1480,7 +1560,7 @@ mod tests {
             grouping_set,
             rollup.clone(),
         ])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col, col1, col2, col3), \
@@ -1492,7 +1572,7 @@ mod tests {
 
         // 8. col + cube + rollup
         let sets = enumerate_grouping_sets(vec![simple_col, cube, rollup])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \

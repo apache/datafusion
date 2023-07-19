@@ -17,6 +17,7 @@
 
 use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_common::{DataFusionError, Result};
+use log::debug;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -45,7 +46,11 @@ impl MemoryPool for UnboundedMemoryPool {
     }
 }
 
-/// A [`MemoryPool`] that implements a greedy first-come first-serve limit
+/// A [`MemoryPool`] that implements a greedy first-come first-serve limit.
+///
+/// This pool works well for queries that do not need to spill or have
+/// a single spillable operator. See [`GreedyMemoryPool`] if there are
+/// multiple spillable operators that all will spill.
 #[derive(Debug)]
 pub struct GreedyMemoryPool {
     pool_size: usize,
@@ -55,6 +60,7 @@ pub struct GreedyMemoryPool {
 impl GreedyMemoryPool {
     /// Allocate up to `limit` bytes
     pub fn new(pool_size: usize) -> Self {
+        debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
         Self {
             pool_size,
             used: AtomicUsize::new(0),
@@ -92,6 +98,13 @@ impl MemoryPool for GreedyMemoryPool {
 /// an even fraction of the available memory sans any unspillable reservations
 /// (i.e. `(pool_size - unspillable_memory) / num_spillable_reservations`)
 ///
+/// This pool works best when you know beforehand the query has
+/// multiple spillable operators that will likely all need to
+/// spill. Sometimes it will cause spills even when there was
+/// sufficient memory (reserved for other operators) to avoid doing
+/// so.
+///
+/// ```text
 ///    ┌───────────────────────z──────────────────────z───────────────┐
 ///    │                       z                      z               │
 ///    │                       z                      z               │
@@ -100,6 +113,7 @@ impl MemoryPool for GreedyMemoryPool {
 ///    │                       z                      z               │
 ///    │                       z                      z               │
 ///    └───────────────────────z──────────────────────z───────────────┘
+/// ```
 ///
 /// Unspillable memory is allocated in a first-come, first-serve fashion
 #[derive(Debug)]

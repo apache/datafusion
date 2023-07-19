@@ -20,17 +20,18 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{
-    error::{DataFusionError, Result},
-    logical_expr::StringifiedPlan,
-    physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics},
-};
+use datafusion_common::display::StringifiedPlan;
+
+use datafusion_common::{DataFusionError, Result};
+
+use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use log::trace;
 
+use super::DisplayAs;
 use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
-use crate::execution::context::TaskContext;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_execution::TaskContext;
 
 /// Explain execution plan operator. This operator contains the string
 /// values of the various plans it has when it is created, and passes
@@ -67,6 +68,20 @@ impl ExplainExec {
     /// access to verbose
     pub fn verbose(&self) -> bool {
         self.verbose
+    }
+}
+
+impl DisplayAs for ExplainExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "ExplainExec")
+            }
+        }
     }
 }
 
@@ -154,18 +169,6 @@ impl ExecutionPlan for ExplainExec {
             self.schema.clone(),
             futures::stream::iter(vec![Ok(record_batch)]),
         )))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "ExplainExec")
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

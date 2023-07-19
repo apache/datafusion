@@ -25,18 +25,19 @@ use std::{any::Any, sync::Arc, task::Poll};
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
-use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
     ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 
 use super::utils::{
     adjust_right_output_partitioning, cross_join_equivalence_properties,
@@ -139,6 +140,20 @@ async fn load_left_input(
     Ok((merged_batch, reservation))
 }
 
+impl DisplayAs for CrossJoinExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CrossJoinExec")
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for CrossJoinExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -158,7 +173,7 @@ impl ExecutionPlan for CrossJoinExec {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] || children[1] {
             Err(DataFusionError::Plan(
@@ -241,18 +256,6 @@ impl ExecutionPlan for CrossJoinExec {
             left_index: 0,
             join_metrics,
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "CrossJoinExec")
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {
@@ -457,10 +460,10 @@ mod tests {
     use super::*;
     use crate::assert_batches_sorted_eq;
     use crate::common::assert_contains;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::physical_plan::common;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{build_table_scan_i32, columns};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,

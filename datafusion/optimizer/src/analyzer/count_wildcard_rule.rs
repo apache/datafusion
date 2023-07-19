@@ -18,7 +18,7 @@
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{Column, DFField, DFSchema, DFSchemaRef, Result};
-use datafusion_expr::expr::{AggregateFunction, InSubquery};
+use datafusion_expr::expr::{AggregateFunction, Alias, InSubquery};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::ScalarSubquery;
 use datafusion_expr::{
@@ -132,6 +132,15 @@ impl TreeNodeRewriter for CountWildcardRewriter {
 
     fn mutate(&mut self, old_expr: Expr) -> Result<Expr> {
         let new_expr = match old_expr.clone() {
+            Expr::Alias(Alias { expr, name, .. }) if name.contains(COUNT_STAR) => {
+                Expr::Alias(Alias::new(
+                    *expr,
+                    name.replace(
+                        COUNT_STAR,
+                        count(lit(COUNT_STAR_EXPANSION)).to_string().as_str(),
+                    ),
+                ))
+            }
             Expr::Column(Column { name, relation }) if name.contains(COUNT_STAR) => {
                 Expr::Column(Column {
                     name: name.replace(

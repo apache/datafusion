@@ -87,7 +87,7 @@ impl Opt {
 
         if let Some(s) = self.page_size {
             props_builder = props_builder
-                .set_data_pagesize_limit(s)
+                .set_data_page_size_limit(s)
                 .set_write_batch_size(s);
         }
 

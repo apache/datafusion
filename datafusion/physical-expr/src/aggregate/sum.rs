@@ -15,14 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
 use std::any::Any;
 use std::convert::TryFrom;
+use std::ops::AddAssign;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
+use super::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
+use crate::aggregate::utils::down_cast_any_ref;
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use arrow::array::Array;
+use arrow::array::Decimal128Array;
 use arrow::compute;
+use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use arrow::{
     array::{
@@ -31,17 +41,12 @@ use arrow::{
     },
     datatypes::Field,
 };
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type,
+    UInt64Type,
+};
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
-
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
-use crate::aggregate::utils::down_cast_any_ref;
-use crate::expressions::format_state_name;
-use arrow::array::Array;
-use arrow::array::Decimal128Array;
-use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
 
 /// SUM aggregate expression
@@ -86,6 +91,19 @@ impl Sum {
     }
 }
 
+/// Creates a [`PrimitiveGroupsAccumulator`] with the specified
+/// [`ArrowPrimitiveType`] which applies `$FN` to each element
+///
+/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
+macro_rules! instantiate_primitive_accumulator {
+    ($SELF:expr, $PRIMTYPE:ident, $FN:expr) => {{
+        Ok(Box::new(PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
+            &$SELF.data_type,
+            $FN,
+        )))
+    }};
+}
+
 impl AggregateExpr for Sum {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -105,18 +123,11 @@ impl AggregateExpr for Sum {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![
-            Field::new(
-                format_state_name(&self.name, "sum"),
-                self.data_type.clone(),
-                self.nullable,
-            ),
-            Field::new(
-                format_state_name(&self.name, "count"),
-                DataType::UInt64,
-                self.nullable,
-            ),
-        ])
+        Ok(vec![Field::new(
+            format_state_name(&self.name, "sum"),
+            self.data_type.clone(),
+            self.nullable,
+        )])
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -131,7 +142,7 @@ impl AggregateExpr for Sum {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
+    fn groups_accumulator_supported(&self) -> bool {
         true
     }
 
@@ -145,12 +156,50 @@ impl AggregateExpr for Sum {
         )))
     }
 
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        // instantiate specialized accumulator
+        match self.data_type {
+            DataType::UInt64 => {
+                instantiate_primitive_accumulator!(self, UInt64Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Int64 => {
+                instantiate_primitive_accumulator!(self, Int64Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::UInt32 => {
+                instantiate_primitive_accumulator!(self, UInt32Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Int32 => {
+                instantiate_primitive_accumulator!(self, Int32Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Float32 => {
+                instantiate_primitive_accumulator!(self, Float32Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Float64 => {
+                instantiate_primitive_accumulator!(self, Float64Type, |x, y| x
+                    .add_assign(y))
+            }
+            DataType::Decimal128(_, _) => {
+                instantiate_primitive_accumulator!(self, Decimal128Type, |x, y| x
+                    .add_assign(y))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "GroupsAccumulator not supported for {}: {}",
+                self.name, self.data_type
+            ))),
+        }
+    }
+
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SumAccumulator::try_new(&self.data_type)?))
+        Ok(Box::new(SlidingSumAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -168,10 +217,10 @@ impl PartialEq<dyn Any> for Sum {
     }
 }
 
+/// This accumulator computes SUM incrementally
 #[derive(Debug)]
 struct SumAccumulator {
     sum: ScalarValue,
-    count: u64,
 }
 
 impl SumAccumulator {
@@ -179,12 +228,32 @@ impl SumAccumulator {
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
             sum: ScalarValue::try_from(data_type)?,
+        })
+    }
+}
+
+/// This accumulator incrementally computes sums over a sliding window
+#[derive(Debug)]
+struct SlidingSumAccumulator {
+    sum: ScalarValue,
+    count: u64,
+}
+
+impl SlidingSumAccumulator {
+    /// new sum accumulator
+    pub fn try_new(data_type: &DataType) -> Result<Self> {
+        Ok(Self {
+            // start at zero
+            sum: ScalarValue::try_from(data_type)?,
             count: 0,
         })
     }
 }
 
-// returns the new value after sum with the new values, taking nullability into account
+/// Sums the contents of the `$VALUES` array using the arrow compute
+/// kernel, and return a `ScalarValue::$SCALAR`.
+///
+/// Handles nullability
 macro_rules! typed_sum_delta_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident) => {{
         let array = downcast_value!($VALUES, $ARRAYTYPE);
@@ -327,6 +396,34 @@ pub(crate) fn update_avg_to_row(
 
 impl Accumulator for SumAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.sum.clone()])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &values[0];
+        let delta = sum_batch(values, &self.sum.get_datatype())?;
+        self.sum = self.sum.add(&delta)?;
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // sum(sum1, sum2, sum3, ...) = sum1 + sum2 + sum3 + ...
+        self.update_batch(states)
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        // TODO: add the checker for overflow
+        // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
+        Ok(self.sum.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.sum) + self.sum.size()
+    }
+}
+
+impl Accumulator for SlidingSumAccumulator {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.sum.clone(), ScalarValue::from(self.count)])
     }
 
@@ -359,6 +456,10 @@ impl Accumulator for SumAccumulator {
         } else {
             Ok(self.sum.clone())
         }
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

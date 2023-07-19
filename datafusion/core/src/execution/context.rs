@@ -17,23 +17,22 @@
 
 //! [`SessionContext`] contains methods for registering data sources and executing queries
 use crate::{
-    catalog::catalog::{CatalogList, MemoryCatalogList},
+    catalog::{CatalogList, MemoryCatalogList},
     datasource::{
-        datasource::TableProviderFactory,
         listing::{ListingOptions, ListingTable},
         listing_table_factory::ListingTableFactory,
+        provider::TableProviderFactory,
     },
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
-    physical_optimizer::{
-        aggregate_statistics::AggregateStatistics, join_selection::JoinSelection,
-        optimizer::PhysicalOptimizerRule,
-    },
+    physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
+use datafusion_common::alias::AliasGenerator;
+use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, StringifiedPlan,
+    DescribeTable, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -54,8 +53,8 @@ use arrow::{
 };
 
 use crate::catalog::{
-    catalog::{CatalogProvider, MemoryCatalogProvider},
     schema::{MemorySchemaProvider, SchemaProvider},
+    {CatalogProvider, MemoryCatalogProvider},
 };
 use crate::dataframe::DataFrame;
 use crate::datasource::{
@@ -69,20 +68,21 @@ use crate::logical_expr::{
     LogicalPlanBuilder, SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
-use datafusion_sql::{planner::ParserOptions, ResolvedTableReference, TableReference};
-
-use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
-use crate::physical_optimizer::repartition::Repartition;
+use datafusion_sql::{
+    parser::{CopyToSource, CopyToStatement},
+    planner::ParserOptions,
+    ResolvedTableReference, TableReference,
+};
+use sqlparser::dialect::dialect_from_str;
 
 use crate::config::ConfigOptions;
+use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
-use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
-use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::PhysicalPlanner;
+use crate::physical_planner::DefaultPhysicalPlanner;
+use crate::physical_planner::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -92,20 +92,11 @@ use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
-use sqlparser::dialect::{
-    AnsiDialect, BigQueryDialect, ClickHouseDialect, Dialect, GenericDialect,
-    HiveDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, RedshiftSqlDialect,
-    SQLiteDialect, SnowflakeDialect,
-};
 use url::Url;
 
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
-use crate::physical_optimizer::pipeline_checker::PipelineChecker;
-use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
-use crate::physical_optimizer::sort_enforcement::EnforceSorting;
 use datafusion_optimizer::{
     analyzer::{Analyzer, AnalyzerRule},
     OptimizerConfig,
@@ -114,7 +105,7 @@ use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 // backwards compatibility
-use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
+use crate::execution::options::ArrowReadOptions;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 
@@ -123,7 +114,7 @@ use super::options::{
 };
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
-/// This allows methods such [`SessionContext::read_csv`] and `[`SessionContext::read_avro`]
+/// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
 /// to take either a single file or multiple files.
 pub trait DataFilePaths {
     /// Parse to a vector of [`ListingTableUrl`] URLs.
@@ -489,6 +480,7 @@ impl SessionContext {
         }
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let input = self.state().optimize(&input)?;
         let table = self.table(&name).await;
 
         match (if_not_exists, or_replace, table) {
@@ -771,8 +763,8 @@ impl SessionContext {
     /// Note in SQL queries, function names are looked up using
     /// lowercase unless the query uses quotes. For example,
     ///
-    /// `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
-    /// `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
+    /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
+    /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
     pub fn register_udf(&self, f: ScalarUDF) {
         self.state
             .write()
@@ -785,12 +777,26 @@ impl SessionContext {
     /// Note in SQL queries, aggregate names are looked up using
     /// lowercase unless the query uses quotes. For example,
     ///
-    /// `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
-    /// `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
+    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
+    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
     pub fn register_udaf(&self, f: AggregateUDF) {
         self.state
             .write()
             .aggregate_functions
+            .insert(f.name.clone(), Arc::new(f));
+    }
+
+    /// Registers a window UDF within this context.
+    ///
+    /// Note in SQL queries, window function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
+    /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
+    pub fn register_udwf(&self, f: WindowUDF) {
+        self.state
+            .write()
+            .window_functions
             .insert(f.name.clone(), Arc::new(f));
     }
 
@@ -840,6 +846,20 @@ impl SessionContext {
         &self,
         table_paths: P,
         options: NdJsonReadOptions<'_>,
+    ) -> Result<DataFrame> {
+        self._read_type(table_paths, options).await
+    }
+
+    /// Creates a [`DataFrame`] for reading an Arrow data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_arrow<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        options: ArrowReadOptions<'_>,
     ) -> Result<DataFrame> {
         self._read_type(table_paths, options).await
     }
@@ -918,7 +938,7 @@ impl SessionContext {
         ))
     }
 
-    /// Registers a [`ListingTable]` that can assemble multiple files
+    /// Registers a [`ListingTable`] that can assemble multiple files
     /// from locations in an [`ObjectStore`] instance into a single
     /// table.
     ///
@@ -1020,6 +1040,27 @@ impl SessionContext {
         name: &str,
         table_path: &str,
         options: AvroReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options = options.to_listing_options(&self.copied_config());
+
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema.map(|s| Arc::new(s.to_owned())),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Registers an Arrow file as a table that can be referenced from
+    /// SQL statements executed against this context.
+    pub async fn register_arrow(
+        &self,
+        name: &str,
+        table_path: &str,
+        options: ArrowReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options.to_listing_options(&self.copied_config());
 
@@ -1252,6 +1293,10 @@ impl FunctionRegistry for SessionContext {
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.state.read().udaf(name)
     }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        self.state.read().udwf(name)
+    }
 }
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
@@ -1293,7 +1338,7 @@ pub struct SessionState {
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
-    physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    physical_optimizers: PhysicalOptimizer,
     /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
     query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Collection of catalogs containing schemas and ultimately TableProviders
@@ -1302,6 +1347,10 @@ pub struct SessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    /// Window functions registered in the context
+    window_functions: HashMap<String, Arc<WindowUDF>>,
+    /// Deserializer registry for extensions.
+    serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
     config: SessionConfig,
     /// Execution properties
@@ -1360,6 +1409,7 @@ impl SessionState {
         table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("ARROW".into(), Arc::new(ListingTableFactory::new()));
 
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
@@ -1384,65 +1434,17 @@ impl SessionState {
             );
         }
 
-        // We need to take care of the rule ordering. They may influence each other.
-        let physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-            Arc::new(AggregateStatistics::new()),
-            // Statistics-based join selection will change the Auto mode to a real join implementation,
-            // like collect left, or hash join, or future sort merge join, which will influence the
-            // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
-            // repartitioning and local sorting steps to meet distribution and ordering requirements.
-            // Therefore, it should run before EnforceDistribution and EnforceSorting.
-            Arc::new(JoinSelection::new()),
-            // If the query is processing infinite inputs, the PipelineFixer rule applies the
-            // necessary transformations to make the query runnable (if it is not already runnable).
-            // If the query can not be made runnable, the rule emits an error with a diagnostic message.
-            // Since the transformations it applies may alter output partitioning properties of operators
-            // (e.g. by swapping hash join sides), this rule runs before EnforceDistribution.
-            Arc::new(PipelineFixer::new()),
-            // In order to increase the parallelism, the Repartition rule will change the
-            // output partitioning of some operators in the plan tree, which will influence
-            // other rules. Therefore, it should run as soon as possible. It is optional because:
-            // - It's not used for the distributed engine, Ballista.
-            // - It's conflicted with some parts of the EnforceDistribution, since it will
-            //   introduce additional repartitioning while EnforceDistribution aims to
-            //   reduce unnecessary repartitioning.
-            Arc::new(Repartition::new()),
-            // - Currently it will depend on the partition number to decide whether to change the
-            // single node sort to parallel local sort and merge. Therefore, GlobalSortSelection
-            // should run after the Repartition.
-            // - Since it will change the output ordering of some operators, it should run
-            // before JoinSelection and EnforceSorting, which may depend on that.
-            Arc::new(GlobalSortSelection::new()),
-            // The EnforceDistribution rule is for adding essential repartition to satisfy the required
-            // distribution. Please make sure that the whole plan tree is determined before this rule.
-            Arc::new(EnforceDistribution::new()),
-            // The EnforceSorting rule is for adding essential local sorting to satisfy the required
-            // ordering. Please make sure that the whole plan tree is determined before this rule.
-            // Note that one should always run this rule after running the EnforceDistribution rule
-            // as the latter may break local sorting requirements.
-            Arc::new(EnforceSorting::new()),
-            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution
-            // and EnforceSorting rules
-            Arc::new(CombinePartialFinalAggregate::new()),
-            // The CoalesceBatches rule will not influence the distribution and ordering of the
-            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
-            Arc::new(CoalesceBatches::new()),
-            // The PipelineChecker rule will reject non-runnable query plans that use
-            // pipeline-breaking operators on infinite input(s). The rule generates a
-            // diagnostic error message when this happens. It makes no changes to the
-            // given query plan; i.e. it only acts as a final gatekeeping rule.
-            Arc::new(PipelineChecker::new()),
-        ];
-
         SessionState {
             session_id,
             analyzer: Analyzer::new(),
             optimizer: Optimizer::new(),
-            physical_optimizers,
+            physical_optimizers: PhysicalOptimizer::new(),
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
+            window_functions: HashMap::new(),
+            serializer_registry: Arc::new(EmptySerializerRegistry),
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
@@ -1572,7 +1574,7 @@ impl SessionState {
         mut self,
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     ) -> Self {
-        self.physical_optimizers = physical_optimizers;
+        self.physical_optimizers = PhysicalOptimizer::with_rules(physical_optimizers);
         self
     }
 
@@ -1599,7 +1601,16 @@ impl SessionState {
         mut self,
         optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     ) -> Self {
-        self.physical_optimizers.push(optimizer_rule);
+        self.physical_optimizers.rules.push(optimizer_rule);
+        self
+    }
+
+    /// Replace the extension [`SerializerRegistry`]
+    pub fn with_serializer_registry(
+        mut self,
+        registry: Arc<dyn SerializerRegistry>,
+    ) -> Self {
+        self.serializer_registry = registry;
         self
     }
 
@@ -1621,7 +1632,13 @@ impl SessionState {
         sql: &str,
         dialect: &str,
     ) -> Result<datafusion_sql::parser::Statement> {
-        let dialect = create_dialect_from_str(dialect)?;
+        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Unsupported SQL dialect: {dialect}. Available dialects: \
+                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                     MsSQL, ClickHouse, BigQuery, Ansi."
+            ))
+        })?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
         if statements.len() > 1 {
             return Err(DataFusionError::NotImplemented(
@@ -1649,45 +1666,58 @@ impl SessionState {
         // table providers for all relations referenced in this query
         let mut relations = hashbrown::HashSet::with_capacity(10);
 
+        struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
+
+        impl<'a> RelationVisitor<'a> {
+            /// Record that `relation` was used in this statement
+            fn insert(&mut self, relation: &ObjectName) {
+                self.0.get_or_insert_with(relation, |_| relation.clone());
+            }
+        }
+
+        impl<'a> Visitor for RelationVisitor<'a> {
+            type Break = ();
+
+            fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<()> {
+                self.insert(relation);
+                ControlFlow::Continue(())
+            }
+
+            fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
+                if let Statement::ShowCreate {
+                    obj_type: ShowCreateObject::Table | ShowCreateObject::View,
+                    obj_name,
+                } = statement
+                {
+                    self.insert(obj_name)
+                }
+                ControlFlow::Continue(())
+            }
+        }
+
+        let mut visitor = RelationVisitor(&mut relations);
         match statement {
             DFStatement::Statement(s) => {
-                struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
-
-                impl<'a> Visitor for RelationVisitor<'a> {
-                    type Break = ();
-
-                    fn pre_visit_relation(
-                        &mut self,
-                        relation: &ObjectName,
-                    ) -> ControlFlow<()> {
-                        self.0.get_or_insert_with(relation, |_| relation.clone());
-                        ControlFlow::Continue(())
-                    }
-
-                    fn pre_visit_statement(
-                        &mut self,
-                        statement: &Statement,
-                    ) -> ControlFlow<()> {
-                        if let Statement::ShowCreate {
-                            obj_type: ShowCreateObject::Table | ShowCreateObject::View,
-                            obj_name,
-                        } = statement
-                        {
-                            self.0.get_or_insert_with(obj_name, |_| obj_name.clone());
-                        }
-                        ControlFlow::Continue(())
-                    }
-                }
-                let mut visitor = RelationVisitor(&mut relations);
                 let _ = s.as_ref().visit(&mut visitor);
             }
             DFStatement::CreateExternalTable(table) => {
-                relations.insert(ObjectName(vec![Ident::from(table.name.as_str())]));
+                visitor
+                    .0
+                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
             }
-            DFStatement::DescribeTableStmt(table) => {
-                relations
-                    .get_or_insert_with(&table.table_name, |_| table.table_name.clone());
-            }
+            DFStatement::DescribeTableStmt(table) => visitor.insert(&table.table_name),
+            DFStatement::CopyTo(CopyToStatement {
+                source,
+                target: _,
+                options: _,
+            }) => match source {
+                CopyToSource::Relation(table_name) => {
+                    visitor.insert(table_name);
+                }
+                CopyToSource::Query(query) => {
+                    query.visit(&mut visitor);
+                }
+            },
         }
 
         // Always include information_schema if available
@@ -1862,7 +1892,7 @@ impl SessionState {
 
     /// Return the physical optimizers
     pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
-        &self.physical_optimizers
+        &self.physical_optimizers.rules
     }
 
     /// return the configuration options
@@ -1888,6 +1918,16 @@ impl SessionState {
     /// Return reference to aggregate_functions
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.aggregate_functions
+    }
+
+    /// Return reference to window functions
+    pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
+    }
+
+    /// Return [SerializerRegistry] for extensions
+    pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
+        self.serializer_registry.clone()
     }
 
     /// Return version of the cargo package that produced this query
@@ -1916,6 +1956,10 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.state.aggregate_functions().get(name).cloned()
+    }
+
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+        self.state.window_functions().get(name).cloned()
     }
 
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
@@ -1965,11 +2009,25 @@ impl FunctionRegistry for SessionState {
             ))
         })
     }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        let result = self.window_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "There is no UDWF named \"{name}\" in the registry"
+            ))
+        })
+    }
 }
 
 impl OptimizerConfig for SessionState {
     fn query_execution_start_time(&self) -> DateTime<Utc> {
         self.execution_props.query_execution_start_time
+    }
+
+    fn alias_generator(&self) -> Arc<AliasGenerator> {
+        self.execution_props.alias_generator.clone()
     }
 
     fn options(&self) -> &ConfigOptions {
@@ -1994,30 +2052,35 @@ impl From<&SessionState> for TaskContext {
             state.config.clone(),
             state.scalar_functions.clone(),
             state.aggregate_functions.clone(),
+            state.window_functions.clone(),
             state.runtime_env.clone(),
         )
     }
 }
 
-// TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/848 is released
-fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
-    match dialect_name.to_lowercase().as_str() {
-        "generic" => Ok(Box::new(GenericDialect)),
-        "mysql" => Ok(Box::new(MySqlDialect {})),
-        "postgresql" | "postgres" => Ok(Box::new(PostgreSqlDialect {})),
-        "hive" => Ok(Box::new(HiveDialect {})),
-        "sqlite" => Ok(Box::new(SQLiteDialect {})),
-        "snowflake" => Ok(Box::new(SnowflakeDialect)),
-        "redshift" => Ok(Box::new(RedshiftSqlDialect {})),
-        "mssql" => Ok(Box::new(MsSqlDialect {})),
-        "clickhouse" => Ok(Box::new(ClickHouseDialect {})),
-        "bigquery" => Ok(Box::new(BigQueryDialect)),
-        "ansi" => Ok(Box::new(AnsiDialect {})),
-        _ => {
-            Err(DataFusionError::Internal(format!(
-                "Unsupported SQL dialect: {dialect_name}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi."
-            )))
-        }
+/// Default implementation of [SerializerRegistry] that throws unimplemented error
+/// for all requests.
+pub struct EmptySerializerRegistry;
+
+impl SerializerRegistry for EmptySerializerRegistry {
+    fn serialize_logical_plan(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+    ) -> Result<Vec<u8>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Serializing user defined logical plan node `{}` is not supported",
+            node.name()
+        )))
+    }
+
+    fn deserialize_logical_plan(
+        &self,
+        name: &str,
+        _bytes: &[u8],
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Deserializing user defined logical plan node `{name}` is not supported"
+        )))
     }
 }
 
@@ -2118,7 +2181,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Execution error: variable [\"@\"] has no type information"
+            "Error during planning: variable [\"@\"] has no type information"
         );
         Ok(())
     }
@@ -2159,10 +2222,9 @@ mod tests {
         let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
             .await
             .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Error during planning: Invalid function \'my_func\'"
-        );
+        assert!(err
+            .to_string()
+            .contains("Error during planning: Invalid function \'my_func\'"));
 
         // Can call it if you put quotes
         let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
@@ -2206,10 +2268,9 @@ mod tests {
         let err = plan_and_collect(&ctx, "SELECT MY_AVG(i) FROM t")
             .await
             .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Error during planning: Invalid function \'my_avg\'"
-        );
+        assert!(err
+            .to_string()
+            .contains("Error during planning: Invalid function \'my_avg\'"));
 
         // Can call it if you put quotes
         let result = plan_and_collect(&ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;

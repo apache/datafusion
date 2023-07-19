@@ -17,20 +17,21 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
     rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields};
 use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
         JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Unnest, Values, Window,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
+        Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard,
@@ -40,8 +41,8 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue, TableReference, ToDFSchema,
+    display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -453,9 +454,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-
-                let expr = curr_plan.expressions();
-                from_plan(&curr_plan, &expr, &new_inputs)
+                curr_plan.with_new_inputs(&new_inputs)
             }
         }
     }
@@ -478,7 +477,7 @@ impl LogicalPlanBuilder {
         // As described in https://github.com/apache/arrow-datafusion/issues/5293
         let all_aliases = missing_exprs.iter().all(|e| {
             projection_exprs.iter().any(|proj_expr| {
-                if let Expr::Alias(expr, _) = proj_expr {
+                if let Expr::Alias(Alias { expr, .. }) = proj_expr {
                     e == expr.as_ref()
                 } else {
                     false
@@ -826,17 +825,11 @@ impl LogicalPlanBuilder {
         window_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
-        let all_expr = window_expr.iter();
-        validate_unique_names("Windows", all_expr.clone())?;
-        let mut window_fields: Vec<DFField> = self.plan.schema().fields().clone();
-        window_fields.extend_from_slice(&exprlist_to_fields(all_expr, &self.plan)?);
-        let metadata = self.plan.schema().metadata().clone();
-
-        Ok(Self::from(LogicalPlan::Window(Window {
-            input: Arc::new(self.plan),
+        validate_unique_names("Windows", &window_expr)?;
+        Ok(Self::from(LogicalPlan::Window(Window::try_new(
             window_expr,
-            schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata)?),
-        })))
+            Arc::new(self.plan),
+        )?)))
     }
 
     /// Apply an aggregate: grouping on the `group_expr` expressions
@@ -1115,7 +1108,7 @@ pub(crate) fn validate_unique_names<'a>(
             Some((existing_position, existing_expr)) => {
                 Err(DataFusionError::Plan(
                     format!("{node_name} require unique expression names \
-                             but the expression \"{existing_expr:?}\" at position {existing_position} and \"{expr:?}\" \
+                             but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
                              at position {position} have the same name. Consider aliasing (\"AS\") one of them.",
                             )
                 ))
@@ -1133,11 +1126,18 @@ pub fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
-            ignore_alias @ Expr::Alias { .. } => ignore_alias,
-            ignore_col @ Expr::Column { .. } => ignore_col,
-            x => x.alias(schema.field(i).name()),
+            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
+                e.unalias().alias(schema.field(i).name())
+            }
+            Expr::Column(Column {
+                relation: _,
+                ref name,
+            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
+            Expr::Alias { .. } | Expr::Column { .. } => e,
+            _ => e.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
+
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         alias_expr, input, schema,
     )?))
@@ -1187,7 +1187,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         .into_iter()
         .flat_map(|p| match p {
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
-            x => vec![Arc::new(x)],
+            other_plan => vec![Arc::new(other_plan)],
         })
         .map(|p| {
             let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
@@ -1199,7 +1199,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                         Arc::new(union_schema.clone()),
                     )?))
                 }
-                x => Ok(Arc::new(x)),
+                other_plan => Ok(Arc::new(other_plan)),
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1223,17 +1223,17 @@ pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<Expr>>,
 ) -> Result<LogicalPlan> {
+    // TODO: move it into analyzer
     let input_schema = plan.schema();
     let mut projected_expr = vec![];
     for e in expr {
         let e = e.into();
         match e {
             Expr::Wildcard => {
-                projected_expr.extend(expand_wildcard(input_schema, &plan)?)
+                projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => {
-                projected_expr.extend(expand_qualified_wildcard(qualifier, input_schema)?)
-            }
+            Expr::QualifiedWildcard { ref qualifier } => projected_expr
+                .extend(expand_qualified_wildcard(qualifier, input_schema, None)?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1311,7 +1311,7 @@ pub fn wrap_projection_for_join_if_necessary(
             //  then a and cast(a as int) will use the same field name - `a` in projection schema.
             //  https://github.com/apache/arrow-datafusion/issues/4478
             if matches!(key, Expr::Cast(_)) || matches!(key, Expr::TryCast(_)) {
-                let alias = format!("{key:?}");
+                let alias = format!("{key}");
                 key.clone().alias(alias)
             } else {
                 key.clone()
@@ -1321,7 +1321,7 @@ pub fn wrap_projection_for_join_if_necessary(
 
     let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
     let plan = if need_project {
-        let mut projection = expand_wildcard(input_schema, &input)?;
+        let mut projection = expand_wildcard(input_schema, &input, None)?;
         let join_key_items = alias_join_keys
             .iter()
             .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))

@@ -17,25 +17,25 @@
 
 //! Physical expressions for window functions
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates,
     expressions::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    type_coercion::coerce,
     udaf, ExecutionPlan, PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow_schema::{DataType, Field, SchemaRef};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
-    window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
-    WindowFrame,
+    window_function::{BuiltInWindowFunction, WindowFunction},
+    PartitionEvaluator, WindowFrame, WindowUDF,
 };
-use datafusion_physical_expr::window::{
-    BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
+use datafusion_physical_expr::{
+    window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
+    AggregateExpr,
 };
 use std::borrow::Borrow;
 use std::convert::TryInto;
@@ -47,15 +47,12 @@ mod window_agg_exec;
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::equivalence::OrderingEquivalenceBuilder;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr::{
-    normalize_expr_with_equivalence_properties, OrderedColumn,
-    OrderingEquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -70,23 +67,20 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunction::AggregateFunction(fun) => {
-            let aggregate =
-                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
-            if !window_frame.start_bound.is_unbounded() {
-                Arc::new(SlidingAggregateWindowExpr::new(
-                    aggregate,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                ))
-            } else {
-                Arc::new(PlainAggregateWindowExpr::new(
-                    aggregate,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                ))
-            }
+            let aggregate = aggregates::create_aggregate_expr(
+                fun,
+                false,
+                args,
+                &[],
+                input_schema,
+                name,
+            )?;
+            window_expr_from_aggregate_expr(
+                partition_by,
+                order_by,
+                window_frame,
+                aggregate,
+            )
         }
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
             create_built_in_window_expr(fun, args, input_schema, name)?,
@@ -94,13 +88,50 @@ pub fn create_window_expr(
             order_by,
             window_frame,
         )),
-        WindowFunction::AggregateUDF(fun) => Arc::new(PlainAggregateWindowExpr::new(
-            udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
+        WindowFunction::AggregateUDF(fun) => {
+            let aggregate =
+                udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?;
+            window_expr_from_aggregate_expr(
+                partition_by,
+                order_by,
+                window_frame,
+                aggregate,
+            )
+        }
+        WindowFunction::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
+            create_udwf_window_expr(fun, args, input_schema, name)?,
             partition_by,
             order_by,
             window_frame,
         )),
     })
+}
+
+/// Creates an appropriate [`WindowExpr`] based on the window frame and
+fn window_expr_from_aggregate_expr(
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    order_by: &[PhysicalSortExpr],
+    window_frame: Arc<WindowFrame>,
+    aggregate: Arc<dyn AggregateExpr>,
+) -> Arc<dyn WindowExpr> {
+    // Is there a potentially unlimited sized window frame?
+    let unbounded_window = window_frame.start_bound.is_unbounded();
+
+    if !unbounded_window {
+        Arc::new(SlidingAggregateWindowExpr::new(
+            aggregate,
+            partition_by,
+            order_by,
+            window_frame,
+        ))
+    } else {
+        Arc::new(PlainAggregateWindowExpr::new(
+            aggregate,
+            partition_by,
+            order_by,
+            window_frame,
+        ))
+    }
 }
 
 fn get_scalar_value_from_args(
@@ -135,8 +166,7 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
         BuiltInWindowFunction::Ntile => {
-            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let n: i64 = get_scalar_value_from_args(&coerced_args, 0)?
+            let n: i64 = get_scalar_value_from_args(args, 0)?
                 .ok_or_else(|| {
                     DataFusionError::Execution(
                         "NTILE requires at least 1 argument".to_string(),
@@ -147,33 +177,26 @@ fn create_built_in_window_expr(
             Arc::new(Ntile::new(name, n))
         }
         BuiltInWindowFunction::Lag => {
-            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let arg = coerced_args[0].clone();
+            let arg = args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)?
+            let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(&coerced_args, 2)?;
+            let default_value = get_scalar_value_from_args(args, 2)?;
             Arc::new(lag(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::Lead => {
-            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let arg = coerced_args[0].clone();
+            let arg = args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)?
+            let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(&coerced_args, 2)?;
+            let default_value = get_scalar_value_from_args(args, 2)?;
             Arc::new(lead(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::NthValue => {
-            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let arg = coerced_args[0].clone();
-            let n = coerced_args[1]
-                .as_any()
-                .downcast_ref::<Literal>()
-                .unwrap()
-                .value();
+            let arg = args[0].clone();
+            let n = args[1].as_any().downcast_ref::<Literal>().unwrap().value();
             let n: i64 = n
                 .clone()
                 .try_into()
@@ -183,18 +206,81 @@ fn create_built_in_window_expr(
             Arc::new(NthValue::nth(name, arg, data_type, n)?)
         }
         BuiltInWindowFunction::FirstValue => {
-            let arg =
-                coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
+            let arg = args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
             Arc::new(NthValue::first(name, arg, data_type))
         }
         BuiltInWindowFunction::LastValue => {
-            let arg =
-                coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
+            let arg = args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
             Arc::new(NthValue::last(name, arg, data_type))
         }
     })
+}
+
+/// Creates a `BuiltInWindowFunctionExpr` suitable for a user defined window function
+fn create_udwf_window_expr(
+    fun: &Arc<WindowUDF>,
+    args: &[Arc<dyn PhysicalExpr>],
+    input_schema: &Schema,
+    name: String,
+) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+    // need to get the types into an owned vec for some reason
+    let input_types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.data_type(input_schema))
+        .collect::<Result<_>>()?;
+
+    // figure out the output type
+    let data_type = (fun.return_type)(&input_types)?;
+    Ok(Arc::new(WindowUDFExpr {
+        fun: Arc::clone(fun),
+        args: args.to_vec(),
+        name,
+        data_type,
+    }))
+}
+
+/// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]
+#[derive(Clone, Debug)]
+struct WindowUDFExpr {
+    fun: Arc<WindowUDF>,
+    args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Display name
+    name: String,
+    /// result type
+    data_type: Arc<DataType>,
+}
+
+impl BuiltInWindowFunctionExpr for WindowUDFExpr {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        let nullable = true;
+        Ok(Field::new(
+            &self.name,
+            self.data_type.as_ref().clone(),
+            nullable,
+        ))
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.args.clone()
+    }
+
+    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        (self.fun.partition_evaluator_factory)()
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        None
+    }
 }
 
 pub(crate) fn calc_requirements<
@@ -254,62 +340,28 @@ pub(crate) fn window_ordering_equivalence(
 ) -> OrderingEquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.ordering_equivalence_properties()`.
-    let mut result = OrderingEquivalenceProperties::new(schema.clone());
-    result.extend(
-        input
-            .ordering_equivalence_properties()
-            .classes()
-            .iter()
-            .cloned(),
-    );
-    let out_ordering = input.output_ordering().unwrap_or(&[]);
+    let mut builder = OrderingEquivalenceBuilder::new(schema.clone())
+        .with_equivalences(input.equivalence_properties())
+        .with_existing_ordering(input.output_ordering().map(|elem| elem.to_vec()))
+        .extend(input.ordering_equivalence_properties());
+
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            // Only the built-in `RowNumber` window function introduces a new
-            // ordering:
-            if builtin_window_expr
+            builtin_window_expr
                 .get_built_in_func_expr()
-                .as_any()
-                .is::<RowNumber>()
-            {
-                // If there is an existing ordering, add new ordering as an equivalence:
-                if let Some(first) = out_ordering.first() {
-                    // Normalize expression, as we search for ordering equivalences
-                    // on normalized versions:
-                    let normalized = normalize_expr_with_equivalence_properties(
-                        first.expr.clone(),
-                        input.equivalence_properties().classes(),
-                    );
-                    if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
-                        let column_info =
-                            schema.column_with_name(expr.field().unwrap().name());
-                        if let Some((idx, field)) = column_info {
-                            let lhs = OrderedColumn::new(column.clone(), first.options);
-                            let options = SortOptions {
-                                descending: false,
-                                nulls_first: false,
-                            }; // ASC, NULLS LAST
-                            let rhs = OrderedColumn::new(
-                                Column::new(field.name(), idx),
-                                options,
-                            );
-                            result.add_equal_conditions((&lhs, &rhs));
-                        }
-                    }
-                }
-            }
+                .add_equal_orderings(&mut builder);
         }
     }
-    result
+    builder.build()
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::physical_plan::CsvExec;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::CsvExec;
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};

@@ -30,22 +30,22 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{DFSchemaRef, DataFusionError};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
 
+use super::DisplayAs;
 use super::{
     expressions::PhysicalSortExpr,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution::context::TaskContext;
 use crate::physical_plan::common::get_meet_of_orderings;
-use crate::{
-    error::Result,
-    physical_plan::{expressions, metrics::BaselineMetrics},
-};
+use crate::physical_plan::stream::ObservedStream;
+use crate::physical_plan::{expressions, metrics::BaselineMetrics};
+use datafusion_common::Result;
+use datafusion_execution::TaskContext;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -142,6 +142,20 @@ impl UnionExec {
     /// Get inputs of the execution plan
     pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
         &self.inputs
+    }
+}
+
+impl DisplayAs for UnionExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "UnionExec")
+            }
+        }
     }
 }
 
@@ -243,21 +257,9 @@ impl ExecutionPlan for UnionExec {
 
         warn!("Error in Union: Partition {} not found", partition);
 
-        Err(crate::error::DataFusionError::Execution(format!(
+        Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in Union"
         )))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "UnionExec")
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -343,6 +345,20 @@ impl InterleaveExec {
     }
 }
 
+impl DisplayAs for InterleaveExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "InterleaveExec")
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for InterleaveExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -417,21 +433,9 @@ impl ExecutionPlan for InterleaveExec {
 
         warn!("Error in InterleaveExec: Partition {} not found", partition);
 
-        Err(crate::error::DataFusionError::Execution(format!(
+        Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in InterleaveExec"
         )))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "InterleaveExec")
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -557,40 +561,6 @@ impl Stream for CombinedRecordBatchStream {
         } else {
             Pending
         }
-    }
-}
-
-/// Stream wrapper that records `BaselineMetrics` for a particular
-/// partition
-struct ObservedStream {
-    inner: SendableRecordBatchStream,
-    baseline_metrics: BaselineMetrics,
-}
-
-impl ObservedStream {
-    fn new(inner: SendableRecordBatchStream, baseline_metrics: BaselineMetrics) -> Self {
-        Self {
-            inner,
-            baseline_metrics,
-        }
-    }
-}
-
-impl RecordBatchStream for ObservedStream {
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.inner.schema()
-    }
-}
-
-impl futures::Stream for ObservedStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let poll = self.inner.poll_next_unpin(cx);
-        self.baseline_metrics.record_poll(poll)
     }
 }
 

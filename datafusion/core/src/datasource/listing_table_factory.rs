@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
 
-use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
@@ -36,6 +36,7 @@ use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
@@ -77,10 +78,11 @@ impl TableProviderFactory for ListingTableFactory {
                     .with_file_compression_type(file_compression_type),
             ),
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat),
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
+            FileType::ARROW => Arc::new(ArrowFormat),
         };
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
@@ -126,22 +128,8 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let file_sort_order = if cmd.order_exprs.is_empty() {
-            None
-        } else {
-            Some(cmd.order_exprs.clone())
-        };
-
         // look for 'infinite' as an option
-        let infinite_source = match cmd.options.get("infinite_source").map(|s| s.as_str())
-        {
-            None => false,
-            Some("true") => true,
-            Some("false") => false,
-            Some(value) => {
-                return Err(DataFusionError::Plan(format!("Unknown value for infinite_source: {value}. Expected 'true' or 'false'")));
-            }
-        };
+        let infinite_source = cmd.unbounded;
 
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
@@ -149,7 +137,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_infinite_source(infinite_source)
-            .with_file_sort_order(file_sort_order);
+            .with_file_sort_order(cmd.order_exprs.clone());
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {
@@ -208,6 +196,7 @@ mod tests {
             file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
             definition: None,
             order_exprs: vec![],
+            unbounded: false,
             options: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();

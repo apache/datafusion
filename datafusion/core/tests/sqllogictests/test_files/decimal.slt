@@ -124,6 +124,12 @@ select arrow_typeof(avg(c1)), avg(c1) from decimal_simple;
 Decimal128(14, 10) 0.0000366666
 
 
+query TR
+select arrow_typeof(median(c1)), median(c1) from decimal_simple;
+----
+Decimal128(10, 6) 0.00004
+
+
 query RRIBR rowsort
 select * from decimal_simple where c1=CAST(0.00002 as Decimal(10,8));
 ----
@@ -597,3 +603,12 @@ query R
 select try_cast(1234567 as decimal(7,3));
 ----
 NULL
+
+statement ok
+create table foo (a DECIMAL(38, 20), b DECIMAL(38, 0));
+
+statement ok
+insert into foo VALUES (1, 5);
+
+query error DataFusion error: Arrow error: Compute error: Overflow happened on: 100000000000000000000 \* 100000000000000000000000000000000000000
+select a / b from foo;

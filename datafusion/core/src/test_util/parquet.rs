@@ -26,11 +26,11 @@ use crate::common::ToDFSchema;
 use crate::config::ConfigOptions;
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use crate::error::Result;
 use crate::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_expr::execution_props::ExecutionProps;
-use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
@@ -109,6 +109,7 @@ impl TestParquetFile {
             location: Path::parse(canonical_path.to_str().unwrap_or_default())?,
             last_modified: Default::default(),
             size,
+            e_tag: None,
         };
 
         Ok(Self {
@@ -150,7 +151,7 @@ impl TestParquetFile {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         };
 

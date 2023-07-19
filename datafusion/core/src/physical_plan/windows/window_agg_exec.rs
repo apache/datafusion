@@ -17,8 +17,6 @@
 
 //! Stream and channel implementations for window function expressions.
 
-use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::common::transpose;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -28,7 +26,7 @@ use crate::physical_plan::windows::{
     calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
 use crate::physical_plan::{
-    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
@@ -42,6 +40,8 @@ use arrow::{
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_common::DataFusionError;
+use datafusion_common::Result;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
@@ -121,6 +121,34 @@ impl WindowAggExec {
     }
 }
 
+impl DisplayAs for WindowAggExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "WindowAggExec: ")?;
+                let g: Vec<String> = self
+                    .window_expr
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{}: {:?}, frame: {:?}",
+                            e.name().to_owned(),
+                            e.field(),
+                            e.get_window_frame()
+                        )
+                    })
+                    .collect();
+                write!(f, "wdw=[{}]", g.join(", "))?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl ExecutionPlan for WindowAggExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -145,7 +173,7 @@ impl ExecutionPlan for WindowAggExec {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             Err(DataFusionError::Plan(
@@ -223,32 +251,6 @@ impl ExecutionPlan for WindowAggExec {
             self.ordered_partition_by_indices.clone(),
         )?);
         Ok(stream)
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "WindowAggExec: ")?;
-                let g: Vec<String> = self
-                    .window_expr
-                    .iter()
-                    .map(|e| {
-                        format!(
-                            "{}: {:?}, frame: {:?}",
-                            e.name().to_owned(),
-                            e.field(),
-                            e.get_window_frame()
-                        )
-                    })
-                    .collect();
-                write!(f, "wdw=[{}]", g.join(", "))?;
-            }
-        }
-        Ok(())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

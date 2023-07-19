@@ -19,6 +19,7 @@ use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{
     and,
     expr_rewriter::replace_col,
@@ -164,7 +165,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
             is_evaluate = false;
             Ok(VisitRecursion::Stop)
         }
-        Expr::Alias(_, _)
+        Expr::Alias(_)
         | Expr::BinaryExpr(_)
         | Expr::Like(_)
         | Expr::ILike(_)
@@ -668,7 +669,7 @@ impl OptimizerRule for PushDownFilter {
                     .map(|(i, field)| {
                         // strip alias, as they should not be part of filters
                         let expr = match &projection.expr[i] {
-                            Expr::Alias(expr, _) => expr.as_ref().clone(),
+                            Expr::Alias(Alias { expr, .. }) => expr.as_ref().clone(),
                             expr => expr.clone(),
                         };
 
@@ -748,8 +749,7 @@ impl OptimizerRule for PushDownFilter {
                     )?),
                     None => (*agg.input).clone(),
                 };
-                let new_agg =
-                    from_plan(&filter.input, &filter.input.expressions(), &vec![child])?;
+                let new_agg = filter.input.with_new_inputs(&vec![child])?;
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,

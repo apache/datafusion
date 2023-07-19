@@ -18,9 +18,9 @@
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_row::reader::read_as_batch;
@@ -87,7 +87,7 @@ async fn get_exec(
                 projection: projection.cloned(),
                 limit,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,

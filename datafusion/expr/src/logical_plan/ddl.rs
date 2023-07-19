@@ -189,15 +189,16 @@ pub struct CreateExternalTable {
     /// SQL used to create the table, if available
     pub definition: Option<String>,
     /// Order expressions supplied by user
-    pub order_exprs: Vec<Expr>,
+    pub order_exprs: Vec<Vec<Expr>>,
     /// File compression type (GZIP, BZIP2, XZ, ZSTD)
     pub file_compression_type: CompressionTypeVariant,
+    /// Whether the table is an infinite streams
+    pub unbounded: bool,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derived_hash_with_manual_eq)]
 impl Hash for CreateExternalTable {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.schema.hash(state);
@@ -211,6 +212,7 @@ impl Hash for CreateExternalTable {
         self.definition.hash(state);
         self.file_compression_type.hash(state);
         self.order_exprs.hash(state);
+        self.unbounded.hash(state);
         self.options.len().hash(state); // HashMap is not hashable
     }
 }

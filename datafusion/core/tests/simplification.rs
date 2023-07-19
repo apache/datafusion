@@ -27,7 +27,7 @@ use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyInfo};
 /// about the expressions.
 ///
 /// You can provide that information using DataFusion [DFSchema]
-/// objects or from some other implemention
+/// objects or from some other implementation
 struct MyInfo {
     /// The input schema
     schema: DFSchema,

@@ -17,7 +17,11 @@
 
 //! Expression simplification API
 
+use std::ops::Not;
+
+use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
+
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use arrow::{
@@ -30,8 +34,8 @@ use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter}
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
-    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
-    Volatility,
+    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
+    Like, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -42,7 +46,7 @@ pub struct ExprSimplifier<S> {
     info: S,
 }
 
-const THRESHOLD_INLINE_INLIST: usize = 3;
+pub const THRESHOLD_INLINE_INLIST: usize = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
@@ -114,6 +118,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
+        let mut or_in_list_simplifier = OrInListSimplifier::new();
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
@@ -121,6 +126,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // https://github.com/apache/arrow-datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
+            .rewrite(&mut or_in_list_simplifier)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)
@@ -430,17 +436,37 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 let first_val = list[0].clone();
                 if negated {
-                    list.into_iter()
-                        .skip(1)
-                        .fold((*expr.clone()).not_eq(first_val), |acc, y| {
-                            (*expr.clone()).not_eq(y).and(acc)
-                        })
+                    list.into_iter().skip(1).fold(
+                        (*expr.clone()).not_eq(first_val),
+                        |acc, y| {
+                            // Note that `A and B and C and D` is a left-deep tree structure
+                            // as such we want to maintain this structure as much as possible
+                            // to avoid reordering the expression during each optimization
+                            // pass.
+                            //
+                            // Left-deep tree structure for `A and B and C and D`:
+                            // ```
+                            //        &
+                            //       / \
+                            //      &   D
+                            //     / \
+                            //    &   C
+                            //   / \
+                            //  A   B
+                            // ```
+                            //
+                            // The code below maintain the left-deep tree structure.
+                            acc.and((*expr.clone()).not_eq(y))
+                        },
+                    )
                 } else {
-                    list.into_iter()
-                        .skip(1)
-                        .fold((*expr.clone()).eq(first_val), |acc, y| {
-                            (*expr.clone()).eq(y).or(acc)
-                        })
+                    list.into_iter().skip(1).fold(
+                        (*expr.clone()).eq(first_val),
+                        |acc, y| {
+                            // Same reasoning as above
+                            acc.or((*expr.clone()).eq(y))
+                        },
+                    )
                 }
             }
             //
@@ -1043,17 +1069,20 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Expr::Case(case)
-                if !case.when_then_expr.is_empty()
-                && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
-                && info.is_boolean_type(&case.when_then_expr[0].1)? =>
+            Expr::Case(Case {
+                expr: None,
+                when_then_expr,
+                else_expr,
+            }) if !when_then_expr.is_empty()
+                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&when_then_expr[0].1)? =>
             {
                 // The disjunction of all the when predicates encountered so far
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
                 let mut out_expr = lit(false);
 
-                for (when, then) in case.when_then_expr {
+                for (when, then) in when_then_expr {
                     let case_expr = when
                         .as_ref()
                         .clone()
@@ -1064,7 +1093,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     filter_expr = filter_expr.or(*when);
                 }
 
-                if let Some(else_expr) = case.else_expr {
+                if let Some(else_expr) = else_expr {
                     let case_expr = filter_expr.not().and(*else_expr);
                     out_expr = out_expr.or(case_expr);
                 }
@@ -1161,11 +1190,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 lit(!negated)
             }
 
-            // a IS NOT NULL --> true, if a is not nullable
-            Expr::IsNotNull(expr) if !info.nullable(&expr)? => lit(true),
+            // a is not null/unknown --> true (if a is not nullable)
+            Expr::IsNotNull(expr) | Expr::IsNotUnknown(expr)
+                if !info.nullable(&expr)? =>
+            {
+                lit(true)
+            }
 
-            // a IS NULL --> false, if a is not nullable
-            Expr::IsNull(expr) if !info.nullable(&expr)? => lit(false),
+            // a is null/unknown --> false (if a is not nullable)
+            Expr::IsNull(expr) | Expr::IsUnknown(expr) if !info.nullable(&expr)? => {
+                lit(false)
+            }
 
             // no additional rewrites possible
             expr => expr,
@@ -1176,7 +1211,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        ops::{BitAnd, BitOr, BitXor},
+        sync::Arc,
+    };
 
     use crate::simplify_expressions::{
         utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
@@ -1283,10 +1322,8 @@ mod tests {
         expected_expr: Expr,
         date_time: &DateTime<Utc>,
     ) {
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
+        let execution_props =
+            ExecutionProps::new().with_query_execution_start_time(*date_time);
 
         let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
         let evaluated_expr = input_expr
@@ -1642,9 +1679,12 @@ mod tests {
     fn test_simplify_divide_zero_by_zero() {
         // 0 / 0 -> null
         let expr = lit(0) / lit(0);
-        let expected = lit(ScalarValue::Int32(None));
+        let err = try_simplify(expr).unwrap_err();
 
-        assert_eq!(simplify(expr), expected);
+        assert!(
+            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
+            "{err}"
+        );
     }
 
     #[test]
@@ -2044,7 +2084,7 @@ mod tests {
     #[test]
     fn test_simplify_simple_bitwise_and() {
         // (c2 > 5) & (c2 > 5) -> (c2 > 5)
-        let expr = (col("c2").gt(lit(5))).bitwise_and(col("c2").gt(lit(5)));
+        let expr = (col("c2").gt(lit(5))).bitand(col("c2").gt(lit(5)));
         let expected = col("c2").gt(lit(5));
 
         assert_eq!(simplify(expr), expected);
@@ -2053,7 +2093,7 @@ mod tests {
     #[test]
     fn test_simplify_simple_bitwise_or() {
         // (c2 > 5) | (c2 > 5) -> (c2 > 5)
-        let expr = (col("c2").gt(lit(5))).bitwise_or(col("c2").gt(lit(5)));
+        let expr = (col("c2").gt(lit(5))).bitor(col("c2").gt(lit(5)));
         let expected = col("c2").gt(lit(5));
 
         assert_eq!(simplify(expr), expected);
@@ -2062,13 +2102,13 @@ mod tests {
     #[test]
     fn test_simplify_simple_bitwise_xor() {
         // c4 ^ c4 -> 0
-        let expr = (col("c4")).bitwise_xor(col("c4"));
+        let expr = (col("c4")).bitxor(col("c4"));
         let expected = lit(0u32);
 
         assert_eq!(simplify(expr), expected);
 
         // c3 ^ c3 -> 0
-        let expr = col("c3").bitwise_xor(col("c3"));
+        let expr = col("c3").bitxor(col("c3"));
         let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
@@ -2434,6 +2474,58 @@ mod tests {
         // single word
         assert_change(regex_match(col("c1"), lit("foo")), like(col("c1"), "%foo%"));
 
+        // regular expressions that match an exact literal
+        assert_change(regex_match(col("c1"), lit("^$")), col("c1").eq(lit("")));
+        assert_change(
+            regex_not_match(col("c1"), lit("^$")),
+            col("c1").not_eq(lit("")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^foo$")),
+            col("c1").eq(lit("foo")),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("^foo$")),
+            col("c1").not_eq(lit("foo")),
+        );
+
+        // regular expressions that match exact captured literals
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar)$")),
+            col("c1").eq(lit("foo")).or(col("c1").eq(lit("bar"))),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("^(foo|bar)$")),
+            col("c1")
+                .not_eq(lit("foo"))
+                .and(col("c1").not_eq(lit("bar"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo)$")),
+            col("c1").eq(lit("foo")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar|baz)$")),
+            ((col("c1").eq(lit("foo"))).or(col("c1").eq(lit("bar"))))
+                .or(col("c1").eq(lit("baz"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar|baz|qux)$")),
+            col("c1")
+                .in_list(vec![lit("foo"), lit("bar"), lit("baz"), lit("qux")], false),
+        );
+
+        // regular expressions that mismatch captured literals
+        assert_no_change(regex_match(col("c1"), lit("(foo|bar)")));
+        assert_no_change(regex_match(col("c1"), lit("(foo|bar)*")));
+        assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
+        assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
+        assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
+        assert_no_change(regex_match(col("c1"), lit("^")));
+        assert_no_change(regex_match(col("c1"), lit("$")));
+        assert_no_change(regex_match(col("c1"), lit("$^")));
+        assert_no_change(regex_match(col("c1"), lit("$foo^")));
+
         // OR-chain
         assert_change(
             regex_match(col("c1"), lit("foo|bar|baz")),
@@ -2451,6 +2543,19 @@ mod tests {
             regex_not_match(col("c1"), lit("foo|bar|baz")),
             not_like(col("c1"), "%foo%")
                 .and(not_like(col("c1"), "%bar%"))
+                .and(not_like(col("c1"), "%baz%")),
+        );
+        // both anchored expressions (translated to equality) and unanchored
+        assert_change(
+            regex_match(col("c1"), lit("foo|^x$|baz")),
+            like(col("c1"), "%foo%")
+                .or(col("c1").eq(lit("x")))
+                .or(like(col("c1"), "%baz%")),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("foo|^bar$|baz")),
+            not_like(col("c1"), "%foo%")
+                .and(col("c1").not_eq(lit("bar")))
                 .and(not_like(col("c1"), "%baz%")),
         );
         // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)
@@ -2631,6 +2736,25 @@ mod tests {
     }
 
     #[test]
+    fn simplify_expr_is_unknown() {
+        assert_eq!(simplify(col("c2").is_unknown()), col("c2").is_unknown(),);
+
+        // 'c2_non_null is unknown' is always false
+        assert_eq!(simplify(col("c2_non_null").is_unknown()), lit(false));
+    }
+
+    #[test]
+    fn simplify_expr_is_not_known() {
+        assert_eq!(
+            simplify(col("c2").is_not_unknown()),
+            col("c2").is_not_unknown()
+        );
+
+        // 'c2_non_null is not unknown' is always true
+        assert_eq!(simplify(col("c2_non_null").is_not_unknown()), lit(true));
+    }
+
+    #[test]
     fn simplify_expr_eq() {
         let schema = expr_test_schema();
         assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
@@ -2698,9 +2822,9 @@ mod tests {
 
     #[test]
     fn simplify_expr_case_when_then_else() {
-        // CASE WHERE c2 != false THEN "ok" == "not_ok" ELSE c2 == true
+        // CASE WHEN c2 != false THEN "ok" == "not_ok" ELSE c2 == true
         // -->
-        // CASE WHERE c2 THEN false ELSE c2
+        // CASE WHEN c2 THEN false ELSE c2
         // -->
         // false
         assert_eq!(
@@ -2715,9 +2839,9 @@ mod tests {
             col("c2").not().and(col("c2")) // #1716
         );
 
-        // CASE WHERE c2 != false THEN "ok" == "ok" ELSE c2
+        // CASE WHEN c2 != false THEN "ok" == "ok" ELSE c2
         // -->
-        // CASE WHERE c2 THEN true ELSE c2
+        // CASE WHEN c2 THEN true ELSE c2
         // -->
         // c2
         //
@@ -2735,7 +2859,7 @@ mod tests {
             col("c2").or(col("c2").not().and(col("c2"))) // #1716
         );
 
-        // CASE WHERE ISNULL(c2) THEN true ELSE c2
+        // CASE WHEN ISNULL(c2) THEN true ELSE c2
         // -->
         // ISNULL(c2) OR c2
         //
@@ -2752,7 +2876,7 @@ mod tests {
                 .or(col("c2").is_not_null().and(col("c2")))
         );
 
-        // CASE WHERE c1 then true WHERE c2 then false ELSE true
+        // CASE WHEN c1 then true WHEN c2 then false ELSE true
         // --> c1 OR (NOT(c1) AND c2 AND FALSE) OR (NOT(c1 OR c2) AND TRUE)
         // --> c1 OR (NOT(c1) AND NOT(c2))
         // --> c1 OR NOT(c2)
@@ -2771,7 +2895,7 @@ mod tests {
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
 
-        // CASE WHERE c1 then true WHERE c2 then true ELSE false
+        // CASE WHEN c1 then true WHEN c2 then true ELSE false
         // --> c1 OR (NOT(c1) AND c2 AND TRUE) OR (NOT(c1 OR c2) AND FALSE)
         // --> c1 OR (NOT(c1) AND c2)
         // --> c1 OR c2
@@ -2848,11 +2972,11 @@ mod tests {
 
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], false)),
-            col("c1").eq(lit(2)).or(col("c1").eq(lit(1)))
+            col("c1").eq(lit(1)).or(col("c1").eq(lit(2)))
         );
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
-            col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+            col("c1").not_eq(lit(1)).and(col("c1").not_eq(lit(2)))
         );
 
         let subquery = Arc::new(test_table_scan_with_name("test").unwrap());
@@ -2878,7 +3002,7 @@ mod tests {
         let subquery2 =
             scalar_subquery(Arc::new(test_table_scan_with_name("test2").unwrap()));
 
-        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery2> AND c1 != <subquery1>
+        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery1> AND c1 != <subquery2>
         assert_eq!(
             simplify(in_list(
                 col("c1"),
@@ -2886,18 +3010,36 @@ mod tests {
                 true
             )),
             col("c1")
-                .not_eq(subquery2.clone())
-                .and(col("c1").not_eq(subquery1.clone()))
+                .not_eq(subquery1.clone())
+                .and(col("c1").not_eq(subquery2.clone()))
         );
 
-        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery2> OR c1 == <subquery1>
+        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery1> OR c1 == <subquery2>
         assert_eq!(
             simplify(in_list(
                 col("c1"),
                 vec![subquery1.clone(), subquery2.clone()],
                 false
             )),
-            col("c1").eq(subquery2).or(col("c1").eq(subquery1))
+            col("c1").eq(subquery1).or(col("c1").eq(subquery2))
+        );
+
+        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) ->
+        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
+        );
+        assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_large_or() {
+        let expr = (0..5)
+            .map(|i| col("c1").eq(lit(i)))
+            .fold(lit(false), |acc, e| acc.or(e));
+        assert_eq!(
+            simplify(expr),
+            in_list(col("c1"), (0..5).map(lit).collect(), false),
         );
     }
 

@@ -20,16 +20,51 @@
 #############
 
 statement ok
-CREATE TABLE t1(
+CREATE TABLE unsigned_integers(
   a INT,
   b INT,
   c INT,
-  d INT
+  d INT,
+  e INT,
+  f INT
 ) as VALUES
-  (1, 100, 567, 1024),
-  (2, 1000, 123, 256),
-  (3, 10000, 978, 2048)
+  (1, 100, 567, 1024, 4, 10),
+  (2, 1000, 123, 256, 5, 11),
+  (3, 10000, 978, 2048, 6, 12),
+  (4, NULL, NULL, 512, NULL, NULL)
 ;
+
+statement ok
+CREATE TABLE signed_integers(
+  a INT,
+  b INT,
+  c INT,
+  d INT,
+  e INT,
+  f INT
+) as VALUES
+  (-1, 100, -567, 1024, -4, 10),
+  (2, -1000, 123, -256, 5, -11),
+  (-3, 10000, -978, 2048, -6, 12),
+  (4, NULL, NULL, -512, NULL, NULL)
+;
+
+statement ok
+CREATE TABLE small_floats(
+  a FLOAT,
+  b FLOAT,
+  c FLOAT,
+  d FLOAT,
+  e FLOAT,
+  f FLOAT
+) as VALUES
+  (0.2, -0.1, 1.0, -0.9, 0.1, 0.5),
+  (0.5, -0.2, 0.0, 0.9, -0.2, 0.6),
+  (-0.7, 0.1, -1.0, 0.9, 0.3, -0.7),
+  (-1.0, NULL, NULL, -0.9, NULL, NULL)
+;
+
+## abs
 
 # abs scalar function
 query RRR rowsort
@@ -43,6 +78,17 @@ select abs(null);
 ----
 NULL
 
+# abs with columns
+query RRR rowsort
+select abs(a), abs(b), abs(c) from signed_integers;
+----
+1 100 567
+2 1000 123
+3 10000 978
+4 NULL NULL
+
+## acos
+
 # acos scalar function
 query RRR rowsort
 select acos(0), acos(0.5), acos(1);
@@ -54,6 +100,17 @@ query R rowsort
 select acos(null);
 ----
 NULL
+
+# acos with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(acos(a), 5), round(acos(b), 5), round(acos(c), 5) from small_floats;
+----
+1.0472 1.77215 1.5708
+1.36944 1.67096 0
+2.34619 1.47063 3.14159
+3.14159 NULL NULL
+
+## acosh
 
 # acosh scalar function
 # cosh(x) = (exp(x) + exp(-x)) / 2
@@ -68,6 +125,17 @@ select acosh(null);
 ----
 NULL
 
+# acosh with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(acosh(a), 5), round(acosh(b), 5), round(acosh(c), 5) from signed_integers;
+----
+1.31696 NaN 5.50532
+2.06344 NULL NULL
+NaN 5.29829 NaN
+NaN 9.90349 NaN
+
+## asin
+
 # asin scalar function
 query RRR rowsort
 select asin(0), asin(0.5), asin(1);
@@ -79,6 +147,17 @@ query R rowsort
 select asin(null);
 ----
 NULL
+
+# asin with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(asin(a), 5), round(asin(b), 5), round(asin(c), 5) from small_floats;
+----
+-0.7754 0.10017 -1.5708
+-1.5708 NULL NULL
+0.20136 -0.10017 1.5708
+0.5236 -0.20136 0
+
+## asinh
 
 # asinh scalar function
 # sinh(x) = (exp(x) - exp(-x)) / 2
@@ -93,6 +172,17 @@ select asinh(null);
 ----
 NULL
 
+# asinh with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(asinh(a), 5), round(asinh(b), 5), round(asinh(c), 5) from small_floats;
+----
+-0.65267 0.09983 -0.88137
+-0.88137 NULL NULL
+0.19869 -0.09983 0.88137
+0.48121 -0.19869 0
+
+## atan
+
 # atan scalar function
 query RRR rowsort
 select atan(0), atan(cbrt(3)), atan(1);
@@ -104,6 +194,17 @@ query R rowsort
 select atan(null);
 ----
 NULL
+
+# atan with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(atan(a), 5), round(atan(b), 5), round(atan(c), 5) from small_floats;
+----
+-0.61073 0.09967 -0.7854
+-0.7854 NULL NULL
+0.1974 -0.09967 0.7854
+0.46365 -0.1974 0
+
+## atanh
 
 # atanh scalar function
 # tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
@@ -118,6 +219,17 @@ select atanh(null);
 ----
 NULL
 
+# atanh with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(atanh(a), 5), round(atanh(b), 5), round(atanh(c), 5) from small_floats;
+----
+-0.8673 0.10034 -Infinity
+-Infinity NULL NULL
+0.20273 -0.10034 Infinity
+0.54931 -0.20273 0
+
+## atan2
+
 # atan2 scalar function
 query RRR rowsort
 select atan2(0, 1), atan2(1, 2), atan2(2, 2);
@@ -130,17 +242,28 @@ select atan2(null, 64);
 ----
 NULL
 
-# atan2 scalar nulls 1
+# atan2 scalar nulls #1
 query R rowsort
 select atan2(2, null);
 ----
 NULL
 
-# atan2 scalar nulls 2
+# atan2 scalar nulls #2
 query R rowsort
 select atan2(null, null);
 ----
 NULL
+
+# atan2 with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(atan2(a, b), 5), round(atan2(c, d), 5), round(atan2(f, e), 5) from small_floats;
+----
+-1.4289 -0.83798 -1.1659
+1.9513 0 1.89255
+2.03444 2.30361 1.3734
+NULL NULL NULL
+
+## cbrt
 
 # cbrt scalar function
 query RRR rowsort
@@ -154,6 +277,17 @@ select cbrt(null);
 ----
 NULL
 
+# cbrt with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(cbrt(a), 5), round(cbrt(b), 5), round(cbrt(c), 5) from signed_integers;
+----
+-1 4.64159 -8.27677
+-1.44225 21.54435 -9.92612
+1.25992 -10 4.97319
+1.5874 NULL NULL
+
+## ceil
+
 # ceil scalar function
 query RRR rowsort
 select ceil(1.6), ceil(1.5), ceil(1.4);
@@ -165,6 +299,17 @@ query R rowsort
 select ceil(null);
 ----
 NULL
+
+# ceil with columns
+query RRR rowsort
+select ceil(a), ceil(b), ceil(c) from small_floats;
+----
+-1 NULL NULL
+0 1 -1
+1 0 0
+1 0 1
+
+## degrees
 
 # degrees scalar function
 query RRR rowsort
@@ -178,6 +323,17 @@ select degrees(null);
 ----
 NULL
 
+# degrees with columns
+query RRR rowsort
+select round(degrees(a), 5), round(degrees(e), 5), round(degrees(f), 5) from signed_integers;
+----
+-171.88734 -343.77468 687.54935
+-57.29578 -229.18312 572.9578
+114.59156 286.4789 -630.25357
+229.18312 NULL NULL
+
+## cos
+
 # cos scalar function
 query RRR rowsort
 select cos(0), cos(pi() / 3), cos(pi() / 2);
@@ -189,6 +345,17 @@ query R rowsort
 select cos(null);
 ----
 NULL
+
+# cos with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(cos(a), 5), round(cos(b), 5), round(cos(c), 5) from signed_integers;
+----
+-0.41615 0.56238 -0.88797
+-0.65364 NULL NULL
+-0.98999 -0.95216 -0.56968
+0.5403 0.86232 0.05744
+
+## cosh
 
 # cosh scalar function
 # cosh(x) = (exp(x) + exp(-x)) / 2
@@ -203,6 +370,17 @@ select cosh(null);
 ----
 NULL
 
+# cosh with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(cosh(a), 5), round(cosh(b), 5), round(cosh(c), 5) from small_floats;
+----
+1.02007 1.005 1.54308
+1.12763 1.02007 1
+1.25517 1.005 1.54308
+1.54308 NULL NULL
+
+## exp
+
 # exp scalar function
 query RRR rowsort
 select exp(0), exp(1), exp(2);
@@ -214,6 +392,17 @@ query R rowsort
 select exp(null);
 ----
 NULL
+
+# exp with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(exp(a), 5), round(exp(e), 5), round(exp(f), 5) from signed_integers;
+----
+0.04979 0.00248 162754.79142
+0.36788 0.01832 22026.46579
+54.59815 NULL NULL
+7.38906 148.41316 0.00002
+
+## factorial
 
 # factorial scalar function
 query III rowsort
@@ -227,6 +416,17 @@ select factorial(null);
 ----
 NULL
 
+# factorial with columns
+query III rowsort
+select factorial(a), factorial(e), factorial(f) from unsigned_integers;
+----
+1 24 3628800
+2 120 39916800
+24 NULL NULL
+6 720 479001600
+
+## floor
+
 # floor scalar function
 query RRR rowsort
 select floor(1.4), floor(1.5), floor(1.6);
@@ -238,6 +438,17 @@ query R rowsort
 select floor(null);
 ----
 NULL
+
+# floor with columns
+query RRR rowsort
+select floor(a), floor(b), floor(c) from signed_integers;
+----
+-1 100 -567
+-3 10000 -978
+2 -1000 123
+4 NULL NULL
+
+## gcd
 
 # gcd scalar function
 query III rowsort
@@ -251,17 +462,28 @@ select gcd(null, 64);
 ----
 NULL
 
-# gcd scalar nulls 1
+# gcd scalar nulls #1
 query I rowsort
 select gcd(2, null);
 ----
 NULL
 
-# gcd scalar nulls 2
+# gcd scalar nulls #2
 query I rowsort
 select gcd(null, null);
 ----
 NULL
+
+# gcd with columns
+query III rowsort
+select gcd(a, b), gcd(c, d), gcd(e, f) from signed_integers;
+----
+1 1 2
+1 2 6
+2 1 1
+NULL NULL NULL
+
+## lcm
 
 # lcm scalar function
 query III rowsort
@@ -275,17 +497,28 @@ select lcm(null, 64);
 ----
 NULL
 
-# lcm scalar nulls 1
+# lcm scalar nulls #1
 query I rowsort
 select lcm(2, null);
 ----
 NULL
 
-# lcm scalar nulls 2
+# lcm scalar nulls #2
 query I rowsort
 select lcm(null, null);
 ----
 NULL
+
+# lcm with columns
+query III rowsort
+select lcm(a, b), lcm(c, d), lcm(e, f) from signed_integers;
+----
+100 580608 20
+1000 31488 55
+30000 1001472 12
+NULL NULL NULL
+
+## ln
 
 # ln scalar function
 query RRR rowsort
@@ -306,6 +539,17 @@ select ln(0);
 ----
 -Infinity
 
+# ln with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(ln(a), 5), round(ln(b), 5), round(ln(c), 5) from signed_integers;
+----
+0.69315 NaN 4.81218
+1.38629 NULL NULL
+NaN 4.60517 NaN
+NaN 9.21034 NaN
+
+## log
+
 # log scalar function
 query RR rowsort
 select log(2, 64) a, log(100) b union all select log(2, 8), log(10);
@@ -313,27 +557,19 @@ select log(2, 64) a, log(100) b union all select log(2, 8), log(10);
 3 1
 6 2
 
-# log scalar function
-query RRR rowsort
-select log(a, 64) a, log(b), log(10, b) from t1;
-----
-3.7855785 4 4
-6 3 3
-Infinity 2 2
-
 # log scalar nulls
 query RR rowsort
 select log(null, 64) a, log(null) b;
 ----
 NULL NULL
 
-# log scalar nulls 1
+# log scalar nulls #1
 query RR rowsort
 select log(2, null) a, log(null) b;
 ----
 NULL NULL
 
-# log scalar nulls 2
+# log scalar nulls #2
 query RR rowsort
 select log(null, null) a, log(null) b;
 ----
@@ -345,6 +581,26 @@ query RR rowsort
 select log(0) a, log(1, 64) b;
 ----
 -Infinity Infinity
+
+# log with columns #1
+query RRR rowsort
+select log(a, 64) a, log(b), log(10, b) from unsigned_integers;
+----
+3 NULL NULL
+3.7855785 4 4
+6 3 3
+Infinity 2 2
+
+# log with columns #2
+query RRR rowsort
+select log(a, 64) a, log(b), log(10, b) from signed_integers;
+----
+3 NULL NULL
+6 NaN NaN
+NaN 2 2
+NaN 4 4
+
+## log10
 
 # log10 scalar function
 query RRR rowsort
@@ -365,6 +621,17 @@ select log10(0);
 ----
 -Infinity
 
+# log10 with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(log(a), 5), round(log(b), 5), round(log(c), 5) from signed_integers;
+----
+0.30103 NaN 2.08991
+0.60206 NULL NULL
+NaN 2 NaN
+NaN 4 NaN
+
+## log2
+
 # log2 scalar function
 query RRR rowsort
 select log2(1), log2(2), log2(4);
@@ -384,11 +651,24 @@ select log2(0);
 ----
 -Infinity
 
+# log2 with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(log2(a), 5), round(log2(b), 5), round(log2(c), 5) from signed_integers;
+----
+1 NaN 6.94251
+2 NULL NULL
+NaN 13.28771 NaN
+NaN 6.64386 NaN
+
+## pi
+
 # pi scalar function
 query RRR rowsort
 select pi(), pi() / 2, pi() / 3;
 ----
 3.14159265359 1.570796326795 1.047197551197
+
+## power
 
 # power scalar function
 query III rowsort
@@ -402,17 +682,28 @@ select power(null, 64);
 ----
 NULL
 
-# power scalar nulls 1
+# power scalar nulls #1
 query I rowsort
 select power(2, null);
 ----
 NULL
 
-# power scalar nulls 2
+# power scalar nulls #2
 query R rowsort
 select power(null, null);
 ----
 NULL
+
+# power with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(power(a, b), 5), round(power(c, d), 5), round(power(e, f), 5) from small_floats;
+----
+1.1487 0 NaN
+1.17462 1 0.31623
+NULL NULL NULL
+NaN NaN 2.32282
+
+## radians
 
 # radians scalar function
 query RRR rowsort
@@ -426,6 +717,17 @@ select radians(null);
 ----
 NULL
 
+# radians with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(radians(a), 5), round(radians(b), 5), round(radians(c), 5) from signed_integers;
+----
+-0.01745 1.74533 -9.89602
+-0.05236 174.53293 -17.06932
+0.03491 -17.45329 2.14675
+0.06981 NULL NULL
+
+## round
+
 # round scalar function
 query RRR rowsort
 select round(1.4), round(1.5), round(1.6);
@@ -437,6 +739,17 @@ query R rowsort
 select round(null);
 ----
 NULL
+
+# round with columns
+query RRR rowsort
+select round(a), round(b), round(c) from small_floats;
+----
+-1 0 -1
+-1 NULL NULL
+0 0 1
+1 0 0
+
+## signum
 
 # signum scalar function
 query RRR rowsort
@@ -450,6 +763,17 @@ select signum(null);
 ----
 NULL
 
+# signum with columns
+query RRR rowsort
+select signum(a), signum(b), signum(c) from signed_integers;
+----
+-1 1 -1
+-1 1 -1
+1 -1 1
+1 NULL NULL
+
+## sin
+
 # sin scalar function
 query RRR rowsort
 select sin(0), sin(pi() / 3), sin(pi() / 2);
@@ -461,6 +785,17 @@ query R rowsort
 select sin(null);
 ----
 NULL
+
+# sin with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(sin(a), 5), round(sin(b), 5), round(sin(c), 5) from small_floats;
+----
+-0.64422 0.09983 -0.84147
+-0.84147 NULL NULL
+0.19867 -0.09983 0.84147
+0.47943 -0.19867 0
+
+## sinh
 
 # sinh scalar function
 # sinh(x) = (exp(x) - exp(-x)) / 2
@@ -475,6 +810,17 @@ select sinh(null);
 ----
 NULL
 
+# sinh with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(sinh(a), 5), round(sinh(b), 5), round(sinh(c), 5) from small_floats;
+----
+-0.75858 0.10017 -1.1752
+-1.1752 NULL NULL
+0.20134 -0.10017 1.1752
+0.5211 -0.20134 0
+
+## sqrt
+
 # sqrt scalar function
 query RRR rowsort
 select sqrt(0), sqrt(4), sqrt(9);
@@ -487,6 +833,17 @@ select sqrt(null);
 ----
 NULL
 
+# sqrt with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integers;
+----
+1.41421 NaN 11.09054
+2 NULL NULL
+NaN 10 NaN
+NaN 100 NaN
+
+## tan
+
 # tan scalar function
 query RRR rowsort
 select tan(0), tan(pi() / 6), tan(pi() / 4);
@@ -498,6 +855,17 @@ query R rowsort
 select tan(null);
 ----
 NULL
+
+# tan with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(tan(a), 5), round(tan(b), 5), round(tan(c), 5) from small_floats;
+----
+-0.84229 0.10033 -1.55741
+-1.55741 NULL NULL
+0.20271 -0.10033 1.55741
+0.5463 -0.20271 0
+
+## tanh
 
 # tanh scalar function
 # tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
@@ -512,6 +880,17 @@ select tanh(null);
 ----
 NULL
 
+# tanh with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(tanh(a), 5), round(tanh(b), 5), round(tanh(c), 5) from small_floats;
+----
+-0.60437 0.09967 -0.76159
+-0.76159 NULL NULL
+0.19738 -0.09967 0.76159
+0.46212 -0.19738 0
+
+## trunc
+
 # trunc scalar function
 query RRR rowsort
 select trunc(1.5), trunc(2.71), trunc(3.1415);
@@ -524,48 +903,123 @@ select trunc(null);
 ----
 NULL
 
+# trunc with columns
+query RRR rowsort
+select trunc(a), trunc(b), trunc(c) from small_floats;
+----
+-1 NULL NULL
+0 0 -1
+0 0 0
+0 0 1
+
+## bitwise and
+
 # bitwise and with column and scalar
 query I rowsort
-select c & 856 from t1;
+select c & 856 from signed_integers;
 ----
-528
-848
+328
+8
 88
+NULL
+
+# bitwise and with columns
+query III rowsort
+select a & b, c & d, e & f from signed_integers;
+----
+0 0 5
+100 1024 8
+10000 2048 8
+NULL NULL NULL
+
+## bitwise or
 
 # bitwise or with column and scalar
 query I rowsort
-select c | 856 from t1;
+select c | 856 from signed_integers;
 ----
+-130
+-39
 891
-895
-986
+NULL
+
+# bitwise or with columns
+query III rowsort
+select a | b, c | d, e | f from signed_integers;
+----
+-1 -567 -2
+-3 -978 -2
+-998 -133 -11
+NULL NULL NULL
+
+## bitwise xor
 
 # bitwise xor with column and scalar
 query I rowsort
-select c ^ 856 from t1;
+select c ^ 856 from signed_integers;
 ----
-138
-367
+-138
+-367
 803
+NULL
 
-# right shift with column and scalar
-query I rowsort
-select d >> 2 from t1;
+# bitwise xor with columns
+query III rowsort
+select a ^ b, c ^ d, e ^ f from signed_integers;
 ----
+-10003 -3026 -10
+-101 -1591 -10
+-998 -133 -16
+NULL NULL NULL
+
+## bitwise right shift
+
+# bitwise right shift with column and scalar
+query I rowsort
+select d >> 2 from signed_integers;
+----
+-128
+-64
 256
 512
-64
 
-# left shift with column and scalar
-query I rowsort
-select d << 2 from t1;
+# bitwise right shift with columns
+query III rowsort
+select a >> b, c >> d, e >> f from signed_integers;
 ----
-1024
+-1 -567 -1
+-1 -978 -1
+0 123 0
+NULL NULL NULL
+
+## bitwise left shift
+
+# bitwise left shift with column and scalar
+query I rowsort
+select d << 2 from signed_integers;
+----
+-1024
+-2048
 4096
 8192
 
+# bitwise left shift with columns
+query III rowsort
+select a << b, c << d, e << f from signed_integers;
+----
+-16 -567 -4096
+-196608 -978 -24576
+33554432 123 10485760
+NULL NULL NULL
+
 statement ok
-drop table t1
+drop table unsigned_integers;
+
+statement ok
+drop table signed_integers;
+
+statement ok
+drop table small_floats;
 
 
 statement ok
@@ -636,6 +1090,18 @@ FROM t1
 999
 999
 
+# issue: https://github.com/apache/arrow-datafusion/issues/7004
+query B
+select case c1
+    when 'foo' then TRUE
+    when 'bar' then FALSE
+end from t1
+----
+NULL
+NULL
+NULL
+NULL
+
 statement ok
 drop table t1
 
@@ -646,32 +1112,40 @@ SELECT CASE WHEN NULL THEN 'foo' ELSE 'bar' END
 bar
 
 # case_expr_with_null()
-query I
+query ?
 select case when b is null then null else b end from (select a,b from (values (1,null),(2,3)) as t (a,b)) a;
 ----
 NULL
 3
 
-query I
+query ?
 select case when b is null then null else b end from (select a,b from (values (1,1),(2,3)) as t (a,b)) a;
 ----
 1
 3
 
 # case_expr_with_nulls()
-query I
+query ?
 select case when b is null then null when b < 3 then null when b >=3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a
 ----
 NULL
 NULL
 4
 
-query I
+query ?
 select case b when 1 then null when 2 then null when 3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a;
 ----
 NULL
 NULL
 4
+
+# issue: https://github.com/apache/arrow-datafusion/issues/6376
+query I
+select case when a = 0 then 123 end from (values(1), (0), (null)) as t(a);
+----
+NULL
+123
+NULL
 
 # csv_query_sum_cast() {
 
@@ -903,17 +1377,15 @@ SELECT not(true), not(false)
 ----
 false true
 
-query BB
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Int64\(1\) \}' can't be evaluated because the expression's type is Int64, not boolean or NULL\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 SELECT not(1), not(0)
-----
--2 -1
 
 query ?B
 SELECT null, not(null)
 ----
 NULL NULL
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT/BITWISE_NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL or Integer\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 SELECT NOT('hi')
 
 # test_negative_expressions()
@@ -1209,3 +1681,51 @@ NULL NULL NULL NULL 8 15.625
 
 statement ok
 drop table test
+
+# error message for wrong function signature (Variadic: arbitrary number of args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'concat\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tconcat\(Utf8, ..\)
+SELECT concat();
+
+# error message for wrong function signature (Uniform: t args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tnullif\(Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8, Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8\)
+SELECT nullif(1);
+
+# error message for wrong function signature (Exact: exact number of args of an exact type)
+statement error Error during planning: No function matches the given name and argument types 'pi\(Float64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpi\(\)
+SELECT pi(3.14);
+
+# error message for wrong function signature (Any: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'arrow_typeof\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarrow_typeof\(Any\)
+SELECT arrow_typeof(1, 1);
+
+# error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
+SELECT power(1, 2, 3);
+
+# turn off enable_ident_normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld
+
+# turn on enable_ident_normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld

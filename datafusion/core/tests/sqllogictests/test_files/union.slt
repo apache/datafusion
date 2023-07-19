@@ -204,30 +204,30 @@ physical_plan
 UnionExec
 --ProjectionExec: expr=[id@0 as id, name@1 as name]
 ----CoalesceBatchesExec: target_batch_size=8192
-------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(Column { name: "id", index: 0 }, Column { name: "CAST(t2.id AS Int32)", index: 2 }), (Column { name: "name", index: 1 }, Column { name: "name", index: 1 })]
+------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(id@0, CAST(t2.id AS Int32)@2), (name@1, name@1)]
 --------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Column { name: "id", index: 0 }, Column { name: "name", index: 1 }], 4), input_partitions=4
+------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
 --------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
 ----------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "CAST(t2.id AS Int32)", index: 2 }, Column { name: "name", index: 1 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
 ------------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
 --------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 --ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
 ----ProjectionExec: expr=[id@0 as id, name@1 as name]
 ------CoalesceBatchesExec: target_batch_size=8192
---------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(Column { name: "CAST(t2.id AS Int32)", index: 2 }, Column { name: "id", index: 0 }), (Column { name: "name", index: 1 }, Column { name: "name", index: 1 })]
+--------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Column { name: "CAST(t2.id AS Int32)", index: 2 }, Column { name: "name", index: 1 }], 4), input_partitions=4
+------------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
 --------------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
 ----------------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
 ------------------CoalesceBatchesExec: target_batch_size=8192
---------------------RepartitionExec: partitioning=Hash([Column { name: "id", index: 0 }, Column { name: "name", index: 1 }], 4), input_partitions=4
+--------------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
 ----------------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
 ------------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Column { name: "id", index: 0 }, Column { name: "name", index: 1 }], 4), input_partitions=4
+------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
 --------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 query IT rowsort
@@ -274,24 +274,24 @@ Union
 physical_plan
 InterleaveExec
 --CoalesceBatchesExec: target_batch_size=8192
-----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(Column { name: "name", index: 0 }, Column { name: "name", index: 0 })]
+----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
 ------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "name", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
 --------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 ------CoalesceBatchesExec: target_batch_size=8192
---------RepartitionExec: partitioning=Hash([Column { name: "name", index: 0 }], 4), input_partitions=4
+--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 ----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 --CoalesceBatchesExec: target_batch_size=8192
-----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(Column { name: "name", index: 0 }, Column { name: "name", index: 0 })]
+----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
 ------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "name", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
 --------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 ------CoalesceBatchesExec: target_batch_size=8192
---------RepartitionExec: partitioning=Hash([Column { name: "name", index: 0 }], 4), input_partitions=4
+--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 ----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 # union_upcast_types
@@ -308,7 +308,7 @@ Limit: skip=0, fetch=5
 --------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
---SortPreservingMergeExec: [c9@1 DESC]
+--SortPreservingMergeExec: [c9@1 DESC], fetch=5
 ----UnionExec
 ------SortExec: expr=[c9@1 DESC]
 --------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
@@ -347,16 +347,16 @@ Projection: COUNT(UInt8(1))
 --------TableScan: t2 projection=[name]
 physical_plan
 ProjectionExec: expr=[COUNT(UInt8(1))@1 as COUNT(UInt8(1))]
---AggregateExec: mode=Single, gby=[name@0 as name], aggr=[COUNT(UInt8(1))]
+--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[COUNT(UInt8(1))]
 ----InterleaveExec
 ------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "name", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
 --------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 ------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "name", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
 --------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
@@ -432,13 +432,13 @@ logical_plan
 Sort: t1.c1 ASC NULLS LAST
 --Union
 ----TableScan: t1 projection=[c1]
-----Projection: t2.c1a AS t1.c1
+----Projection: t2.c1a AS c1
 ------TableScan: t2 projection=[c1a]
 physical_plan
 SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 --UnionExec
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
-----ProjectionExec: expr=[c1a@0 as t1.c1]
+----ProjectionExec: expr=[c1a@0 as c1]
 ------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a], output_ordering=[c1a@0 ASC NULLS LAST], has_header=true
 
 statement ok
@@ -446,3 +446,63 @@ drop table t1
 
 statement ok
 drop table t2
+
+# test UNION ALL aliases correctly with aliased columns
+query TT
+explain select 1 a group by a union all select 2 b union all select 3 c
+----
+logical_plan
+Union
+--Projection: Int64(1) AS a
+----Aggregate: groupBy=[[Int64(1)]], aggr=[[]]
+------EmptyRelation
+--Projection: Int64(2) AS a
+----EmptyRelation
+--Projection: Int64(3) AS a
+----EmptyRelation
+physical_plan
+UnionExec
+--ProjectionExec: expr=[Int64(1)@0 as a]
+----AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1)], aggr=[]
+------CoalesceBatchesExec: target_batch_size=8192
+--------RepartitionExec: partitioning=Hash([Int64(1)@0], 4), input_partitions=4
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------AggregateExec: mode=Partial, gby=[1 as Int64(1)], aggr=[]
+--------------EmptyExec: produce_one_row=true
+--ProjectionExec: expr=[2 as a]
+----EmptyExec: produce_one_row=true
+--ProjectionExec: expr=[3 as a]
+----EmptyExec: produce_one_row=true
+
+# test UNION ALL aliases correctly with aliased subquery
+query TT
+explain select count(*) count, n from (select 5 as n) a group by n
+union all
+select x, y from (select 1 as x , max(10) as y) b
+----
+logical_plan
+Union
+--Projection: COUNT(UInt8(1)) AS count, a.n
+----Aggregate: groupBy=[[a.n]], aggr=[[COUNT(UInt8(1))]]
+------SubqueryAlias: a
+--------Projection: Int64(5) AS n
+----------EmptyRelation
+--Projection: b.x AS count, b.y AS n
+----SubqueryAlias: b
+------Projection: Int64(1) AS x, MAX(Int64(10)) AS y
+--------Aggregate: groupBy=[[]], aggr=[[MAX(Int64(10))]]
+----------EmptyRelation
+physical_plan
+UnionExec
+--ProjectionExec: expr=[COUNT(UInt8(1))@1 as count, n@0 as n]
+----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(UInt8(1))]
+------CoalesceBatchesExec: target_batch_size=8192
+--------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=4
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(UInt8(1))]
+--------------ProjectionExec: expr=[5 as n]
+----------------EmptyExec: produce_one_row=true
+--ProjectionExec: expr=[x@0 as count, y@1 as n]
+----ProjectionExec: expr=[1 as x, MAX(Int64(10))@0 as y]
+------AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
+--------EmptyExec: produce_one_row=true

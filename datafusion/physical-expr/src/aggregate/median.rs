@@ -66,6 +66,7 @@ impl AggregateExpr for Median {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(MedianAccumulator {
             data_type: self.data_type.clone(),
+            arrays: vec![],
             all_values: vec![],
         }))
     }
@@ -108,16 +109,21 @@ impl PartialEq<dyn Any> for Median {
 /// The median accumulator accumulates the raw input values
 /// as `ScalarValue`s
 ///
-/// The intermediate state is represented as a List of those scalars
+/// The intermediate state is represented as a List of scalar values updated by
+/// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
+/// in the final evaluation step so that we avoid expensive conversions and
+/// allocations during `update_batch`.
 struct MedianAccumulator {
     data_type: DataType,
+    arrays: Vec<ArrayRef>,
     all_values: Vec<ScalarValue>,
 }
 
 impl Accumulator for MedianAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let state =
-            ScalarValue::new_list(Some(self.all_values.clone()), self.data_type.clone());
+        let all_values = to_scalar_values(&self.arrays)?;
+        let state = ScalarValue::new_list(Some(all_values), self.data_type.clone());
+
         Ok(vec![state])
     }
 
@@ -125,12 +131,9 @@ impl Accumulator for MedianAccumulator {
         assert_eq!(values.len(), 1);
         let array = &values[0];
 
+        // Defer conversions to scalar values to final evaluation.
         assert_eq!(array.data_type(), &self.data_type);
-        self.all_values.reserve(self.all_values.len() + array.len());
-        for index in 0..array.len() {
-            self.all_values
-                .push(ScalarValue::try_from_array(array, index)?);
-        }
+        self.arrays.push(array.clone());
 
         Ok(())
     }
@@ -157,7 +160,14 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        if !self.all_values.iter().any(|v| !v.is_null()) {
+        let batch_values = to_scalar_values(&self.arrays)?;
+
+        if !self
+            .all_values
+            .iter()
+            .chain(batch_values.iter())
+            .any(|v| !v.is_null())
+        {
             return ScalarValue::try_from(&self.data_type);
         }
 
@@ -166,6 +176,7 @@ impl Accumulator for MedianAccumulator {
         let array = ScalarValue::iter_to_array(
             self.all_values
                 .iter()
+                .chain(batch_values.iter())
                 // ignore null values
                 .filter(|v| !v.is_null())
                 .cloned(),
@@ -196,6 +207,9 @@ impl Accumulator for MedianAccumulator {
                 ScalarValue::UInt64(Some(v)) => ScalarValue::UInt64(Some(v / 2)),
                 ScalarValue::Float32(Some(v)) => ScalarValue::Float32(Some(v / 2.0)),
                 ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(v / 2.0)),
+                ScalarValue::Decimal128(Some(v), p, s) => {
+                    ScalarValue::Decimal128(Some(v / 2), p, s)
+                }
                 v => {
                     return Err(DataFusionError::Internal(format!(
                         "Unsupported type in MedianAccumulator: {v:?}"
@@ -211,11 +225,28 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + ScalarValue::size_of_vec(&self.all_values)
+        let arrays_size: usize = self.arrays.iter().map(|a| a.len()).sum();
+
+        std::mem::size_of_val(self)
+            + ScalarValue::size_of_vec(&self.all_values)
+            + arrays_size
             - std::mem::size_of_val(&self.all_values)
             + self.data_type.size()
             - std::mem::size_of_val(&self.data_type)
     }
+}
+
+fn to_scalar_values(arrays: &[ArrayRef]) -> Result<Vec<ScalarValue>> {
+    let num_values: usize = arrays.iter().map(|a| a.len()).sum();
+    let mut all_values = Vec::with_capacity(num_values);
+
+    for array in arrays {
+        for index in 0..array.len() {
+            all_values.push(ScalarValue::try_from_array(&array, index)?);
+        }
+    }
+
+    Ok(all_values)
 }
 
 /// Given a returns `array[indicies[indicie_index]]` as a `ScalarValue`
@@ -229,4 +260,141 @@ fn scalar_at_index(
         .try_into()
         .expect("Convert uint32 to usize");
     ScalarValue::try_from_array(array, array_index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::col;
+    use crate::expressions::tests::aggregate;
+    use crate::generic_test_op;
+    use arrow::record_batch::RecordBatch;
+    use arrow::{array::*, datatypes::*};
+    use datafusion_common::Result;
+
+    #[test]
+    fn median_decimal() -> Result<()> {
+        // test median
+        let array: ArrayRef = Arc::new(
+            (1..7)
+                .map(Some)
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(10, 4)?,
+        );
+
+        generic_test_op!(
+            array,
+            DataType::Decimal128(10, 4),
+            Median,
+            ScalarValue::Decimal128(Some(3), 10, 4)
+        )
+    }
+
+    #[test]
+    fn median_decimal_with_nulls() -> Result<()> {
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(|i| if i == 2 { None } else { Some(i) })
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(10, 4)?,
+        );
+        generic_test_op!(
+            array,
+            DataType::Decimal128(10, 4),
+            Median,
+            ScalarValue::Decimal128(Some(3), 10, 4)
+        )
+    }
+
+    #[test]
+    fn median_decimal_all_nulls() -> Result<()> {
+        // test median
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat::<Option<i128>>(None)
+                .take(6)
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(10, 4)?,
+        );
+        generic_test_op!(
+            array,
+            DataType::Decimal128(10, 4),
+            Median,
+            ScalarValue::Decimal128(None, 10, 4)
+        )
+    }
+
+    #[test]
+    fn median_i32_odd() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3_i32))
+    }
+
+    #[test]
+    fn median_i32_even() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3_i32))
+    }
+
+    #[test]
+    fn median_i32_with_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
+        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3i32))
+    }
+
+    #[test]
+    fn median_i32_all_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        generic_test_op!(a, DataType::Int32, Median, ScalarValue::Int32(None))
+    }
+
+    #[test]
+    fn median_u32_odd() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        generic_test_op!(a, DataType::UInt32, Median, ScalarValue::from(3u32))
+    }
+
+    #[test]
+    fn median_u32_even() -> Result<()> {
+        let a: ArrayRef = Arc::new(UInt32Array::from(vec![
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32, 6_u32,
+        ]));
+        generic_test_op!(a, DataType::UInt32, Median, ScalarValue::from(3u32))
+    }
+
+    #[test]
+    fn median_f32_odd() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        generic_test_op!(a, DataType::Float32, Median, ScalarValue::from(3_f32))
+    }
+
+    #[test]
+    fn median_f32_even() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float32Array::from(vec![
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32, 6_f32,
+        ]));
+        generic_test_op!(a, DataType::Float32, Median, ScalarValue::from(3.5_f32))
+    }
+
+    #[test]
+    fn median_f64_odd() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        generic_test_op!(a, DataType::Float64, Median, ScalarValue::from(3_f64))
+    }
+
+    #[test]
+    fn median_f64_even() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64, 6_f64,
+        ]));
+        generic_test_op!(a, DataType::Float64, Median, ScalarValue::from(3.5_f64))
+    }
 }

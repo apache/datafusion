@@ -38,7 +38,6 @@ use crate::{
     logical_expr::Operator,
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
-use arrow::compute::DEFAULT_CAST_OPTIONS;
 use arrow::record_batch::RecordBatchOptions;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
@@ -549,7 +548,7 @@ fn rewrite_expr_to_prunable(
         let left = Arc::new(phys_expr::CastExpr::new(
             left,
             cast.cast_type().clone(),
-            DEFAULT_CAST_OPTIONS,
+            None,
         ));
         Ok((left, op, right))
     } else if let Some(try_cast) =
@@ -934,7 +933,6 @@ pub(crate) enum StatisticsType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
     use crate::logical_expr::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::array::Decimal128Array;
@@ -948,6 +946,7 @@ mod tests {
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use std::collections::HashMap;
+    use std::ops::{Not, Rem};
 
     #[derive(Debug)]
     /// Mock statistic provider for tests
@@ -1298,7 +1297,7 @@ mod tests {
 
         // Note the statistics return an invalid UTF-8 sequence which will be converted to null
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(BinaryArray::from_slice([&[255u8] as &[u8]]))),
+            min_values: Some(Arc::new(BinaryArray::from(vec![&[255u8] as &[u8]]))),
             max_values: None,
             num_containers: 1,
         };
@@ -1524,9 +1523,7 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test OR operator joining supported c1 < 1 expression and unsupported c2 % 2 = 0 expression
-        let expr = col("c1")
-            .lt(lit(1))
-            .or(col("c2").modulus(lit(2)).eq(lit(0)));
+        let expr = col("c1").lt(lit(1)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expected_expr = "true";
         let predicate_expr = test_build_predicate_expression(
             &expr,

@@ -21,8 +21,8 @@ use std::task::Poll;
 
 use arrow::record_batch::RecordBatch;
 
-use super::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time, Timestamp};
-use crate::error::Result;
+use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
+use datafusion_common::Result;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator
@@ -43,22 +43,13 @@ use crate::error::Result;
 /// // when operator is finished:
 /// baseline_metrics.done();
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BaselineMetrics {
     /// end_time is set when `ExecutionMetrics::done()` is called
     end_time: Timestamp,
 
     /// amount of time the operator was actively trying to use the CPU
     elapsed_compute: Time,
-
-    /// count of spills during the execution of the operator
-    spill_count: Count,
-
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: Count,
-
-    /// current memory usage for the operator
-    mem_used: Gauge,
 
     /// output rows: the total output rows
     output_rows: Count,
@@ -73,37 +64,26 @@ impl BaselineMetrics {
         Self {
             end_time: MetricBuilder::new(metrics).end_timestamp(partition),
             elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
-            spill_count: MetricBuilder::new(metrics).spill_count(partition),
-            spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
-            mem_used: MetricBuilder::new(metrics).mem_used(partition),
             output_rows: MetricBuilder::new(metrics).output_rows(partition),
+        }
+    }
+
+    /// Returns a [`BaselineMetrics`] that updates the same `elapsed_compute` ignoring
+    /// all other metrics
+    ///
+    /// This is useful when an operator offloads some of its intermediate work to separate tasks
+    /// that as a result won't be recorded by [`Self::record_poll`]
+    pub fn intermediate(&self) -> BaselineMetrics {
+        Self {
+            end_time: Default::default(),
+            elapsed_compute: self.elapsed_compute.clone(),
+            output_rows: Default::default(),
         }
     }
 
     /// return the metric for cpu time spend in this operator
     pub fn elapsed_compute(&self) -> &Time {
         &self.elapsed_compute
-    }
-
-    /// return the metric for the total number of spills triggered during execution
-    pub fn spill_count(&self) -> &Count {
-        &self.spill_count
-    }
-
-    /// return the metric for the total spilled bytes during execution
-    pub fn spilled_bytes(&self) -> &Count {
-        &self.spilled_bytes
-    }
-
-    /// return the metric for current memory usage
-    pub fn mem_used(&self) -> &Gauge {
-        &self.mem_used
-    }
-
-    /// Record a spill of `spilled_bytes` size.
-    pub fn record_spill(&self, spilled_bytes: usize) {
-        self.spill_count.add(1);
-        self.spilled_bytes.add(spilled_bytes);
     }
 
     /// return the metric for the total number of output rows produced

@@ -27,7 +27,9 @@ use crate::error::Result;
 use crate::physical_optimizer::join_selection::swap_hash_join;
 use crate::physical_optimizer::pipeline_checker::PipelineStatePropagator;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
+use crate::physical_plan::joins::{
+    HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
+};
 use crate::physical_plan::ExecutionPlan;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::DataFusionError;
@@ -101,6 +103,7 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.filter().cloned(),
                 hash_join.join_type(),
                 hash_join.null_equals_null(),
+                StreamJoinPartitionMode::Partitioned,
             )
             .map(|exec| {
                 input.plan = Arc::new(exec) as _;
@@ -278,6 +281,7 @@ mod hash_join_tests {
     use crate::test_util::UnboundedExec;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::utils::DataPtr;
     use std::sync::Arc;
 
     struct TestCase {
@@ -610,7 +614,6 @@ mod hash_join_tests {
         Ok(())
     }
 
-    #[allow(clippy::vtable_address_comparisons)]
     async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         let left_unbounded = t.initial_sources_unbounded.0 == SourceType::Unbounded;
         let right_unbounded = t.initial_sources_unbounded.1 == SourceType::Unbounded;
@@ -677,8 +680,8 @@ mod hash_join_tests {
             ..
         }) = plan.as_any().downcast_ref::<HashJoinExec>()
         {
-            let left_changed = Arc::ptr_eq(left, &right_exec);
-            let right_changed = Arc::ptr_eq(right, &left_exec);
+            let left_changed = Arc::data_ptr_eq(left, &right_exec);
+            let right_changed = Arc::data_ptr_eq(right, &left_exec);
             // If this is not equal, we have a bigger problem.
             assert_eq!(left_changed, right_changed);
             assert_eq!(

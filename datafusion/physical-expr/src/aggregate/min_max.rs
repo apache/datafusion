@@ -21,19 +21,28 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{
+    DataType, Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use arrow::{
     array::{
-        ArrayRef, Date32Array, Date64Array, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
+        ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
         UInt64Array, UInt8Array,
     },
     datatypes::Field,
+};
+use arrow_array::types::{
+    Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
@@ -86,6 +95,48 @@ impl Max {
         }
     }
 }
+/// Creates a [`PrimitiveGroupsAccumulator`] for computing `MAX`
+/// the specified [`ArrowPrimitiveType`].
+///
+/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
+macro_rules! instantiate_max_accumulator {
+    ($SELF:expr, $NATIVE:ident, $PRIMTYPE:ident) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
+                &$SELF.data_type,
+                |cur, new| {
+                    if *cur < new {
+                        *cur = new
+                    }
+                },
+            )
+            // Initialize each accumulator to $NATIVE::MIN
+            .with_starting_value($NATIVE::MIN),
+        ))
+    }};
+}
+
+/// Creates a [`PrimitiveGroupsAccumulator`] for computing `MIN`
+/// the specified [`ArrowPrimitiveType`].
+///
+///
+/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
+macro_rules! instantiate_min_accumulator {
+    ($SELF:expr, $NATIVE:ident, $PRIMTYPE:ident) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
+                &$SELF.data_type,
+                |cur, new| {
+                    if *cur > new {
+                        *cur = new
+                    }
+                },
+            )
+            // Initialize each accumulator to $NATIVE::MAX
+            .with_starting_value($NATIVE::MAX),
+        ))
+    }};
+}
 
 impl AggregateExpr for Max {
     /// Return a reference to Any that can be used for downcasting
@@ -125,8 +176,26 @@ impl AggregateExpr for Max {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
+    fn groups_accumulator_supported(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self.data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
+        )
     }
 
     fn create_row_accumulator(
@@ -137,6 +206,66 @@ impl AggregateExpr for Max {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use DataType::*;
+        use TimeUnit::*;
+
+        match self.data_type {
+            Int8 => instantiate_max_accumulator!(self, i8, Int8Type),
+            Int16 => instantiate_max_accumulator!(self, i16, Int16Type),
+            Int32 => instantiate_max_accumulator!(self, i32, Int32Type),
+            Int64 => instantiate_max_accumulator!(self, i64, Int64Type),
+            UInt8 => instantiate_max_accumulator!(self, u8, UInt8Type),
+            UInt16 => instantiate_max_accumulator!(self, u16, UInt16Type),
+            UInt32 => instantiate_max_accumulator!(self, u32, UInt32Type),
+            UInt64 => instantiate_max_accumulator!(self, u64, UInt64Type),
+            Float32 => {
+                instantiate_max_accumulator!(self, f32, Float32Type)
+            }
+            Float64 => {
+                instantiate_max_accumulator!(self, f64, Float64Type)
+            }
+            Date32 => instantiate_max_accumulator!(self, i32, Date32Type),
+            Date64 => instantiate_max_accumulator!(self, i64, Date64Type),
+            Time32(Second) => {
+                instantiate_max_accumulator!(self, i32, Time32SecondType)
+            }
+            Time32(Millisecond) => {
+                instantiate_max_accumulator!(self, i32, Time32MillisecondType)
+            }
+            Time64(Microsecond) => {
+                instantiate_max_accumulator!(self, i64, Time64MicrosecondType)
+            }
+            Time64(Nanosecond) => {
+                instantiate_max_accumulator!(self, i64, Time64NanosecondType)
+            }
+            Timestamp(Second, _) => {
+                instantiate_max_accumulator!(self, i64, TimestampSecondType)
+            }
+            Timestamp(Millisecond, _) => {
+                instantiate_max_accumulator!(self, i64, TimestampMillisecondType)
+            }
+            Timestamp(Microsecond, _) => {
+                instantiate_max_accumulator!(self, i64, TimestampMicrosecondType)
+            }
+            Timestamp(Nanosecond, _) => {
+                instantiate_max_accumulator!(self, i64, TimestampNanosecondType)
+            }
+            Decimal128(_, _) => {
+                instantiate_max_accumulator!(self, i128, Decimal128Type)
+            }
+
+            // It would be nice to have a fast implementation for Strings as well
+            // https://github.com/apache/arrow-datafusion/issues/6906
+
+            // This is only reached if groups_accumulator_supported is out of sync
+            _ => Err(DataFusionError::Internal(format!(
+                "GroupsAccumulator not supported for max({})",
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -290,6 +419,9 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::LargeUtf8 => {
             typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, min_string)
         }
+        DataType::Boolean => {
+            typed_min_max_batch!(values, BooleanArray, Boolean, min_boolean)
+        }
         _ => min_max_batch!(values, min),
     })
 }
@@ -302,6 +434,9 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::LargeUtf8 => {
             typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, max_string)
+        }
+        DataType::Boolean => {
+            typed_min_max_batch!(values, BooleanArray, Boolean, max_boolean)
         }
         _ => min_max_batch!(values, max),
     })
@@ -385,6 +520,9 @@ macro_rules! min_max {
                     (lhs, rhs)
                 )));
                 }
+            }
+            (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
+                typed_min_max!(lhs, rhs, Boolean, $OP)
             }
             (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
                 typed_min_max!(lhs, rhs, Float64, $OP)
@@ -532,6 +670,9 @@ macro_rules! min_max {
 macro_rules! min_max_v2 {
     ($INDEX:ident, $ACC:ident, $SCALAR:expr, $OP:ident) => {{
         Ok(match $SCALAR {
+            ScalarValue::Boolean(rhs) => {
+                typed_min_max_v2!($INDEX, $ACC, rhs, bool, $OP)
+            }
             ScalarValue::Float64(rhs) => {
                 typed_min_max_v2!($INDEX, $ACC, rhs, f64, $OP)
             }
@@ -687,6 +828,10 @@ impl Accumulator for SlidingMaxAccumulator {
         Ok(self.max.clone())
     }
 
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
     }
@@ -813,10 +958,6 @@ impl AggregateExpr for Min {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -825,6 +966,83 @@ impl AggregateExpr for Min {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self.data_type,
+            Int8 | Int16
+                | Int32
+                | Int64
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Float32
+                | Float64
+                | Decimal128(_, _)
+                | Date32
+                | Date64
+                | Time32(_)
+                | Time64(_)
+                | Timestamp(_, _)
+        )
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use DataType::*;
+        use TimeUnit::*;
+        match self.data_type {
+            Int8 => instantiate_min_accumulator!(self, i8, Int8Type),
+            Int16 => instantiate_min_accumulator!(self, i16, Int16Type),
+            Int32 => instantiate_min_accumulator!(self, i32, Int32Type),
+            Int64 => instantiate_min_accumulator!(self, i64, Int64Type),
+            UInt8 => instantiate_min_accumulator!(self, u8, UInt8Type),
+            UInt16 => instantiate_min_accumulator!(self, u16, UInt16Type),
+            UInt32 => instantiate_min_accumulator!(self, u32, UInt32Type),
+            UInt64 => instantiate_min_accumulator!(self, u64, UInt64Type),
+            Float32 => {
+                instantiate_min_accumulator!(self, f32, Float32Type)
+            }
+            Float64 => {
+                instantiate_min_accumulator!(self, f64, Float64Type)
+            }
+            Date32 => instantiate_min_accumulator!(self, i32, Date32Type),
+            Date64 => instantiate_min_accumulator!(self, i64, Date64Type),
+            Time32(Second) => {
+                instantiate_min_accumulator!(self, i32, Time32SecondType)
+            }
+            Time32(Millisecond) => {
+                instantiate_min_accumulator!(self, i32, Time32MillisecondType)
+            }
+            Time64(Microsecond) => {
+                instantiate_min_accumulator!(self, i64, Time64MicrosecondType)
+            }
+            Time64(Nanosecond) => {
+                instantiate_min_accumulator!(self, i64, Time64NanosecondType)
+            }
+            Timestamp(Second, _) => {
+                instantiate_min_accumulator!(self, i64, TimestampSecondType)
+            }
+            Timestamp(Millisecond, _) => {
+                instantiate_min_accumulator!(self, i64, TimestampMillisecondType)
+            }
+            Timestamp(Microsecond, _) => {
+                instantiate_min_accumulator!(self, i64, TimestampMicrosecondType)
+            }
+            Timestamp(Nanosecond, _) => {
+                instantiate_min_accumulator!(self, i64, TimestampNanosecondType)
+            }
+            Decimal128(_, _) => {
+                instantiate_min_accumulator!(self, i128, Decimal128Type)
+            }
+            // This is only reached if groups_accumulator_supported is out of sync
+            _ => Err(DataFusionError::Internal(format!(
+                "GroupsAccumulator not supported for min({})",
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -944,6 +1162,10 @@ impl Accumulator for SlidingMinAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.min.clone())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -1428,5 +1650,79 @@ mod tests {
             Max,
             ScalarValue::Time64Nanosecond(Some(5))
         )
+    }
+
+    #[test]
+    fn max_bool() -> Result<()> {
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, false]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(false))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, true]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, true, false]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(Vec::<bool>::new()));
+        generic_test_op!(
+            a,
+            DataType::Boolean,
+            Max,
+            ScalarValue::from(None as Option<bool>)
+        )?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![None as Option<bool>]));
+        generic_test_op!(
+            a,
+            DataType::Boolean,
+            Max,
+            ScalarValue::from(None as Option<bool>)
+        )?;
+
+        let a: ArrayRef =
+            Arc::new(BooleanArray::from(vec![None, Some(true), Some(false)]));
+        generic_test_op!(a, DataType::Boolean, Max, ScalarValue::from(true))?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn min_bool() -> Result<()> {
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, false]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, true]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(true))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![false, true, false]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(Vec::<bool>::new()));
+        generic_test_op!(
+            a,
+            DataType::Boolean,
+            Min,
+            ScalarValue::from(None as Option<bool>)
+        )?;
+
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![None as Option<bool>]));
+        generic_test_op!(
+            a,
+            DataType::Boolean,
+            Min,
+            ScalarValue::from(None as Option<bool>)
+        )?;
+
+        let a: ArrayRef =
+            Arc::new(BooleanArray::from(vec![None, Some(true), Some(false)]));
+        generic_test_op!(a, DataType::Boolean, Min, ScalarValue::from(false))?;
+
+        Ok(())
     }
 }

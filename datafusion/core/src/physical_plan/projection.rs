@@ -26,21 +26,23 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::Result;
+use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 
+use datafusion_physical_expr::equivalence::update_ordering_equivalence_with_cast;
+use datafusion_physical_expr::expressions::CastExpr;
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, OrderingEquivalenceProperties,
@@ -156,6 +158,33 @@ impl ProjectionExec {
     }
 }
 
+impl DisplayAs for ProjectionExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let expr: Vec<String> = self
+                    .expr
+                    .iter()
+                    .map(|(e, alias)| {
+                        let e = e.to_string();
+                        if &e != alias {
+                            format!("{e} as {alias}")
+                        } else {
+                            e
+                        }
+                    })
+                    .collect();
+
+                write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for ProjectionExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -218,11 +247,29 @@ impl ExecutionPlan for ProjectionExec {
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        if self.output_ordering.is_none() {
+            // If there is no output ordering, return an "empty" equivalence set:
+            return new_properties;
+        }
+
+        let mut input_oeq = self.input().ordering_equivalence_properties();
+        // Stores cast expression and its `Column` version in the output:
+        let mut cast_exprs: Vec<(CastExpr, Column)> = vec![];
+        for (idx, (expr, name)) in self.expr.iter().enumerate() {
+            if let Some(cast_expr) = expr.as_any().downcast_ref::<CastExpr>() {
+                let target_col = Column::new(name, idx);
+                cast_exprs.push((cast_expr.clone(), target_col));
+            }
+        }
+
+        update_ordering_equivalence_with_cast(&cast_exprs, &mut input_oeq);
+
         project_ordering_equivalence_properties(
-            self.input.ordering_equivalence_properties(),
+            input_oeq,
             &self.columns_map,
             &mut new_properties,
         );
+
         new_properties
     }
 
@@ -258,31 +305,6 @@ impl ExecutionPlan for ProjectionExec {
             input: self.input.execute(partition, context)?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                let expr: Vec<String> = self
-                    .expr
-                    .iter()
-                    .map(|(e, alias)| {
-                        let e = e.to_string();
-                        if &e != alias {
-                            format!("{e} as {alias}")
-                        } else {
-                            e
-                        }
-                    })
-                    .collect();
-
-                write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -407,9 +429,9 @@ mod tests {
     use crate::physical_plan::common::collect;
     use crate::physical_plan::expressions::{self, col};
     use crate::prelude::SessionContext;
-    use crate::scalar::ScalarValue;
     use crate::test::{self};
     use crate::test_util;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::binary;
     use futures::future;

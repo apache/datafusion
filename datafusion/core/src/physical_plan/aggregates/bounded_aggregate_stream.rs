@@ -31,9 +31,6 @@ use futures::stream::{Stream, StreamExt};
 use hashbrown::raw::RawTable;
 use itertools::izip;
 
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     AggregationOrdering, GroupByOrderMode, PhysicalGroupBy, RowAccumulatorItem,
@@ -41,6 +38,9 @@ use crate::physical_plan::aggregates::{
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 
 use crate::physical_plan::aggregates::utils::{
     aggr_state_schema, col_to_scalar, get_at_indices, get_optional_filters,
@@ -58,6 +58,8 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
+
+use super::AggregateExec;
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
@@ -113,31 +115,32 @@ pub(crate) struct BoundedAggregateStream {
     /// first element in the array corresponds to normal accumulators
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
+    /// Information on how the input of this group is ordered
     aggregation_ordering: AggregationOrdering,
+    /// Has this stream finished producing output
     is_end: bool,
 }
 
 impl BoundedAggregateStream {
     /// Create a new BoundedAggregateStream
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        mode: AggregateMode,
-        schema: SchemaRef,
-        group_by: PhysicalGroupBy,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        input: SendableRecordBatchStream,
-        baseline_metrics: BaselineMetrics,
-        batch_size: usize,
-        scalar_update_factor: usize,
+        agg: &AggregateExec,
         context: Arc<TaskContext>,
         partition: usize,
-        // Stores algorithm mode and output ordering
-        aggregation_ordering: AggregationOrdering,
+        aggregation_ordering: AggregationOrdering, // Stores algorithm mode and output ordering
     ) -> Result<Self> {
+        let agg_schema = Arc::clone(&agg.schema);
+        let agg_group_by = agg.group_by.clone();
+        let agg_filter_expr = agg.filter_expr.clone();
+
+        let batch_size = context.session_config().batch_size();
+        let scalar_update_factor = context.session_config().agg_scalar_update_factor();
+        let input = agg.input.execute(partition, Arc::clone(&context))?;
+        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let mut start_idx = group_by.expr.len();
+        let mut start_idx = agg_group_by.expr.len();
         let mut row_aggr_expr = vec![];
         let mut row_agg_indices = vec![];
         let mut row_aggregate_expressions = vec![];
@@ -150,19 +153,22 @@ impl BoundedAggregateStream {
         // Assuming create_schema() always puts group columns in front of aggregation columns, we set
         // col_idx_base to the group expression count.
         let all_aggregate_expressions =
-            aggregates::aggregate_expressions(&aggr_expr, &mode, start_idx)?;
-        let filter_expressions = match mode {
-            AggregateMode::Partial | AggregateMode::Single => filter_expr,
+            aggregates::aggregate_expressions(&agg.aggr_expr, &agg.mode, start_idx)?;
+        let filter_expressions = match agg.mode {
+            AggregateMode::Partial
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; aggr_expr.len()]
+                vec![None; agg.aggr_expr.len()]
             }
         };
-        for ((expr, others), filter) in aggr_expr
+        for ((expr, others), filter) in agg
+            .aggr_expr
             .iter()
             .zip(all_aggregate_expressions.into_iter())
             .zip(filter_expressions.into_iter())
         {
-            let n_fields = match mode {
+            let n_fields = match agg.mode {
                 // In partial aggregation, we keep additional fields in order to successfully
                 // merge aggregation results downstream.
                 AggregateMode::Partial => expr.state_fields()?.len(),
@@ -191,7 +197,7 @@ impl BoundedAggregateStream {
 
         let row_aggr_schema = aggr_state_schema(&row_aggr_expr);
 
-        let group_schema = group_schema(&schema, group_by.expr.len());
+        let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
         let row_converter = RowConverter::new(
             group_schema
                 .fields()
@@ -214,9 +220,9 @@ impl BoundedAggregateStream {
         let exec_state = ExecutionState::ReadingInput;
 
         Ok(BoundedAggregateStream {
-            schema: Arc::clone(&schema),
+            schema: agg_schema,
             input,
-            mode,
+            mode: agg.mode,
             normal_aggr_expr,
             normal_aggregate_expressions,
             normal_filter_expressions,
@@ -226,7 +232,7 @@ impl BoundedAggregateStream {
             row_converter,
             row_aggr_schema,
             row_aggr_layout,
-            group_by,
+            group_by: agg_group_by,
             aggr_state,
             exec_state,
             baseline_metrics,
@@ -273,11 +279,11 @@ impl Stream for BoundedAggregateStream {
                         }
                         // inner had error, return to caller
                         Some(Err(e)) => return Poll::Ready(Some(Err(e))),
-                        // inner is done, producing output
+                        // inner is done, switch to producing output
                         None => {
-                            for element in self.aggr_state.ordered_group_states.iter_mut()
-                            {
-                                element.status = GroupStatus::CanEmit;
+                            let states = self.aggr_state.ordered_group_states.iter_mut();
+                            for state in states {
+                                state.status = GroupStatus::CanEmit;
                             }
                             self.exec_state = ExecutionState::ProducingOutput;
                         }
@@ -295,6 +301,7 @@ impl Stream for BoundedAggregateStream {
                         Ok(Some(result)) => {
                             let batch = result.record_output(&self.baseline_metrics);
                             self.row_group_skip_position += batch.num_rows();
+                            // try to read more input
                             self.exec_state = ExecutionState::ReadingInput;
                             self.prune();
                             return Poll::Ready(Some(Ok(batch)));
@@ -323,18 +330,22 @@ impl RecordBatchStream for BoundedAggregateStream {
 /// indices for a group. This information is used when executing streaming
 /// GROUP BY calculations.
 struct GroupOrderInfo {
+    /// The group by key
     owned_row: OwnedRow,
+    /// the hash value of the group
     hash: u64,
+    /// the range of row indices in the input batch that belong to this group
     range: Range<usize>,
 }
 
 impl BoundedAggregateStream {
-    // Update the aggr_state according to group_by values (result of group_by_expressions) when group by
-    // expressions are fully ordered.
-    fn update_ordered_group_state(
+    /// Update the aggr_state hash table according to group_by values
+    /// (result of group_by_expressions) when group by expressions are
+    /// fully ordered.
+    fn update_fully_ordered_group_state(
         &mut self,
         group_values: &[ArrayRef],
-        per_group_indices: Vec<GroupOrderInfo>,
+        per_group_order_info: Vec<GroupOrderInfo>,
         allocated: &mut usize,
     ) -> Result<Vec<usize>> {
         // 1.1 construct the key from the group values
@@ -346,7 +357,7 @@ impl BoundedAggregateStream {
 
         let AggregationState {
             map: row_map,
-            ordered_group_states: row_group_states,
+            ordered_group_states,
             ..
         } = &mut self.aggr_state;
 
@@ -354,13 +365,13 @@ impl BoundedAggregateStream {
             owned_row,
             hash,
             range,
-        } in per_group_indices
+        } in per_group_order_info
         {
             let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                let ordered_group_state = &row_group_states[*group_idx];
+                let ordered_group_state = &ordered_group_states[*group_idx];
                 let group_state = &ordered_group_state.group_state;
                 owned_row.row() == group_state.group_by_values.row()
             });
@@ -368,7 +379,7 @@ impl BoundedAggregateStream {
             match entry {
                 // Existing entry for this group value
                 Some((_hash, group_idx)) => {
-                    let group_state = &mut row_group_states[*group_idx].group_state;
+                    let group_state = &mut ordered_group_states[*group_idx].group_state;
 
                     // 1.3
                     if group_state.indices.is_empty() {
@@ -383,6 +394,7 @@ impl BoundedAggregateStream {
                 None => {
                     let accumulator_set =
                         aggregates::create_accumulators(&self.normal_aggr_expr)?;
+                    // Save the value of the ordering columns as Vec<ScalarValue>
                     let row = get_row_at_idx(group_values, range.start)?;
                     let ordered_columns = self
                         .aggregation_ordering
@@ -390,6 +402,7 @@ impl BoundedAggregateStream {
                         .iter()
                         .map(|idx| row[*idx].clone())
                         .collect::<Vec<_>>();
+
                     // Add new entry to group_states and save newly created index
                     let group_state = GroupState {
                         group_by_values: owned_row,
@@ -401,12 +414,11 @@ impl BoundedAggregateStream {
                         indices: (range.start as u32..range.end as u32)
                             .collect::<Vec<_>>(), // 1.3
                     };
-                    let group_idx = row_group_states.len();
+                    let group_idx = ordered_group_states.len();
 
                     // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
@@ -430,10 +442,10 @@ impl BoundedAggregateStream {
                     let ordered_group_state = OrderedGroupState {
                         group_state,
                         ordered_columns,
-                        status: GroupStatus::GroupProgress,
+                        status: GroupStatus::GroupInProgress,
                         hash,
                     };
-                    row_group_states.push_accounted(ordered_group_state, allocated);
+                    ordered_group_states.push_accounted(ordered_group_state, allocated);
 
                     groups_with_rows.push(group_idx);
                 }
@@ -512,8 +524,7 @@ impl BoundedAggregateStream {
 
                     // NOTE: do NOT include the `GroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
@@ -538,7 +549,7 @@ impl BoundedAggregateStream {
                     let ordered_group_state = OrderedGroupState {
                         group_state,
                         ordered_columns,
-                        status: GroupStatus::GroupProgress,
+                        status: GroupStatus::GroupInProgress,
                         hash,
                     };
                     group_states.push_accounted(ordered_group_state, allocated);
@@ -590,7 +601,9 @@ impl BoundedAggregateStream {
                         state_accessor
                             .point_to(0, group_state.aggregation_buffer.as_mut_slice());
                         match self.mode {
-                            AggregateMode::Partial | AggregateMode::Single => {
+                            AggregateMode::Partial
+                            | AggregateMode::Single
+                            | AggregateMode::SinglePartitioned => {
                                 accumulator.update_batch(&values, &mut state_accessor)
                             }
                             AggregateMode::FinalPartitioned | AggregateMode::Final => {
@@ -613,7 +626,9 @@ impl BoundedAggregateStream {
                         )?;
                         let size_pre = accumulator.size();
                         let res = match self.mode {
-                            AggregateMode::Partial | AggregateMode::Single => {
+                            AggregateMode::Partial
+                            | AggregateMode::Single
+                            | AggregateMode::SinglePartitioned => {
                                 accumulator.update_batch(&values)
                             }
                             AggregateMode::FinalPartitioned | AggregateMode::Final => {
@@ -707,6 +722,7 @@ impl BoundedAggregateStream {
 
         let row_converter_size_pre = self.row_converter.size();
         for group_values in &group_by_values {
+            // If the input is fully sorted on its grouping keys
             let groups_with_rows = if let AggregationOrdering {
                 mode: GroupByOrderMode::FullyOrdered,
                 order_indices,
@@ -727,8 +743,9 @@ impl BoundedAggregateStream {
                     })
                     .collect::<Vec<_>>();
                 let n_rows = group_rows.num_rows();
+                // determine the boundaries between groups
                 let ranges = evaluate_partition_ranges(n_rows, &sort_column)?;
-                let per_group_indices = ranges
+                let per_group_order_info = ranges
                     .into_iter()
                     .map(|range| GroupOrderInfo {
                         owned_row: group_rows.row(range.start).owned(),
@@ -736,9 +753,9 @@ impl BoundedAggregateStream {
                         range,
                     })
                     .collect::<Vec<_>>();
-                self.update_ordered_group_state(
+                self.update_fully_ordered_group_state(
                     group_values,
-                    per_group_indices,
+                    per_group_order_info,
                     &mut allocated,
                 )?
             } else {
@@ -835,22 +852,30 @@ impl BoundedAggregateStream {
     }
 }
 
+/// Tracks the state of the ordered grouping
 #[derive(Debug, PartialEq)]
 enum GroupStatus {
-    // `GroupProgress` means data for current group is not complete. New data may arrive.
-    GroupProgress,
-    // `CanEmit` means data for current group is completed. And its result can emitted.
+    /// Data for current group is not complete, and new data may yet
+    /// arrive.
+    GroupInProgress,
+    /// Data for current group is completed, and its result can emitted.
     CanEmit,
-    // Emitted means that result for the groups is outputted. Group can be pruned from state.
+    /// Result for the groups has been successfully emitted, and group
+    /// state can be pruned.
     Emitted,
 }
 
-/// The state that is built for each output group.
+/// Information about the order of the state that is built for each
+/// output group.
 #[derive(Debug)]
 pub struct OrderedGroupState {
+    /// Aggregate values
     group_state: GroupState,
+    /// The actual value of the ordered columns for this group
     ordered_columns: Vec<ScalarValue>,
+    /// Can we emit this group?
     status: GroupStatus,
+    /// Hash value of the group
     hash: u64,
 }
 
@@ -883,16 +908,23 @@ impl std::fmt::Debug for AggregationState {
 }
 
 impl BoundedAggregateStream {
-    /// Prune the groups from the `self.aggr_state.group_states` which are in
-    /// `GroupStatus::Emitted`(this status means that result of this group emitted/outputted already, and
-    /// we are sure that these groups cannot receive new rows.) status.
+    /// Prune the groups from `[Self::ordered_group_states]` which are in
+    /// [`GroupStatus::Emitted`].
+    ///
+    /// Emitted means that the result of this group has already been
+    /// emitted, and we are sure that these groups can not receive new
+    /// rows.
     fn prune(&mut self) {
+        // clear out emitted groups
         let n_partition = self.aggr_state.ordered_group_states.len();
         self.aggr_state
             .ordered_group_states
             .retain(|elem| elem.status != GroupStatus::Emitted);
+
         let n_partition_new = self.aggr_state.ordered_group_states.len();
         let n_pruned = n_partition - n_partition_new;
+
+        // update hash table with the new indexes of the remaining groups
         self.aggr_state.map.clear();
         for (idx, item) in self.aggr_state.ordered_group_states.iter().enumerate() {
             self.aggr_state
@@ -920,7 +952,9 @@ impl BoundedAggregateStream {
         );
         let group_state_chunk =
             &self.aggr_state.ordered_group_states[skip_items..end_idx];
-        // Consider only the groups that can be emitted. (The ones we are sure that will not receive new entry.)
+
+        // Consider only the groups that can be emitted. (The ones we
+        // are sure that will not receive new entry.)
         let group_state_chunk = group_state_chunk
             .iter()
             .filter(|item| item.status == GroupStatus::CanEmit)
@@ -945,7 +979,8 @@ impl BoundedAggregateStream {
             }
             AggregateMode::Final
             | AggregateMode::FinalPartitioned
-            | AggregateMode::Single => {
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => {
                 let mut results = vec![];
                 for (idx, acc) in self.row_accumulators.iter().enumerate() {
                     let mut state_accessor = RowAccessor::new(&self.row_aggr_schema);
@@ -988,7 +1023,8 @@ impl BoundedAggregateStream {
                     ),
                     AggregateMode::Final
                     | AggregateMode::FinalPartitioned
-                    | AggregateMode::Single => ScalarValue::iter_to_array(
+                    | AggregateMode::Single
+                    | AggregateMode::SinglePartitioned => ScalarValue::iter_to_array(
                         group_state_chunk.iter().map(|group_state| {
                             group_state.group_state.accumulator_set[idx]
                                 .evaluate()

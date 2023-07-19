@@ -17,7 +17,7 @@
 
 use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::CustomTableScanNode;
+use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
     convert_required,
     protobuf::{
@@ -43,6 +43,7 @@ use datafusion_common::{
     Result,
 };
 use datafusion_expr::logical_plan::DdlStatement;
+use datafusion_expr::DropView;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -325,19 +326,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let file_sort_order = scan
-                    .file_sort_order
-                    .iter()
-                    .map(|expr| from_proto::parse_expr(expr, ctx))
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                // Protobuf doesn't distinguish between "not present"
-                // and empty
-                let file_sort_order = if file_sort_order.is_empty() {
-                    None
-                } else {
-                    Some(file_sort_order)
-                };
+                let mut all_sort_orders = vec![];
+                for order in &scan.file_sort_order {
+                    let file_sort_order = order
+                        .logical_expr_nodes
+                        .iter()
+                        .map(|expr| from_proto::parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    all_sort_orders.push(file_sort_order)
+                }
 
                 let file_format: Arc<dyn FileFormat> =
                     match scan.file_format_type.as_ref().ok_or_else(|| {
@@ -356,7 +353,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .with_has_header(*has_header)
                                 .with_delimiter(str_to_byte(delimiter)?),
                         ),
-                        FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
+                        FileFormatType::Avro(..) => Arc::new(AvroFormat),
                     };
 
                 let table_paths = &scan
@@ -384,7 +381,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize)
-                    .with_file_sort_order(file_sort_order);
+                    .with_file_sort_order(all_sort_orders);
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())
@@ -505,11 +502,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )))?
                 }
 
-                let order_exprs = create_extern_table
-                    .order_exprs
-                    .iter()
-                    .map(|expr| from_proto::parse_expr(expr, ctx))
-                    .collect::<Result<Vec<Expr>, _>>()?;
+                let mut order_exprs = vec![];
+                for expr in &create_extern_table.order_exprs {
+                    let order_expr = expr
+                        .logical_expr_nodes
+                        .iter()
+                        .map(|expr| from_proto::parse_expr(expr, ctx))
+                        .collect::<Result<Vec<Expr>, _>>()?;
+                    order_exprs.push(order_expr)
+                }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
@@ -527,6 +528,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     if_not_exists: create_extern_table.if_not_exists,
                     file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
+                    unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
                 })))
             }
@@ -768,6 +770,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .prepare(prepare.name.clone(), data_types)?
                     .build()
             }
+            LogicalPlanType::DropView(dropview) => Ok(datafusion_expr::LogicalPlan::Ddl(
+                datafusion_expr::DdlStatement::DropView(DropView {
+                    name: from_owned_table_reference(dropview.name.as_ref(), "DropView")?,
+                    if_exists: dropview.if_exists,
+                    schema: Arc::new(convert_required!(dropview.schema)?),
+                }),
+            )),
         }
     }
 
@@ -848,15 +857,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     };
 
                     let options = listing_table.options();
-                    let file_sort_order =
-                        if let Some(file_sort_order) = &options.file_sort_order {
-                            file_sort_order
+
+                    let mut exprs_vec: Vec<LogicalExprNodeCollection> = vec![];
+                    for order in &options.file_sort_order {
+                        let expr_vec = LogicalExprNodeCollection {
+                            logical_expr_nodes: order
                                 .iter()
                                 .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<protobuf::LogicalExprNode>, _>>()?
-                        } else {
-                            vec![]
+                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
                         };
+                        exprs_vec.push(expr_vec);
+                    }
 
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
@@ -879,7 +890,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 filters,
                                 target_partitions: options.target_partitions as u32,
-                                file_sort_order,
+                                file_sort_order: exprs_vec,
                             },
                         )),
                     })
@@ -1184,29 +1195,42 @@ impl AsLogicalPlan for LogicalPlanNode {
                     definition,
                     file_compression_type,
                     order_exprs,
+                    unbounded,
                     options,
                 },
-            )) => Ok(protobuf::LogicalPlanNode {
-                logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
-                    protobuf::CreateExternalTableNode {
-                        name: Some(name.clone().into()),
-                        location: location.clone(),
-                        file_type: file_type.clone(),
-                        has_header: *has_header,
-                        schema: Some(df_schema.try_into()?),
-                        table_partition_cols: table_partition_cols.clone(),
-                        if_not_exists: *if_not_exists,
-                        delimiter: String::from(*delimiter),
-                        order_exprs: order_exprs
+            )) => {
+                let mut converted_order_exprs: Vec<LogicalExprNodeCollection> = vec![];
+                for order in order_exprs {
+                    let temp = LogicalExprNodeCollection {
+                        logical_expr_nodes: order
                             .iter()
                             .map(|expr| expr.try_into())
-                            .collect::<Result<Vec<_>, to_proto::Error>>()?,
-                        definition: definition.clone().unwrap_or_default(),
-                        file_compression_type: file_compression_type.to_string(),
-                        options: options.clone(),
-                    },
-                )),
-            }),
+                            .collect::<Result<Vec<_>, to_proto::Error>>(
+                        )?,
+                    };
+                    converted_order_exprs.push(temp);
+                }
+
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
+                        protobuf::CreateExternalTableNode {
+                            name: Some(name.clone().into()),
+                            location: location.clone(),
+                            file_type: file_type.clone(),
+                            has_header: *has_header,
+                            schema: Some(df_schema.try_into()?),
+                            table_partition_cols: table_partition_cols.clone(),
+                            if_not_exists: *if_not_exists,
+                            delimiter: String::from(*delimiter),
+                            order_exprs: converted_order_exprs,
+                            definition: definition.clone().unwrap_or_default(),
+                            file_compression_type: file_compression_type.to_string(),
+                            unbounded: *unbounded,
+                            options: options.clone(),
+                        },
+                    )),
+                })
+            }
             LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                 name,
                 input,
@@ -1369,9 +1393,19 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
-            LogicalPlan::Ddl(DdlStatement::DropView(_)) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for DropView",
-            )),
+            LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                name,
+                if_exists,
+                schema,
+            })) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::DropView(
+                    protobuf::DropViewNode {
+                        name: Some(name.clone().into()),
+                        if_exists: *if_exists,
+                        schema: Some(schema.try_into()?),
+                    },
+                )),
+            }),
             LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropCatalogSchema",
             )),
@@ -1405,7 +1439,7 @@ mod roundtrip_tests {
             TimeUnit, UnionMode,
         },
     };
-    use datafusion::datasource::datasource::TableProviderFactory;
+    use datafusion::datasource::provider::TableProviderFactory;
     use datafusion::datasource::TableProvider;
     use datafusion::execution::context::SessionState;
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -1426,7 +1460,8 @@ mod roundtrip_tests {
         Expr, LogicalPlan, Operator, TryCast, Volatility,
     };
     use datafusion_expr::{
-        create_udaf, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
+        create_udaf, PartitionEvaluator, Signature, WindowFrame, WindowFrameBound,
+        WindowFrameUnits, WindowFunction, WindowUDF,
     };
     use prost::Message;
     use std::collections::HashMap;
@@ -1642,13 +1677,23 @@ mod roundtrip_tests {
             .await?;
         ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
             .await?;
+
+        // SELECT
         let plan = ctx
             .sql("SELECT * FROM view_t1")
             .await?
             .into_optimized_plan()?;
+
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+        // DROP
+        let plan = ctx.sql("DROP VIEW view_t1").await?.into_optimized_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
         Ok(())
     }
 
@@ -2297,6 +2342,37 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_field() {
+        let field =
+            Field::new("f", DataType::Int32, true).with_metadata(HashMap::from([
+                (String::from("k1"), String::from("v1")),
+                (String::from("k2"), String::from("v2")),
+            ]));
+        let proto_field: super::protobuf::Field = (&field).try_into().unwrap();
+        let returned_field: Field = (&proto_field).try_into().unwrap();
+        assert_eq!(field, returned_field);
+    }
+
+    #[test]
+    fn roundtrip_schema() {
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("b", DataType::Decimal128(15, 2), true).with_metadata(
+                    HashMap::from([(String::from("k1"), String::from("v1"))]),
+                ),
+            ],
+            HashMap::from([
+                (String::from("k2"), String::from("v2")),
+                (String::from("k3"), String::from("v3")),
+            ]),
+        );
+        let proto_schema: super::protobuf::Schema = (&schema).try_into().unwrap();
+        let returned_schema: Schema = (&proto_schema).try_into().unwrap();
+        assert_eq!(schema, returned_schema);
+    }
+
+    #[test]
     fn roundtrip_not() {
         let test_expr = Expr::Not(Box::new(lit(1.0_f32)));
 
@@ -2742,12 +2818,119 @@ mod roundtrip_tests {
             vec![col("col1")],
             vec![col("col1")],
             vec![col("col2")],
+            row_number_frame.clone(),
+        ));
+
+        // 5. test with AggregateUDF
+        #[derive(Debug)]
+        struct DummyAggr {}
+
+        impl Accumulator for DummyAggr {
+            fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
+                Ok(vec![])
+            }
+
+            fn update_batch(
+                &mut self,
+                _values: &[ArrayRef],
+            ) -> datafusion::error::Result<()> {
+                Ok(())
+            }
+
+            fn merge_batch(
+                &mut self,
+                _states: &[ArrayRef],
+            ) -> datafusion::error::Result<()> {
+                Ok(())
+            }
+
+            fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
+                Ok(ScalarValue::Float64(None))
+            }
+
+            fn size(&self) -> usize {
+                std::mem::size_of_val(self)
+            }
+        }
+
+        let dummy_agg = create_udaf(
+            // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
+            "dummy_agg",
+            // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
+            DataType::Float64,
+            // the return type; DataFusion expects this to match the type returned by `evaluate`.
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            // This is the accumulator factory; DataFusion uses it to create new accumulators.
+            Arc::new(|_| Ok(Box::new(DummyAggr {}))),
+            // This is the description of the state. `state()` must match the types here.
+            Arc::new(vec![DataType::Float64, DataType::UInt32]),
+        );
+
+        let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::AggregateUDF(Arc::new(dummy_agg.clone())),
+            vec![col("col1")],
+            vec![col("col1")],
+            vec![col("col2")],
+            row_number_frame.clone(),
+        ));
+        ctx.register_udaf(dummy_agg);
+
+        // 6. test with WindowUDF
+        #[derive(Clone, Debug)]
+        struct DummyWindow {}
+
+        impl PartitionEvaluator for DummyWindow {
+            fn uses_window_frame(&self) -> bool {
+                true
+            }
+
+            fn evaluate(
+                &mut self,
+                _values: &[ArrayRef],
+                _range: &std::ops::Range<usize>,
+            ) -> Result<ScalarValue> {
+                Ok(ScalarValue::Float64(None))
+            }
+        }
+
+        fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
+            if arg_types.len() != 1 {
+                return Err(DataFusionError::Plan(format!(
+                    "dummy_udwf expects 1 argument, got {}: {:?}",
+                    arg_types.len(),
+                    arg_types
+                )));
+            }
+            Ok(Arc::new(arg_types[0].clone()))
+        }
+
+        fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+            Ok(Box::new(DummyWindow {}))
+        }
+
+        let dummy_window_udf = WindowUDF {
+            name: String::from("dummy_udwf"),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+            return_type: Arc::new(return_type),
+            partition_evaluator_factory: Arc::new(make_partition_evaluator),
+        };
+
+        let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::WindowUDF(Arc::new(dummy_window_udf.clone())),
+            vec![col("col1")],
+            vec![col("col1")],
+            vec![col("col2")],
             row_number_frame,
         ));
+
+        ctx.register_udwf(dummy_window_udf);
 
         roundtrip_expr_test(test_expr1, ctx.clone());
         roundtrip_expr_test(test_expr2, ctx.clone());
         roundtrip_expr_test(test_expr3, ctx.clone());
-        roundtrip_expr_test(test_expr4, ctx);
+        roundtrip_expr_test(test_expr4, ctx.clone());
+        roundtrip_expr_test(test_expr5, ctx.clone());
+        roundtrip_expr_test(test_expr6, ctx);
     }
 }
