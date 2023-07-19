@@ -71,7 +71,7 @@ enum ScalarFunctionType {
     Not,
     /// [Expr::Like] Used for filtering rows based on the given wildcard pattern. Case sensitive
     Like,
-    /// [Expr::ILike] Case insensitive operator counterpart of `Like`
+    /// [Expr::Like] Case insensitive operator counterpart of `Like`
     ILike,
 }
 
