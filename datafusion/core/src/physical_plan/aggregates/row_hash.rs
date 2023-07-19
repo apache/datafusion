@@ -395,7 +395,7 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    /// Produces the next batch of output from ExecutionState::ProductingOuptut, updating self.execution_state
+    /// Produces the next batch of output from ExecutionState::ProducingOuptut, updating self.execution_state
     /// appropriately
     fn next_output(&mut self, batch: RecordBatch) -> RecordBatch {
         assert!(matches!(
