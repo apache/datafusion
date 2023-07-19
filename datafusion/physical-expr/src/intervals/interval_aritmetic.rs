@@ -20,7 +20,6 @@
 use std::borrow::Borrow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::ops::{AddAssign, SubAssign};
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;

@@ -21,7 +21,7 @@ use std::borrow::Borrow;
 use std::cmp::{max, Ordering};
 use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
-use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
@@ -47,7 +47,6 @@ use arrow::{
     },
 };
 use arrow_array::timezone::Tz;
-use arrow_array::ArrowNativeTypeOp;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
@@ -3508,9 +3507,9 @@ impl ScalarValue {
         };
 
         if DIR {
-            self.add(one).unwrap_or_else(|_| self)
+            self.add(one).unwrap_or(self)
         } else {
-            self.sub(one).unwrap_or_else(|_| self)
+            self.sub(one).unwrap_or(self)
         }
     }
 }

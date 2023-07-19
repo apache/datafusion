@@ -41,6 +41,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::intervals::is_operator_supported;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries,
     OrderingEquivalenceProperties, PhysicalExpr,
@@ -49,9 +50,7 @@ use datafusion_physical_expr::{
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
-use datafusion_execution::TaskContext;
 use datafusion_physical_expr::utils::collect_columns;
-use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
