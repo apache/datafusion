@@ -479,7 +479,7 @@ impl BuiltinScalarFunction {
             },
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
-                let mut max_dims = 1;
+                let mut max_dims = 0;
                 for input_expr_type in input_expr_types {
                     match input_expr_type {
                         List(field) => {
@@ -487,7 +487,7 @@ impl BuiltinScalarFunction {
                                 let dims = self.return_dimension(input_expr_type.clone());
                                 if max_dims < dims {
                                     max_dims = dims;
-                                    expr_type = field.data_type().clone();
+                                    expr_type = input_expr_type.clone();
                                 }
                             }
                         }
@@ -499,7 +499,7 @@ impl BuiltinScalarFunction {
                     }
                 }
 
-                Ok(List(Arc::new(Field::new("item", expr_type, true))))
+                Ok(expr_type)
             }
             BuiltinScalarFunction::ArrayContains => Ok(Boolean),
             BuiltinScalarFunction::ArrayDims => {

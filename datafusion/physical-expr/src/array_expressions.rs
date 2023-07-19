@@ -163,13 +163,20 @@ fn compute_array_length(
 
 /// Returns the dimension of the array
 fn compute_array_ndims(arr: Option<ArrayRef>) -> Result<Option<u64>> {
+    Ok(compute_array_ndims_with_datatype(arr)?.0)
+}
+
+/// Returns the dimension and lower datatype of the array
+fn compute_array_ndims_with_datatype(
+    arr: Option<ArrayRef>,
+) -> Result<(Option<u64>, DataType)> {
     let mut res: u64 = 1;
     let mut value = match arr {
         Some(arr) => arr,
-        None => return Ok(None),
+        None => return Ok((None, DataType::Null)),
     };
     if value.is_empty() {
-        return Ok(None);
+        return Ok((None, DataType::Null));
     }
 
     loop {
@@ -178,7 +185,7 @@ fn compute_array_ndims(arr: Option<ArrayRef>) -> Result<Option<u64>> {
                 value = downcast_arg!(value, ListArray).value(0);
                 res += 1;
             }
-            _ => return Ok(Some(res)),
+            data_type => return Ok((Some(res), data_type.clone())),
         }
     }
 }
@@ -623,15 +630,20 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::List(field) => match field.data_type() {
-            DataType::Null => array_concat(&args[1..]),
-            _ => concat_internal(args),
-        },
-        data_type => Err(DataFusionError::NotImplemented(format!(
-            "Array is not type '{data_type:?}'."
-        ))),
+    let mut new_args = vec![];
+    for arg in args {
+        let (ndim, lower_data_type) =
+            compute_array_ndims_with_datatype(Some(arg.clone()))?;
+        if ndim.is_none() || ndim == Some(1) {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Array is not type '{lower_data_type:?}'."
+            )));
+        } else if !lower_data_type.equals_datatype(&DataType::Null) {
+            new_args.push(arg.clone());
+        }
     }
+
+    concat_internal(new_args.as_slice())
 }
 
 macro_rules! fill {

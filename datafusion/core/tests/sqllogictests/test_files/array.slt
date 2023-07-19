@@ -516,19 +516,37 @@ select array_concat(make_array(), make_array(2, 3));
 ----
 [2, 3]
 
-# array_cat scalar function #7 (function alias `array_concat`)
+# array_concat scalar function #7 (with empty arrays)
+query ?
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(make_array()));
+----
+[[1, 2], [3, 4]]
+
+# array_concat scalar function #8 (with empty arrays)
+query ?
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(make_array()), make_array(make_array(), make_array()), make_array(make_array(5, 6), make_array(7, 8)));
+----
+[[1, 2], [3, 4], [5, 6], [7, 8]]
+
+# array_concat scalar function #9 (with empty arrays)
+query ?
+select array_concat(make_array(make_array()), make_array(make_array(1, 2), make_array(3, 4)));
+----
+[[1, 2], [3, 4]]
+
+# array_cat scalar function #10 (function alias `array_concat`)
 query ??
 select array_cat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), array_cat(make_array([1], [2]), make_array([3], [4]));
 ----
 [1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
 
-# list_concat scalar function #8 (function alias `array_concat`)
+# list_concat scalar function #11 (function alias `array_concat`)
 query ??
 select list_concat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), list_concat(make_array([1], [2]), make_array([3], [4]));
 ----
 [1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
 
-# list_cat scalar function #9 (function alias `array_concat`)
+# list_cat scalar function #12 (function alias `array_concat`)
 query ??
 select list_cat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), list_cat(make_array([1], [2]), make_array([3], [4]));
 ----
