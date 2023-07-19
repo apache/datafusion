@@ -129,7 +129,7 @@ impl GroupOrderingFull {
         batch_hashes: &[u64],
         total_num_groups: usize,
     ) {
-        assert!(total_num_groups > 0);
+        assert_ne!(total_num_groups, 0);
         assert_eq!(group_indices.len(), batch_hashes.len());
 
         // copy any hash values
