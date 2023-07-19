@@ -44,8 +44,10 @@ pub struct GroupsAccumulatorAdapter {
 
     /// Current memory usage, in bytes.
     ///
-    /// Note this is incrementally updated to avoid size() being a
-    /// bottleneck, which we saw in earlier implementations.
+    /// Note this is incrementally updated with deltas to avoid the
+    /// call to size() being a bottleneck. We saw size() being a
+    /// bottleneck in earlier implementations when there were many
+    /// distinct groups.
     allocation_bytes: usize,
 }
 
@@ -213,10 +215,16 @@ impl GroupsAccumulatorAdapter {
         Ok(())
     }
 
+    /// Increment the allocation by `n`
+    ///
+    /// See [`Self::allocation_bytes`] for rationale.
     fn add_allocation(&mut self, size: usize) {
         self.allocation_bytes += size;
     }
 
+    /// Decrease the allocation by `n`
+    ///
+    /// See [`Self::allocation_bytes`] for rationale.
     fn free_allocation(&mut self, size: usize) {
         // use saturating sub to avoid errors if the accumulators
         // report erronious sizes
@@ -225,6 +233,8 @@ impl GroupsAccumulatorAdapter {
 
     /// Adjusts the allocation for something that started with
     /// start_size and now has new_size avoiding overflow
+    ///
+    /// See [`Self::allocation_bytes`] for rationale.
     fn adjust_allocation(&mut self, old_size: usize, new_size: usize) {
         if new_size > old_size {
             self.add_allocation(new_size - old_size)
