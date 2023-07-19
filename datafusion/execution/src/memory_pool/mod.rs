@@ -18,7 +18,7 @@
 //! Manages all available memory during query execution
 
 use datafusion_common::Result;
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 mod pool;
 pub mod proxy;
@@ -157,7 +157,6 @@ impl MemoryReservation {
 
     /// Sets the size of this reservation to `capacity`
     pub fn resize(&mut self, capacity: usize) {
-        use std::cmp::Ordering;
         match capacity.cmp(&self.size) {
             Ordering::Greater => self.grow(capacity - self.size),
             Ordering::Less => self.shrink(self.size - capacity),
@@ -167,7 +166,6 @@ impl MemoryReservation {
 
     /// Try to set the size of this reservation to `capacity`
     pub fn try_resize(&mut self, capacity: usize) -> Result<()> {
-        use std::cmp::Ordering;
         match capacity.cmp(&self.size) {
             Ordering::Greater => self.try_grow(capacity - self.size)?,
             Ordering::Less => self.shrink(self.size - capacity),
@@ -219,6 +217,49 @@ pub fn human_readable_size(size: usize) -> String {
         }
     };
     format!("{value:.1} {unit}")
+}
+
+/// Tracks the change in memory to avoid overflow. Typically, this
+/// is isued like the following
+///
+/// 1. Call `delta.dec(sized_thing.size())`
+///
+/// 2. potentially change size of `sized_thing`
+///
+/// 3. Call `delta.inc(size_thing.size())`
+#[derive(Debug, Default)]
+pub struct MemoryDelta {
+    decrease: usize,
+    increase: usize,
+}
+
+impl MemoryDelta {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// record size being 'decremented'. This is used for to record the
+    /// initial size of some allocation prior to hange
+    pub fn dec(&mut self, sz: usize) {
+        self.decrease += sz;
+    }
+
+    /// record size being 'incremented'. This is used for to record
+    /// the final size of some object.
+    pub fn inc(&mut self, sz: usize) {
+        self.increase += sz;
+    }
+
+    /// Adjusts the reservation with the delta used / freed
+    pub fn update(self, reservation: &mut MemoryReservation) -> Result<()> {
+        let Self { decrease, increase } = self;
+        match increase.cmp(&decrease) {
+            Ordering::Less => reservation.shrink(decrease - increase),
+            Ordering::Equal => {}
+            Ordering::Greater => reservation.try_grow(increase - decrease)?,
+        };
+        Ok(())
+    }
 }
 
 #[cfg(test)]

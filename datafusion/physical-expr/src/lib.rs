@@ -46,8 +46,9 @@ pub mod utils;
 pub mod var_provider;
 pub mod window;
 
-// reexport this to maintain compatibility with anything that used from_slice previously
-pub use aggregate::groups_accumulator::{GroupsAccumulator, GroupsAccumulatorAdapter};
+pub use aggregate::groups_accumulator::{
+    EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
+};
 pub use aggregate::AggregateExpr;
 
 pub use equivalence::{
