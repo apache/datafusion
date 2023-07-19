@@ -354,11 +354,8 @@ impl Stream for GroupedHashAggregateStream {
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
-                            let to_emit = if self.input_done {
-                                Some(EmitTo::All)
-                            } else {
-                                self.group_ordering.emit_to()
-                            };
+                            assert!(!self.input_done);
+                            let to_emit = self.group_ordering.emit_to();
 
                             if let Some(to_emit) = to_emit {
                                 let batch =
