@@ -42,8 +42,8 @@ use datafusion_physical_expr::PhysicalSortExpr;
 ///     │┌───┐│    │ ┌──────────────┐  │ │     ┗━━━━━━━━━━━━━━━━━┛ ┗━━━━━━━┛
 ///     ││ 0 ││    │ │  123, "MA"   │  │ │        current_sort      sort_key
 ///     │└───┘│    │ └──────────────┘  │ │
-///     │ ... │    │    ...            │ │      current_sort tracks the most
-///     │┌───┐│    │ ┌──────────────┐  │ │      recent group index that had
+///     │ ... │    │    ...            │ │      current_sort tracks the
+///     │┌───┐│    │ ┌──────────────┐  │ │      smallest group index that had
 ///     ││ 8 ││    │ │  765, "MA"   │  │ │      the same sort_key as current
 ///     │├───┤│    │ ├──────────────┤  │ │
 ///     ││ 9 ││    │ │  923, "MD"   │◀─┼─┘
