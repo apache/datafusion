@@ -58,7 +58,7 @@ use log::debug;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask, AsyncArrowWriter};
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
@@ -639,27 +639,22 @@ pub async fn plan_to_parquet(
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut join_set = JoinSet::new();
-    let mut buffer;
     for i in 0..plan.output_partitioning().partition_count() {
-        let storeref = store.clone();
         let plan: Arc<dyn ExecutionPlan> = plan.clone();
         let filename = format!("{}/part-{i}.parquet", parsed.prefix());
         let file = Path::parse(filename)?;
-        buffer = Vec::new();
         let propclone = writer_properties.clone();
 
-        let stream = plan.execute(i, task_ctx.clone())?;
+        let storeref = store.clone();
+        let (_, multipart_writer) = storeref.put_multipart(&file).await?;
+        let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let mut writer = ArrowWriter::try_new(&mut buffer, plan.schema(), propclone)?;
-            stream
-                .map(|batch| writer.write(&batch?).map_err(DataFusionError::ParquetError))
-                .try_collect()
-                .await
-                .map_err(DataFusionError::from)?;
-            writer.close().map_err(DataFusionError::from)?;
-            let write_bytes = Bytes::from_iter(buffer);
-            storeref
-                .put(&file, write_bytes)
+            let mut writer = AsyncArrowWriter::try_new(multipart_writer, plan.schema(), 0,propclone)?;
+            while let Some(next_batch) = stream.next().await{
+                let batch = next_batch?;
+                writer.write(&batch).await?;
+            }
+            writer.close()
                 .await
                 .map_err(DataFusionError::from)
                 .map(|_| ())
