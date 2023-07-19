@@ -27,22 +27,26 @@ use super::expressions::PhysicalSortExpr;
 use super::{
     ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+
 use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
+
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::intervals::is_operator_supported;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, ExprBoundaries, PhysicalExpr,
+    analyze, split_conjunction, AnalysisContext, ExprBoundaries,
+    OrderingEquivalenceProperties, PhysicalExpr,
 };
 
+use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 use datafusion_execution::TaskContext;
@@ -149,6 +153,10 @@ impl ExecutionPlan for FilterExec {
             input_properties.add_equal_conditions(new_condition)
         }
         input_properties
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(
