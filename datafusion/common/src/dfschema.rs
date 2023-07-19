@@ -54,7 +54,7 @@ impl IdentifierKeyGroup {
     ) -> Self {
         Self {
             identifier_key_indices,
-            is_unique: true,
+            is_unique: false,
             associated_indices,
         }
     }
@@ -847,6 +847,14 @@ impl SchemaExt for Schema {
     }
 }
 
+/// Adds `offset` value to each entry inside `in_data`.
+fn add_offset_to_vec<T: Copy + std::ops::Add<Output = T>>(
+    in_data: &[T],
+    offset: T,
+) -> Vec<T> {
+    in_data.iter().map(|&item| item + offset).collect()
+}
+
 /// Add offset value to identifier key indices and its associated indices
 /// for each identifier key group
 pub fn add_offset_to_identifier_key_groups(
@@ -862,19 +870,16 @@ pub fn add_offset_to_identifier_key_groups(
                  associated_indices,
              }| {
                 IdentifierKeyGroup {
-                    identifier_key_indices: identifier_key_indices
-                        .iter()
-                        .map(|pk_idx| pk_idx + offset)
-                        .collect(),
+                    identifier_key_indices: add_offset_to_vec(
+                        identifier_key_indices,
+                        offset,
+                    ),
                     is_unique: *is_unique,
-                    associated_indices: associated_indices
-                        .iter()
-                        .map(|item| item + offset)
-                        .collect(),
+                    associated_indices: add_offset_to_vec(associated_indices, offset),
                 }
             },
         )
-        .collect::<IdentifierKeyGroups>()
+        .collect()
 }
 
 #[cfg(test)]

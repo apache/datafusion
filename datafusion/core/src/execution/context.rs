@@ -86,9 +86,7 @@ use crate::physical_planner::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::{
-    DFSchema, IdentifierKeyGroup, OwnedTableReference, SchemaReference,
-};
+use datafusion_common::{OwnedTableReference, SchemaReference};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -497,7 +495,7 @@ impl SessionContext {
             )),
             (_, _, Err(_)) => {
                 let df_schema = input.schema();
-
+                // Get primary key indices in the schema
                 let primary_keys = primary_key
                     .iter()
                     .map(|pk| {
@@ -515,20 +513,7 @@ impl SessionContext {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let fields = df_schema.fields().to_vec();
-
-                // all of the primary keys are associated with all of the fields (since it is source).
-                let association_indices = (0..fields.len()).collect::<Vec<_>>();
-                let primary_keys_with_associations = vec![IdentifierKeyGroup::new(
-                    primary_keys.clone(),
-                    association_indices,
-                )];
-                let updated_schema =
-                    DFSchema::new_with_metadata(fields, df_schema.metadata().clone())?
-                        .with_identifier_key_groups(primary_keys_with_associations);
-
-                let schema = Arc::new(updated_schema.into());
-
+                let schema = Arc::new(df_schema.as_ref().into());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;

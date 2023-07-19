@@ -269,7 +269,11 @@ impl LogicalPlanBuilder {
             let n_field = schema.fields.len();
             // All the field indices are associated, since it is source,
             let associated_indices = (0..n_field).collect::<Vec<_>>();
-            id_key_groups.push(IdentifierKeyGroup::new(pks.to_vec(), associated_indices));
+            id_key_groups.push(
+                IdentifierKeyGroup::new(pks.to_vec(), associated_indices)
+                    // Since primary keys are guaranteed to be unique, set `is_unique` flag to `true`
+                    .with_is_unique(true),
+            );
         }
 
         let projected_schema = projection
