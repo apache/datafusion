@@ -91,7 +91,7 @@ enum State {
 
     /// Data is in progress.
     InProgress {
-        /// first group index with the sort_key
+        /// Smallest group index with the sort_key
         current_sort: usize,
         /// The sort key of group_index `current_sort`
         sort_key: OwnedRow,
