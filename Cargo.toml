@@ -33,7 +33,7 @@ version = "27.0.0"
 
 [workspace.dependencies]
 arrow = { version = "43.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
-arrow-array = { version = "43.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-array = { version = "44.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "43.0.0", default-features = false }
 arrow-flight = { version = "43.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "43.0.0", default-features = false }
