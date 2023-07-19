@@ -485,7 +485,6 @@ impl GroupedHashAggregateStream {
             self.group_ordering.new_groups(
                 group_values,
                 group_indices,
-                batch_hashes,
                 total_num_groups,
             )?;
         }
@@ -624,15 +623,14 @@ impl GroupedHashAggregateStream {
                 }
                 std::mem::swap(&mut new_group_values, &mut self.group_values);
 
-                // rebuild hash table (maybe we should remove the
-                // entries for each group that was emitted rather than
-                // rebuilding the whole thing
-
-                let hashes = self.group_ordering.remove_groups(n);
-                assert_eq!(hashes.len(), self.group_values.num_rows());
-                self.map.clear();
-                for (idx, &hash) in hashes.iter().enumerate() {
-                    self.map.insert(hash, (hash, idx), |(hash, _)| *hash);
+                self.group_ordering.remove_groups(n);
+                // SAFETY: self.map outlives iterator and is not modified concurrently
+                unsafe {
+                    for bucket in self.map.iter() {
+                        if bucket.as_ref().1 < n {
+                            self.map.erase(bucket);
+                        }
+                    }
                 }
             }
         };
