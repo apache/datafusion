@@ -35,7 +35,8 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
     add_offset_to_lex_ordering, add_offset_to_ordering_equivalence_classes,
     build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
+    combine_join_ordering_equivalence_properties, estimate_join_statistics,
+    partitioned_join_output_partitioning, JoinOn, StreamSide,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
@@ -300,7 +301,7 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn maintains_input_order(&self) -> Vec<bool> {
         match self.join_type {
-            JoinType::Inner => vec![true, true],
+            JoinType::Inner => vec![true, false],
             JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![true, false],
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
                 vec![false, true]
@@ -322,62 +323,16 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
-        let left_columns_len = self.left.schema().fields.len();
-        let left_oeq_properties = self.left.ordering_equivalence_properties();
-        let right_oeq_properties = self.right.ordering_equivalence_properties();
-        match self.join_type {
-            JoinType::Inner => {
-                // Since left side is the stream side for this `SortMergeJoin` implementation,
-                // global ordering of the left table is preserved at the output. Hence, left
-                // side ordering equivalences are still valid.
-                new_properties.extend(left_oeq_properties.classes().iter().cloned());
-                if let Some(output_ordering) = &self.output_ordering {
-                    // Update right table ordering equivalence expression indices; i.e.
-                    // add left table size as an offset.
-                    let updated_right_oeq_classes =
-                        add_offset_to_ordering_equivalence_classes(
-                            right_oeq_properties.classes(),
-                            left_columns_len,
-                        )
-                        .unwrap();
-                    let left_output_ordering = self.left.output_ordering().unwrap_or(&[]);
-                    // Right side ordering equivalence properties should be prepended with
-                    // those of the left side while constructing output ordering equivalence
-                    // properties for `SortMergeJoin`. As an example;
-                    //
-                    // If the right table ordering equivalences contain `b ASC`, and the output
-                    // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
-                    // for the right table should be converted to `a ASC, b ASC` before it is added
-                    // to the ordering equivalences of `SortMergeJoinExec`.
-                    for oeq_class in updated_right_oeq_classes {
-                        for ordering in oeq_class.others() {
-                            // Entries inside ordering equivalence should be normalized before insertion.
-                            let normalized_ordering = normalize_sort_exprs(
-                                ordering,
-                                self.equivalence_properties().classes(),
-                                &[],
-                            );
-                            let new_oeq_ordering =
-                                merge_vectors(left_output_ordering, &normalized_ordering);
-                            new_properties.add_equal_conditions((
-                                output_ordering,
-                                &new_oeq_ordering,
-                            ));
-                        }
-                    }
-                }
-            }
-            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-                new_properties.extend(left_oeq_properties.classes().iter().cloned());
-            }
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-                new_properties.extend(right_oeq_properties.classes().iter().cloned());
-            }
-            // All ordering equivalences from left and/or right sides are invalidated.
-            _ => {}
-        }
-        new_properties
+        combine_join_ordering_equivalence_properties(
+            &self.join_type,
+            &self.left,
+            &self.right,
+            self.schema(),
+            &self.maintains_input_order(),
+            StreamSide::Left,
+            self.equivalence_properties(),
+        )
+        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

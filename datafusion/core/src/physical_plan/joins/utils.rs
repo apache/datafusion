@@ -47,6 +47,7 @@ use datafusion_physical_expr::{
     OrderingEquivalentClass, PhysicalExpr, PhysicalSortExpr,
 };
 
+use datafusion_physical_expr::utils::normalize_sort_exprs;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use itertools::Itertools;
@@ -324,15 +325,21 @@ fn merge_vectors(
 fn prefix_ordering_equivalence_with_existing_ordering(
     existing_ordering: &[PhysicalSortExpr],
     oeq_classes: &[OrderingEquivalentClass],
+    eq_classes: &[EquivalentClass],
 ) -> Vec<OrderingEquivalentClass> {
     oeq_classes
         .iter()
         .map(|oeq_class| {
-            let updated_head = merge_vectors(existing_ordering, oeq_class.head());
+            let normalized_head = normalize_sort_exprs(oeq_class.head(), eq_classes, &[]);
+            let updated_head = merge_vectors(existing_ordering, &normalized_head);
             let updated_others = oeq_class
                 .others()
                 .iter()
-                .map(|ordering| merge_vectors(existing_ordering, ordering))
+                .map(|ordering| {
+                    let normalized_ordering =
+                        normalize_sort_exprs(ordering, eq_classes, &[]);
+                    merge_vectors(existing_ordering, &normalized_ordering)
+                })
                 .collect();
             OrderingEquivalentClass::new(updated_head, updated_others)
         })
@@ -347,6 +354,7 @@ pub fn combine_join_ordering_equivalence_properties(
     schema: SchemaRef,
     maintains_input_order: &[bool],
     stream_side: StreamSide,
+    join_eq_properties: EquivalenceProperties,
 ) -> Result<OrderingEquivalenceProperties> {
     let mut new_properties = OrderingEquivalenceProperties::new(schema);
     let left_columns_len = left.schema().fields.len();
@@ -387,6 +395,7 @@ pub fn combine_join_ordering_equivalence_properties(
                     prefix_ordering_equivalence_with_existing_ordering(
                         left_output_ordering,
                         &right_oeq_classes,
+                        join_eq_properties.classes(),
                     );
                 new_properties.extend(updated_right_oeq_classes);
             }
@@ -416,6 +425,7 @@ pub fn combine_join_ordering_equivalence_properties(
                     prefix_ordering_equivalence_with_existing_ordering(
                         right_output_ordering,
                         &left_oeq_classes,
+                        join_eq_properties.classes(),
                     );
                 new_properties.extend(updated_left_oeq_classes);
             }

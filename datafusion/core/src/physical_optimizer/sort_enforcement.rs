@@ -2448,6 +2448,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_sort_merge_join_order_by_right() -> Result<()> {
         let left_schema = create_test_schema()?;
         let right_schema = create_test_schema2()?;

@@ -383,6 +383,7 @@ impl ExecutionPlan for HashJoinExec {
             self.schema(),
             &self.maintains_input_order(),
             StreamSide::Right,
+            self.equivalence_properties(),
         )
         .unwrap()
     }
