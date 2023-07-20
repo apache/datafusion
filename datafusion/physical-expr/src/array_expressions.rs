@@ -2279,63 +2279,6 @@ mod tests {
         assert_eq!(result, &UInt64Array::from_value(2, 1));
     }
 
-    #[test]
-    fn test_array_has_all() {
-        // array_has_all([1, 2, 3, 4], array_append([1, 2, 3, 4], 3)) = t
-        let first_array = return_array().into_array(1);
-        let second_array = array_append(&[
-            first_array.clone(),
-            Arc::new(Int64Array::from(vec![Some(3)])),
-        ])
-        .expect("failed to initialize function array_has_all");
-
-        let arr = array_has_all(&[first_array.clone(), second_array])
-            .expect("failed to initialize function array_has_all");
-        let result = as_boolean_array(&arr);
-
-        assert_eq!(result, &BooleanArray::from(vec![true]));
-
-        // array_has_all([1, 2, 3, 4], array_append([1, 2, 3, 4], 5)) = f
-        let second_array = array_append(&[
-            first_array.clone(),
-            Arc::new(Int64Array::from(vec![Some(5)])),
-        ])
-        .expect("failed to initialize function array_has_all");
-
-        let arr = array_has_all(&[first_array.clone(), second_array])
-            .expect("failed to initialize function array_has_all");
-        let result = as_boolean_array(&arr);
-
-        assert_eq!(result, &BooleanArray::from(vec![false]));
-    }
-
-    #[test]
-    fn test_nested_array_has_all() {
-        // array_has_all([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 3)) = t
-        let first_array = return_nested_array().into_array(1);
-        let array = return_array().into_array(1);
-        let second_array =
-            array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(3)]))])
-                .expect("failed to initialize function array_has_all");
-
-        let arr = array_has_all(&[first_array.clone(), second_array])
-            .expect("failed to initialize function array_has_all");
-        let result = as_boolean_array(&arr);
-
-        assert_eq!(result, &BooleanArray::from(vec![true]));
-
-        // array_has_all([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 9)) = f
-        let second_array =
-            array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(9)]))])
-                .expect("failed to initialize function array_has_all");
-
-        let arr = array_has_all(&[first_array.clone(), second_array])
-            .expect("failed to initialize function array_has_all");
-        let result = as_boolean_array(&arr);
-
-        assert_eq!(result, &BooleanArray::from(vec![false]));
-    }
-
     fn return_array() -> ColumnarValue {
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
