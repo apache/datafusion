@@ -16,21 +16,23 @@
 // under the License.
 
 use crate::physical_plan::aggregates::group_values::GroupValues;
+use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
+use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_schema::DataType;
 use datafusion_common::Result;
-use datafusion_physical_expr::EmitTo;
-use std::collections::HashMap;
-use std::sync::Arc;
-use arrow_array::cast::AsArray;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_physical_expr::EmitTo;
+use hashbrown::raw::RawTable;
+use std::sync::Arc;
 
 /// A [`GroupValues`] storing raw primitive values
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     data_type: DataType,
-    map: HashMap<T::Native, usize>,
+    map: RawTable<usize>,
+    random_state: RandomState,
     null_group: Option<usize>,
     values: Vec<T::Native>,
 }
@@ -40,9 +42,10 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         assert!(PrimitiveArray::<T>::is_compatible(&data_type));
         Self {
             data_type,
-            map: HashMap::with_capacity(1024),
-            values: Vec::with_capacity(1024),
+            map: RawTable::with_capacity(128),
+            values: Vec::with_capacity(128),
             null_group: None,
+            random_state: Default::default(),
         }
     }
 }
@@ -57,26 +60,42 @@ where
 
         for v in cols[0].as_primitive::<T>() {
             let group_id = match v {
-                None => self.null_group.get_or_insert_with(|| {
+                None => *self.null_group.get_or_insert_with(|| {
                     let group_id = self.values.len();
                     self.values.push(Default::default());
                     group_id
                 }),
-                Some(key) => self.map.entry(key).or_insert_with(|| {
-                    let group_id = self.values.len();
-                    self.values.push(key);
-                    group_id
-                }),
+                Some(key) => {
+                    let hash = self.random_state.hash_one(key);
+                    let insert = self.map.find_or_find_insert_slot(
+                        hash,
+                        |g| unsafe { *self.values.get_unchecked(*g) == key },
+                        |g| unsafe {
+                            self.random_state.hash_one(*self.values.get_unchecked(*g))
+                        },
+                    );
+
+                    // SAFETY: No mutation occurred since find_or_find_insert_slot
+                    unsafe {
+                        match insert {
+                            Ok(v) => *v.as_ref(),
+                            Err(slot) => {
+                                let g = self.values.len();
+                                self.map.insert_in_slot(hash, slot, g);
+                                self.values.push(key);
+                                g
+                            }
+                        }
+                    }
+                }
             };
-            groups.push(*group_id)
+            groups.push(group_id)
         }
         Ok(())
     }
 
     fn size(&self) -> usize {
-        // This is an approximation
-        self.map.capacity() * std::mem::size_of::<(T::Native, usize)>()
-            + self.values.allocated_size()
+        self.map.capacity() * std::mem::size_of::<usize>() + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -107,13 +126,18 @@ where
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
             EmitTo::First(n) => {
-                self.map.retain(|_, v| match v.checked_sub(n) {
-                    Some(new) => {
-                        *v = new;
-                        true
+                // SAFETY: self.map outlives iterator and is not modified concurrently
+                unsafe {
+                    for bucket in self.map.iter() {
+                        // Decrement group index by n
+                        match bucket.as_ref().checked_sub(n) {
+                            // Group index was >= n, shift value down
+                            Some(sub) => *bucket.as_mut() = sub,
+                            // Group index was < n, so remove from table
+                            None => self.map.erase(bucket),
+                        }
                     }
-                    None => false,
-                });
+                }
                 let null_group = match &mut self.null_group {
                     Some(v) if *v >= n => {
                         *v -= n;
