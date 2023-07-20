@@ -339,6 +339,11 @@ impl OrderingEquivalenceBuilder {
         &self.schema
     }
 
+    /// Return a reference to the existing ordering
+    pub fn existing_ordering(&self) -> &LexOrdering {
+        &self.existing_ordering
+    }
+
     pub fn build(self) -> OrderingEquivalenceProperties {
         self.ordering_eq_properties
     }

@@ -18,8 +18,7 @@
 //! Aggregates functionalities
 
 use crate::physical_plan::aggregates::{
-    bounded_aggregate_stream::BoundedAggregateStream, no_grouping::AggregateStream,
-    row_hash::GroupedHashAggregateStream,
+    no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -46,10 +45,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-mod bounded_aggregate_stream;
 mod no_grouping;
+mod order;
 mod row_hash;
-mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
@@ -95,7 +93,7 @@ pub enum AggregateMode {
 /// Specifically, each distinct combination of the relevant columns
 /// are contiguous in the input, and once a new combination is seen
 /// previous combinations are guaranteed never to appear again
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupByOrderMode {
     /// The input is not (known to be) ordered by any of the
     /// expressions in the GROUP BY clause.
@@ -218,7 +216,6 @@ impl PartialEq for PhysicalGroupBy {
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHashAggregateStream(GroupedHashAggregateStream),
-    BoundedAggregate(BoundedAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
@@ -226,7 +223,6 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
-            StreamType::BoundedAggregate(stream) => Box::pin(stream),
         }
     }
 }
@@ -725,14 +721,6 @@ impl AggregateExec {
             Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
             )?))
-        } else if let Some(aggregation_ordering) = &self.aggregation_ordering {
-            let aggregation_ordering = aggregation_ordering.clone();
-            Ok(StreamType::BoundedAggregate(BoundedAggregateStream::new(
-                self,
-                context,
-                partition,
-                aggregation_ordering,
-            )?))
         } else {
             Ok(StreamType::GroupedHashAggregateStream(
                 GroupedHashAggregateStream::new(self, context, partition)?,
@@ -1116,6 +1104,7 @@ fn create_accumulators(
         .collect::<Result<Vec<_>>>()
 }
 
+#[allow(dead_code)]
 fn create_row_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
 ) -> Result<Vec<RowAccumulatorItem>> {

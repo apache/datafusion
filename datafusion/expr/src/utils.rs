@@ -279,7 +279,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
-            | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
             | Expr::Not(_)
             | Expr::IsNotNull(_)

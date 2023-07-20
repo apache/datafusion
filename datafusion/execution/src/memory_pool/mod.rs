@@ -18,7 +18,7 @@
 //! Manages all available memory during query execution
 
 use datafusion_common::Result;
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 mod pool;
 pub mod proxy;
@@ -157,7 +157,6 @@ impl MemoryReservation {
 
     /// Sets the size of this reservation to `capacity`
     pub fn resize(&mut self, capacity: usize) {
-        use std::cmp::Ordering;
         match capacity.cmp(&self.size) {
             Ordering::Greater => self.grow(capacity - self.size),
             Ordering::Less => self.shrink(self.size - capacity),
@@ -167,7 +166,6 @@ impl MemoryReservation {
 
     /// Try to set the size of this reservation to `capacity`
     pub fn try_resize(&mut self, capacity: usize) -> Result<()> {
-        use std::cmp::Ordering;
         match capacity.cmp(&self.size) {
             Ordering::Greater => self.try_grow(capacity - self.size)?,
             Ordering::Less => self.shrink(self.size - capacity),
