@@ -163,7 +163,7 @@ select column1, column2, column3 from arrays_values_without_nulls;
 ### Array function tests
 
 
-## make_array
+## make_array (aliases: `make_list`)
 
 # make_array scalar function #1
 query ???
@@ -206,6 +206,12 @@ query ??
 select make_array(make_array()), make_array(make_array(make_array()))
 ----
 [[]] [[[]]]
+
+# make_list scalar function #8 (function alias: `make_array`)
+query ???
+select make_list(1, 2, 3), make_list(1.0, 2.0, 3.0), make_list('h', 'e', 'l', 'l', 'o');
+----
+[1, 2, 3] [1.0, 2.0, 3.0] [h, e, l, l, o]
 
 # make_array scalar function with nulls
 query ???
@@ -286,9 +292,9 @@ from values;
 
 
 
-## array_append
+## array_append (aliases: `list_append`, `array_push_back`, `list_push_back`)
 
-# array_append scalar function #2
+# array_append scalar function #1
 query ?
 select array_append(make_array(), 4);
 ----
@@ -311,6 +317,24 @@ query ???
 select array_append(make_array([1], [2], [3]), make_array(4)), array_append(make_array([1.0], [2.0], [3.0]), make_array(4.0)), array_append(make_array(['h'], ['e'], ['l'], ['l']), make_array('o'));
 ----
 [[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+# list_append scalar function #5 (function alias `array_append`)
+query ???
+select list_append(make_array(1, 2, 3), 4), list_append(make_array(1.0, 2.0, 3.0), 4.0), list_append(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_push_back scalar function #6 (function alias `array_append`)
+query ???
+select array_push_back(make_array(1, 2, 3), 4), array_push_back(make_array(1.0, 2.0, 3.0), 4.0), array_push_back(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# list_push_back scalar function #7 (function alias `array_append`)
+query ???
+select list_push_back(make_array(1, 2, 3), 4), list_push_back(make_array(1.0, 2.0, 3.0), 4.0), list_push_back(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
 # array_append with columns #1
 query ?
@@ -351,7 +375,7 @@ select array_append(column1, make_array(1, 11, 111)), array_append(make_array(ma
 [[1, 2, 3], [2, 9, 1], [7, 8, 9], [1, 2, 3], [1, 7, 4], [4, 5, 6], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [7, 8, 9]]
 [[4, 5, 6], [10, 11, 12], [4, 9, 8], [7, 8, 9], [10, 11, 12], [1, 8, 7], [1, 11, 111]] [[1, 2, 3], [11, 12, 13], [10, 11, 12]]
 
-## array_prepend
+## array_prepend (aliases: `list_prepend`, `array_push_front`, `list_push_front`)
 
 # array_prepend scalar function #1
 query ?
@@ -376,6 +400,24 @@ query ???
 select array_prepend(make_array(1), make_array(make_array(2), make_array(3), make_array(4))), array_prepend(make_array(1.0), make_array([2.0], [3.0], [4.0])), array_prepend(make_array('h'), make_array(['e'], ['l'], ['l'], ['o']));
 ----
 [[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+# list_prepend scalar function #5 (function alias `array_prepend`)
+query ???
+select list_prepend(1, make_array(2, 3, 4)), list_prepend(1.0, make_array(2.0, 3.0, 4.0)), list_prepend('h', make_array('e', 'l', 'l', 'o'));
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_push_front scalar function #6 (function alias `array_prepend`)
+query ???
+select array_push_front(1, make_array(2, 3, 4)), array_push_front(1.0, make_array(2.0, 3.0, 4.0)), array_push_front('h', make_array('e', 'l', 'l', 'o'));
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# list_push_front scalar function #7 (function alias `array_prepend`)
+query ???
+select list_push_front(1, make_array(2, 3, 4)), list_push_front(1.0, make_array(2.0, 3.0, 4.0)), list_push_front('h', make_array('e', 'l', 'l', 'o'));
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
 # array_prepend with columns #1
 query ?
@@ -436,7 +478,7 @@ select array_fill(1, make_array())
 ----
 []
 
-## array_concat
+## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
 # array_concat scalar function #1
 query ??
@@ -474,29 +516,77 @@ select array_concat(make_array(), make_array(2, 3));
 ----
 [2, 3]
 
+# array_concat scalar function #7 (with empty arrays)
+query ?
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(make_array()));
+----
+[[1, 2], [3, 4]]
+
+# array_concat scalar function #8 (with empty arrays)
+query ?
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(make_array()), make_array(make_array(), make_array()), make_array(make_array(5, 6), make_array(7, 8)));
+----
+[[1, 2], [3, 4], [5, 6], [7, 8]]
+
+# array_concat scalar function #9 (with empty arrays)
+query ?
+select array_concat(make_array(make_array()), make_array(make_array(1, 2), make_array(3, 4)));
+----
+[[1, 2], [3, 4]]
+
+# array_cat scalar function #10 (function alias `array_concat`)
+query ??
+select array_cat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), array_cat(make_array([1], [2]), make_array([3], [4]));
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
+
+# list_concat scalar function #11 (function alias `array_concat`)
+query ??
+select list_concat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), list_concat(make_array([1], [2]), make_array([3], [4]));
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
+
+# list_cat scalar function #12 (function alias `array_concat`)
+query ??
+select list_cat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), list_cat(make_array([1], [2]), make_array([3], [4]));
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
+
 # array_concat with different dimensions #1 (2D + 1D)
 query ?
-select array_concat(make_array([1,2], [3,4]), make_array(5, 6))
+select array_concat(make_array([1,2], [3,4]), make_array(5, 6));
 ----
 [[1, 2], [3, 4], [5, 6]]
 
 # array_concat with different dimensions #2 (1D + 2D)
 query ?
-select array_concat(make_array(5, 6), make_array([1,2], [3,4]))
+select array_concat(make_array(5, 6), make_array([1,2], [3,4]));
 ----
 [[5, 6], [1, 2], [3, 4]]
 
 # array_concat with different dimensions #3 (2D + 1D + 1D)
 query ?
-select array_concat(make_array([1,2], [3,4]), make_array(5, 6), make_array(7,8))
+select array_concat(make_array([1,2], [3,4]), make_array(5, 6), make_array(7,8));
 ----
 [[1, 2], [3, 4], [5, 6], [7, 8]]
 
 # array_concat with different dimensions #4 (1D + 2D + 3D)
 query ?
-select array_concat(make_array(10, 20), make_array([30, 40]), make_array([[50, 60]]))
+select array_concat(make_array(10, 20), make_array([30, 40]), make_array([[50, 60]]));
 ----
 [[[10, 20]], [[30, 40]], [[50, 60]]]
+
+# array_concat with different dimensions #5 (2D + 1D + 3D)
+query ?
+select array_concat(make_array([30, 40]), make_array(10, 20), make_array([[50, 60]]));
+----
+[[[30, 40]], [[10, 20]], [[50, 60]]]
+
+# array_concat with different dimensions #6 (2D + 1D + 3D + 4D + 3D)
+query ?
+select array_concat(make_array([30, 40]), make_array(10, 20), make_array([[50, 60]]),  make_array([[[70, 80]]]), make_array([[80, 40]]));
+----
+[[[[30, 40]]], [[[10, 20]]], [[[50, 60]]], [[[70, 80]]], [[[80, 40]]]]
 
 # array_concat column-wise #1
 query ?
@@ -635,7 +725,7 @@ select array_concat(make_array(column3), column1, column2) from arrays_values_v2
 [, 11, 12]
 []
 
-## array_position
+## array_position (aliases: `list_position`, `array_indexof`, `list_indexof`)
 
 # array_position scalar function #1
 query III
@@ -660,6 +750,24 @@ query II
 select array_position(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], 3), array_position(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], 3);
 ----
 4 3
+
+# list_position scalar function #5 (function alias `array_position`)
+query III
+select list_position(['h', 'e', 'l', 'l', 'o'], 'l'), list_position([1, 2, 3, 4, 5], 5), list_position([1, 1, 1], 1);
+----
+3 5 1
+
+# array_indexof scalar function #6 (function alias `array_position`)
+query III
+select array_indexof(['h', 'e', 'l', 'l', 'o'], 'l'), array_indexof([1, 2, 3, 4, 5], 5), array_indexof([1, 1, 1], 1);
+----
+3 5 1
+
+# list_indexof scalar function #7 (function alias `array_position`)
+query III
+select list_indexof(['h', 'e', 'l', 'l', 'o'], 'l'), list_indexof([1, 2, 3, 4, 5], 5), list_indexof([1, 1, 1], 1);
+----
+3 5 1
 
 # array_position with columns #1
 query II
@@ -693,7 +801,7 @@ select array_position(make_array([1, 2, 3], [4, 5, 6], [11, 12, 13]), column2), 
 NULL 6 4
 NULL 1 NULL
 
-## array_positions
+## array_positions (aliases: `list_positions`)
 
 # array_positions scalar function #1
 query ???
@@ -701,11 +809,17 @@ select array_positions(['h', 'e', 'l', 'l', 'o'], 'l'), array_positions([1, 2, 3
 ----
 [3, 4] [5] [1, 2, 3]
 
-# array_positions scalar function #2
+# array_positions scalar function #2 (element is list)
 query ?
 select array_positions(make_array([1, 2, 3], [2, 1, 3], [1, 5, 6], [2, 1, 3], [4, 5, 6]), [2, 1, 3]);
 ----
 [2, 4]
+
+# list_positions scalar function #3 (function alias `array_positions`)
+query ???
+select list_positions(['h', 'e', 'l', 'l', 'o'], 'l'), list_positions([1, 2, 3, 4, 5], 5), list_positions([1, 1, 1], 1);
+----
+[3, 4] [5] [1, 2, 3]
 
 # array_positions with columns #1
 query ?
@@ -747,9 +861,9 @@ select array_replace(make_array(1, 2, 3, 4), 2, 3), array_replace(make_array(1, 
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
 
-## array_to_string
+## array_to_string (aliases: `list_to_string`, `array_join`, `list_join`)
 
-# array_to_string scalar function
+# array_to_string scalar function #1
 query TTT
 select array_to_string(['h', 'e', 'l', 'l', 'o'], ','), array_to_string([1, 2, 3, 4, 5], '-'), array_to_string([1.0, 2.0, 3.0], '|');
 ----
@@ -766,6 +880,24 @@ query T
 select array_to_string(make_array(), ',')
 ----
 (empty)
+
+# list_to_string scalar function #4 (function alias `array_to_string`)
+query TTT
+select list_to_string(['h', 'e', 'l', 'l', 'o'], ','), list_to_string([1, 2, 3, 4, 5], '-'), list_to_string([1.0, 2.0, 3.0], '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
+# array_join scalar function #5 (function alias `array_to_string`)
+query TTT
+select array_join(['h', 'e', 'l', 'l', 'o'], ','), array_join([1, 2, 3, 4, 5], '-'), array_join([1.0, 2.0, 3.0], '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
+# list_join scalar function #6 (function alias `list_join`)
+query TTT
+select list_join(['h', 'e', 'l', 'l', 'o'], ','), list_join([1, 2, 3, 4, 5], '-'), list_join([1.0, 2.0, 3.0], '|');
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
 
 # array_to_string scalar function with nulls #1
 query TTT
@@ -887,9 +1019,9 @@ select trim_array(make_array(), 0), trim_array(make_array(), 1)
 ----
 [] []
 
-## array_length
+## array_length (aliases: `list_length`)
 
-# array_length scalar function
+# array_length scalar function #1
 query III
 select array_length(make_array(1, 2, 3, 4, 5)), array_length(make_array(1, 2, 3)), array_length(make_array([1, 2], [3, 4], [5, 6]));
 ----
@@ -919,6 +1051,12 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 ----
 0 0 NULL
 
+# list_length scalar function #6 (function alias `array_length`)
+query III
+select list_length(make_array(1, 2, 3, 4, 5)), list_length(make_array(1, 2, 3)), list_length(make_array([1, 2], [3, 4], [5, 6]));
+----
+5 3 3
+
 # array_length with columns
 query I
 select array_length(column1, column3) from arrays_values;
@@ -945,7 +1083,7 @@ NULL 10
 NULL 10
 NULL 10
 
-## array_dims
+## array_dims (aliases: `list_dims`)
 
 # array_dims scalar function
 query ???
@@ -965,6 +1103,12 @@ select array_dims(make_array()), array_dims(make_array(make_array()))
 ----
 NULL [1, 0]
 
+# list_dims scalar function #4 (function alias `array_dims`)
+query ???
+select list_dims(make_array(1, 2, 3)), list_dims(make_array([1, 2], [3, 4])), list_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
 # array_dims with columns
 query ???
 select array_dims(column1), array_dims(column2), array_dims(column3) from arrays;
@@ -977,9 +1121,9 @@ NULL [3] [4]
 [2, 2] NULL [1]
 [2, 2] [3] NULL
 
-## array_ndims
+## array_ndims (aliases: `list_ndims`)
 
-# array_ndims scalar function
+# array_ndims scalar function #1
 query III
 select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4])), array_ndims(make_array([[[[1], [2]]]]));
 ----
@@ -992,6 +1136,17 @@ select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1
 3 21
 
 # array_ndims scalar function #3
+query II
+select array_ndims(make_array()), array_ndims(make_array(make_array()))
+----
+NULL 2
+
+# list_ndims scalar function #4 (function alias `array_ndims`)
+query III
+select list_ndims(make_array(1, 2, 3)), list_ndims(make_array([1, 2], [3, 4])), list_ndims(make_array([[[[1], [2]]]]));
+----
+1 2 5
+
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
