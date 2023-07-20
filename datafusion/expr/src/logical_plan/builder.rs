@@ -1352,33 +1352,32 @@ pub(crate) fn project_identifier_keys(
     ))
 }
 
-/// Check whether expression contains `Expr::GroupingSet`
+/// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
 fn contains_grouping_set(group_expr: &[Expr]) -> bool {
     group_expr
         .iter()
         .any(|expr| matches!(expr, Expr::GroupingSet(_)))
 }
 
-/// Calculate identifier key groups for aggregate expressions
+/// Calculates identifier key groups for aggregate expressions.
 pub(crate) fn aggregate_identifier_keys(
-    // Expressions inside GROUP BY
+    // Expressions in the GROUP BY clause:
     group_expr: &[Expr],
-    // input of aggregate
+    // Input plan of the aggregate:
     input: &LogicalPlan,
-    // If is_unique flag of identifier key group is true. Association covers whole table. `n_out`
-    // stores schema field length to be able to correctly associate with whole table.
+    // Schema field length:
     n_out: usize,
 ) -> Result<IdentifierKeyGroups> {
-    // Calculate identifier keys for the aggregate
     let mut identifier_key_groups = vec![];
-    // We can do analysis for how to propagate identifier key through aggregate
-    // when group by doesn't contain grouping set expression.
-    // When group by contains grouping set expression; identifier key will be empty.
-    // because we cannot guarantee group by expression results will be unique.
+    // We can do a case analysis on how to propagate identifier keys based on
+    // whether the GROUP BY in question contains a grouping set expression:
+    // - If so, the identifier key will be empty because we cannot guarantee
+    //   that GROUP BY expression results will be unique.
+    // - Otherwise, it may be possible to propagate identifier keys.
     if !contains_grouping_set(group_expr) {
-        // association covers whole table.
+        // Association covers whole table:
         let associated_indices = (0..n_out).collect::<Vec<_>>();
-        // Get id key groups of input
+        // Get identifier key groups of the input:
         let id_key_groups = input.schema().identifier_key_groups();
         let fields = input.schema().fields();
         for id_key_group in id_key_groups {
@@ -1389,8 +1388,9 @@ pub(crate) fn aggregate_identifier_keys(
                 .map(|&idx| fields[idx].qualified_name())
                 .collect::<Vec<_>>();
             for (idx, group_by_expr) in group_expr.iter().enumerate() {
-                // when one of input identifier key matches with group by expression
-                // Add index of group by expression as identifier key
+                // When one of the input identifier keys matches with the GROUP
+                // BY expression, add the index of the GROUP BY expression as
+                // an identifier key.
                 if id_key_field_names.contains(&group_by_expr.display_name()?) {
                     new_identifier_key_indices.insert(idx);
                 }
@@ -1400,16 +1400,18 @@ pub(crate) fn aggregate_identifier_keys(
                     IdentifierKeyGroup::new(
                         new_identifier_key_indices.into_iter().collect(),
                         associated_indices.clone(),
-                    ) // input uniqueness keeps same, when group by matches with
-                    // input identifier keys
+                    )
+                    // input uniqueness stays the same when GROUP BY matches with input identifier keys
                     .with_is_unique(id_key_group.is_unique),
                 );
             }
         }
-        // Guaranteed to be unique after aggregation, since it has single expression such GROUP BY a
+        // Guaranteed to be unique after aggregation, since it has a single
+        // expression (e.g. GROUP BY a):
         if group_expr.len() == 1 {
-            // If identifier key groups contain 0, delete this identifier key from identifier key groups
-            // because it will be added anyway with is_unique flag true.
+            // If identifier key groups contain 0, delete this identifier key from
+            // identifier key groups because it will be added anyway with is_unique
+            // flag set.
             if let Some(idx) = identifier_key_groups
                 .iter()
                 .position(|item| item.identifier_key_indices.contains(&0))
@@ -1418,13 +1420,14 @@ pub(crate) fn aggregate_identifier_keys(
                     .identifier_key_indices
                     .retain(|&x| x != idx);
                 if identifier_key_groups[idx].identifier_key_indices.is_empty() {
-                    // identifier key is empty (e.g `identifier_key_indices` was vec![0], deleting 0
-                    // emptied `identifier_key_indices` vector.), delete this identifier group
+                    // Identifier key is empty, delete this identifier group.
+                    // Example: `identifier_key_indices` was equal to vec![0],
+                    //          and deleting 0 emptied it.
                     identifier_key_groups.remove(idx);
                 }
             }
-            // Add new identifier group with, that is associated with whole table. Where it is guaranteed
-            // to be unique.
+            // Add a new identifier group that is associated with whole table.
+            // Here, it is guaranteed to be unique.
             identifier_key_groups.push(
                 IdentifierKeyGroup::new(vec![0], associated_indices).with_is_unique(true),
             );
