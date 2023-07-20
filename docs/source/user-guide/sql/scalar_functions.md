@@ -507,13 +507,16 @@ tanh(numeric_expression)
 Truncates a number toward zero (at the decimal point).
 
 ```
-trunc(numeric_expression)
+trunc(numeric_expression[, decimal_places])
 ```
 
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+- **decimal_places**: Optional. The number of decimal places to truncate to.
+  Defaults to 0.
 
 ## Conditional Functions
 
