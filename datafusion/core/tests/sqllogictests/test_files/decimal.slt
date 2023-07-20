@@ -415,13 +415,13 @@ select c1/c5 from decimal_simple;
 
 
 query T
-select arrow_typeof(c5%cast(0.00001 as decimal(5,5))) from decimal_simple limit 1;
+select arrow_typeof(c5 % cast(0.00001 as decimal(5,5))) from decimal_simple limit 1;
 ----
 Decimal128(7, 7)
 
 
 query R rowsort
-select c5%cast(0.00001 as decimal(5,5)) from decimal_simple;
+select c5 % cast(0.00001 as decimal(5,5)) from decimal_simple;
 ----
 0
 0
@@ -441,13 +441,13 @@ select c5%cast(0.00001 as decimal(5,5)) from decimal_simple;
 
 
 query T
-select arrow_typeof(c1%c5) from decimal_simple limit 1;
+select arrow_typeof(c1 % c5) from decimal_simple limit 1;
 ----
 Decimal128(11, 7)
 
 
 query R rowsort
-select c1%c5 from decimal_simple;
+select c1 % c5 from decimal_simple;
 ----
 0
 0
