@@ -17,7 +17,7 @@
 
 //! Logical plan types
 
-use crate::builder::project_identifier_keys;
+use crate::builder::{aggregate_identifier_keys, project_identifier_keys};
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::expr_vec_fmt;
@@ -1254,15 +1254,10 @@ pub struct Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
-        // update identifier key groups of `input` according to projection exprs.
-        let id_key_groups = project_identifier_keys(&expr, &input)?;
-        let schema = Arc::new(
-            DFSchema::new_with_metadata(
-                exprlist_to_fields(&expr, &input)?,
-                input.schema().metadata().clone(),
-            )?
-            .with_identifier_key_groups(id_key_groups),
-        );
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            exprlist_to_fields(&expr, &input)?,
+            input.schema().metadata().clone(),
+        )?);
         Self::try_new_with_schema(expr, input, schema)
     }
 
@@ -1275,6 +1270,10 @@ impl Projection {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
+        // update identifier key groups of `input` according to projection exprs.
+        let id_key_groups = project_identifier_keys(&expr, &input)?;
+        let schema = schema.as_ref().clone();
+        let schema = Arc::new(schema.with_identifier_key_groups(id_key_groups));
         Ok(Self {
             expr,
             input,
@@ -1624,11 +1623,12 @@ impl Aggregate {
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        // TODO: Add handling for aggregate primary key
+
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
         )?;
+
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 
@@ -1657,6 +1657,12 @@ impl Aggregate {
                 schema.fields().len()
             )));
         }
+
+        let identifier_key_groups =
+            aggregate_identifier_keys(&group_expr, &input, schema.fields().len())?;
+        let new_schema = schema.as_ref().clone();
+        let schema =
+            Arc::new(new_schema.with_identifier_key_groups(identifier_key_groups));
         Ok(Self {
             input,
             group_expr,

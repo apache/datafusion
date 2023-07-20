@@ -1352,6 +1352,87 @@ pub(crate) fn project_identifier_keys(
     ))
 }
 
+/// Check whether expression contains `Expr::GroupingSet`
+fn contains_grouping_set(group_expr: &[Expr]) -> bool {
+    group_expr
+        .iter()
+        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+}
+
+/// Calculate identifier key groups for aggregate expressions
+pub(crate) fn aggregate_identifier_keys(
+    // Expressions inside GROUP BY
+    group_expr: &[Expr],
+    // input of aggregate
+    input: &LogicalPlan,
+    // If is_unique flag of identifier key group is true. Association covers whole table. `n_out`
+    // stores schema field length to be able to correctly associate with whole table.
+    n_out: usize,
+) -> Result<IdentifierKeyGroups> {
+    // Calculate identifier keys for the aggregate
+    let mut identifier_key_groups = vec![];
+    // We can do analysis for how to propagate identifier key through aggregate
+    // when group by doesn't contain grouping set expression.
+    // When group by contains grouping set expression; identifier key will be empty.
+    // because we cannot guarantee group by expression results will be unique.
+    if !contains_grouping_set(group_expr) {
+        // association covers whole table.
+        let associated_indices = (0..n_out).collect::<Vec<_>>();
+        // Get id key groups of input
+        let id_key_groups = input.schema().identifier_key_groups();
+        let fields = input.schema().fields();
+        for id_key_group in id_key_groups {
+            let mut new_identifier_key_indices = HashSet::new();
+            let id_key_indices = &id_key_group.identifier_key_indices;
+            let id_key_field_names = id_key_indices
+                .iter()
+                .map(|&idx| fields[idx].qualified_name())
+                .collect::<Vec<_>>();
+            for (idx, group_by_expr) in group_expr.iter().enumerate() {
+                // when one of input identifier key matches with group by expression
+                // Add index of group by expression as identifier key
+                if id_key_field_names.contains(&group_by_expr.display_name()?) {
+                    new_identifier_key_indices.insert(idx);
+                }
+            }
+            if !new_identifier_key_indices.is_empty() {
+                identifier_key_groups.push(
+                    IdentifierKeyGroup::new(
+                        new_identifier_key_indices.into_iter().collect(),
+                        associated_indices.clone(),
+                    ) // input uniqueness keeps same, when group by matches with
+                    // input identifier keys
+                    .with_is_unique(id_key_group.is_unique),
+                );
+            }
+        }
+        // Guaranteed to be unique after aggregation, since it has single expression such GROUP BY a
+        if group_expr.len() == 1 {
+            // If identifier key groups contain 0, delete this identifier key from identifier key groups
+            // because it will be added anyway with is_unique flag true.
+            if let Some(idx) = identifier_key_groups
+                .iter()
+                .position(|item| item.identifier_key_indices.contains(&0))
+            {
+                identifier_key_groups[idx]
+                    .identifier_key_indices
+                    .retain(|&x| x != idx);
+                if identifier_key_groups[idx].identifier_key_indices.is_empty() {
+                    // identifier key is empty (e.g `identifier_key_indices` was vec![0], deleting 0
+                    // emptied `identifier_key_indices` vector.), delete this identifier group
+                    identifier_key_groups.remove(idx);
+                }
+            }
+            // Add new identifier group with, that is associated with whole table. Where it is guaranteed
+            // to be unique.
+            identifier_key_groups.push(
+                IdentifierKeyGroup::new(vec![0], associated_indices).with_is_unique(true),
+            );
+        }
+    }
+    Ok(identifier_key_groups)
+}
+
 /// Create Projection
 /// # Errors
 /// This function errors under any of the following conditions:

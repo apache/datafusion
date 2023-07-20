@@ -3059,3 +3059,68 @@ FROM
       FROM sales_global_with_pk AS l
       JOIN sales_global_with_pk AS r ON l.sn >= r.sn))
 GROUP BY r.sn
+
+# aggregate should propagate primary key successfully
+query IPR
+SELECT sn, ts, sum1
+FROM (
+  SELECT ts, sn, SUM(amount) as sum1
+  FROM sales_global_with_pk
+  GROUP BY sn)
+GROUP BY sn
+ORDER BY sn
+----
+0 2022-01-01T06:00:00 30
+1 2022-01-01T08:00:00 50
+2 2022-01-01T11:30:00 75
+3 2022-01-02T12:00:00 200
+4 2022-01-03T10:00:00 100
+
+# aggregate should be able to introduce identifier key
+# (when group by contains single expression, group by expression
+# becomes identifier key, after aggregation; since we are sure that
+# it will consist of unique values.)
+# please note that ts is not primary key, still
+# we can use sum1, after outer aggregation because
+# after inner aggregation, ts becomes identifier key.
+query PR
+SELECT ts, sum1
+FROM (
+  SELECT ts, SUM(amount) as sum1
+  FROM sales_global_with_pk
+  GROUP BY ts)
+GROUP BY ts
+ORDER BY ts
+----
+2022-01-01T06:00:00 30
+2022-01-01T08:00:00 50
+2022-01-01T11:30:00 75
+2022-01-02T12:00:00 200
+2022-01-03T10:00:00 100
+
+# aggregate should reset its identifier keys
+# if it is guaranteed that, after aggregation
+# group by expressions will be unique.
+query IRI
+SELECT *
+FROM (
+  SELECT *, ROW_NUMBER() OVER(ORDER BY l.sn) AS rn1
+  FROM (
+    SELECT l.sn, SUM(l.amount)
+    FROM (
+      SELECT l.sn, l.amount, SUM(l.amount) as sum1
+      FROM
+        (SELECT *
+        FROM sales_global_with_pk AS l
+        JOIN sales_global_with_pk AS r ON l.sn >= r.sn)
+      GROUP BY l.sn)
+    GROUP BY l.sn)
+  )
+GROUP BY l.sn
+ORDER BY l.sn
+----
+0 30 1
+1 50 2
+2 75 3
+3 200 4
+4 100 5
