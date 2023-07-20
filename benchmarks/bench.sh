@@ -373,7 +373,7 @@ data_clickbench_partitioned() {
     echo -n "Checking hits_partitioned..."
     OUTPUT_SIZE=`wc -c * 2>/dev/null | tail -n 1  | awk '{print $1}' || true`
     if test "${OUTPUT_SIZE}" = "14737666736"; then
-        echo -n "... found ${OUTPUT_SIZE} KB ..."
+        echo -n "... found ${OUTPUT_SIZE} bytes ..."
     else
         echo -n " downloading with ${MAX_CONCURRENT_DOWNLOADS} parallel workers"
         seq 0 99 | xargs -P${MAX_CONCURRENT_DOWNLOADS} -I{} bash -c 'wget -q --continue https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_{}.parquet && echo -n "."'
