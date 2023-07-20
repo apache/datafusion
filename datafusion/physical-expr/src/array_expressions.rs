@@ -1375,152 +1375,6 @@ pub fn array_ndims(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-macro_rules! contains {
-    ($FIRST_ARRAY:expr, $SECOND_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let first_array = downcast_arg!($FIRST_ARRAY, $ARRAY_TYPE);
-        let second_array = downcast_arg!($SECOND_ARRAY, $ARRAY_TYPE);
-        for x in second_array.values().iter().dedup() {
-            if !first_array.values().contains(x) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }};
-}
-
-macro_rules! overlap {
-    ($FIRST_ARRAY:expr, $SECOND_ARRAY:expr, $ARRAY_TYPE:ident) => {{
-        let first_array = downcast_arg!($FIRST_ARRAY, $ARRAY_TYPE);
-        let second_array = downcast_arg!($SECOND_ARRAY, $ARRAY_TYPE);
-        for x in second_array.values().iter().dedup() {
-            if first_array.values().contains(x) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }};
-}
-
-/// Convert nested list arry to 1d lsit array without offset preserve.
-fn flatten_list_array<OffsetSize: OffsetSizeTrait>(
-    array: ArrayRef,
-) -> Result<GenericListArray<OffsetSize>> {
-    let list_array = array.as_list::<OffsetSize>();
-    match array.data_type() {
-        DataType::List(field) => match field.data_type() {
-            DataType::List(..) => {
-                let (_, offsets, values, _) = list_array.clone().into_parts();
-                let arr_offsets = offsets.to_vec();
-                let inner_arr = flatten_list_array::<OffsetSize>(values)?;
-                let (field, offsets, values, nulls) = inner_arr.into_parts();
-
-                let inner_arr_offsets = offsets.to_vec();
-                let flatten_offsets: Vec<OffsetSize> = arr_offsets
-                    .iter()
-                    .filter_map(|idx| {
-                        let idx = (*idx).as_usize();
-                        inner_arr_offsets.get(idx).cloned()
-                    })
-                    .collect();
-
-                let offsets = OffsetBuffer::new(flatten_offsets.into());
-
-                let list_array =
-                    GenericListArray::<OffsetSize>::new(field, offsets, values, nulls);
-
-                Ok(list_array)
-            }
-            _ => Ok(list_array.clone()),
-        },
-        _ => Err(DataFusionError::Internal(
-            "array should be list".to_string(),
-        )),
-    }
-}
-
-fn overlap_internal(arr: ArrayRef, sub_arr: ArrayRef) -> Result<bool> {
-    match (arr.data_type(), sub_arr.data_type()) {
-                (DataType::Utf8, DataType::Utf8) => overlap!(arr, sub_arr, StringArray),
-                (DataType::LargeUtf8, DataType::LargeUtf8) => overlap!(arr, sub_arr, LargeStringArray),
-                (DataType::Boolean, DataType::Boolean) => {
-                    let first_array = downcast_arg!(arr, BooleanArray);
-                    let second_array = downcast_arg!(sub_arr, BooleanArray);
-                    if second_array.true_count() > 0 && first_array.true_count() > 0 {
-                            return Ok(true);
-                    }
-                    if second_array.false_count() > 0  &&first_array.false_count() > 0 {
-                            return Ok(true);
-                    }
-                    Ok(false)
-                }
-                (DataType::Float32, DataType::Float32) => overlap!(arr, sub_arr, Float32Array),
-                (DataType::Float64, DataType::Float64) => overlap!(arr, sub_arr, Float64Array),
-                (DataType::Int8, DataType::Int8) => overlap!(arr, sub_arr, Int8Array),
-                (DataType::Int16, DataType::Int16) => overlap!(arr, sub_arr, Int16Array),
-                (DataType::Int32, DataType::Int32) => overlap!(arr, sub_arr, Int32Array),
-                (DataType::Int64, DataType::Int64) => overlap!(arr, sub_arr, Int64Array),
-                (DataType::UInt8, DataType::UInt8) => overlap!(arr, sub_arr, UInt8Array),
-                (DataType::UInt16, DataType::UInt16) => overlap!(arr, sub_arr, UInt16Array),
-                (DataType::UInt32, DataType::UInt32) => overlap!(arr, sub_arr, UInt32Array),
-                (DataType::UInt64, DataType::UInt64) => overlap!(arr, sub_arr, UInt64Array),
-                (first_array_data_type, second_array_data_type) => {
-                    Err(DataFusionError::NotImplemented(format!(
-                        "Array_has_all is not implemented for types '{first_array_data_type:?}' and '{second_array_data_type:?}'."
-                    )))
-                }
-            }
-}
-
-fn contains_internal(arr: ArrayRef, sub_arr: ArrayRef) -> Result<bool> {
-    match (arr.data_type(), sub_arr.data_type()) {
-                (DataType::Utf8, DataType::Utf8) => contains!(arr, sub_arr, StringArray),
-                (DataType::LargeUtf8, DataType::LargeUtf8) => contains!(arr, sub_arr, LargeStringArray),
-                (DataType::Boolean, DataType::Boolean) => {
-                    let first_array = downcast_arg!(arr, BooleanArray);
-                    let second_array = downcast_arg!(sub_arr, BooleanArray);
-                    if second_array.true_count() > 0 && first_array.true_count() == 0 {
-                            return Ok(false);
-                    }
-                    if second_array.false_count() > 0 && first_array.false_count() == 0 {
-                            return Ok(false);
-                    }
-                    Ok(true)
-                }
-                (DataType::Float32, DataType::Float32) => contains!(arr, sub_arr, Float32Array),
-                (DataType::Float64, DataType::Float64) => contains!(arr, sub_arr, Float64Array),
-                (DataType::Int8, DataType::Int8) => contains!(arr, sub_arr, Int8Array),
-                (DataType::Int16, DataType::Int16) => contains!(arr, sub_arr, Int16Array),
-                (DataType::Int32, DataType::Int32) => contains!(arr, sub_arr, Int32Array),
-                (DataType::Int64, DataType::Int64) => contains!(arr, sub_arr, Int64Array),
-                (DataType::UInt8, DataType::UInt8) => contains!(arr, sub_arr, UInt8Array),
-                (DataType::UInt16, DataType::UInt16) => contains!(arr, sub_arr, UInt16Array),
-                (DataType::UInt32, DataType::UInt32) => contains!(arr, sub_arr, UInt32Array),
-                (DataType::UInt64, DataType::UInt64) => contains!(arr, sub_arr, UInt64Array),
-                (first_array_data_type, second_array_data_type) => {
-                    Err(DataFusionError::NotImplemented(format!(
-                        "Array_has_all is not implemented for types '{first_array_data_type:?}' and '{second_array_data_type:?}'."
-                    )))
-                }
-            }
-}
-
-/// Array_has_any SQL function
-pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
-    assert_eq!(args.len(), 2);
-    let array = flatten_list_array::<i32>(args[0].clone())?;
-    // TODO: Dont need to flatten rhs array
-    let sub_array = flatten_list_array::<i32>(args[1].clone())?;
-    let mut boolean_array = Vec::with_capacity(array.len());
-
-    for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
-        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = overlap_internal(arr.clone(), sub_arr.clone())?;
-            boolean_array.push(res);
-        }
-    }
-    Ok(Arc::new(BooleanArray::from(boolean_array)))
-}
-
 macro_rules! non_list_contains {
     ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
         let sub_array = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
@@ -1558,14 +1412,44 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(boolean_builder.finish()))
         }
 
+        // Int64, Int32, Int16, Int8
+        // UInt64, UInt32, UInt16, UInt8
         DataType::Int64 => {
             non_list_contains!(array, args[1], Int64Array)
         }
+        DataType::Int32 => {
+            non_list_contains!(array, args[1], Int32Array)
+        }
+        DataType::Int16 => {
+            non_list_contains!(array, args[1], Int16Array)
+        }
+        DataType::Int8 => {
+            non_list_contains!(array, args[1], Int8Array)
+        }
+        DataType::UInt64 => {
+            non_list_contains!(array, args[1], UInt64Array)
+        }
+        DataType::UInt32 => {
+            non_list_contains!(array, args[1], UInt32Array)
+        }
+        DataType::UInt16 => {
+            non_list_contains!(array, args[1], UInt16Array)
+        }
+        DataType::UInt8 => {
+            non_list_contains!(array, args[1], UInt8Array)
+        }
+
         DataType::Float64 => {
             non_list_contains!(array, args[1], Float64Array)
         }
+        DataType::Float32 => {
+            non_list_contains!(array, args[1], Float32Array)
+        }
         DataType::Utf8 => {
             non_list_contains!(array, args[1], StringArray)
+        }
+        DataType::LargeUtf8 => {
+            non_list_contains!(array, args[1], LargeStringArray)
         }
         DataType::Boolean => {
             non_list_contains!(array, args[1], BooleanArray)
@@ -1577,6 +1461,100 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
     }
+}
+
+macro_rules! array_has_any_non_list_check {
+    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
+        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
+        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
+
+        let mut res = false;
+        for elem in sub_arr.iter().dedup() {
+            res |= arr
+                .iter()
+                .dedup()
+                .flatten()
+                .any(|x| x == elem.expect("null type not supported"));
+        }
+        res
+    }};
+}
+
+/// Array_has_any SQL function
+pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
+    assert_eq!(args.len(), 2);
+
+    let array = args[0].as_list::<i32>();
+    let sub_array = args[1].as_list::<i32>();
+
+    let mut boolean_builder = BooleanArray::builder(array.len());
+    for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
+        if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
+            let res = match (arr.data_type(), sub_arr.data_type()) {
+                (DataType::List(_), DataType::List(_)) => {
+                    let arr = downcast_arg!(arr, ListArray);
+                    let sub_arr = downcast_arg!(sub_arr, ListArray);
+
+                    let mut res = false;
+                    for elem in sub_arr.iter().dedup().flatten() {
+                        res |= arr.iter().dedup().flatten().any(|x| *x == *elem);
+                    }
+                    res
+                }
+                // Int64, Int32, Int16, Int8
+                // UInt64, UInt32, UInt16, UInt8
+                (DataType::Int64, DataType::Int64) => {
+                    array_has_any_non_list_check!(arr, sub_arr, Int64Array)
+                }
+                (DataType::Int32, DataType::Int32) => {
+                    array_has_any_non_list_check!(arr, sub_arr, Int32Array)
+                }
+                (DataType::Int16, DataType::Int16) => {
+                    array_has_any_non_list_check!(arr, sub_arr, Int16Array)
+                }
+                (DataType::Int8, DataType::Int8) => {
+                    array_has_any_non_list_check!(arr, sub_arr, Int8Array)
+                }
+                (DataType::UInt64, DataType::UInt64) => {
+                    array_has_any_non_list_check!(arr, sub_arr, UInt64Array)
+                }
+                (DataType::UInt32, DataType::UInt32) => {
+                    array_has_any_non_list_check!(arr, sub_arr, UInt32Array)
+                }
+                (DataType::UInt16, DataType::UInt16) => {
+                    array_has_any_non_list_check!(arr, sub_arr, UInt16Array)
+                }
+                (DataType::UInt8, DataType::UInt8) => {
+                    array_has_any_non_list_check!(arr, sub_arr, UInt8Array)
+                }
+
+                (DataType::Float64, DataType::Float64) => {
+                    array_has_any_non_list_check!(arr, sub_arr, Float64Array)
+                }
+                (DataType::Float32, DataType::Float32) => {
+                    array_has_any_non_list_check!(arr, sub_arr, Float32Array)
+                }
+                (DataType::Boolean, DataType::Boolean) => {
+                    array_has_any_non_list_check!(arr, sub_arr, BooleanArray)
+                }
+                // Utf8, LargeUtf8
+                (DataType::Utf8, DataType::Utf8) => {
+                    array_has_any_non_list_check!(arr, sub_arr, StringArray)
+                }
+                (DataType::LargeUtf8, DataType::LargeUtf8) => {
+                    array_has_any_non_list_check!(arr, sub_arr, LargeStringArray)
+                }
+
+                _ => Err(DataFusionError::NotImplemented(format!(
+                    "Array_has_any is not implemented for types '{:?}' and '{:?}'.",
+                    arr.data_type(),
+                    sub_arr.data_type()
+                )))?,
+            };
+            boolean_builder.append_value(res);
+        }
+    }
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
 macro_rules! array_has_all_non_list_check {
@@ -1606,7 +1584,7 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(array.len());
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            match (arr.data_type(), sub_arr.data_type()) {
+            let res = match (arr.data_type(), sub_arr.data_type()) {
                 (DataType::List(_), DataType::List(_)) => {
                     let arr = downcast_arg!(arr, ListArray);
                     let sub_arr = downcast_arg!(sub_arr, ListArray);
@@ -1615,22 +1593,57 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
                     for elem in sub_arr.iter().dedup().flatten() {
                         res &= arr.iter().dedup().flatten().any(|x| *x == *elem);
                     }
-                    boolean_builder.append_value(res);
+                    res
                 }
+                // Int64, Int32, Int16, Int8
+                // UInt64, UInt32, UInt16, UInt8
                 (DataType::Int64, DataType::Int64) => {
-                    let res = array_has_all_non_list_check!(arr, sub_arr, Int64Array);
-                    boolean_builder.append_value(res);
+                    array_has_all_non_list_check!(arr, sub_arr, Int64Array)
                 }
+                (DataType::Int32, DataType::Int32) => {
+                    array_has_all_non_list_check!(arr, sub_arr, Int32Array)
+                }
+                (DataType::Int16, DataType::Int16) => {
+                    array_has_all_non_list_check!(arr, sub_arr, Int16Array)
+                }
+                (DataType::Int8, DataType::Int8) => {
+                    array_has_all_non_list_check!(arr, sub_arr, Int8Array)
+                }
+                (DataType::UInt64, DataType::UInt64) => {
+                    array_has_all_non_list_check!(arr, sub_arr, UInt64Array)
+                }
+                (DataType::UInt32, DataType::UInt32) => {
+                    array_has_all_non_list_check!(arr, sub_arr, UInt32Array)
+                }
+                (DataType::UInt16, DataType::UInt16) => {
+                    array_has_all_non_list_check!(arr, sub_arr, UInt16Array)
+                }
+                (DataType::UInt8, DataType::UInt8) => {
+                    array_has_all_non_list_check!(arr, sub_arr, UInt8Array)
+                }
+
                 (DataType::Float64, DataType::Float64) => {
-                    let res = array_has_all_non_list_check!(arr, sub_arr, Float64Array);
-                    boolean_builder.append_value(res);
+                    array_has_all_non_list_check!(arr, sub_arr, Float64Array)
+                }
+                (DataType::Float32, DataType::Float32) => {
+                    array_has_all_non_list_check!(arr, sub_arr, Float32Array)
+                }
+                (DataType::Boolean, DataType::Boolean) => {
+                    array_has_all_non_list_check!(arr, sub_arr, BooleanArray)
+                }
+                (DataType::Utf8, DataType::Utf8) => {
+                    array_has_all_non_list_check!(arr, sub_arr, StringArray)
+                }
+                (DataType::LargeUtf8, DataType::LargeUtf8) => {
+                    array_has_all_non_list_check!(arr, sub_arr, LargeStringArray)
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
                     "Array_has_all is not implemented for types '{:?}' and '{:?}'.",
                     arr.data_type(),
                     sub_arr.data_type()
                 )))?,
-            }
+            };
+            boolean_builder.append_value(res);
         }
     }
     Ok(Arc::new(boolean_builder.finish()))

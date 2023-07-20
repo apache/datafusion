@@ -89,15 +89,29 @@ AS VALUES
 statement ok
 CREATE TABLE array_has_table_1D
 AS VALUES
-  (make_array(1, 2), 1, make_array(true, true, true), false, make_array(1,2,3), make_array(1,3)),
-  (make_array(3, 4, 5), 2, make_array(false, false, false), false, make_array(1,2,3,4), make_array(2,5))
+  (make_array(1, 2), 1, make_array(1,2,3), make_array(1,3), make_array(1,3,5), make_array(2,4,6,8,1,3,5)),
+  (make_array(3, 4, 5), 2, make_array(1,2,3,4), make_array(2,5), make_array(2,4,6), make_array(1,3,5))
 ;
 
 statement ok
 CREATE TABLE array_has_table_1D_Float
 AS VALUES
-  (make_array(1.0, 2.0), 1.0, make_array(1.0,2.0,3.0), make_array(1.0,3.0)),
-  (make_array(3.0, 4.0, 5.0), 2.0, make_array(1.0,2.0,3.0,4.0), make_array(2.0,5.0))
+  (make_array(1.0, 2.0), 1.0, make_array(1.0,2.0,3.0), make_array(1.0,3.0), make_array(1.11), make_array(2.22, 3.33)),
+  (make_array(3.0, 4.0, 5.0), 2.0, make_array(1.0,2.0,3.0,4.0), make_array(2.0,5.0), make_array(2.22, 1.11), make_array(1.11, 3.33))
+;
+
+statement ok
+CREATE TABLE array_has_table_1D_Boolean
+AS VALUES
+  (make_array(true, true, true), false, make_array(true, true, false, true, false), make_array(true, false, true), make_array(false), make_array(true, false)),
+  (make_array(false, false, false), false, make_array(true, false, true), make_array(true, true), make_array(true, true), make_array(false,false,true))
+;
+
+statement ok
+CREATE TABLE array_has_table_1D_UTF8
+AS VALUES
+  (make_array('a', 'bc', 'def'), 'bc', make_array('datafusion', 'rust', 'arrow'), make_array('rust', 'arrow'), make_array('rust', 'arrow', 'python'), make_array('data')),
+  (make_array('a', 'bc', 'def'), 'defg', make_array('datafusion', 'rust', 'arrow'), make_array('datafusion', 'rust', 'arrow', 'python'), make_array('rust', 'arrow'), make_array('datafusion', 'rust', 'arrow'))
 ;
 
 statement ok
@@ -1206,52 +1220,70 @@ NULL 1 1
 
 ## array_has/array_has_all/array_has_any
 
-query BB
+query BBBBBBBBB
 select array_has(make_array(1,2), 1),
-       array_has(make_array(1,2,NULL), 1)
+       array_has(make_array(1,2,NULL), 1),
+       array_has(make_array([2,3], [3,4]), make_array(2,3)),
+       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1], [2,3])),
+       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([4,5], [6])),
+       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1])),
+       array_has(make_array([[[1]]]), make_array([[1]])),
+       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[2]])),
+       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[1], [2]]))
 ;
 ----
-true true
-
-query B
-select array_has(make_array([2,3], [3,4]), make_array(2,3));
-----
-true
+true true true true true false true false true
 
 query BBB
-select array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1], [2,3])),
-       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([4,5], [6])),
-       array_has(make_array([[1], [2,3]], [[4,5], [6]]), make_array([1]));
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from array_has_table_1D;
+----
+true true true
+false false false
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from array_has_table_1D_Float;
 ----
 true true false
+false false true
 
 query BBB
-select array_has(make_array([[[1]]]), make_array([[1]])),
-       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[2]])),
-       array_has(make_array([[[1]]], [[[1], [2]]]), make_array([[1], [2]]));
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from array_has_table_1D_Boolean;
 ----
-true false true
+false true true
+true true true
+
+query BBB
+select array_has(column1, column2),
+       array_has_all(column3, column4),
+       array_has_any(column5, column6)
+from array_has_table_1D_UTF8;
+----
+true true false
+false false true
 
 query BB
 select array_has(column1, column2),
-       array_has(column3, column4)
-from array_has_table_1D;
+       array_has_all(column3, column4)
+from array_has_table_2D;
 ----
-true false
 false true
+true false
 
 query B
-select array_has(column1, column2)
-from array_has_table_1D_Float;
+select array_has_all(column1, column2)
+from array_has_table_2D_float;
 ----
 true
 false
-
-query B
-select array_has(column1, column2) from array_has_table_2D;
-----
-false
-true
 
 query B
 select array_has(column1, column2) from array_has_table_3D;
@@ -1263,17 +1295,6 @@ false
 true
 false
 true
-
-query ???
-select column1, column2, column3 from arrays;
-----
-[[, 2], [3, ]] [1.1, 2.2, 3.3] [L, o, r, e, m]
-[[3, 4], [5, 6]] [, 5.5, 6.6] [i, p, , u, m]
-[[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, , l, o, r]
-[[7, ], [9, 10]] [10.1, , 12.2] [s, i, t]
-NULL [13.3, 14.4, 15.5] [a, m, e, t]
-[[11, 12], [13, 14]] NULL [,]
-[[15, 16], [, 18]] [16.6, 17.7, 18.8] NULL
 
 query BBBB
 select array_has(column1, make_array(5, 6)),
@@ -1289,120 +1310,23 @@ false true false false
 false false false false
 false false false false
 
-query BBBBBBB
+query BBBBBBBBBBBBB
 select array_has_all(make_array(1,2,3), make_array(1,3)),
        array_has_all(make_array(1,2,3), make_array(1,4)),
        array_has_all(make_array([1,2], [3,4]), make_array([1,2])),
        array_has_all(make_array([1,2], [3,4]), make_array([1,3])),
        array_has_all(make_array([1,2], [3,4]), make_array([1,2], [3,4], [5,6])),
        array_has_all(make_array([[1,2,3]]), make_array([[1]])),
-       array_has_all(make_array([[1,2,3]]), make_array([[1,2,3]]))
+       array_has_all(make_array([[1,2,3]]), make_array([[1,2,3]])),
+       array_has_any(make_array(1,2,3), make_array(1,10,100)),
+       array_has_any(make_array(1,2,3), make_array(10,100)),
+       array_has_any(make_array([1,2], [3,4]), make_array([1,10], [10,4])),
+       array_has_any(make_array([1,2], [3,4]), make_array([10,20], [3,4])),
+       array_has_any(make_array([[1,2,3]]), make_array([[1,2,3], [4,5,6]])),
+       array_has_any(make_array([[1,2,3]]), make_array([[1,2,3]], [[4,5,6]]))
 ;
 ----
-true false true false false false true
-
-query B
-select array_has_all(column5, column6)
-from array_has_table_1D;
-----
-true
-false
-
-query B
-select array_has_all(column3, column4)
-from array_has_table_1D_Float;
-----
-true
-false
-
-query B
-select array_has_all(column3, column4)
-from array_has_table_2D;
-----
-true
-false
-
-query B
-select array_has_all(column1, column2)
-from array_has_table_2D_float;
-----
-true
-false
-
-# # array_has_all scalar function #5
-# query BB
-# select array_has_all([true, true, false, true, false], [true, false, false]), array_has_all([true, false, true], [true, true]);
-# ----
-# true true
-#
-# # array_has_all scalar function #6
-# query BBB
-# select array_has_all(make_array(true, true, true), make_array(false, false)),
-#        array_has_all([false, false, false], [true, true]),
-#        array_has_all(make_array(true, true, true), make_array(true, false));
-# ----
-# false false false
-#
-# # For reference
-# # query ??
-# # select column1, column2 from arrays;
-# # ----
-# # [[, 2], [3, ]] [1.1, 2.2, 3.3]
-# # [[3, 4], [5, 6]] [, 5.5, 6.6]
-# # [[5, 6], [7, 8]] [7.7, 8.8, 9.9]
-# # [[7, ], [9, 10]] [10.1, , 12.2]
-# # NULL [13.3, 14.4, 15.5]
-# # [[11, 12], [13, 14]] NULL
-# # [[15, 16], [, 18]] [16.6, 17.7, 18.8]
-#
-# # array_has_all column-wise #1
-# query BB
-# select array_has_all(column1, make_array(7)),
-#        array_has_all(column1, make_array(3, 4, 5, 6)) from arrays;
-# ----
-# false false
-# false true
-# true false
-# true false
-# false false
-# false false
-# false false
-#
-#
-# # array_has_any column-wise #1
-# query B
-# select array_has_any(column1, make_array(3, 5, 7, 11)) from arrays;
-# ----
-# true
-# true
-# true
-# true
-# false
-# true
-# false
-#
-# # array_has_any column-wise #2
-# query BBBBB
-# select array_has_any(make_array(true, true, true), make_array(false)),
-#        array_has_any(make_array(true, true, true), make_array(true)),
-#        array_has_any(make_array(true, false), make_array(true)),
-#        array_has_any(make_array(true, false), make_array(false)),
-#        array_has_any(make_array(false, false), make_array(true, false));
-# ----
-# false true true true true
-#
-# # array_has_any column-wise #3
-# query BBB
-# select array_has_any(column2, make_array(1.0, 1.2, 1.4)),
-#        array_has_any(column2, make_array(1.1, 1.2, 1.4)),
-#        array_has_any(column2, make_array(1.1, 16.6, 1.4)) from arrays;
-# ----
-# false true true
-# false false false
-# false false false
-# false false false
-# false false false
-# false false true
+true false true false false false true true false false true false true
 
 ### Array operators tests
 ## array concatenate operator
@@ -1518,6 +1442,12 @@ drop table array_has_table_1D;
 
 statement ok
 drop table array_has_table_1D_Float;
+
+statement ok
+drop table array_has_table_1D_Boolean;
+
+statement ok
+drop table array_has_table_1D_UTF8;
 
 statement ok
 drop table array_has_table_2D;
