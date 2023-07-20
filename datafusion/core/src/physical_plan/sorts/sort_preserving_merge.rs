@@ -271,7 +271,7 @@ mod tests {
 
     use arrow::array::ArrayRef;
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, Int32Type};
     use arrow::record_batch::RecordBatch;
     use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, StreamExt};
@@ -287,9 +287,89 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::{assert_batches_eq, test_util};
-    use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
+    use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray, DictionaryArray};
 
     use super::*;
+
+    #[tokio::test]
+    async fn test_dict_merge() {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int32Array::from(vec![0, 0, 1, 2, 2, 1, 1, 0, 2]);
+        let a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+            Some("a"),
+            Some("c"),
+            Some("e"),
+            Some("g"),
+            Some("i"),
+            Some("k"),
+            Some("m"),
+            Some("o"),
+            Some("q"),
+        ]));
+        let batch_1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
+
+        let values = StringArray::from_iter_values(["d", "e", "f"]);
+        let keys = Int32Array::from(vec![0, 0, 1, 2, 2, 1, 1, 0, 2]);
+        let a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
+            Some("b"),
+            Some("d"),
+            Some("f"),
+            Some("h"),
+            Some("j"),
+            Some("l"),
+            Some("n"),
+            Some("p"),
+            Some("r"),
+        ]));
+        let batch_2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
+
+        let schema = batch_1.schema();
+        let sort = vec![
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            }
+        ];
+        let exec = MemoryExec::try_new(&[vec![batch_1], vec![batch_2]], schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let collected = collect(merge, task_ctx).await.unwrap();
+        // collected.iter().for_each(|batch| {
+        //     arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+        //         .unwrap()
+        //         .to_string();
+        // });
+
+        let expected = vec![
+            "+---+---+",
+            "| a | b |",
+            "+---+---+",
+            "| a | a |",
+            "| d | b |",
+            "| a | c |",
+            "| d | d |",
+            "| b | e |",
+            "| e | f |",
+            "| c | g |",
+            "| f | h |",
+            "| c | i |",
+            "| f | j |",
+            "| b | k |",
+            "| e | l |",
+            "| b | m |",
+            "| e | n |",
+            "| a | o |",
+            "| d | p |",
+            "| c | q |",
+            "| f | r |",
+            "+---+---+",
+        ];
+        assert_batches_eq!(expected, collected.as_slice());
+    }
 
     #[tokio::test]
     async fn test_merge_interleave() {
