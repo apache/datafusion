@@ -20,6 +20,7 @@
 use std::borrow::Borrow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::ops::{AddAssign, SubAssign};
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
@@ -157,28 +158,6 @@ impl Display for IntervalBound {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "IntervalBound [{}]", self.value)
     }
-}
-
-/// Returns the next value by adding one to the input value.
-pub fn next_value_add(value: ScalarValue) -> ScalarValue {
-    let one = if let Ok(one) = ScalarValue::new_one(&value.get_datatype()) {
-        one
-    } else {
-        return value;
-    };
-
-    value.add(one).unwrap_or(value)
-}
-
-/// Returns the next value by adding one to the input value.
-pub fn next_value_sub(value: ScalarValue) -> ScalarValue {
-    let one = if let Ok(one) = ScalarValue::new_one(&value.get_datatype()) {
-        one
-    } else {
-        return value;
-    };
-
-    value.sub(one).unwrap_or(value)
 }
 
 /// This type represents an interval, which is used to calculate reliable
@@ -542,17 +521,64 @@ impl Interval {
     pub fn interval_with_closed_bounds(mut self) -> Interval {
         if self.lower.open {
             // Get next value
-            self.lower.value = next_value_add(self.lower.value);
+            self.lower.value = next_value::<true>(self.lower.value);
             self.lower.open = false;
         }
 
         if self.upper.open {
             // Get previous value
-            self.upper.value = next_value_sub(self.upper.value);
+            self.upper.value = next_value::<false>(self.upper.value);
             self.upper.open = false;
         }
 
         self
+    }
+}
+
+trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
+    fn one() -> Self;
+}
+
+macro_rules! impl_OneTrait{
+    ($($m:ty),*) => {$( impl OneTrait for $m  { fn one() -> Self { 1 as $m } })*}
+}
+impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64}
+
+/// This function either increments or decrements its argument, depending on the `INC` value.
+/// If `true`, it increments; otherwise it decrements the argument.
+fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
+    mut val: T,
+) -> T {
+    if INC {
+        val.add_assign(T::one());
+    } else {
+        val.sub_assign(T::one());
+    }
+    val
+}
+
+/// This function returns the next/previous value depending on the `ADD` value.
+/// If `true`, it returns the next value; otherwise it returns the previous value.
+fn next_value<const INC: bool>(value: ScalarValue) -> ScalarValue {
+    use ScalarValue::*;
+    match value {
+        Float32(Some(val)) => {
+            let incremented_bits = increment_decrement::<INC, u32>(val.to_bits());
+            Float32(Some(f32::from_bits(incremented_bits)))
+        }
+        Float64(Some(val)) => {
+            let incremented_bits = increment_decrement::<INC, u64>(val.to_bits());
+            Float64(Some(f64::from_bits(incremented_bits)))
+        }
+        Int8(Some(val)) => Int8(Some(increment_decrement::<INC, i8>(val))),
+        Int16(Some(val)) => Int16(Some(increment_decrement::<INC, i16>(val))),
+        Int32(Some(val)) => Int32(Some(increment_decrement::<INC, i32>(val))),
+        Int64(Some(val)) => Int64(Some(increment_decrement::<INC, i64>(val))),
+        UInt8(Some(val)) => UInt8(Some(increment_decrement::<INC, u8>(val))),
+        UInt16(Some(val)) => UInt16(Some(increment_decrement::<INC, u16>(val))),
+        UInt32(Some(val)) => UInt32(Some(increment_decrement::<INC, u32>(val))),
+        UInt64(Some(val)) => UInt64(Some(increment_decrement::<INC, u64>(val))),
+        _ => value, // Infinite bounds or unsupported datatypes
     }
 }
 
@@ -635,8 +661,11 @@ fn calculate_cardinality_based_on_bounds(
 #[cfg(test)]
 mod tests {
     use crate::intervals::{Interval, IntervalBound};
+    use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
     use ScalarValue::Boolean;
+
+    use super::next_value;
 
     fn open_open<T>(lower: Option<T>, upper: Option<T>) -> Interval
     where
@@ -1359,6 +1388,74 @@ mod tests {
             IntervalBound::new(ScalarValue::from(0.0625_f32), true),
         );
         assert_eq!(interval.cardinality()?, distinct_f32 * 256);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_next_value() -> Result<()> {
+        // integer increment / decrement
+        let zeros = vec![
+            ScalarValue::new_zero(&DataType::UInt8)?,
+            ScalarValue::new_zero(&DataType::UInt16)?,
+            ScalarValue::new_zero(&DataType::UInt32)?,
+            ScalarValue::new_zero(&DataType::UInt64)?,
+            ScalarValue::new_zero(&DataType::Int8)?,
+            ScalarValue::new_zero(&DataType::Int8)?,
+            ScalarValue::new_zero(&DataType::Int8)?,
+            ScalarValue::new_zero(&DataType::Int8)?,
+        ];
+
+        let ones = vec![
+            ScalarValue::new_one(&DataType::UInt8)?,
+            ScalarValue::new_one(&DataType::UInt16)?,
+            ScalarValue::new_one(&DataType::UInt32)?,
+            ScalarValue::new_one(&DataType::UInt64)?,
+            ScalarValue::new_one(&DataType::Int8)?,
+            ScalarValue::new_one(&DataType::Int8)?,
+            ScalarValue::new_one(&DataType::Int8)?,
+            ScalarValue::new_one(&DataType::Int8)?,
+        ];
+
+        let _ = zeros.into_iter().zip(ones.into_iter()).map(|(z, o)| {
+            assert_eq!(next_value::<true>(z.clone()), o);
+            assert_eq!(next_value::<false>(o), z);
+        });
+
+        // floating value increment / decrement
+        let values = vec![
+            ScalarValue::new_zero(&DataType::Float32)?,
+            ScalarValue::new_zero(&DataType::Float64)?,
+        ];
+
+        let eps = vec![
+            ScalarValue::Float32(Some(1e-6)),
+            ScalarValue::Float64(Some(1e-6)),
+        ];
+
+        let _ = values.into_iter().zip(eps.into_iter()).map(|(v, e)| {
+            assert!(next_value::<true>(v.clone()).sub(v.clone()).unwrap().lt(&e));
+            assert!(v.clone().sub(next_value::<false>(v)).unwrap().lt(&e));
+        });
+
+        // Min / Max values do not change
+        let min = vec![
+            ScalarValue::UInt64(Some(u64::MIN)),
+            ScalarValue::Int8(Some(i8::MIN)),
+            ScalarValue::Float32(Some(f32::MIN)),
+            ScalarValue::Float64(Some(f64::MIN)),
+        ];
+        let max = vec![
+            ScalarValue::UInt64(Some(u64::MAX)),
+            ScalarValue::Int8(Some(i8::MAX)),
+            ScalarValue::Float32(Some(f32::MAX)),
+            ScalarValue::Float64(Some(f64::MAX)),
+        ];
+
+        let _ = min.into_iter().zip(max.into_iter()).map(|(min, max)| {
+            assert_eq!(next_value::<true>(max.clone()), max);
+            assert_eq!(next_value::<false>(min.clone()), min);
+        });
 
         Ok(())
     }
