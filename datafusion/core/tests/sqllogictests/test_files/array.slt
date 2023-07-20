@@ -89,15 +89,29 @@ AS VALUES
 statement ok
 CREATE TABLE array_has_table_1D
 AS VALUES
-  (make_array(1, 2), 1, make_array(true, true, true), false),
-  (make_array(3, 4, 5), 2, make_array(false, false, false), false)
+  (make_array(1, 2), 1, make_array(true, true, true), false, make_array(1,2,3), make_array(1,3)),
+  (make_array(3, 4, 5), 2, make_array(false, false, false), false, make_array(1,2,3,4), make_array(2,5))
+;
+
+statement ok
+CREATE TABLE array_has_table_1D_Float
+AS VALUES
+  (make_array(1.0, 2.0), 1.0, make_array(1.0,2.0,3.0), make_array(1.0,3.0)),
+  (make_array(3.0, 4.0, 5.0), 2.0, make_array(1.0,2.0,3.0,4.0), make_array(2.0,5.0))
 ;
 
 statement ok
 CREATE TABLE array_has_table_2D
 AS VALUES
-  (make_array([1,2]), make_array(1,3)),
-  (make_array([3,4], [5]), make_array(5))
+  (make_array([1,2]), make_array(1,3), make_array([1,2,3], [4,5], [6,7]), make_array([4,5], [6,7])),
+  (make_array([3,4], [5]), make_array(5), make_array([1,2,3,4], [5,6,7], [8,9,10]), make_array([1,2,3], [5,6,7], [8,9,10]))
+;
+
+statement ok
+CREATE TABLE array_has_table_2D_float
+AS VALUES
+  (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.1, 2.2], [3.3])),
+  (make_array([1.0, 2.0, 3.0], [1.1, 2.2], [3.3]), make_array([1.0], [1.1, 2.2], [3.3]))
 ;
 
 statement ok
@@ -111,7 +125,6 @@ AS VALUES
   (make_array([[1], [2]], [[2], [3]]), make_array([1], [2], [3])),
   (make_array([[1], [2]], [[2], [3]]), make_array([1], [2]))
 ;
-
 
 statement ok
 CREATE TABLE arrays_values_without_nulls
@@ -1193,10 +1206,12 @@ NULL 1 1
 
 ## array_has/array_has_all/array_has_any
 
-query B
-select array_has(make_array(1,2), 1);
+query BB
+select array_has(make_array(1,2), 1),
+       array_has(make_array(1,2,NULL), 1)
+;
 ----
-true
+true true
 
 query B
 select array_has(make_array([2,3], [3,4]), make_array(2,3));
@@ -1224,6 +1239,13 @@ from array_has_table_1D;
 ----
 true false
 false true
+
+query B
+select array_has(column1, column2)
+from array_has_table_1D_Float;
+----
+true
+false
 
 query B
 select array_has(column1, column2) from array_has_table_2D;
@@ -1267,26 +1289,46 @@ false true false false
 false false false false
 false false false false
 
-# array_has_all scalar function #1
-# query BBB
-# select array_has_all(make_array(1, 2, 3), make_array(1, 1, 2, 3)), array_has_all([1, 2, 3], [1, 1, 2]), array_has_all([1, 2, 3], [2, 1, 3, 1]);
+query BBBBBBB
+select array_has_all(make_array(1,2,3), make_array(1,3)),
+       array_has_all(make_array(1,2,3), make_array(1,4)),
+       array_has_all(make_array([1,2], [3,4]), make_array([1,2])),
+       array_has_all(make_array([1,2], [3,4]), make_array([1,3])),
+       array_has_all(make_array([1,2], [3,4]), make_array([1,2], [3,4], [5,6])),
+       array_has_all(make_array([[1,2,3]]), make_array([[1]])),
+       array_has_all(make_array([[1,2,3]]), make_array([[1,2,3]]))
+;
+----
+true false true false false false true
 
-# array_has_all scalar function #2
-# query BB
-# select array_has_all([[1, 2], [3, 4]], [[1, 2], [3, 4], [1, 3]]), array_has_all([[[1], [2]], [[3], [4]]], [1, 2, 2, 3, 4]);
+query B
+select array_has_all(column5, column6)
+from array_has_table_1D;
+----
+true
+false
 
-# array_has_all scalar function #3
-# query BBB
-# select array_has_all(make_array(1, 2, 3), make_array(1, 2, 3, 4)), array_has_all([1, 2, 3], [1, 1, 4]), array_has_all([1, 2, 3], [2, 1, 3, 4]);
-# ----
-# false false false
-#
-# # array_has_all scalar function #4
-# query BB
-# select array_has_all([[1, 2], [3, 4]], [[1, 2], [3, 4], [1, 5]]), array_has_all([[[1], [2]], [[3], [4]]], [1, 2, 2, 3, 5]);
-# ----
-# false false
-#
+query B
+select array_has_all(column3, column4)
+from array_has_table_1D_Float;
+----
+true
+false
+
+query B
+select array_has_all(column3, column4)
+from array_has_table_2D;
+----
+true
+false
+
+query B
+select array_has_all(column1, column2)
+from array_has_table_2D_float;
+----
+true
+false
+
 # # array_has_all scalar function #5
 # query BB
 # select array_has_all([true, true, false, true, false], [true, false, false]), array_has_all([true, false, true], [true, true]);
@@ -1475,7 +1517,16 @@ statement ok
 drop table array_has_table_1D;
 
 statement ok
+drop table array_has_table_1D_Float;
+
+statement ok
 drop table array_has_table_2D;
+
+statement ok
+drop table array_has_table_2D_float;
+
+statement ok
+drop table array_has_table_3D;
 
 statement ok
 drop table arrays_values_without_nulls;

@@ -536,16 +536,16 @@ scalar_expr!(
 );
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
-    ArrayHasAll,
-    array_has_all,
-    first_array second_array,
-"Returns true if each element of the second array appears in the first array; otherwise, it returns false."
-);
-scalar_expr!(
     ArrayHas,
     array_has,
     first_array second_array,
 "Returns true, if the element appears in the first array, otherwise false."
+);
+scalar_expr!(
+    ArrayHasAll,
+    array_has_all,
+    first_array second_array,
+"Returns true if each element of the second array appears in the first array; otherwise, it returns false."
 );
 scalar_expr!(
     ArrayHasAny,

@@ -1529,7 +1529,7 @@ macro_rules! non_list_contains {
         for (arr, elem) in $ARRAY.iter().zip(sub_array.iter()) {
             if let (Some(arr), Some(elem)) = (arr, elem) {
                 let arr = downcast_arg!(arr, $ARRAY_TYPE);
-                let res = arr.iter().flatten().any(|x| x == elem);
+                let res = arr.iter().dedup().flatten().any(|x| x == elem);
                 boolean_builder.append_value(res);
             }
         }
@@ -1551,7 +1551,7 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
             for (arr, elem) in array.iter().zip(sub_array.iter()) {
                 if let (Some(arr), Some(elem)) = (arr, elem) {
                     let list_arr = arr.as_list::<i32>();
-                    let res = list_arr.iter().flatten().any(|x| *x == *elem);
+                    let res = list_arr.iter().dedup().flatten().any(|x| *x == *elem);
                     boolean_builder.append_value(res);
                 }
             }
@@ -1579,21 +1579,61 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+macro_rules! array_has_all_non_list_check {
+    ($ARRAY:expr, $SUB_ARRAY:expr, $ARRAY_TYPE:ident) => {{
+        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
+        let sub_arr = downcast_arg!($SUB_ARRAY, $ARRAY_TYPE);
+
+        let mut res = true;
+        for elem in sub_arr.iter().dedup() {
+            res &= arr
+                .iter()
+                .dedup()
+                .flatten()
+                .any(|x| x == elem.expect("null type not supported"));
+        }
+        res
+    }};
+}
+
 /// Array_has_all SQL function
 pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     assert_eq!(args.len(), 2);
-    let array = flatten_list_array::<i32>(args[0].clone())?;
-    // TODO: Dont need to flatten rhs array
-    let sub_array = flatten_list_array::<i32>(args[1].clone())?;
-    let mut boolean_array = Vec::with_capacity(array.len());
 
+    let array = args[0].as_list::<i32>();
+    let sub_array = args[1].as_list::<i32>();
+
+    let mut boolean_builder = BooleanArray::builder(array.len());
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = contains_internal(arr.clone(), sub_arr.clone())?;
-            boolean_array.push(res);
+            match (arr.data_type(), sub_arr.data_type()) {
+                (DataType::List(_), DataType::List(_)) => {
+                    let arr = downcast_arg!(arr, ListArray);
+                    let sub_arr = downcast_arg!(sub_arr, ListArray);
+
+                    let mut res = true;
+                    for elem in sub_arr.iter().dedup().flatten() {
+                        res &= arr.iter().dedup().flatten().any(|x| *x == *elem);
+                    }
+                    boolean_builder.append_value(res);
+                }
+                (DataType::Int64, DataType::Int64) => {
+                    let res = array_has_all_non_list_check!(arr, sub_arr, Int64Array);
+                    boolean_builder.append_value(res);
+                }
+                (DataType::Float64, DataType::Float64) => {
+                    let res = array_has_all_non_list_check!(arr, sub_arr, Float64Array);
+                    boolean_builder.append_value(res);
+                }
+                _ => Err(DataFusionError::NotImplemented(format!(
+                    "Array_has_all is not implemented for types '{:?}' and '{:?}'.",
+                    arr.data_type(),
+                    sub_arr.data_type()
+                )))?,
+            }
         }
     }
-    Ok(Arc::new(BooleanArray::from(boolean_array)))
+    Ok(Arc::new(boolean_builder.finish()))
 }
 
 #[cfg(test)]
