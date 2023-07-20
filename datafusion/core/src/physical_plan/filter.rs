@@ -42,6 +42,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::is_operator_supported;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries,
     OrderingEquivalenceProperties, PhysicalExpr,
@@ -49,8 +50,6 @@ use datafusion_physical_expr::{
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
-
-use datafusion_physical_expr::utils::collect_columns;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
@@ -238,35 +237,38 @@ impl ExecutionPlan for FilterExec {
     }
 }
 
-/// This function ensures that all bounds in the `ExprBoundaries` vector are converted
-/// to closed bounds. If a bound is initially open, it is adjusted by incrementing(if it
-/// is a lower bound) or decrementing(if it is an upper bound) by one unit of its datatype
-/// to make it a closed bound.
+/// This function ensures that all bounds in the `ExprBoundaries` vector are
+/// converted to closed bounds. If a lower/upper bound is initially open, it
+/// is adjusted by using the next/previous value for its data type to convert
+/// it into a closed bound.
 fn collect_new_statistics(
     input_column_stats: Vec<ColumnStatistics>,
     selectivity: f64,
     analysis_boundaries: Vec<ExprBoundaries>,
 ) -> Vec<ColumnStatistics> {
-    let mut res = Vec::with_capacity(analysis_boundaries.len());
-    for (
-        i,
-        ExprBoundaries {
-            interval,
-            distinct_count,
-            ..
-        },
-    ) in analysis_boundaries.into_iter().enumerate()
-    {
-        let closed_interval = interval.interval_with_closed_bounds();
-        let nonempty_columns = selectivity > 0.0;
-        res.push(ColumnStatistics {
-            null_count: input_column_stats[i].null_count,
-            max_value: nonempty_columns.then_some(closed_interval.upper.value),
-            min_value: nonempty_columns.then_some(closed_interval.lower.value),
-            distinct_count,
-        });
-    }
-    res
+    let nonempty_columns = selectivity > 0.0;
+    analysis_boundaries
+        .into_iter()
+        .enumerate()
+        .map(
+            |(
+                idx,
+                ExprBoundaries {
+                    interval,
+                    distinct_count,
+                    ..
+                },
+            )| {
+                let closed_interval = interval.close_bounds();
+                ColumnStatistics {
+                    null_count: input_column_stats[idx].null_count,
+                    max_value: nonempty_columns.then_some(closed_interval.upper.value),
+                    min_value: nonempty_columns.then_some(closed_interval.lower.value),
+                    distinct_count,
+                }
+            },
+        )
+        .collect()
 }
 
 /// The FilterExec streams wraps the input iterator and applies the predicate expression to

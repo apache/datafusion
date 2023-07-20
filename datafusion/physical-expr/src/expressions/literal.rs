@@ -21,15 +21,14 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::physical_expr::down_cast_any_ref;
+use crate::PhysicalExpr;
+
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents a literal value

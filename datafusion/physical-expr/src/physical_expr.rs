@@ -15,24 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Schema};
-
-use arrow::record_batch::RecordBatch;
-
-use datafusion_common::utils::DataPtr;
-use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
-
-use std::fmt::{Debug, Display};
-
-use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
-use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
-
 use crate::expressions::Column;
 use crate::intervals::cp_solver::PropagationResult;
 use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
 use crate::utils::collect_columns;
+
+use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
+use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
+use arrow::datatypes::{DataType, Schema};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::DataPtr;
+use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
+use datafusion_expr::ColumnarValue;
+
 use std::any::Any;
+use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -192,9 +189,10 @@ pub fn analyze(
     }
 }
 
-/// If the `PropagationResult` indicates success, this function calculates the selectivity value by comparing the initial
-/// and final column boundaries. Following this, it constructs and returns a new `AnalysisContext`, with
-/// the updated parameters.
+/// If the `PropagationResult` indicates success, this function calculates the
+/// selectivity value by comparing the initial and final column boundaries.
+/// Following this, it constructs and returns a new `AnalysisContext` with the
+/// updated parameters.
 fn shrink_boundaries(
     expr: &Arc<dyn PhysicalExpr>,
     mut graph: ExprIntervalGraph,
@@ -208,7 +206,7 @@ fn shrink_boundaries(
                 .iter_mut()
                 .find(|bound| bound.column.eq(column))
             {
-                bound.update_interval(graph.get_interval(*i))
+                bound.interval = graph.get_interval(*i);
             };
         }
     });
@@ -235,11 +233,15 @@ fn shrink_boundaries(
     Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
 }
 
-/// This function calculates the filter predicate's selectivity by comparing the initial and pruned column boundaries.
-/// Selectivity is defined as the ratio of rows in a table that satisfy the filter's predicate. An exact propagation result
-// at the root, i.e. `[true, true]` or `[false, false]`, leads to early exit (returning a selectivity value of either 1.0 or 0.0).
-// In such a case, `[true, true]` indicates that all data values satisfy the predicate (hence, selectivity is 1.0), and `[false, false]`
-// suggests that no data value meets the predicate (therefore, selectivity is 0.0).
+/// This function calculates the filter predicate's selectivity by comparing
+/// the initial and pruned column boundaries. Selectivity is defined as the
+/// ratio of rows in a table that satisfy the filter's predicate.
+///
+/// An exact propagation result at the root, i.e. `[true, true]` or `[false, false]`,
+/// leads to early exit (returning a selectivity value of either 1.0 or 0.0). In such
+/// a case, `[true, true]` indicates that all data values satisfy the predicate (hence,
+/// selectivity is 1.0), and `[false, false]` suggests that no data value meets the
+/// predicate (therefore, selectivity is 0.0).
 fn calculate_selectivity(
     lower_value: &ScalarValue,
     upper_value: &ScalarValue,
@@ -250,9 +252,9 @@ fn calculate_selectivity(
         (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Ok(1.0),
         (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => Ok(0.0),
         _ => {
-            // Since the intervals are assumed as uniform, and the values
+            // Since the intervals are assumed uniform and the values
             // are not correlated, we need to multiply the selectivities
-            // of multiple columns to get overall selectivity.
+            // of multiple columns to get the overall selectivity.
             target_boundaries.iter().enumerate().try_fold(
                 1.0,
                 |acc, (i, ExprBoundaries { interval, .. })| {
@@ -306,11 +308,11 @@ impl AnalysisContext {
         statistics: &[ColumnStatistics],
     ) -> Self {
         let mut column_boundaries = vec![];
-        for (i, stats) in statistics.iter().enumerate() {
+        for (idx, stats) in statistics.iter().enumerate() {
             column_boundaries.push(ExprBoundaries::from_column(
                 stats,
-                input_schema.fields()[i].name().clone(),
-                i,
+                input_schema.fields()[idx].name().clone(),
+                idx,
             ));
         }
         Self::new(column_boundaries)
@@ -322,14 +324,14 @@ impl AnalysisContext {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExprBoundaries {
     pub column: Column,
-    /// Minimum and Maximum values this expression's result can have.
+    /// Minimum and maximum values this expression can have.
     pub interval: Interval,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Option<usize>,
 }
 
 impl ExprBoundaries {
-    /// Create a new `ExprBoundaries` from a column level statistics.
+    /// Create a new `ExprBoundaries` object from column level statistics.
     pub fn from_column(stats: &ColumnStatistics, col: String, index: usize) -> Self {
         Self {
             column: Column::new(&col, index),
@@ -345,10 +347,6 @@ impl ExprBoundaries {
             ),
             distinct_count: stats.distinct_count,
         }
-    }
-
-    pub fn update_interval(&mut self, interval: Interval) {
-        self.interval = interval;
     }
 }
 

@@ -536,6 +536,7 @@ impl ExprIntervalGraph {
         }
     }
 
+    /// Returns the interval associated with the node at the given `index`.
     pub fn get_interval(&self, index: usize) -> Interval {
         self.graph[NodeIndex::new(index)].interval.clone()
     }

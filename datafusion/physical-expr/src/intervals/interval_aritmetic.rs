@@ -22,15 +22,15 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
+use crate::aggregate::min_max::{max, min};
+use crate::intervals::rounding::alter_fp_rounding_mode;
+
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
-
-use crate::aggregate::min_max::{max, min};
-use crate::intervals::rounding::alter_fp_rounding_mode;
 
 /// This type represents a single endpoint of an [`Interval`]. An endpoint can
 /// be open or closed, denoting whether the interval includes or excludes the
@@ -454,7 +454,8 @@ impl Interval {
         upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
     };
 
-    // Cardinality is the number of all points included by the interval, considering its bounds.
+    /// Returns the cardinality of this interval, which is the number of all
+    /// distinct points inside it.
     pub fn cardinality(&self) -> Result<u64> {
         match self.get_datatype() {
             Ok(data_type) if data_type.is_integer() => {
@@ -471,8 +472,9 @@ impl Interval {
                     )))
                 }
             }
-            // Since the floating-point numbers are ordered in the same order as their binary representation,
-            // we can consider their binary representations as "indices" and subtract them.
+            // Ordering floating-point numbers according to their binary representations
+            // coincide with their natural ordering. Therefore, we can consider their
+            // binary representations as "indices" and subtract them. For details, see:
             // https://stackoverflow.com/questions/8875064/how-many-distinct-floating-point-numbers-in-a-specific-range
             Ok(data_type) if data_type.is_floating() => {
                 // If the minimum value is a negative number, we need to
@@ -516,9 +518,10 @@ impl Interval {
         }
     }
 
-    /// The interval has any open bound(s), the function converts
-    /// them to closed bound(s) preserving the interval endpoints.
-    pub fn interval_with_closed_bounds(mut self) -> Interval {
+    /// This function "closes" this interval; i.e. it modifies the endpoints so
+    /// that we end up with the narrowest possible closed interval containing
+    /// the original interval.
+    pub fn close_bounds(mut self) -> Interval {
         if self.lower.open {
             // Get next value
             self.lower.value = next_value::<true>(self.lower.value);
@@ -582,6 +585,7 @@ fn next_value<const INC: bool>(value: ScalarValue) -> ScalarValue {
     }
 }
 
+/// This function computes the cardinality ratio of the given intervals.
 pub fn cardinality_ratio(
     initial_interval: &Interval,
     final_interval: &Interval,
@@ -660,12 +664,11 @@ fn calculate_cardinality_based_on_bounds(
 
 #[cfg(test)]
 mod tests {
+    use super::next_value;
     use crate::intervals::{Interval, IntervalBound};
+
     use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
-    use ScalarValue::Boolean;
-
-    use super::next_value;
 
     fn open_open<T>(lower: Option<T>, upper: Option<T>) -> Interval
     where
@@ -1213,6 +1216,7 @@ mod tests {
     // ([false, false], [false, true], [true, true]) for boolean intervals.
     #[test]
     fn non_standard_interval_constructs() {
+        use ScalarValue::Boolean;
         let cases = vec![
             (
                 IntervalBound::new(Boolean(None), true),

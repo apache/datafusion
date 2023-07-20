@@ -18,14 +18,6 @@
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    array::{new_null_array, Array, ArrayRef, LargeStringArray, StringArray},
-    record_batch::RecordBatch,
-};
-use arrow_schema::{DataType, Schema};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
-
 use crate::{physical_expr::down_cast_any_ref, PhysicalExpr};
 
 use arrow::compute::kernels::comparison::{
@@ -34,6 +26,13 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::comparison::{
     ilike_utf8_scalar, like_utf8_scalar, nilike_utf8_scalar, nlike_utf8_scalar,
 };
+use arrow::{
+    array::{new_null_array, Array, ArrayRef, LargeStringArray, StringArray},
+    record_batch::RecordBatch,
+};
+use arrow_schema::{DataType, Schema};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::ColumnarValue;
 
 // Like expression
 #[derive(Debug, Hash)]

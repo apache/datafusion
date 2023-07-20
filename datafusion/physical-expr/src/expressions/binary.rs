@@ -49,13 +49,12 @@ use arrow::compute::kernels::comparison::{
     eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
+use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, CastOptions};
 use arrow::datatypes::*;
+use arrow::record_batch::RecordBatch;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-
-use datafusion_expr::type_coercion::{is_decimal, is_timestamp, is_utf8_or_large_utf8};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -73,9 +72,6 @@ use kernels_arrow::{
     subtract_decimal_dyn_scalar, subtract_dyn_decimal, subtract_dyn_temporal,
 };
 
-use arrow::datatypes::{DataType, Schema, TimeUnit};
-use arrow::record_batch::RecordBatch;
-
 use self::kernels_arrow::{
     add_dyn_temporal_left_scalar, add_dyn_temporal_right_scalar,
     subtract_dyn_temporal_left_scalar, subtract_dyn_temporal_right_scalar,
@@ -87,13 +83,14 @@ use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use datafusion_common::cast::as_boolean_array;
 
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::{
     coercion_decimal_mathematics_type, get_result_type,
 };
+use datafusion_expr::type_coercion::{is_decimal, is_timestamp, is_utf8_or_large_utf8};
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
