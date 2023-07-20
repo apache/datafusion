@@ -89,8 +89,8 @@ AS VALUES
 statement ok
 CREATE TABLE array_has_table_1D
 AS VALUES
-  (make_array(1, 2), 1),
-  (make_array(3, 4, 5), 2)
+  (make_array(1, 2), 1, make_array(true, true, true), false),
+  (make_array(3, 4, 5), 2, make_array(false, false, false), false)
 ;
 
 statement ok
@@ -1217,11 +1217,13 @@ select array_has(make_array([[[1]]]), make_array([[1]])),
 ----
 true false true
 
-query B
-select array_has(column1, column2) from array_has_table_1D;
+query BB
+select array_has(column1, column2),
+       array_has(column3, column4)
+from array_has_table_1D;
 ----
-true
-false
+true false
+false true
 
 query B
 select array_has(column1, column2) from array_has_table_2D;
@@ -1240,40 +1242,30 @@ true
 false
 true
 
-# query ?
-# select column1 from arrays;
-# ----
-# [[, 2], [3, ]]
-# [[3, 4], [5, 6]]
-# [[5, 6], [7, 8]]
-# [[7, ], [9, 10]]
-# NULL
-# [[11, 12], [13, 14]]
-# [[15, 16], [, 18]]
+query ???
+select column1, column2, column3 from arrays;
+----
+[[, 2], [3, ]] [1.1, 2.2, 3.3] [L, o, r, e, m]
+[[3, 4], [5, 6]] [, 5.5, 6.6] [i, p, , u, m]
+[[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, , l, o, r]
+[[7, ], [9, 10]] [10.1, , 12.2] [s, i, t]
+NULL [13.3, 14.4, 15.5] [a, m, e, t]
+[[11, 12], [13, 14]] NULL [,]
+[[15, 16], [, 18]] [16.6, 17.7, 18.8] NULL
 
-# array_has scalar function #1
-query BB
+query BBBB
 select array_has(column1, make_array(5, 6)),
-       array_has(column1, make_array(7, NULL)) from arrays;
+       array_has(column1, make_array(7, NULL)),
+       array_has(column2, 5.5),
+       array_has(column3, 'o')
+from arrays;
 ----
-false false
-true false
-true false
-false true
-false false
-false false
-
-query error DataFusion error: Error during planning: table 'datafusion\.public\.array_has_table' not found
-select array_has(column1, 1) from array_has_table;
-
-query B
-select array_has(make_array(1,2,3), 1);
-----
-true
-
-# array_has column-wise #1
-# query B
-# select array_has(column1, 7) from arrays;
+false false false true
+true false true false
+true false false true
+false true false false
+false false false false
+false false false false
 
 # array_has_all scalar function #1
 # query BBB
