@@ -467,7 +467,7 @@ pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
         _ => matches!(
             arg_type,
             arg_type if NUMERICS.contains(arg_type)
-            || matches!(arg_type, DataType::Decimal128(_, _))
+            || matches!(arg_type, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
         ),
     }
 }
@@ -480,7 +480,7 @@ pub fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
         _ => matches!(
             arg_type,
             arg_type if NUMERICS.contains(arg_type)
-                || matches!(arg_type, DataType::Decimal128(_, _))
+                || matches!(arg_type, DataType::Decimal128(_, _)| DataType::Decimal256(_, _))
         ),
     }
 }
@@ -579,6 +579,7 @@ mod tests {
         let input_types = vec![
             vec![DataType::Int32],
             vec![DataType::Decimal128(10, 2)],
+            vec![DataType::Decimal256(1, 1)],
             vec![DataType::Utf8],
         ];
         for fun in funs {
@@ -594,6 +595,7 @@ mod tests {
             vec![DataType::Int32],
             vec![DataType::Float32],
             vec![DataType::Decimal128(20, 3)],
+            vec![DataType::Decimal256(20, 3)],
         ];
         for fun in funs {
             for input_type in &input_types {
