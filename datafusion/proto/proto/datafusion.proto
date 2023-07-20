@@ -925,10 +925,17 @@ message ScalarValue{
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
     StructValue struct_value = 32;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
+    Decimal256 decimal256_value = 35;
   }
 }
 
 message Decimal128{
+  bytes value = 1;
+  int64 p = 2;
+  int64 s = 3;
+}
+
+message Decimal256{
   bytes value = 1;
   int64 p = 2;
   int64 s = 3;
