@@ -18,8 +18,7 @@
 //! Aggregates functionalities
 
 use crate::physical_plan::aggregates::{
-    bounded_aggregate_stream::BoundedAggregateStream, no_grouping::AggregateStream,
-    row_hash::GroupedHashAggregateStream,
+    no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -46,10 +45,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-mod bounded_aggregate_stream;
 mod no_grouping;
+mod order;
 mod row_hash;
-mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
@@ -77,7 +75,13 @@ pub enum AggregateMode {
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
+    /// This mode requires tha the input is a single partition (like Final)
     Single,
+    /// Applies the entire logical aggregation operation in a single operator,
+    /// as opposed to Partial / Final modes which apply the logical aggregation using
+    /// two operators.
+    /// This mode requires tha the input is partitioned by group key (like FinalPartitioned)
+    SinglePartitioned,
 }
 
 /// Group By expression modes
@@ -89,7 +93,7 @@ pub enum AggregateMode {
 /// Specifically, each distinct combination of the relevant columns
 /// are contiguous in the input, and once a new combination is seen
 /// previous combinations are guaranteed never to appear again
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupByOrderMode {
     /// The input is not (known to be) ordered by any of the
     /// expressions in the GROUP BY clause.
@@ -212,7 +216,6 @@ impl PartialEq for PhysicalGroupBy {
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHashAggregateStream(GroupedHashAggregateStream),
-    BoundedAggregate(BoundedAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
@@ -220,7 +223,6 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
-            StreamType::BoundedAggregate(stream) => Box::pin(stream),
         }
     }
 }
@@ -719,14 +721,6 @@ impl AggregateExec {
             Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
             )?))
-        } else if let Some(aggregation_ordering) = &self.aggregation_ordering {
-            let aggregation_ordering = aggregation_ordering.clone();
-            Ok(StreamType::BoundedAggregate(BoundedAggregateStream::new(
-                self,
-                context,
-                partition,
-                aggregation_ordering,
-            )?))
         } else {
             Ok(StreamType::GroupedHashAggregateStream(
                 GroupedHashAggregateStream::new(self, context, partition)?,
@@ -872,13 +866,15 @@ impl ExecutionPlan for AggregateExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.mode {
-            AggregateMode::Partial | AggregateMode::Single => {
+            AggregateMode::Partial => {
                 vec![Distribution::UnspecifiedDistribution]
             }
-            AggregateMode::FinalPartitioned => {
+            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
                 vec![Distribution::HashPartitioned(self.output_group_expr())]
             }
-            AggregateMode::Final => vec![Distribution::SinglePartition],
+            AggregateMode::Final | AggregateMode::Single => {
+                vec![Distribution::SinglePartition]
+            }
         }
     }
 
@@ -982,7 +978,8 @@ fn create_schema(
         }
         AggregateMode::Final
         | AggregateMode::FinalPartitioned
-        | AggregateMode::Single => {
+        | AggregateMode::Single
+        | AggregateMode::SinglePartitioned => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
                 fields.push(expr.field()?)
@@ -998,7 +995,7 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
     Arc::new(Schema::new(group_fields))
 }
 
-/// returns physical expressions to evaluate against a batch
+/// returns physical expressions for arguments to evaluate against a batch
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
 /// * Final: columns of `AggregateExpr::state_fields()`
@@ -1008,7 +1005,9 @@ fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial | AggregateMode::Single => Ok(aggr_expr
+        AggregateMode::Partial
+        | AggregateMode::Single
+        | AggregateMode::SinglePartitioned => Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let pre_cast_type = if let Some(Sum {
@@ -1105,6 +1104,7 @@ fn create_accumulators(
         .collect::<Result<Vec<_>>>()
 }
 
+#[allow(dead_code)]
 fn create_row_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
 ) -> Result<Vec<RowAccumulatorItem>> {
@@ -1141,7 +1141,8 @@ fn finalize_aggregation(
         }
         AggregateMode::Final
         | AggregateMode::FinalPartitioned
-        | AggregateMode::Single => {
+        | AggregateMode::Single
+        | AggregateMode::SinglePartitioned => {
             // merge the state to the final value
             accumulators
                 .iter()

@@ -21,6 +21,7 @@ use arrow::array::*;
 use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::compute;
 use arrow::datatypes::{DataType, Field, UInt64Type};
+use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
 use datafusion_common::ScalarValue;
@@ -409,6 +410,7 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[1];
 
     let res = match (arr.value_type(), element.data_type()) {
+                (DataType::List(_), DataType::List(_)) => concat_internal(args)?,
                 (DataType::Utf8, DataType::Utf8) => append!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => append!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => append!(arr, element, BooleanArray),
@@ -498,6 +500,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[1])?;
 
     let res = match (arr.value_type(), element.data_type()) {
+                (DataType::List(_), DataType::List(_)) => concat_internal(args)?,
                 (DataType::Utf8, DataType::Utf8) => prepend!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => prepend!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => prepend!(arr, element, BooleanArray),
@@ -542,7 +545,18 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
                 let mut aligned_array = array.clone();
                 for _ in 0..(max_ndim - ndim) {
                     let data_type = aligned_array.as_ref().data_type().clone();
-                    aligned_array = array_array(&[aligned_array], data_type)?;
+                    let offsets: Vec<i32> =
+                        (0..downcast_arg!(aligned_array, ListArray).offsets().len())
+                            .map(|i| i as i32)
+                            .collect();
+                    let field = Arc::new(Field::new("item", data_type, true));
+
+                    aligned_array = Arc::new(ListArray::try_new(
+                        field,
+                        OffsetBuffer::new(offsets.into()),
+                        Arc::new(aligned_array.clone()),
+                        None,
+                    )?)
                 }
                 Ok(aligned_array)
             } else {
@@ -554,42 +568,65 @@ fn align_array_dimensions(args: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
     aligned_args
 }
 
+fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let args = align_array_dimensions(args.to_vec())?;
+
+    let list_arrays =
+        downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+
+    // Assume number of rows is the same for all arrays
+    let row_count = list_arrays[0].len();
+    let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
+    let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+    let array_data: Vec<&ArrayData> = array_data.iter().collect();
+
+    let mut mutable = MutableArrayData::with_capacities(array_data, true, capacity);
+
+    let mut array_lens = vec![0; row_count];
+    let mut null_bit_map: Vec<bool> = vec![true; row_count];
+
+    for (i, array_len) in array_lens.iter_mut().enumerate().take(row_count) {
+        let null_count = mutable.null_count();
+        for (j, a) in list_arrays.iter().enumerate() {
+            mutable.extend(j, i, i + 1);
+            *array_len += a.value_length(i);
+        }
+
+        // This means all arrays are null
+        if mutable.null_count() == null_count + list_arrays.len() {
+            null_bit_map[i] = false;
+        }
+    }
+
+    let mut buffer = BooleanBufferBuilder::new(row_count);
+    buffer.append_slice(null_bit_map.as_slice());
+    let nulls = Some(NullBuffer::from(buffer.finish()));
+
+    let offsets: Vec<i32> = std::iter::once(0)
+        .chain(array_lens.iter().scan(0, |state, &x| {
+            *state += x;
+            Some(*state)
+        }))
+        .collect();
+
+    let builder = mutable.into_builder();
+
+    let list = builder
+        .len(row_count)
+        .buffers(vec![Buffer::from_vec(offsets)])
+        .nulls(nulls)
+        .build()?;
+
+    let list = arrow::array::make_array(list);
+    Ok(Arc::new(list))
+}
+
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::List(field) => match field.data_type() {
             DataType::Null => array_concat(&args[1..]),
-            _ => {
-                let args = align_array_dimensions(args.to_vec())?;
-
-                let list_arrays = downcast_vec!(args, ListArray)
-                    .collect::<Result<Vec<&ListArray>>>()?;
-
-                let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-
-                let capacity =
-                    Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-                let array_data: Vec<_> =
-                    list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-
-                let array_data = array_data.iter().collect();
-
-                let mut mutable =
-                    MutableArrayData::with_capacities(array_data, false, capacity);
-
-                for (i, a) in list_arrays.iter().enumerate() {
-                    mutable.extend(i, 0, a.len())
-                }
-
-                let builder = mutable.into_builder();
-                let list = builder
-                    .len(1)
-                    .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
-                    .build()
-                    .unwrap();
-
-                return Ok(Arc::new(arrow::array::make_array(list)));
-            }
+            _ => concat_internal(args),
         },
         data_type => Err(DataFusionError::NotImplemented(format!(
             "Array is not type '{data_type:?}'."
@@ -737,6 +774,7 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let res = match arr.data_type() {
         DataType::List(field) => match field.data_type() {
+            DataType::List(_) => position!(arr, element, index, ListArray),
             DataType::Utf8 => position!(arr, element, index, StringArray),
             DataType::LargeUtf8 => position!(arr, element, index, LargeStringArray),
             DataType::Boolean => position!(arr, element, index, BooleanArray),
@@ -822,6 +860,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let res = match arr.data_type() {
         DataType::List(field) => match field.data_type() {
+            DataType::List(_) => positions!(arr, element, ListArray),
             DataType::Utf8 => positions!(arr, element, StringArray),
             DataType::LargeUtf8 => positions!(arr, element, LargeStringArray),
             DataType::Boolean => positions!(arr, element, BooleanArray),
@@ -1040,7 +1079,6 @@ macro_rules! to_string {
                 }
             }
         }
-
         Ok($ARG)
     }};
 }
@@ -1048,9 +1086,10 @@ macro_rules! to_string {
 /// Array_to_string SQL function
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = &args[0];
-    let delimeter = as_generic_string_array::<i32>(&args[1])?
-        .value(0)
-        .to_string();
+
+    let delimeters = as_generic_string_array::<i32>(&args[1])?;
+    let delimeters: Vec<Option<&str>> = delimeters.iter().collect();
+
     let mut null_string = String::from("");
     let mut with_null_string = false;
     if args.len() == 3 {
@@ -1195,21 +1234,56 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let mut arg = String::from("");
-    let mut res = compute_array_to_string(
-        &mut arg,
-        arr.clone(),
-        delimeter.clone(),
-        null_string,
-        with_null_string,
-    )?
-    .clone();
-    match res.as_str() {
-        "" => Ok(Arc::new(StringArray::from(vec![Some(res)]))),
+    let mut res: Vec<Option<String>> = Vec::new();
+
+    match arr.data_type() {
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            let list_array = arr.as_list::<i32>();
+            for (arr, &delimeter) in list_array.iter().zip(delimeters.iter()) {
+                if let (Some(arr), Some(delimeter)) = (arr, delimeter) {
+                    arg = String::from("");
+                    let s = compute_array_to_string(
+                        &mut arg,
+                        arr,
+                        delimeter.to_string(),
+                        null_string.clone(),
+                        with_null_string,
+                    )?
+                    .clone();
+
+                    if let Some(s) = s.strip_suffix(delimeter) {
+                        res.push(Some(s.to_string()));
+                    } else {
+                        res.push(Some(s));
+                    }
+                } else {
+                    res.push(None);
+                }
+            }
+        }
         _ => {
-            res.truncate(res.len() - delimeter.len());
-            Ok(Arc::new(StringArray::from(vec![Some(res)])))
+            // delimeter length is 1
+            assert_eq!(delimeters.len(), 1);
+            let delimeter = delimeters[0].unwrap();
+            let s = compute_array_to_string(
+                &mut arg,
+                arr.clone(),
+                delimeter.to_string(),
+                null_string,
+                with_null_string,
+            )?
+            .clone();
+
+            if !s.is_empty() {
+                let s = s.strip_suffix(delimeter).unwrap().to_string();
+                res.push(Some(s));
+            } else {
+                res.push(Some(s));
+            }
         }
     }
+
+    Ok(Arc::new(StringArray::from(res)))
 }
 
 /// Trim_array SQL function
@@ -1297,6 +1371,7 @@ macro_rules! contains {
         for x in second_array.values().iter().dedup() {
             if !first_array.values().contains(x) {
                 res = false;
+                break;
             }
         }
 
@@ -1550,6 +1625,48 @@ mod tests {
             &[1, 2, 3, 4, 5, 6, 7, 8, 9],
             result
                 .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_concat() {
+        // array_concat([1, 2, 3, 4], [1, 2, 3, 4]) = [1, 2, 3, 4, 1, 2, 3, 4]
+        let list_array = return_array().into_array(1);
+        let arr = array_concat(&[list_array.clone(), list_array.clone()])
+            .expect("failed to initialize function array_concat");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_concat");
+
+        assert_eq!(
+            &[1, 2, 3, 4, 1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_concat([[1, 2, 3, 4], [5, 6, 7, 8]], [1, 2, 3, 4]) = [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4]]
+        let list_nested_array = return_nested_array().into_array(1);
+        let list_array = return_array().into_array(1);
+        let arr = array_concat(&[list_nested_array, list_array])
+            .expect("failed to initialize function array_concat");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_concat");
+
+        assert_eq!(
+            &[1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .value(2)
                 .as_any()
                 .downcast_ref::<Int64Array>()
                 .unwrap()

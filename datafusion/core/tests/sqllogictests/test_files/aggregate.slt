@@ -1420,65 +1420,95 @@ select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.c
 2 1 1.414213562373 1
 
 
-# sum / count for all nulls
+
+# aggregates on empty tables
 statement ok
-create table the_nulls as values (null::bigint, 1), (null::bigint, 1), (null::bigint, 2);
+CREATE TABLE empty (column1 bigint, column2 int);
 
-# counts should be zeros (even for nulls)
-query II
-SELECT count(column1), column2 from the_nulls group by column2 order by column2;
+# no group by column
+query IIRIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1)
+FROM empty
 ----
-0 1
-0 2
+0 NULL NULL NULL NULL NULL NULL NULL
 
-# sums should be null
-query II
-SELECT sum(column1), column2 from the_nulls group by column2 order by column2;
+# Same query but with grouping (no groups, so no output)
+query IIRIIIIII
+SELECT
+  count(column1),
+  sum(column1),
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1),
+  column2
+FROM empty
+GROUP BY column2
+ORDER BY column2;
 ----
+
+
+statement ok
+drop table empty
+
+# aggregates on all nulls
+statement ok
+CREATE TABLE the_nulls
+AS VALUES
+  (null::bigint, 1),
+  (null::bigint, 1),
+  (null::bigint, 2);
+
+query II
+select * from the_nulls
+----
+NULL 1
 NULL 1
 NULL 2
 
-# avg should be null
-query RI
-SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
+# no group by column
+query IIRIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1)
+FROM the_nulls
 ----
-NULL 1
-NULL 2
+0 NULL NULL NULL NULL NULL NULL NULL
 
-# bit_and should be null
-query II
-SELECT bit_and(column1), column2 from the_nulls group by column2 order by column2;
+# Same query but with grouping
+query IIRIIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1),
+  column2
+FROM the_nulls
+GROUP BY column2
+ORDER BY column2;
 ----
-NULL 1
-NULL 2
-
-# bit_or should be null
-query II
-SELECT bit_or(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# bit_xor should be null
-query II
-SELECT bit_xor(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# min should be null
-query II
-SELECT min(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# max should be null
-query II
-SELECT max(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
+0 NULL NULL NULL NULL NULL NULL NULL 1
+0 NULL NULL NULL NULL NULL NULL NULL 2
 
 
 statement ok
@@ -1489,29 +1519,49 @@ create table bit_aggregate_functions (
   c1 SMALLINT NOT NULL,
   c2 SMALLINT NOT NULL,
   c3 SMALLINT,
+  tag varchar
 )
 as values
-  (5, 10, 11),
-  (33, 11, null),
-  (9, 12, null);
+  (5,  10, 11,   'A'),
+  (33, 11, null, 'B'),
+  (9,  12, null, 'A');
 
-# query_bit_and
-query III
-SELECT bit_and(c1), bit_and(c2), bit_and(c3) FROM bit_aggregate_functions
+# query_bit_and, query_bit_or, query_bit_xor
+query IIIIIIIII
+SELECT
+  bit_and(c1),
+  bit_and(c2),
+  bit_and(c3),
+  bit_or(c1),
+  bit_or(c2),
+  bit_or(c3),
+  bit_xor(c1),
+  bit_xor(c2),
+  bit_xor(c3)
+FROM bit_aggregate_functions
 ----
-1 8 11
+1 8 11 45 15 11 45 13 11
 
-# query_bit_or
-query III
-SELECT bit_or(c1), bit_or(c2), bit_or(c3) FROM bit_aggregate_functions
+# query_bit_and, query_bit_or, query_bit_xor, with group
+query IIIIIIIIIT
+SELECT
+  bit_and(c1),
+  bit_and(c2),
+  bit_and(c3),
+  bit_or(c1),
+  bit_or(c2),
+  bit_or(c3),
+  bit_xor(c1),
+  bit_xor(c2),
+  bit_xor(c3),
+  tag
+FROM bit_aggregate_functions
+GROUP BY tag
+ORDER BY tag
 ----
-45 15 11
+1 8 11 13 14 11 12 6 11 A
+33 11 NULL 33 11 NULL 33 11 NULL B
 
-# query_bit_xor
-query III
-SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3) FROM bit_aggregate_functions
-----
-45 13 11
 
 statement ok
 create table bool_aggregate_functions (
@@ -1839,6 +1889,121 @@ drop table t_source;
 statement ok
 drop table t;
 
+
+# aggregates on strings
+statement ok
+create table t_source
+as values
+ ('Foo', 1),
+ ('Bar', 2),
+ (null,  2),
+ ('Baz', 1);
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Utf8') as utf8,
+  arrow_cast(column1, 'LargeUtf8') as largeutf8,
+  column2 as tag
+from t_source;
+
+# No groupy
+query TTITTI
+SELECT
+  min(utf8),
+  max(utf8),
+  count(utf8),
+  min(largeutf8),
+  max(largeutf8),
+  count(largeutf8)
+FROM t
+----
+Bar Foo 3 Bar Foo 3
+
+
+# with groupby
+query TTITTI
+SELECT
+  min(utf8),
+  max(utf8),
+  count(utf8),
+  min(largeutf8),
+  max(largeutf8),
+  count(largeutf8)
+FROM t
+GROUP BY tag
+ORDER BY tag
+----
+Baz Foo 2 Baz Foo 2
+Bar Bar 1 Bar Bar 1
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
+# aggregates on binary
+statement ok
+create table t_source
+as values
+ ('Foo', 1),
+ ('Bar', 2),
+ (null,  2),
+ ('Baz', 1);
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Binary') as binary,
+  arrow_cast(column1, 'LargeBinary') as largebinary,
+  column2 as tag
+from t_source;
+
+# No groupy
+query error DataFusion error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+SELECT
+  min(binary),
+  max(binary),
+  count(binary),
+  min(largebinary),
+  max(largebinary),
+  count(largebinary)
+FROM t
+
+
+# with groupby
+query error DataFusion error: External error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+SELECT
+  min(binary),
+  max(binary),
+  count(binary),
+  min(largebinary),
+  max(largebinary),
+  count(largebinary)
+FROM t
+GROUP BY tag
+ORDER BY tag
+
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
+
+
+statement error DataFusion error: Execution error: Table 't_source' doesn't exist\.
+drop table t_source;
+
+statement error DataFusion error: Execution error: Table 't' doesn't exist\.
+drop table t;
+
 query I
 select median(a) from (select 1 as a where 1=0);
 ----
@@ -1883,27 +2048,44 @@ CREATE TABLE test_table (c1 INT, c2 INT, c3 INT)
 
 # Inserting data
 statement ok
-INSERT INTO test_table VALUES (1, 10, 50), (1, 20, 60), (2, 10, 70), (2, 20, 80), (3, 10, NULL)
+INSERT INTO test_table VALUES
+  (1, 10, 50),
+  (1, 20, 60),
+  (2, 10, 70),
+  (2, 20, 80),
+  (3, 10, NULL)
 
 # query_group_by_with_filter
-query II rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result FROM test_table GROUP BY c1
+query III rowsort
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20),
+  SUM(c2) FILTER (WHERE c2 < 1) -- no rows pass filter, so the output should be NULL
+FROM test_table GROUP BY c1
 ----
-1 20
-2 20
-3 NULL
+1 20 NULL
+2 20 NULL
+3 NULL NULL
 
 # query_group_by_avg_with_filter
-query IR rowsort
-SELECT c1, AVG(c2) FILTER (WHERE c2 >= 20) AS avg_c2 FROM test_table GROUP BY c1
+query IRR rowsort
+SELECT
+  c1,
+  AVG(c2) FILTER (WHERE c2 >= 20),
+  AVG(c2) FILTER (WHERE c2 < 1)  -- no rows pass filter, so output should be null
+FROM test_table GROUP BY c1
 ----
-1 20
-2 20
-3 NULL
+1 20 NULL
+2 20 NULL
+3 NULL NULL
 
 # query_group_by_with_multiple_filters
 query IIR rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2, AVG(c3) FILTER (WHERE c3 <= 70) AS avg_c3 FROM test_table GROUP BY c1
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2,
+  AVG(c3) FILTER (WHERE c3 <= 70) AS avg_c3
+FROM test_table GROUP BY c1
 ----
 1 20 55
 2 20 70
@@ -1911,7 +2093,10 @@ SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2, AVG(c3) FILTER (WHERE c3 <
 
 # query_group_by_distinct_with_filter
 query II rowsort
-SELECT c1, COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count FROM test_table GROUP BY c1
+SELECT
+  c1,
+  COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count
+FROM test_table GROUP BY c1
 ----
 1 1
 2 1
@@ -1919,19 +2104,27 @@ SELECT c1, COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count FROM 
 
 # query_without_group_by_with_filter
 query I rowsort
-SELECT SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2 FROM test_table
+SELECT
+  SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2
+FROM test_table
 ----
 40
 
 # count_without_group_by_with_filter
 query I rowsort
-SELECT COUNT(c2) FILTER (WHERE c2 >= 20) AS count_c2 FROM test_table
+SELECT
+  COUNT(c2) FILTER (WHERE c2 >= 20) AS count_c2
+FROM test_table
 ----
 2
 
 # query_with_and_without_filter
 query III rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result, SUM(c2) as result_no_filter FROM test_table GROUP BY c1;
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20) as result,
+  SUM(c2) as result_no_filter
+FROM test_table GROUP BY c1;
 ----
 1 20 30
 2 20 30
@@ -1939,13 +2132,17 @@ SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result, SUM(c2) as result_no_filte
 
 # query_filter_on_different_column_than_aggregate
 query I rowsort
-select sum(c1) FILTER (WHERE c2 < 30) from test_table;
+select
+  sum(c1) FILTER (WHERE c2 < 30)
+FROM test_table;
 ----
 9
 
 # query_test_empty_filter
 query I rowsort
-SELECT SUM(c2) FILTER (WHERE c2 >= 20000000) AS sum_c2 FROM test_table;
+SELECT
+  SUM(c2) FILTER (WHERE c2 >= 20000000) AS sum_c2
+FROM test_table;
 ----
 NULL
 

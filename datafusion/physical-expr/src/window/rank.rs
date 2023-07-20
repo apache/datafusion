@@ -18,16 +18,19 @@
 //! Defines physical expression for `rank`, `dense_rank`, and `percent_rank` that can evaluated
 //! at runtime during query execution
 
+use crate::expressions::Column;
 use crate::window::window_expr::RankState;
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::PhysicalExpr;
+use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
+
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
@@ -107,6 +110,18 @@ impl BuiltInWindowFunctionExpr for Rank {
             rank_type: self.rank_type,
         }))
     }
+
+    fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+        // The built-in RANK window function (in all modes) introduces a new ordering:
+        schema.column_with_name(self.name()).map(|(idx, field)| {
+            let expr = Arc::new(Column::new(field.name(), idx));
+            let options = SortOptions {
+                descending: false,
+                nulls_first: false,
+            }; // ASC, NULLS LAST
+            PhysicalSortExpr { expr, options }
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -116,39 +131,26 @@ pub(crate) struct RankEvaluator {
 }
 
 impl PartitionEvaluator for RankEvaluator {
-    fn update_state(
+    /// Evaluates the window function inside the given range.
+    fn evaluate(
         &mut self,
-        state: &WindowAggState,
-        idx: usize,
-        range_columns: &[ArrayRef],
-        sort_partition_points: &[Range<usize>],
-    ) -> Result<()> {
-        // find range inside `sort_partition_points` containing `idx`
-        let chunk_idx = sort_partition_points
-            .iter()
-            .position(|elem| elem.start <= idx && idx < elem.end)
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "Expects sort_partition_points to contain idx".to_string(),
-                )
-            })?;
-        let chunk = &sort_partition_points[chunk_idx];
-        let last_rank_data = get_row_at_idx(range_columns, chunk.end - 1)?;
+        values: &[ArrayRef],
+        range: &Range<usize>,
+    ) -> Result<ScalarValue> {
+        let row_idx = range.start;
+        // There is no argument, values are order by column values (where rank is calculated)
+        let range_columns = values;
+        let last_rank_data = get_row_at_idx(range_columns, row_idx)?;
         let empty = self.state.last_rank_data.is_empty();
         if empty || self.state.last_rank_data != last_rank_data {
             self.state.last_rank_data = last_rank_data;
-            self.state.last_rank_boundary = state.offset_pruned_rows + chunk.start;
-            self.state.n_rank = 1 + if empty { chunk_idx } else { self.state.n_rank };
+            self.state.last_rank_boundary += self.state.current_group_count;
+            self.state.current_group_count = 1;
+            self.state.n_rank += 1;
+        } else {
+            // data is still in the same rank
+            self.state.current_group_count += 1;
         }
-        Ok(())
-    }
-
-    /// evaluate window function result inside given range
-    fn evaluate(
-        &mut self,
-        _values: &[ArrayRef],
-        _range: &Range<usize>,
-    ) -> Result<ScalarValue> {
         match self.rank_type {
             RankType::Basic => Ok(ScalarValue::UInt64(Some(
                 self.state.last_rank_boundary as u64 + 1,

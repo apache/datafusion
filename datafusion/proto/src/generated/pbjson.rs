@@ -588,6 +588,7 @@ impl serde::Serialize for AggregateMode {
             Self::Final => "FINAL",
             Self::FinalPartitioned => "FINAL_PARTITIONED",
             Self::Single => "SINGLE",
+            Self::SinglePartitioned => "SINGLE_PARTITIONED",
         };
         serializer.serialize_str(variant)
     }
@@ -603,6 +604,7 @@ impl<'de> serde::Deserialize<'de> for AggregateMode {
             "FINAL",
             "FINAL_PARTITIONED",
             "SINGLE",
+            "SINGLE_PARTITIONED",
         ];
 
         struct GeneratedVisitor;
@@ -649,6 +651,7 @@ impl<'de> serde::Deserialize<'de> for AggregateMode {
                     "FINAL" => Ok(AggregateMode::Final),
                     "FINAL_PARTITIONED" => Ok(AggregateMode::FinalPartitioned),
                     "SINGLE" => Ok(AggregateMode::Single),
+                    "SINGLE_PARTITIONED" => Ok(AggregateMode::SinglePartitioned),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -18064,6 +18067,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayContains => "ArrayContains",
             Self::Encode => "Encode",
             Self::Decode => "Decode",
+            Self::Cot => "Cot",
         };
         serializer.serialize_str(variant)
     }
@@ -18178,6 +18182,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayContains",
             "Encode",
             "Decode",
+            "Cot",
         ];
 
         struct GeneratedVisitor;
@@ -18323,6 +18328,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayContains" => Ok(ScalarFunction::ArrayContains),
                     "Encode" => Ok(ScalarFunction::Encode),
                     "Decode" => Ok(ScalarFunction::Decode),
+                    "Cot" => Ok(ScalarFunction::Cot),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

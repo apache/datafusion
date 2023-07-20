@@ -1024,9 +1024,9 @@ dependencies = [
 
 [[package]]
 name = "ctor"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eed5fff0d93c7559121e9c72bf9c242295869396255071ff2cb1617147b608c5"
+checksum = "1f34ba9a9bcb8645379e9de8cb3ecfcf4d1c85ba66d90deb3259206fa5aa193b"
 dependencies = [
  "quote",
  "syn 2.0.25",
@@ -1197,6 +1197,7 @@ dependencies = [
  "itertools 0.11.0",
  "lazy_static",
  "libc",
+ "log",
  "md-5",
  "paste",
  "petgraph",

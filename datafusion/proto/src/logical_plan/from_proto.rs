@@ -40,8 +40,8 @@ use datafusion_expr::{
     array_fill, array_length, array_ndims, array_position, array_positions,
     array_prepend, array_remove, array_replace, array_to_string, ascii, asin, asinh,
     atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil, character_length,
-    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, current_date, current_time,
-    date_bin, date_part, date_trunc, degrees, digest, exp,
+    chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot, current_date,
+    current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -417,6 +417,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
+            ScalarFunction::Cot => Self::Cot,
             ScalarFunction::Asin => Self::Asin,
             ScalarFunction::Acos => Self::Acos,
             ScalarFunction::Atan => Self::Atan,
@@ -1112,8 +1113,9 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
+            false,
         ))),
-        ExprType::Ilike(like) => Ok(Expr::ILike(Like::new(
+        ExprType::Ilike(like) => Ok(Expr::Like(Like::new(
             like.negated,
             Box::new(parse_required_expr(like.expr.as_deref(), registry, "expr")?),
             Box::new(parse_required_expr(
@@ -1122,6 +1124,7 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
+            true,
         ))),
         ExprType::SimilarTo(like) => Ok(Expr::SimilarTo(Like::new(
             like.negated,
@@ -1132,6 +1135,7 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
+            false,
         ))),
         ExprType::Case(case) => {
             let when_then_expr = case
@@ -1473,6 +1477,7 @@ pub fn parse_expr(
                 )),
                 ScalarFunction::CurrentDate => Ok(current_date()),
                 ScalarFunction::CurrentTime => Ok(current_time()),
+                ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry)?)),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),

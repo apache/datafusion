@@ -15,15 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! Defines BitAnd, BitOr, and BitXor Aggregate accumulators
 
 use ahash::RandomState;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::{AggregateExpr, PhysicalExpr};
-use arrow::datatypes::DataType;
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
+use arrow::datatypes::{
+    DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
+};
 use arrow::{
     array::{
         ArrayRef, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
@@ -35,6 +38,7 @@ use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::collections::HashSet;
 
+use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
 };
@@ -43,6 +47,20 @@ use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::compute::{bit_and, bit_or, bit_xor};
 use datafusion_row::accessor::RowAccessor;
+
+/// Creates a [`PrimitiveGroupsAccumulator`] with the specified
+/// [`ArrowPrimitiveType`] that initailizes each accumulator to $START
+/// and applies `$FN` to each element
+///
+/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
+macro_rules! instantiate_accumulator {
+    ($SELF:expr, $START:expr, $PRIMTYPE:ident, $FN:expr) => {{
+        Ok(Box::new(
+            PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$SELF.data_type, $FN)
+                .with_starting_value($START),
+        ))
+    }};
+}
 
 // returns the new value after bit_and/bit_or/bit_xor with the new values, taking nullability into account
 macro_rules! typed_bit_and_or_xor_batch {
@@ -254,6 +272,53 @@ impl AggregateExpr for BitAnd {
         )))
     }
 
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use std::ops::BitAndAssign;
+        // Note the default value for BitAnd should be all set
+        // (e.g. `0b11...111`) use MAX / -1 here to get appropriate
+        // bit pattern for each type
+        match self.data_type {
+            DataType::Int8 => {
+                instantiate_accumulator!(self, -1, Int8Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::Int16 => {
+                instantiate_accumulator!(self, -1, Int16Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::Int32 => {
+                instantiate_accumulator!(self, -1, Int32Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::Int64 => {
+                instantiate_accumulator!(self, -1, Int64Type, |x, y| x.bitand_assign(y))
+            }
+            DataType::UInt8 => {
+                instantiate_accumulator!(self, u8::MAX, UInt8Type, |x, y| x
+                    .bitand_assign(y))
+            }
+            DataType::UInt16 => {
+                instantiate_accumulator!(self, u16::MAX, UInt16Type, |x, y| x
+                    .bitand_assign(y))
+            }
+            DataType::UInt32 => {
+                instantiate_accumulator!(self, u32::MAX, UInt32Type, |x, y| x
+                    .bitand_assign(y))
+            }
+            DataType::UInt64 => {
+                instantiate_accumulator!(self, u64::MAX, UInt64Type, |x, y| x
+                    .bitand_assign(y))
+            }
+
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
+    }
+
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
     }
@@ -442,6 +507,46 @@ impl AggregateExpr for BitOr {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use std::ops::BitOrAssign;
+        match self.data_type {
+            DataType::Int8 => {
+                instantiate_accumulator!(self, 0, Int8Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::Int16 => {
+                instantiate_accumulator!(self, 0, Int16Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::Int32 => {
+                instantiate_accumulator!(self, 0, Int32Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::Int64 => {
+                instantiate_accumulator!(self, 0, Int64Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::UInt8 => {
+                instantiate_accumulator!(self, 0, UInt8Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::UInt16 => {
+                instantiate_accumulator!(self, 0, UInt16Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::UInt32 => {
+                instantiate_accumulator!(self, 0, UInt32Type, |x, y| x.bitor_assign(y))
+            }
+            DataType::UInt64 => {
+                instantiate_accumulator!(self, 0, UInt64Type, |x, y| x.bitor_assign(y))
+            }
+
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -633,6 +738,46 @@ impl AggregateExpr for BitXor {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn groups_accumulator_supported(&self) -> bool {
+        true
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        use std::ops::BitXorAssign;
+        match self.data_type {
+            DataType::Int8 => {
+                instantiate_accumulator!(self, 0, Int8Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::Int16 => {
+                instantiate_accumulator!(self, 0, Int16Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::Int32 => {
+                instantiate_accumulator!(self, 0, Int32Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::Int64 => {
+                instantiate_accumulator!(self, 0, Int64Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::UInt8 => {
+                instantiate_accumulator!(self, 0, UInt8Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::UInt16 => {
+                instantiate_accumulator!(self, 0, UInt16Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::UInt32 => {
+                instantiate_accumulator!(self, 0, UInt32Type, |x, y| x.bitxor_assign(y))
+            }
+            DataType::UInt64 => {
+                instantiate_accumulator!(self, 0, UInt64Type, |x, y| x.bitxor_assign(y))
+            }
+
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "GroupsAccumulator not supported for {} with {}",
+                self.name(),
+                self.data_type
+            ))),
+        }
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
