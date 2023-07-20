@@ -61,11 +61,16 @@ hash_float!(f16, f32, f64);
 
 /// A [`GroupValues`] storing raw primitive values
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
+    /// The data type of the output array
     data_type: DataType,
+    /// Stores the group index based on the hash of its value
     map: RawTable<usize>,
-    random_state: RandomState,
+    /// The group index of the null value if any
     null_group: Option<usize>,
+    /// The values for each group index
     values: Vec<T::Native>,
+    /// The random state used to generate hashes
+    random_state: RandomState,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
