@@ -39,12 +39,16 @@ use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
+use arrow::buffer::NullBuffer;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow_array::downcast_integer;
+use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use hashbrown::raw::RawTable;
+use hashbrown::HashMap;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -75,6 +79,110 @@ trait GroupValues: Send {
 
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+}
+
+/// A [`GroupValues`] storing raw primitive values
+struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
+    data_type: DataType,
+    map: HashMap<T::Native, usize>,
+    null_group: Option<usize>,
+    values: Vec<T::Native>,
+}
+
+impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
+    fn new(data_type: DataType) -> Self {
+        assert!(PrimitiveArray::<T>::is_compatible(&data_type));
+        Self {
+            data_type,
+            map: HashMap::with_capacity(1024),
+            values: Vec::with_capacity(1024),
+            null_group: None,
+        }
+    }
+}
+
+impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
+where
+    T::Native: std::hash::Hash + Eq,
+{
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        assert_eq!(cols.len(), 1);
+        groups.clear();
+
+        for v in cols[0].as_primitive::<T>() {
+            let group_id = match v {
+                None => self.null_group.get_or_insert_with(|| {
+                    let group_id = self.values.len();
+                    self.values.push(Default::default());
+                    group_id
+                }),
+                Some(key) => self.map.entry(key).or_insert_with(|| {
+                    let group_id = self.values.len();
+                    self.values.push(key);
+                    group_id
+                }),
+            };
+            groups.push(*group_id)
+        }
+        Ok(())
+    }
+
+    fn size(&self) -> usize {
+        // This is an approximation
+        self.map.capacity() * std::mem::size_of::<(T::Native, usize)>()
+            + self.values.allocated_size()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        fn build_primitive<T: ArrowPrimitiveType>(
+            values: Vec<T::Native>,
+            null_idx: Option<usize>,
+        ) -> PrimitiveArray<T> {
+            let nulls = null_idx.map(|null_idx| {
+                let mut buffer = BooleanBufferBuilder::new(values.len());
+                buffer.append_n(values.len(), true);
+                buffer.set_bit(null_idx, false);
+                unsafe { NullBuffer::new_unchecked(buffer.finish(), 1) }
+            });
+            PrimitiveArray::<T>::new(values.into(), nulls)
+        }
+
+        let array: PrimitiveArray<T> = match emit_to {
+            EmitTo::All => {
+                self.map.clear();
+                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
+            }
+            EmitTo::First(n) => {
+                self.map.retain(|_, v| match v.checked_sub(n) {
+                    Some(new) => {
+                        *v = new;
+                        true
+                    }
+                    None => false,
+                });
+                let null_group = match &mut self.null_group {
+                    Some(v) if *v >= n => {
+                        *v -= n;
+                        None
+                    }
+                    Some(_) => self.null_group.take(),
+                    None => None,
+                };
+                let mut split = self.values.split_off(n);
+                std::mem::swap(&mut self.values, &mut split);
+                build_primitive(split, null_group)
+            }
+        };
+        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
+    }
 }
 
 /// A [`GroupValues`] making use of [`Rows`]
@@ -232,6 +340,26 @@ impl GroupValues for GroupValuesRows {
             }
         })
     }
+}
+
+fn group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
+    if schema.fields.len() == 1 {
+        let d = schema.fields[0].data_type();
+
+        macro_rules! downcast_helper {
+            ($t:ty, $d:ident) => {
+                return Ok(Box::new(GroupValuesPrimitive::<$t>::new($d.clone())))
+            };
+        }
+
+        // TODO: More primitives
+        downcast_integer! {
+            d => (downcast_helper, d),
+            _ => {}
+        }
+    }
+
+    Ok(Box::new(GroupValuesRows::try_new(schema)?))
 }
 
 /// Hash based Grouping Aggregator
@@ -416,8 +544,7 @@ impl GroupedHashAggregateStream {
             .transpose()?
             .unwrap_or(GroupOrdering::None);
 
-        let group = Box::new(GroupValuesRows::try_new(group_schema)?);
-
+        let group_values = group_values(group_schema)?;
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -431,7 +558,7 @@ impl GroupedHashAggregateStream {
             filter_expressions,
             group_by: agg_group_by,
             reservation,
-            group_values: group,
+            group_values,
             current_group_indices: Default::default(),
             exec_state,
             baseline_metrics,
