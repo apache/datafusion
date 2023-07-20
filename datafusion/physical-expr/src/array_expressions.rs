@@ -1739,20 +1739,20 @@ mod tests {
 
     #[test]
     fn test_array_remove() {
-        // array_remove([1, 2, 3, 4], 3) = [1, 2, 4]
-        let list_array = return_array();
-        let arr = array_remove(&[
+        // array_remove([3, 1, 2, 3, 2, 3], 3) = [1, 2, 3, 2, 3]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array = array_remove(&[
             list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            Int64Array::from_value(3, 1),
         ])
-        .expect("failed to initialize function array_remove")
-        .into_array(1);
+            .expect("failed to initialize function array_remove")
+            .into_array(1);
         let result =
-            as_list_array(&arr).expect("failed to initialize function array_remove");
+            as_list_array(&array).expect("failed to initialize function array_remove");
 
         assert_eq!(result.len(), 1);
         assert_eq!(
-            &[1, 2, 4],
+            &[1, 2, 3, 2, 3],
             result
                 .value(0)
                 .as_any()
@@ -1763,22 +1763,49 @@ mod tests {
     }
 
     #[test]
-    fn test_array_replace() {
-        // array_replace([1, 2, 3, 4], 3, 4) = [1, 2, 4, 4]
-        let list_array = return_array();
-        let array = array_replace(&[
+    fn test_nested_array_remove() {
+        // array_remove(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        // ) = [[5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let element_array = return_array().into_array(1);
+        let array = array_remove(&[
             list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+            element_array,
         ])
-        .expect("failed to initialize function array_replace")
-        .into_array(1);
+            .expect("failed to initialize function array_remove")
+            .into_array(1);
         let result =
-            as_list_array(&array).expect("failed to initialize function array_replace");
+            as_list_array(&array).expect("failed to initialize function array_remove");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_array_removes() {
+        // array_removes([3, 1, 2, 3, 2, 3], 3) = [1, 2, 2]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array = array_removes(&[
+            list_array,
+            Int64Array::from_value(3, 1),
+        ])
+            .expect("failed to initialize function array_removes")
+            .into_array(1);
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_removes");
 
         assert_eq!(result.len(), 1);
         assert_eq!(
-            &[1, 2, 4, 4],
+            &[1, 2, 2],
             result
                 .value(0)
                 .as_any()
@@ -1786,6 +1813,149 @@ mod tests {
                 .unwrap()
                 .values()
         );
+    }
+
+    #[test]
+    fn test_nested_array_removes() {
+        // array_removes(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        // ) = [[5, 6, 7, 8], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let element_array = return_array().into_array(1);
+        let array = array_replaces(&[
+            list_array,
+            element_array,
+        ])
+            .expect("failed to initialize function array_removes")
+            .into_array(1);
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_removes");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_array_replace() {
+        // array_replace([3, 1, 2, 3, 2, 3], 3, 4) = [4, 1, 2, 3, 2, 3]
+        let list_array = return_array_with_repeating_elements();
+        let array = array_replace(&[
+            list_array,
+            Int64Array::from_value(3, 1),
+            Int64Array::from_value(4, 1),
+        ])
+            .expect("failed to initialize function array_replace")
+            .into_array(1);
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_replace");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[4, 1, 2, 3, 2, 3],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_replace() {
+        // array_replace(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        //     [11, 12, 13, 14],
+        // ) = [[11, 12, 13, 14], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements.into_array(1);
+        let from_array = return_array.into_array(1);
+        let to_array = return_extra_array.into_array(1);
+        let array = array_replace(&[
+            list_array,
+            from_array,
+            to_array,
+        ])
+            .expect("failed to initialize function array_replace")
+            .into_array(1);
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_replace");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_array_replaces() {
+        // array_replaces([3, 1, 2, 3, 2, 3], 3, 4) = [4, 1, 2, 4, 2, 4]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array = array_replaces(&[
+            list_array,
+            Int64Array::from_value(3, 1),
+            Int64Array::from_value(4, 1),
+        ])
+            .expect("failed to initialize function array_replace")
+            .into_array(1);
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_replace");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[4, 1, 2, 4, 2, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_replaces() {
+        // array_replaces(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        //     [11, 12, 13, 14],
+        // ) = [[11, 12, 13, 14], [5, 6, 7, 8], [11, 12, 13, 14], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let from_array = return_array().into_array(1);
+        let to_array = return_extra_array().into_array(1);
+        let array = array_replaces(&[
+            list_array,
+            from_array,
+            to_array,
+        ])
+            .expect("failed to initialize function array_replace")
+            .into_array(1);
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_replace");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(expected, result);
     }
 
     #[test]
@@ -2116,6 +2286,7 @@ mod tests {
     }
 
     fn return_array() -> ColumnarValue {
+        // Returns: [1, 2, 3, 4]
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
@@ -2128,7 +2299,22 @@ mod tests {
         ColumnarValue::Array(result.clone())
     }
 
+    fn return_extra_array() -> ColumnarValue {
+        // Returns: [11, 12, 13, 14]
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(11))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(12))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(13))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(14))),
+        ];
+        let result = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        ColumnarValue::Array(result.clone())
+    }
+
     fn return_nested_array() -> ColumnarValue {
+        // Returns: [[1, 2, 3, 4], [5, 6, 7, 8]]
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
@@ -2157,6 +2343,7 @@ mod tests {
     }
 
     fn return_array_with_nulls() -> ColumnarValue {
+        // Returns: [1, NULL, 3, NULL]
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ColumnarValue::Scalar(ScalarValue::Null),
@@ -2170,6 +2357,7 @@ mod tests {
     }
 
     fn return_nested_array_with_nulls() -> ColumnarValue {
+        // Returns: [[1, NULL, 3, NULL], [NULL, 6, 7, NULL]]
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ColumnarValue::Scalar(ScalarValue::Null),
@@ -2191,6 +2379,87 @@ mod tests {
             .into_array(1);
 
         let args = [ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)];
+        let result = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        ColumnarValue::Array(result.clone())
+    }
+
+    fn return_array_with_repeating_elements() -> ColumnarValue {
+        // Returns: [3, 1, 2, 3, 2, 3]
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+        ];
+        let result = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        ColumnarValue::Array(result.clone())
+    }
+
+    fn return_nested_array_with_repeating_elements() -> ColumanrValue {
+        // Returns: [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+        ];
+        let arr1 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(6))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
+        ];
+        let arr2 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+        ];
+        let arr3 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(9))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(10))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(11))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(12))),
+        ];
+        let arr4 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(6))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
+        ];
+        let arr5 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Array(arr1),
+            ColumnarValue::Array(arr2),
+            ColumnarValue::Array(arr3),
+            ColumnarValue::Array(arr4),
+            ColumnarValue::Array(arr5),
+        ];
         let result = array(&args)
             .expect("failed to initialize function array")
             .into_array(1);
