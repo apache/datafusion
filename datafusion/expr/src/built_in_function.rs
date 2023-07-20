@@ -1072,6 +1072,15 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
+            BuiltinScalarFunction::Trunc => Signature::one_of(
+                vec![
+                    Exact(vec![Float32, Int64]),
+                    Exact(vec![Float64, Int64]),
+                    Exact(vec![Float64]),
+                    Exact(vec![Float32]),
+                ],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Atan2 => Signature::one_of(
                 vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
                 self.volatility(),
@@ -1116,7 +1125,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Sqrt
             | BuiltinScalarFunction::Tan
             | BuiltinScalarFunction::Tanh
-            | BuiltinScalarFunction::Trunc
             | BuiltinScalarFunction::Cot => {
                 // math expressions expect 1 argument of type f64 or f32
                 // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we

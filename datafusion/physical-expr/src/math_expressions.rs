@@ -20,9 +20,8 @@
 use arrow::array::ArrayRef;
 use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
-use arrow_array::Int32Array;
 use datafusion_common::ScalarValue;
-use datafusion_common::ScalarValue::{Float32, Int32};
+use datafusion_common::ScalarValue::{Float32, Int64};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use rand::{thread_rng, Rng};
@@ -543,24 +542,23 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     //or then invoke the compute_truncate method to process precision
     let num = &args[0];
     let precision = if args.len() == 1 {
-        ColumnarValue::Scalar(Int32(Some(0)))
+        ColumnarValue::Scalar(Int64(Some(0)))
     } else {
         ColumnarValue::Array(args[1].clone())
     };
 
     match args[0].data_type() {
         DataType::Float64 => match precision {
-            ColumnarValue::Scalar(Int32(Some(0))) => Ok(Arc::new(
+            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
                 make_function_scalar_inputs!(num, "num", Float64Array, { f64::trunc }),
-            )
-                as ArrayRef),
+            ) as ArrayRef),
             ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
                 num,
                 precision,
                 "x",
                 "y",
                 Float64Array,
-                Int32Array,
+                Int64Array,
                 { compute_truncate64 }
             )) as ArrayRef),
             _ => Err(DataFusionError::Internal(
@@ -568,17 +566,16 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
             )),
         },
         DataType::Float32 => match precision {
-            ColumnarValue::Scalar(Int32(Some(0))) => Ok(Arc::new(
+            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
                 make_function_scalar_inputs!(num, "num", Float32Array, { f32::trunc }),
-            )
-                as ArrayRef),
+            ) as ArrayRef),
             ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
                 num,
                 precision,
                 "x",
                 "y",
                 Float32Array,
-                Int32Array,
+                Int64Array,
                 { compute_truncate32 }
             )) as ArrayRef),
             _ => Err(DataFusionError::Internal(
@@ -591,13 +588,13 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn compute_truncate32(x: f32, y: i32) -> f32 {
-    let factor = 10.0_f32.powi(y);
+fn compute_truncate32(x: f32, y: i64) -> f32 {
+    let factor = 10.0_f32.powi(y as i32);
     (x * factor).round() / factor
 }
 
-fn compute_truncate64(x: f64, y: i32) -> f64 {
-    let factor = 10.0_f64.powi(y);
+fn compute_truncate64(x: f64, y: i64) -> f64 {
+    let factor = 10.0_f64.powi(y as i32);
     (x * factor).round() / factor
 }
 
@@ -900,7 +897,7 @@ mod tests {
                 3.312_979_2,
                 -21.123_4,
             ])),
-            Arc::new(Int32Array::from(vec![0, 3, 2, 5, 6])),
+            Arc::new(Int64Array::from(vec![0, 3, 2, 5, 6])),
         ];
 
         let result = trunc(&args).expect("failed to initialize function truncate");
@@ -925,7 +922,7 @@ mod tests {
                 123.312_979_313_2,
                 -321.123_1,
             ])),
-            Arc::new(Int32Array::from(vec![0, 3, 2, 5, 6])),
+            Arc::new(Int64Array::from(vec![0, 3, 2, 5, 6])),
         ];
 
         let result = trunc(&args).expect("failed to initialize function truncate");
