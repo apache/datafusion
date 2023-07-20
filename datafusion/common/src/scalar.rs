@@ -3496,22 +3496,6 @@ impl ScalarValue {
                 .map(|sv| sv.size() - std::mem::size_of_val(sv))
                 .sum::<usize>()
     }
-
-    /// This function returns the next/previous value depending on the `DIR` value.
-    /// If `true`, it returns the next value; otherwise it returns the previous value.
-    pub fn next_value<const DIR: bool>(self) -> ScalarValue {
-        let one = if let Ok(one) = Self::new_one(&self.get_datatype()) {
-            one
-        } else {
-            return self;
-        };
-
-        if DIR {
-            self.add(one).unwrap_or(self)
-        } else {
-            self.sub(one).unwrap_or(self)
-        }
-    }
 }
 
 macro_rules! impl_scalar {

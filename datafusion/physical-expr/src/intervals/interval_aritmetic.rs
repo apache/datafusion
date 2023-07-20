@@ -159,6 +159,28 @@ impl Display for IntervalBound {
     }
 }
 
+/// Returns the next value by adding one to the input value.
+pub fn next_value_add(value: ScalarValue) -> ScalarValue {
+    let one = if let Ok(one) = ScalarValue::new_one(&value.get_datatype()) {
+        one
+    } else {
+        return value;
+    };
+
+    value.add(one).unwrap_or(value)
+}
+
+/// Returns the next value by adding one to the input value.
+pub fn next_value_sub(value: ScalarValue) -> ScalarValue {
+    let one = if let Ok(one) = ScalarValue::new_one(&value.get_datatype()) {
+        one
+    } else {
+        return value;
+    };
+
+    value.sub(one).unwrap_or(value)
+}
+
 /// This type represents an interval, which is used to calculate reliable
 /// bounds for expressions. Currently, we only support addition and
 /// subtraction, but more capabilities will be added in the future.
@@ -520,13 +542,13 @@ impl Interval {
     pub fn interval_with_closed_bounds(mut self) -> Interval {
         if self.lower.open {
             // Get next value
-            self.lower.value = self.lower.value.next_value::<true>();
+            self.lower.value = next_value_add(self.lower.value);
             self.lower.open = false;
         }
 
         if self.upper.open {
             // Get previous value
-            self.upper.value = self.upper.value.next_value::<false>();
+            self.upper.value = next_value_sub(self.upper.value);
             self.upper.open = false;
         }
 
