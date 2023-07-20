@@ -739,13 +739,61 @@ select array_positions(column1, make_array(4, 5, 6)), array_positions(make_array
 [6] []
 [1] []
 
-## array_replace
+## array_replace (replaces one occurrence of an element) (aliases: `list_replace`)
 
-# array_replace scalar function
+# array_replace scalar function #1
 query ???
 select array_replace(make_array(1, 2, 3, 4), 2, 3), array_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), array_replace(make_array(1, 2, 3), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
+
+# array_replace scalar function #2 (element is list)
+query ???
+select array_replace(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], [1, 1, 1]), array_replace(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], [3, 1, 4]);
+----
+
+# list_replace scalar function #3 (function alias `list_replace`)
+query ???
+select list_replace(make_array(1, 2, 3, 4), 2, 3), list_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), list_replace(make_array(1, 2, 3), 4, 0);
+----
+[1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
+
+# array_replace scalar function with columns #1
+query ???
+select array_replace(column1, column2, column3) from arrays_values_without_nulls;
+----
+
+# array_replace scalar function with columns #2
+query ???
+select array_replace(column1, column2, column3) from nested_arrays;
+----
+
+## array_replaces (replaces all occurrences of the element) (aliases: `list_replaces`)
+
+# array_replaces scalar function #1
+query ???
+select array_replaces(make_array(1, 2, 3, 4), 2, 3), array_replaces(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), array_replaces(make_array(1, 2, 3), 4, 0);
+----
+
+# array_replaces scalar function #2 (element is list)
+query ???
+select array_replaces(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], [1, 1, 1]), array_replaces(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], [3, 1, 4]);
+----
+
+# list_replaces scalar function #3 (function alias `array_replaces`)
+query ???
+select list_replaces(make_array(1, 2, 3, 4), 2, 3), list_replaces(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), list_replaces(make_array(1, 2, 3), 4, 0);
+----
+
+# array_replaces scalar function with columns #1
+query ???
+select array_replaces(column1, column2, column3) from arrays_values_without_nulls;
+----
+
+# array_replaces scalar function with columns #2 (element is list)
+query ???
+select array_replaces(column1, column2, column3) from nested_arrays;
+----
 
 ## array_to_string
 
@@ -860,6 +908,60 @@ select cardinality(column1), cardinality(column2), cardinality(column3) from arr
 NULL 3 4
 4 NULL 1
 4 3 NULL
+
+## array_remove (aliases: `list_remove`)
+
+# array_remove scalar function #1
+query ???
+select array_remove(make_array(1, 2, 2, 1, 1), 2), array_remove(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0), array_remove(make_array('h', 'e', 'l', 'l', 'o'), 'l');
+----
+
+# array_remove scalar function #2 (element is list)
+query ???
+select array_remove(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6]), array_remove(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4]);
+----
+
+# list_remove scalar function #3 (function alias `array_remove`)
+query ???
+select list_remove(make_array(1, 2, 2, 1, 1), 2), list_remove(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0), list_remove(make_array('h', 'e', 'l', 'l', 'o'), 'l');
+----
+
+# array_remove scalar function with columns #1
+query ???
+select array_remove(column1, column2) from arrays_values_without_nulls;
+----
+
+# array_remove scalar function with columns #2 (element is list)
+query ???
+select array_remove(column1, column2) from nested_arrays;
+----
+
+## array_removes (aliases: `list_removes`)
+
+# array_removes scalar function #1
+query ???
+select array_removes(make_array(1, 2, 2, 1, 1), 2), array_removes(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0), array_removes(make_array('h', 'e', 'l', 'l', 'o'), 'l');
+----
+
+# array_removes scalar function #2 (element is list)
+query ???
+select array_removes(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6]), array_removes(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4]);
+----
+
+# list_removes scalar function #3 (function alias `array_removes`)
+query ???
+select list_removes(make_array(1, 2, 2, 1, 1), 2), list_removes(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0), list_removes(make_array('h', 'e', 'l', 'l', 'o'), 'l');
+----
+
+# array_removes scalar function with columns #1
+query ???
+select array_removes(column1, column2) from arrays_values_without_nulls;
+----
+
+# array_removes scalar function with columns #2 (element is list)
+query ???
+select array_removes(column1, column2) from nested_arrays;
+----
 
 ## trim_array
 

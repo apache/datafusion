@@ -137,8 +137,12 @@ pub enum BuiltinScalarFunction {
     ArrayPrepend,
     /// array_remove
     ArrayRemove,
+    /// array_removes
+    ArrayRemoves,
     /// array_replace
     ArrayReplace,
+    /// array_replaces
+    ArrayReplaces,
     /// array_to_string
     ArrayToString,
     /// cardinality
