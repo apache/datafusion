@@ -813,34 +813,34 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </thead>
 <tbody>
 <tr class="row-even"><td><p>array_append(array, element)</p></td>
-<td><p>Appends an element to the end of an array.</p></td>
+<td><p>Appends an element to the end of an array. <code class="docutils literal notranslate"><span class="pre">array_append([1,</span> <span class="pre">2,</span> <span class="pre">3],</span> <span class="pre">4)</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4]</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>array_concat(array[, …, array_n])</p></td>
-<td><p>Concatenates arrays.</p></td>
+<td><p>Concatenates arrays. <code class="docutils literal notranslate"><span class="pre">array_concat([1,</span> <span class="pre">2,</span> <span class="pre">3],</span> <span class="pre">[4,</span> <span class="pre">5,</span> <span class="pre">6])</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4,</span> <span class="pre">5,</span> <span class="pre">6]</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>array_contains(first_array, second_array)</p></td>
 <td><p>Returns true, if each element of the second array appearing in the first array, otherwise false.</p></td>
 </tr>
 <tr class="row-odd"><td><p>array_dims(array)</p></td>
-<td><p>Returns an array of the array’s dimensions.</p></td>
+<td><p>Returns an array of the array’s dimensions. <code class="docutils literal notranslate"><span class="pre">array_dims([[1,</span> <span class="pre">2,</span> <span class="pre">3],</span> <span class="pre">[4,</span> <span class="pre">5,</span> <span class="pre">6]])</span> <span class="pre">-&gt;</span> <span class="pre">[2,</span> <span class="pre">3]</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>array_fill(element, array)</p></td>
 <td><p>Returns an array filled with copies of the given value.</p></td>
 </tr>
 <tr class="row-odd"><td><p>array_length(array, dimension)</p></td>
-<td><p>Returns the length of the array dimension.</p></td>
+<td><p>Returns the length of the array dimension. <code class="docutils literal notranslate"><span class="pre">array_length([1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4,</span> <span class="pre">5])</span> <span class="pre">-&gt;</span> <span class="pre">5</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>array_ndims(array)</p></td>
-<td><p>Returns the number of dimensions of the array.</p></td>
+<td><p>Returns the number of dimensions of the array. <code class="docutils literal notranslate"><span class="pre">array_ndims([[1,</span> <span class="pre">2,</span> <span class="pre">3],</span> <span class="pre">[4,</span> <span class="pre">5,</span> <span class="pre">6]])</span> <span class="pre">-&gt;</span> <span class="pre">2</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>array_position(array, element)</p></td>
-<td><p>Searches for an element in the array, returns first occurrence.</p></td>
+<td><p>Searches for an element in the array, returns first occurrence. <code class="docutils literal notranslate"><span class="pre">array_position([1,</span> <span class="pre">2,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4],</span> <span class="pre">2)</span> <span class="pre">-&gt;</span> <span class="pre">2</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>array_positions(array, element)</p></td>
-<td><p>Searches for an element in the array, returns all occurrences.</p></td>
+<td><p>Searches for an element in the array, returns all occurrences. <code class="docutils literal notranslate"><span class="pre">array_positions([1,</span> <span class="pre">2,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4],</span> <span class="pre">2)</span> <span class="pre">-&gt;</span> <span class="pre">[2,</span> <span class="pre">3]</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>array_prepend(array, element)</p></td>
-<td><p>Prepends an element to the beginning of an array.</p></td>
+<td><p>Prepends an element to the beginning of an array. <code class="docutils literal notranslate"><span class="pre">array_prepend(1,</span> <span class="pre">[2,</span> <span class="pre">3,</span> <span class="pre">4])</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4]</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>array_remove(array, element)</p></td>
 <td><p>Removes all elements equal to the given value from the array.</p></td>
@@ -849,13 +849,13 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <td><p>Replaces a specified element with another specified element.</p></td>
 </tr>
 <tr class="row-even"><td><p>array_to_string(array, delimeter)</p></td>
-<td><p>Converts each element to its text representation.</p></td>
+<td><p>Converts each element to its text representation. <code class="docutils literal notranslate"><span class="pre">array_to_string([1,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4],</span> <span class="pre">',')</span> <span class="pre">-&gt;</span> <span class="pre">1,2,3,4</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>cardinality(array)</p></td>
-<td><p>Returns the total number of elements in the array.</p></td>
+<td><p>Returns the total number of elements in the array. <code class="docutils literal notranslate"><span class="pre">cardinality([[1,</span> <span class="pre">2,</span> <span class="pre">3],</span> <span class="pre">[4,</span> <span class="pre">5,</span> <span class="pre">6]])</span> <span class="pre">-&gt;</span> <span class="pre">6</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>make_array(value1, [value2 [, …]])</p></td>
-<td><p>Returns an Arrow array using the specified input expressions.</p></td>
+<td><p>Returns an Arrow array using the specified input expressions. <code class="docutils literal notranslate"><span class="pre">make_array(1,</span> <span class="pre">2,</span> <span class="pre">3)</span> <span class="pre">-&gt;</span> <span class="pre">[1,</span> <span class="pre">2,</span> <span class="pre">3]</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>trim_array(array, n)</p></td>
 <td><p>Removes the last n elements from the array.</p></td>
