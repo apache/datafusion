@@ -908,6 +908,8 @@ message ScalarValue{
     //WAS: ScalarType null_list_value = 18;
 
     Decimal128 decimal128_value = 20;
+    Decimal256 decimal256_value = 39;
+
     int64 date_64_value = 21;
     int32 interval_yearmonth_value = 24;
     int64 interval_daytime_value = 25;
@@ -925,7 +927,6 @@ message ScalarValue{
     IntervalMonthDayNanoValue interval_month_day_nano = 31;
     StructValue struct_value = 32;
     ScalarFixedSizeBinary fixed_size_binary_value = 34;
-    Decimal256 decimal256_value = 35;
   }
 }
 
