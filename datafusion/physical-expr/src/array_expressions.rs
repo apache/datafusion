@@ -166,7 +166,7 @@ fn compute_array_ndims(arr: Option<ArrayRef>) -> Result<Option<u64>> {
     Ok(compute_array_ndims_with_datatype(arr)?.0)
 }
 
-/// Returns the dimension and lower datatype of the array
+/// Returns the dimension and the datatype of elements of the array
 fn compute_array_ndims_with_datatype(
     arr: Option<ArrayRef>,
 ) -> Result<(Option<u64>, DataType)> {

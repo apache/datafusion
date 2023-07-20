@@ -430,7 +430,7 @@ impl BuiltinScalarFunction {
         )
     }
 
-    /// Returns the dimension [`DataType`] of [`DataType::List`]
+    /// Returns the dimension [`DataType`] of [`DataType::List`].
     fn return_dimension(self, input_expr_type: DataType) -> u64 {
         let mut res: u64 = 1;
         let mut current_data_type = input_expr_type;
