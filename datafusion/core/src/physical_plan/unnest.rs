@@ -44,6 +44,23 @@ use crate::physical_plan::{
 use super::DisplayAs;
 
 /// Unnest the given column by joining the row with each value in the nested type.
+///
+/// For example, calling unnest(c1) results in the following:
+///
+/// ```text
+/// ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
+/// │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
+/// ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+/// │  null   │ │  B  │                │    2    │ │  A  │
+/// ├─────────┤ ├─────┤ ────────────▶  ├─────────┤ ├─────┤
+/// │   {}    │ │  D  │                │  null   │ │  B  │
+/// ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+/// │   {3}   │ │  E  │                │  null   │ │  D  │
+/// └─────────┘ └─────┘                ├─────────┤ ├─────┤
+///   c1         c2                    │    3    │ │  E  │
+///                                    └─────────┘ └─────┘
+///                                        c1        c2
+/// ```
 #[derive(Debug)]
 pub struct UnnestExec {
     /// Input execution plan

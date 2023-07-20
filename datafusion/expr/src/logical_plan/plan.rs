@@ -120,7 +120,8 @@ pub enum LogicalPlan {
     Ddl(DdlStatement),
     /// Describe the schema of table
     DescribeTable(DescribeTable),
-    /// Unnest a column that contains a nested list type.
+    /// Unnest a column that contains a nested list type. See
+    /// [`Unnest`] for more details.
     Unnest(Unnest),
 }
 
@@ -1753,6 +1754,23 @@ pub enum Partitioning {
 }
 
 /// Unnest a column that contains a nested list type.
+///
+/// For example, calling unnest(c1) results in the following:
+///
+/// ```text
+/// ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
+/// │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
+/// ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+/// │  null   │ │  B  │                │    2    │ │  A  │
+/// ├─────────┤ ├─────┤ ────────────▶  ├─────────┤ ├─────┤
+/// │   {}    │ │  D  │                │  null   │ │  B  │
+/// ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+/// │   {3}   │ │  E  │                │  null   │ │  D  │
+/// └─────────┘ └─────┘                ├─────────┤ ├─────┤
+///   c1         c2                    │    3    │ │  E  │
+///                                    └─────────┘ └─────┘
+///                                        c1        c2
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Unnest {
     /// The incoming logical plan
