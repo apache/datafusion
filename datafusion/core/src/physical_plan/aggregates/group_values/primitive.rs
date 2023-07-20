@@ -19,14 +19,45 @@ use crate::physical_plan::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
+use arrow::datatypes::i256;
 use arrow_array::cast::AsArray;
-use arrow_array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
 use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_physical_expr::EmitTo;
+use half::f16;
 use hashbrown::raw::RawTable;
 use std::sync::Arc;
+
+/// A trait to allow hashing of floating point numbers
+trait HashValue {
+    fn hash(self, state: &RandomState) -> u64;
+}
+
+macro_rules! hash_integer {
+    ($($t:ty),+) => {
+        $(impl HashValue for $t {
+            fn hash(self, state: &RandomState) -> u64 {
+                state.hash_one(self)
+            }
+        })+
+    };
+}
+hash_integer!(i8, i16, i32, i64, i128, i256);
+hash_integer!(u8, u16, u32, u64);
+
+macro_rules! hash_float {
+    ($($t:ty),+) => {
+        $(impl HashValue for $t {
+            fn hash(self, state: &RandomState) -> u64 {
+                state.hash_one(self.to_bits())
+            }
+        })+
+    };
+}
+
+hash_float!(f16, f32, f64);
 
 /// A [`GroupValues`] storing raw primitive values
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
@@ -52,7 +83,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
 
 impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
 where
-    T::Native: std::hash::Hash + Eq,
+    T::Native: HashValue,
 {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(cols.len(), 1);
@@ -66,13 +97,12 @@ where
                     group_id
                 }),
                 Some(key) => {
-                    let hash = self.random_state.hash_one(key);
+                    let state = &self.random_state;
+                    let hash = key.hash(state);
                     let insert = self.map.find_or_find_insert_slot(
                         hash,
-                        |g| unsafe { *self.values.get_unchecked(*g) == key },
-                        |g| unsafe {
-                            self.random_state.hash_one(*self.values.get_unchecked(*g))
-                        },
+                        |g| unsafe { self.values.get_unchecked(*g).is_eq(key) },
+                        |g| unsafe { self.values.get_unchecked(*g).hash(state) },
                     );
 
                     // SAFETY: No mutation occurred since find_or_find_insert_slot

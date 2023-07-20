@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{downcast_integer, ArrayRef};
+use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
 use datafusion_physical_expr::EmitTo;
@@ -55,7 +55,7 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
 
         // TODO: More primitives
-        downcast_integer! {
+        downcast_primitive! {
             d => (downcast_helper, d),
             _ => {}
         }
