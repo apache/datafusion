@@ -20,7 +20,7 @@ use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs,
 };
-use datafusion_common::{DataFusionError, IdentifierKeyGroup, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
@@ -432,44 +432,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         let schema = input.schema();
-        let id_key_groups = schema.identifier_key_groups();
-
-        let field_names = schema
-            .fields()
-            .iter()
-            .map(|elem| elem.qualified_name())
-            .collect::<Vec<_>>();
         let mut new_group_by_exprs = group_by_exprs.clone();
-        for IdentifierKeyGroup {
-            identifier_key_indices,
-            associated_indices,
-            ..
-        } in id_key_groups
-        {
-            let id_key_names = identifier_key_indices
-                .iter()
-                .map(|id_key_idx| field_names[*id_key_idx].as_str())
-                .collect::<Vec<_>>();
-            for group_by_expr in &group_by_exprs {
-                let expr_name = format!("{}", group_by_expr);
-                // group by expression contains identifier key
-                // In these case, we can use associated fields after aggregation
-                // even if they are not part of group by expressions
-                if id_key_names.contains(&expr_name.as_str()) {
-                    let associated_field_names = associated_indices
-                        .iter()
-                        .map(|idx| field_names[*idx].as_str())
-                        .collect::<Vec<_>>();
-                    // Expand group by exprs with select_exprs
-                    // If one of the expressions inside group by is identifier key, and
-                    // select expression is associated with that identifier key.
-                    for expr in select_exprs {
-                        let expr_name = format!("{}", expr);
-                        if !new_group_by_exprs.contains(expr)
-                            && associated_field_names.contains(&expr_name.as_str())
-                        {
-                            new_group_by_exprs.push(expr.clone());
-                        }
+        let fields = schema.fields();
+        for group_by_expr in &group_by_exprs {
+            if let Some(target_indices) = schema.get_target_functional_dependencies(
+                group_by_expr.display_name()?.as_str(),
+            ) {
+                // Calculate dependent fields names with determinant group by expression
+                let associated_field_names = target_indices
+                    .iter()
+                    .map(|idx| fields[*idx].qualified_name())
+                    .collect::<Vec<_>>();
+                // Expand group by exprs with select_exprs
+                // If groupby expr is determinant key, we can use its
+                // dependent keys in select statements also.
+                // Expand group expression with dependent select expressions.
+                for expr in select_exprs {
+                    let expr_name = format!("{}", expr);
+                    if !new_group_by_exprs.contains(expr)
+                        && associated_field_names.contains(&expr_name)
+                    {
+                        new_group_by_exprs.push(expr.clone());
                     }
                 }
             }

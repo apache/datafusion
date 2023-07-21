@@ -3076,13 +3076,14 @@ ORDER BY sn
 3 2022-01-02T12:00:00 200
 4 2022-01-03T10:00:00 100
 
-# aggregate should be able to introduce identifier key
+# aggregate should be able to introduce functional dependence
 # (when group by contains single expression, group by expression
-# becomes identifier key, after aggregation; since we are sure that
+# becomes determinant, after aggregation; since we are sure that
 # it will consist of unique values.)
 # please note that ts is not primary key, still
 # we can use sum1, after outer aggregation because
-# after inner aggregation, ts becomes identifier key.
+# after inner aggregation, ts becomes determinant
+# of functional dependence.
 query PR
 SELECT ts, sum1
 FROM (
@@ -3098,8 +3099,8 @@ ORDER BY ts
 2022-01-02T12:00:00 200
 2022-01-03T10:00:00 100
 
-# aggregate should reset its identifier keys
-# if it is guaranteed that, after aggregation
+# aggregate should update its functional dependence
+# mode, if it is guaranteed that, after aggregation
 # group by expressions will be unique.
 query IRI
 SELECT *

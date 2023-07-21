@@ -17,7 +17,9 @@
 
 //! Logical plan types
 
-use crate::builder::{aggregate_identifier_keys, project_identifier_keys};
+use crate::builder::{
+    aggregate_functional_dependencies, project_functional_dependencies,
+};
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::expr_vec_fmt;
@@ -37,7 +39,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    IdentifierKeyGroup, OwnedTableReference, Result, ScalarValue,
+    OwnedTableReference, Result, ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1270,10 +1272,10 @@ impl Projection {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
-        // update identifier key groups of `input` according to projection exprs.
-        let id_key_groups = project_identifier_keys(&expr, &input)?;
+        // update functional dependencies of `input` according to projection exprs.
+        let id_key_groups = project_functional_dependencies(&expr, &input)?;
         let schema = schema.as_ref().clone();
-        let schema = Arc::new(schema.with_identifier_key_groups(id_key_groups));
+        let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
         Ok(Self {
             expr,
             input,
@@ -1324,11 +1326,11 @@ impl SubqueryAlias {
     ) -> Result<Self> {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
-        // Since schema is same, other than qualifier, we can use existing identifier key groups
-        let id_key_groups = plan.schema().identifier_key_groups().clone();
+        // Since schema is same, other than qualifier, we can use existing functional dependencies
+        let func_dependencies = plan.schema().functional_dependencies().clone();
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(&alias, &schema)?
-                .with_identifier_key_groups(id_key_groups),
+                .with_functional_dependencies(func_dependencies),
         );
         Ok(SubqueryAlias {
             input: Arc::new(plan),
@@ -1412,30 +1414,17 @@ impl Window {
             .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
         let metadata = input.schema().metadata().clone();
 
-        // Update identifier key groups for window
-        let mut id_key_groups = input.schema().identifier_key_groups().clone();
-        let n_input_fields = input.schema().fields().len();
-        let new_associated_fields: Vec<usize> =
-            (n_input_fields..window_fields.len()).collect();
-        for IdentifierKeyGroup {
-            is_unique,
-            associated_indices,
-            ..
-        } in id_key_groups.iter_mut()
-        {
-            // if unique, extend associations such that they cover
-            // new window expressions
-            if *is_unique {
-                associated_indices.extend(&new_associated_fields);
-            }
-        }
+        // Update functional dependencies for window
+        let mut window_func_dependencies =
+            input.schema().functional_dependencies().clone();
+        window_func_dependencies.extend_target_indices(window_fields.len());
 
         Ok(Window {
             input,
             window_expr,
             schema: Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
-                    .with_identifier_key_groups(id_key_groups),
+                    .with_functional_dependencies(window_func_dependencies),
             ),
         })
     }
@@ -1658,11 +1647,15 @@ impl Aggregate {
             )));
         }
 
-        let identifier_key_groups =
-            aggregate_identifier_keys(&group_expr, &input, schema.fields().len())?;
+        let aggregate_func_dependencies = aggregate_functional_dependencies(
+            &group_expr,
+            &input,
+            schema.fields().len(),
+        )?;
         let new_schema = schema.as_ref().clone();
-        let schema =
-            Arc::new(new_schema.with_identifier_key_groups(identifier_key_groups));
+        let schema = Arc::new(
+            new_schema.with_functional_dependencies(aggregate_func_dependencies),
+        );
         Ok(Self {
             input,
             group_expr,

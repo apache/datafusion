@@ -265,7 +265,7 @@ fn rewrite_schema(schema: &DFSchema) -> DFSchemaRef {
     DFSchemaRef::new(
         DFSchema::new_with_metadata(new_fields, schema.metadata().clone())
             .unwrap()
-            .with_identifier_key_groups(schema.identifier_key_groups().clone()),
+            .with_functional_dependencies(schema.functional_dependencies().clone()),
     )
 }
 

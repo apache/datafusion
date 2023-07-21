@@ -41,9 +41,9 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    add_offset_to_identifier_key_groups, display::ToStringifiedPlan, Column, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, IdentifierKeyGroup, IdentifierKeyGroups,
-    OwnedTableReference, Result, ScalarValue, TableReference, ToDFSchema,
+    display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
+    ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -264,23 +264,17 @@ impl LogicalPlanBuilder {
         }
 
         let schema = table_source.schema();
-        let mut id_key_groups = vec![];
-        if let Some(pks) = table_source.primary_keys() {
-            let n_field = schema.fields.len();
-            // All the field indices are associated since it is source.
-            let associated_indices = (0..n_field).collect::<Vec<_>>();
-            id_key_groups.push(
-                IdentifierKeyGroup::new(pks.to_vec(), associated_indices)
-                    // As primary keys are guaranteed to be unique, set `is_unique` flag to `true`.
-                    .with_is_unique(true),
-            );
-        }
+        let n_field = schema.fields.len();
+        let func_dependencies = FunctionalDependencies::new_from_primary_keys(
+            table_source.primary_keys(),
+            n_field,
+        );
 
         let projected_schema = projection
             .as_ref()
             .map(|p| {
                 let projected_id_key_groups =
-                    project_identifier_key_indices(&id_key_groups, p, p.len());
+                    func_dependencies.project_functional_dependencies(p, p.len());
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
@@ -293,12 +287,13 @@ impl LogicalPlanBuilder {
                     schema.metadata().clone(),
                 )
                 .map(|df_schema| {
-                    df_schema.with_identifier_key_groups(projected_id_key_groups)
+                    df_schema.with_functional_dependencies(projected_id_key_groups)
                 })
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
-                    .map(|df_schema| df_schema.with_identifier_key_groups(id_key_groups))
+                DFSchema::try_from_qualified_schema(table_name.clone(), &schema).map(
+                    |df_schema| df_schema.with_functional_dependencies(func_dependencies),
+                )
             })?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
@@ -1104,49 +1099,15 @@ pub fn build_join_schema(
             right_fields.clone()
         }
     };
-
-    let mut right_id_key_groups = add_offset_to_identifier_key_groups(
-        right.identifier_key_groups(),
+    let func_dependencies = left.functional_dependencies().join(
+        right.functional_dependencies(),
+        join_type,
         left_fields.len(),
     );
-
-    let mut left_id_key_groups = left.identifier_key_groups().clone();
-
-    // After a join, a primary key may no longer be unique. However, as it still
-    // defines unique set of column values it is still an identifier key for its
-    // associated columns.
-    for group in left_id_key_groups.iter_mut() {
-        group.is_unique = false;
-    }
-    for group in right_id_key_groups.iter_mut() {
-        group.is_unique = false;
-    }
-    let id_key_groups = match join_type {
-        JoinType::Inner => {
-            // Left then right:
-            left_id_key_groups
-                .into_iter()
-                .chain(right_id_key_groups.into_iter())
-                .collect()
-        }
-        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-            // Only use the left side for the schema:
-            left_id_key_groups
-        }
-        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-            // Only use the right side for the schema:
-            right_id_key_groups
-        }
-        JoinType::Full => {
-            // Identifier keys are not preserved.
-            vec![]
-        }
-    };
-
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
     Ok(DFSchema::new_with_metadata(fields, metadata)?
-        .with_identifier_key_groups(id_key_groups))
+        .with_functional_dependencies(func_dependencies))
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1271,64 +1232,12 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }))
 }
 
-// Update entries inside the `entries` vector with their corresponding index
-// inside the `proj_indices` vector.
-fn update_elements_with_matching_indices(
-    entries: &[usize],
-    proj_indices: &[usize],
-) -> Vec<usize> {
-    entries
-        .iter()
-        .filter_map(|val| proj_indices.iter().position(|proj_idx| proj_idx == val))
-        .collect()
-}
-
-/// Update identifier key indices using the index mapping in `proj_indices`.
-/// Assume that `proj_indices` is \[2, 5, 8\] and identifier key groups is
-/// \[5\] -> \[5, 8\] in `df_schema`. Then, the return value will be \[1\] -> \[1, 2\].
-/// This means that the first index of the `proj_indices` (5) is an identifier key,
-/// and this identifier key is associated with columns at indices 1 and 2 (in
-/// the updated schema). In the updated schema, fields at indices \[2, 5, 8\] will
-/// be at \[0, 1, 2\].
-pub fn project_identifier_key_indices(
-    id_key_groups: &IdentifierKeyGroups,
-    proj_indices: &[usize],
-    // If is_unique flag of identifier key group is true. Association covers whole table. `n_out`
-    // stores schema field length to be able to correctly associate with whole table.
-    n_out: usize,
-) -> IdentifierKeyGroups {
-    let mut updated_id_key_groups = vec![];
-    for IdentifierKeyGroup {
-        identifier_key_indices,
-        is_unique,
-        associated_indices,
-    } in id_key_groups
-    {
-        let new_id_key_indices =
-            update_elements_with_matching_indices(identifier_key_indices, proj_indices);
-        let new_association_indices = if *is_unique {
-            // Associate with all of the fields in the schema:
-            (0..n_out).collect()
-        } else {
-            // Update associations according to projection:
-            update_elements_with_matching_indices(associated_indices, proj_indices)
-        };
-        if !new_id_key_indices.is_empty() {
-            let new_id_key_group =
-                IdentifierKeyGroup::new(new_id_key_indices, new_association_indices)
-                    .with_is_unique(*is_unique);
-            updated_id_key_groups.push(new_id_key_group);
-        }
-    }
-    updated_id_key_groups
-}
-
-/// This function projects identifier key groups of the plan `input` according
+/// This function projects functional dependencies of `input` according
 /// to projection expressions `exprs`.
-pub(crate) fn project_identifier_keys(
+pub(crate) fn project_functional_dependencies(
     exprs: &[Expr],
     input: &LogicalPlan,
-) -> Result<IdentifierKeyGroups> {
+) -> Result<FunctionalDependencies> {
     let input_fields = input.schema().fields();
     // Calculate expression indices (if present) in the input schema.
     let proj_indices = exprs
@@ -1345,11 +1254,9 @@ pub(crate) fn project_identifier_keys(
                 .position(|item| item.qualified_name() == expr_name)
         })
         .collect::<Vec<_>>();
-    Ok(project_identifier_key_indices(
-        input.schema().identifier_key_groups(),
-        &proj_indices,
-        exprs.len(),
-    ))
+    let input_func_dependencies = input.schema().functional_dependencies();
+    Ok(input_func_dependencies
+        .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
 /// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
@@ -1359,81 +1266,32 @@ fn contains_grouping_set(group_expr: &[Expr]) -> bool {
         .any(|expr| matches!(expr, Expr::GroupingSet(_)))
 }
 
-/// Calculates identifier key groups for aggregate expressions.
-pub(crate) fn aggregate_identifier_keys(
+/// Calculates functional dependencies for aggregate expressions
+pub(crate) fn aggregate_functional_dependencies(
     // Expressions in the GROUP BY clause:
     group_expr: &[Expr],
     // Input plan of the aggregate:
     input: &LogicalPlan,
     // Schema field length:
     n_out: usize,
-) -> Result<IdentifierKeyGroups> {
-    let mut identifier_key_groups = vec![];
-    // We can do a case analysis on how to propagate identifier keys based on
+) -> Result<FunctionalDependencies> {
+    // We can do a case analysis on how to propagate functional dependencies based on
     // whether the GROUP BY in question contains a grouping set expression:
-    // - If so, the identifier key will be empty because we cannot guarantee
+    // - If so, the functional dependencies will be empty because we cannot guarantee
     //   that GROUP BY expression results will be unique.
-    // - Otherwise, it may be possible to propagate identifier keys.
+    // - Otherwise, it may be possible to propagate functional dependencies
     if !contains_grouping_set(group_expr) {
-        // Association covers whole table:
-        let associated_indices = (0..n_out).collect::<Vec<_>>();
-        // Get identifier key groups of the input:
-        let id_key_groups = input.schema().identifier_key_groups();
-        let fields = input.schema().fields();
-        for id_key_group in id_key_groups {
-            let mut new_identifier_key_indices = HashSet::new();
-            let id_key_indices = &id_key_group.identifier_key_indices;
-            let id_key_field_names = id_key_indices
-                .iter()
-                .map(|&idx| fields[idx].qualified_name())
-                .collect::<Vec<_>>();
-            for (idx, group_by_expr) in group_expr.iter().enumerate() {
-                // When one of the input identifier keys matches with the GROUP
-                // BY expression, add the index of the GROUP BY expression as
-                // an identifier key.
-                if id_key_field_names.contains(&group_by_expr.display_name()?) {
-                    new_identifier_key_indices.insert(idx);
-                }
-            }
-            if !new_identifier_key_indices.is_empty() {
-                identifier_key_groups.push(
-                    IdentifierKeyGroup::new(
-                        new_identifier_key_indices.into_iter().collect(),
-                        associated_indices.clone(),
-                    )
-                    // input uniqueness stays the same when GROUP BY matches with input identifier keys
-                    .with_is_unique(id_key_group.is_unique),
-                );
-            }
-        }
-        // Guaranteed to be unique after aggregation, since it has a single
-        // expression (e.g. GROUP BY a):
-        if group_expr.len() == 1 {
-            // If identifier key groups contain 0, delete this identifier key from
-            // identifier key groups because it will be added anyway with is_unique
-            // flag set.
-            if let Some(idx) = identifier_key_groups
-                .iter()
-                .position(|item| item.identifier_key_indices.contains(&0))
-            {
-                identifier_key_groups[idx]
-                    .identifier_key_indices
-                    .retain(|&x| x != idx);
-                if identifier_key_groups[idx].identifier_key_indices.is_empty() {
-                    // Identifier key is empty, delete this identifier group.
-                    // Example: `identifier_key_indices` was equal to vec![0],
-                    //          and deleting 0 emptied it.
-                    identifier_key_groups.remove(idx);
-                }
-            }
-            // Add a new identifier group that is associated with whole table.
-            // Here, it is guaranteed to be unique.
-            identifier_key_groups.push(
-                IdentifierKeyGroup::new(vec![0], associated_indices).with_is_unique(true),
-            );
-        }
+        let group_by_expr_names = group_expr
+            .iter()
+            .map(|item| item.display_name())
+            .collect::<Result<Vec<_>>>()?;
+        let aggregate_func_dependencies = input
+            .schema()
+            .aggregate_functional_dependencies(&group_by_expr_names, n_out);
+        Ok(aggregate_func_dependencies)
+    } else {
+        Ok(FunctionalDependencies::empty())
     }
-    Ok(identifier_key_groups)
 }
 
 /// Create Projection
@@ -1462,13 +1320,13 @@ pub fn project(
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
-    // Update input identifier keys according to projection.
-    let id_key_groups = project_identifier_keys(&projected_expr, &plan)?;
+    // Update input functional dependencies according to projection.
+    let id_key_groups = project_functional_dependencies(&projected_expr, &plan)?;
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?
-    .with_identifier_key_groups(id_key_groups);
+    .with_functional_dependencies(id_key_groups);
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,
@@ -1633,8 +1491,8 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
     let schema = Arc::new(
         DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
-            // We can use existing identifier key groups:
-            .with_identifier_key_groups(input_schema.identifier_key_groups().clone()),
+            // We can use existing functional dependencies:
+            .with_functional_dependencies(input_schema.functional_dependencies().clone()),
     );
 
     Ok(LogicalPlan::Unnest(Unnest {
@@ -1648,7 +1506,9 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 mod tests {
     use crate::{expr, expr_fn::exists};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
+    use datafusion_common::{
+        FunctionalDependence, OwnedTableReference, SchemaError, TableReference,
+    };
 
     use crate::logical_plan::StringifiedPlan;
 
@@ -2157,9 +2017,16 @@ mod tests {
 
     #[test]
     fn test_get_updated_id_keys() {
-        let identifier_key_groups = vec![IdentifierKeyGroup::new(vec![1], vec![0, 1, 2])];
-        let res = project_identifier_key_indices(&identifier_key_groups, &[1, 2], 2);
-        let expected = vec![IdentifierKeyGroup::new(vec![0], vec![0, 1])];
+        let fund_dependencies =
+            FunctionalDependencies::new(vec![FunctionalDependence::new(
+                vec![1],
+                vec![0, 1, 2],
+            )]);
+        let res = fund_dependencies.project_functional_dependencies(&[1, 2], 2);
+        let expected = FunctionalDependencies::new(vec![FunctionalDependence::new(
+            vec![0],
+            vec![0, 1],
+        )]);
         assert_eq!(res, expected);
     }
 }
