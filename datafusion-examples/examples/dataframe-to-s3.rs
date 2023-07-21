@@ -21,14 +21,13 @@ use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
-//use datafusion::prelude::data;
 use object_store::aws::AmazonS3Builder;
 use std::env;
 use std::sync::Arc;
 use url::Url;
 
-/// This example demonstrates executing a simple query against an Arrow data source (a directory
-/// with multiple Parquet files) and fetching results
+/// This example demonstrates querying data from AmazonS3 and writing
+/// the result of a query back to AmazonS3
 #[tokio::main]
 async fn main() -> Result<()> {
     // create local execution context

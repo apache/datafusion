@@ -37,14 +37,12 @@ use arrow::{
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use arrow_array::RecordBatchWriter;
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
-use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::physical_plan::ExecutionPlan;
 use crate::{
@@ -76,7 +74,6 @@ use std::{
     cmp::min,
     collections::HashMap,
     fmt::{Debug, Formatter, Result as FmtResult},
-    io::Write,
     marker::PhantomData,
     sync::Arc,
     vec,
@@ -477,95 +474,6 @@ where
         write!(f, ", ...")?;
     }
     Ok(())
-}
-
-struct SharedBuffer {
-    /// The inner buffer for reading and writing
-    ///
-    /// The lock is used to obtain internal mutability, so no worry about the
-    /// lock contention.
-    buffer: Arc<futures::lock::Mutex<Vec<u8>>>,
-}
-
-impl Write for SharedBuffer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut buffer = self.buffer.try_lock().unwrap();
-        Write::write(&mut *buffer, buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let mut buffer = self.buffer.try_lock().unwrap();
-        Write::flush(&mut *buffer)
-    }
-}
-
-//Coordinates writing a sequence of RecordBatches using a SharedBuffer
-//between a sync Arrow RecordBatchWriter and an async ObjectStore writer
-struct RecordBatchMultiPartWriter<W: RecordBatchWriter> {
-    rb_writer: W,
-    multipart_writer: Box<dyn AsyncWrite + Send + Unpin>,
-    shared_buffer: Arc<futures::lock::Mutex<Vec<u8>>>,
-    //buffer into shared buffer until we reach target_part_size_bytes
-    //then empty shared buffer / flush via multipart put to ObjectStore
-    target_part_size_bytes: usize,
-}
-
-impl<W: RecordBatchWriter> RecordBatchMultiPartWriter<W> {
-    fn new<F>(
-        rb_constructor: F,
-        multipart_writer: Box<dyn AsyncWrite + Send + Unpin>,
-        target_part_size_bytes: Option<usize>,
-    ) -> Self
-    where
-        F: Fn(SharedBuffer) -> W,
-    {
-        let target_part_size = target_part_size_bytes.unwrap_or(10485760);
-        let buffer = Arc::new(futures::lock::Mutex::new(Vec::with_capacity(
-            target_part_size * 2,
-        )));
-        let shared_buffer = SharedBuffer {
-            buffer: buffer.clone(),
-        };
-        let rb_writer = rb_constructor(shared_buffer);
-        Self {
-            rb_writer,
-            multipart_writer,
-            shared_buffer: buffer,
-            target_part_size_bytes: target_part_size,
-        }
-    }
-
-    //sends bytes in buffer to ObjectStore and clears buffer
-    async fn put_part(&mut self, last_part: bool) -> Result<(), DataFusionError> {
-        let mut buffer = self.shared_buffer.lock().await;
-        if last_part || buffer.len() >= self.target_part_size_bytes {
-            self.multipart_writer.write_all(&buffer).await?;
-            buffer.clear();
-        }
-        Ok(())
-    }
-
-    async fn write_rb(&mut self, batch: RecordBatch) -> Result<(), DataFusionError> {
-        self.rb_writer.write(&batch)?;
-        self.put_part(false).await?;
-        Ok(())
-    }
-
-    async fn flush(&mut self, last_part: bool) -> Result<(), DataFusionError> {
-        self.put_part(last_part).await?;
-        self.multipart_writer
-            .flush()
-            .await
-            .map_err(DataFusionError::from)
-    }
-
-    async fn shutdown(&mut self) -> Result<(), DataFusionError> {
-        self.flush(true).await?;
-        self.multipart_writer
-            .shutdown()
-            .await
-            .map_err(DataFusionError::from)
-    }
 }
 
 /// helper formatting array elements with a comma and a space between them

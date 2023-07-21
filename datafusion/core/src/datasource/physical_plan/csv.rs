@@ -23,7 +23,6 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::FileMeta;
-use crate::datasource::physical_plan::RecordBatchMultiPartWriter;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -35,6 +34,7 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+use tokio::io::AsyncWriteExt;
 
 use super::FileScanConfig;
 
@@ -576,17 +576,26 @@ pub async fn plan_to_csv(
         let file = object_store::path::Path::parse(filename)?;
 
         let mut stream = plan.execute(i, task_ctx.clone())?;
-
         join_set.spawn(async move {
-            let (_, multipart_writer) = storeref.put_multipart(&file).await?;
-            let mut multipart_rb_writer =
-                RecordBatchMultiPartWriter::new(csv::Writer::new, multipart_writer, None);
-            while let Some(next_batch) = stream.next().await {
-                let batch = next_batch?;
-                multipart_rb_writer.write_rb(batch).await?;
+            let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
+            let mut buffer = Vec::with_capacity(1024);
+            //only write headers on first iteration
+            let mut write_headers = true;
+            while let Some(batch) = stream.next().await.transpose()? {
+                let mut writer = csv::WriterBuilder::new()
+                    .has_headers(write_headers)
+                    .build(buffer);
+                writer.write(&batch)?;
+                buffer = writer.into_inner();
+                multipart_writer.write_all(&buffer).await?;
+                buffer.clear();
+                //prevent writing headers more than once
+                write_headers = false;
             }
-
-            multipart_rb_writer.shutdown().await
+            multipart_writer
+                .shutdown()
+                .await
+                .map_err(DataFusionError::from)
         });
     }
 
