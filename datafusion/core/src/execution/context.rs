@@ -2175,13 +2175,13 @@ mod tests {
     async fn create_variable_err() -> Result<()> {
         let ctx = SessionContext::new();
 
-        let err = plan_and_collect(&ctx, "SElECT @=   X#=?!~ 5")
+        let err = plan_and_collect(&ctx, "SElECT @=   X3")
             .await
             .unwrap_err();
 
         assert_eq!(
             err.to_string(),
-            "Error during planning: variable [\"@\"] has no type information"
+            "Error during planning: variable [\"@=\"] has no type information"
         );
         Ok(())
     }
