@@ -1566,6 +1566,7 @@ array_has_any(array, sub-array)
   Can be a constant, column, or function, and any combination of array operators.
 - **sub-array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
+
 ### `array_dims`
 
 Returns an array of the array's dimensions.
