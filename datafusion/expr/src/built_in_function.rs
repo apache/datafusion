@@ -1288,10 +1288,12 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ArrayConcat => {
             &["array_concat", "array_cat", "list_concat", "list_cat"]
         }
-        BuiltinScalarFunction::ArrayHasAll => &["array_has_all"],
         BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
-        BuiltinScalarFunction::ArrayHasAny => &["array_has_any"],
-        BuiltinScalarFunction::ArrayHas => &["array_has"],
+        BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
+        BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
+        BuiltinScalarFunction::ArrayHas => {
+            &["array_has", "list_has", "array_contains", "list_contains"]
+        }
         BuiltinScalarFunction::ArrayFill => &["array_fill"],
         BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],

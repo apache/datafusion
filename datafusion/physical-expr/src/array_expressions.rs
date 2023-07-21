@@ -1454,12 +1454,9 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Boolean => {
             non_list_contains!(array, args[1], BooleanArray)
         }
-        _ => {
-            todo!(
-                "array_has not implemented for type: {:?}",
-                args[1].data_type()
-            )
-        }
+        data_type => Err(DataFusionError::NotImplemented(format!(
+            "Array_has is not implemented for '{data_type:?}'"
+        ))),
     }
 }
 
@@ -1470,11 +1467,13 @@ macro_rules! array_has_any_non_list_check {
 
         let mut res = false;
         for elem in sub_arr.iter().dedup() {
-            res |= arr
-                .iter()
-                .dedup()
-                .flatten()
-                .any(|x| x == elem.expect("null type not supported"));
+            if let Some(elem) = elem {
+                res |= arr.iter().dedup().flatten().any(|x| x == elem);
+            } else {
+                return Err(DataFusionError::Internal(format!(
+                    "array_has_any does not support Null type for element in sub_array"
+                )));
+            }
         }
         res
     }};
@@ -1545,10 +1544,8 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
                     array_has_any_non_list_check!(arr, sub_arr, LargeStringArray)
                 }
 
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Array_has_any is not implemented for types '{:?}' and '{:?}'.",
-                    arr.data_type(),
-                    sub_arr.data_type()
+                (arr_type, sub_arr_type) => Err(DataFusionError::NotImplemented(format!(
+                    "Array_has_any is not implemented for '{arr_type:?}' and '{sub_arr_type:?}'",
                 )))?,
             };
             boolean_builder.append_value(res);
@@ -1564,11 +1561,13 @@ macro_rules! array_has_all_non_list_check {
 
         let mut res = true;
         for elem in sub_arr.iter().dedup() {
-            res &= arr
-                .iter()
-                .dedup()
-                .flatten()
-                .any(|x| x == elem.expect("null type not supported"));
+            if let Some(elem) = elem {
+                res &= arr.iter().dedup().flatten().any(|x| x == elem);
+            } else {
+                return Err(DataFusionError::Internal(format!(
+                    "array_has_all does not support Null type for element in sub_array"
+                )));
+            }
         }
         res
     }};
@@ -1637,10 +1636,8 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
                 (DataType::LargeUtf8, DataType::LargeUtf8) => {
                     array_has_all_non_list_check!(arr, sub_arr, LargeStringArray)
                 }
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Array_has_all is not implemented for types '{:?}' and '{:?}'.",
-                    arr.data_type(),
-                    sub_arr.data_type()
+                (arr_type, sub_arr_type) => Err(DataFusionError::NotImplemented(format!(
+                    "Array_has_all is not implemented for '{arr_type:?}' and '{sub_arr_type:?}'",
                 )))?,
             };
             boolean_builder.append_value(res);

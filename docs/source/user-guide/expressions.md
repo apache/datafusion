@@ -183,7 +183,9 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | array_append(array, element)              | Appends an element to the end of an array. `array_append([1, 2, 3], 4) -> [1, 2, 3, 4]`                        |
 | array_concat(array[, ..., array_n])       | Concatenates arrays. `array_concat([1, 2, 3], [4, 5, 6]) -> [1, 2, 3, 4, 5, 6]`                                |
-| array_contains(first_array, second_array) | Returns true, if each element of the second array appearing in the first array, otherwise false.               |
+| array_has(array, element)                 | Returns true if the array contains the element `array_has([1,2,3], 1) -> true` |
+| array_has_all(array, sub-array)           | Returns true if all elements of sub-array exist in array `array_has_all([1,2,3], [1,3]) -> true` |
+| array_has_any(array, sub-array)           | Returns true if any elements exist is both array `array_has_any([1,2,3], [1,4]) -> true` |
 | array_dims(array)                         | Returns an array of the array's dimensions. `array_dims([[1, 2, 3], [4, 5, 6]]) -> [2, 3]`                     |
 | array_fill(element, array)                | Returns an array filled with copies of the given value.                                                        |
 | array_length(array, dimension)            | Returns the length of the array dimension. `array_length([1, 2, 3, 4, 5]) -> 5`                                |
