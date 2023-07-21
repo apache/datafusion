@@ -273,6 +273,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children.iter().any(|c| *c))
+    }
+
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![
             Some(PhysicalSortRequirement::from_sort_exprs(
