@@ -54,7 +54,6 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
             };
         }
 
-        // TODO: More primitives
         downcast_primitive! {
             d => (downcast_helper, d),
             _ => {}
