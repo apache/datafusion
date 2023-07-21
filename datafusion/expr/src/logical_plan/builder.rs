@@ -273,7 +273,7 @@ impl LogicalPlanBuilder {
         let projected_schema = projection
             .as_ref()
             .map(|p| {
-                let projected_id_key_groups =
+                let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
                 DFSchema::new_with_metadata(
                     p.iter()
@@ -287,7 +287,7 @@ impl LogicalPlanBuilder {
                     schema.metadata().clone(),
                 )
                 .map(|df_schema| {
-                    df_schema.with_functional_dependencies(projected_id_key_groups)
+                    df_schema.with_functional_dependencies(projected_func_dependencies)
                 })
             })
             .unwrap_or_else(|| {
@@ -1321,12 +1321,13 @@ pub fn project(
     validate_unique_names("Projections", projected_expr.iter())?;
 
     // Update input functional dependencies according to projection.
-    let id_key_groups = project_functional_dependencies(&projected_expr, &plan)?;
+    let projected_func_dependencies =
+        project_functional_dependencies(&projected_expr, &plan)?;
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?
-    .with_functional_dependencies(id_key_groups);
+    .with_functional_dependencies(projected_func_dependencies);
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,
