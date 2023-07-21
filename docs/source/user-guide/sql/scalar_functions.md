@@ -1554,7 +1554,7 @@ array_has_all(array, sub-array)
 
 ### `array_has_any`
 
-Returns true if any elements exist is both array
+Returns true if any elements exist in both arrays
 
 ```
 array_has_any(array, sub-array)
