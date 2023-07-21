@@ -58,7 +58,7 @@ use log::debug;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask, AsyncArrowWriter};
+use parquet::arrow::{AsyncArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
@@ -649,12 +649,18 @@ pub async fn plan_to_parquet(
         let (_, multipart_writer) = storeref.put_multipart(&file).await?;
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let mut writer = AsyncArrowWriter::try_new(multipart_writer, plan.schema(), 0,propclone)?;
-            while let Some(next_batch) = stream.next().await{
+            let mut writer = AsyncArrowWriter::try_new(
+                multipart_writer,
+                plan.schema(),
+                10485760,
+                propclone,
+            )?;
+            while let Some(next_batch) = stream.next().await {
                 let batch = next_batch?;
                 writer.write(&batch).await?;
             }
-            writer.close()
+            writer
+                .close()
                 .await
                 .map_err(DataFusionError::from)
                 .map(|_| ())

@@ -23,6 +23,7 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::FileMeta;
+use crate::datasource::physical_plan::RecordBatchMultiPartWriter;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -567,29 +568,25 @@ pub async fn plan_to_csv(
     let parsed = ListingTableUrl::parse(path)?;
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
-    let mut buffer;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let storeref = store.clone();
         let plan: Arc<dyn ExecutionPlan> = plan.clone();
         let filename = format!("{}/part-{i}.csv", parsed.prefix());
         let file = object_store::path::Path::parse(filename)?;
-        buffer = Vec::new();
 
-        let stream = plan.execute(i, task_ctx.clone())?;
+        let mut stream = plan.execute(i, task_ctx.clone())?;
+
         join_set.spawn(async move {
-            let mut writer = csv::Writer::new(buffer);
-            stream
-                .map(|batch| writer.write(&batch?).map_err(DataFusionError::ArrowError))
-                .try_collect()
-                .await
-                .map_err(DataFusionError::from)?;
-            let write_bytes = Bytes::from_iter(writer.into_inner());
-            storeref
-                .put(&file, write_bytes)
-                .await
-                .map_err(DataFusionError::from)
-                .map(|_| ())
+            let (_, multipart_writer) = storeref.put_multipart(&file).await?;
+            let mut multipart_rb_writer =
+                RecordBatchMultiPartWriter::new(csv::Writer::new, multipart_writer, None);
+            while let Some(next_batch) = stream.next().await {
+                let batch = next_batch?;
+                multipart_rb_writer.write_rb(batch).await?;
+            }
+
+            multipart_rb_writer.shutdown().await
         });
     }
 

@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
     let region = "us-east-1";
-    let bucket_name = "<my_s3_example_bucket>";
+    let bucket_name = "rust-perf-testing";
 
     let s3 = AmazonS3Builder::new()
         .with_bucket_name(bucket_name)
@@ -58,25 +58,18 @@ async fn main() -> Result<()> {
         .await?;
 
     // execute the query
-    let df = ctx
-        .sql(
-            "SELECT testcode, count(1) \
-                                FROM test \
-                                group by testcode \
-                                ",
-        )
-        .await?;
+    let df = ctx.sql("SELECT * from test").await?;
 
     let out_path = format!("s3://{bucket_name}/test_write/");
-    df.write_parquet(&out_path, None).await?;
+    df.clone().write_parquet(&out_path, None).await?;
 
-    //write as JSON to s3 instead
-    //let json_out = format!("s3://{bucket_name}/json_out");
-    //df.write_json(&json_out).await?;
+    //write as JSON to s3
+    let json_out = format!("s3://{bucket_name}/json_out");
+    df.clone().write_json(&json_out).await?;
 
-    //write as csv to s3 instead
-    //let csv_out = format!("s3://{bucket_name}/csv_out");
-    //df.write_csv(&csv_out).await?;
+    //write as csv to s3
+    let csv_out = format!("s3://{bucket_name}/csv_out");
+    df.write_csv(&csv_out).await?;
 
     let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
     let listing_options = ListingOptions::new(Arc::new(file_format))
