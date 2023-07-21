@@ -2175,9 +2175,7 @@ mod tests {
     async fn create_variable_err() -> Result<()> {
         let ctx = SessionContext::new();
 
-        let err = plan_and_collect(&ctx, "SElECT @=   X3")
-            .await
-            .unwrap_err();
+        let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
 
         assert_eq!(
             err.to_string(),
