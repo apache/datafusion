@@ -34,8 +34,9 @@ async fn main() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    let region = "us-east-1";
-    let bucket_name = "rust-perf-testing";
+    //enter region and bucket to which your credentials have GET and PUT access
+    let region = "<bucket-region-here>";
+    let bucket_name = "<bucket-name-here>";
 
     let s3 = AmazonS3Builder::new()
         .with_bucket_name(bucket_name)
