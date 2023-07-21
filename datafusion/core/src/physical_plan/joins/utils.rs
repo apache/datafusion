@@ -149,61 +149,90 @@ pub fn adjust_right_output_partitioning(
     }
 }
 
-fn adjust_right_order(
-    right_order: &[PhysicalSortExpr],
+/// Replaces the right column (first index in the `on_column` tuple) with
+/// the left column (zeroth index in the tuple) inside `right_ordering`.
+fn replace_on_columns_of_right_ordering(
+    on_columns: &[(Column, Column)],
+    right_ordering: &mut [PhysicalSortExpr],
     left_columns_len: usize,
-) -> Result<Vec<PhysicalSortExpr>> {
-    right_order
-        .iter()
-        .map(|sort_expr| {
-            let expr = sort_expr.expr.clone();
-            let adjusted = expr.transform_up(&|expr| {
-                Ok(
-                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                        let new_col =
-                            Column::new(column.name(), column.index() + left_columns_len);
-                        Transformed::Yes(Arc::new(new_col))
-                    } else {
-                        Transformed::No(expr)
-                    },
-                )
-            })?;
-            Ok(PhysicalSortExpr {
-                expr: adjusted,
-                options: sort_expr.options,
-            })
-        })
-        .collect::<Result<Vec<_>>>()
+) {
+    for (left_col, right_col) in on_columns {
+        let right_col =
+            Column::new(right_col.name(), right_col.index() + left_columns_len);
+        for item in right_ordering.iter_mut() {
+            if let Some(col) = item.expr.as_any().downcast_ref::<Column>() {
+                if right_col.eq(col) {
+                    item.expr = Arc::new(left_col.clone()) as _;
+                }
+            }
+        }
+    }
 }
 
-/// Calculate the output order for hash join.
-pub fn calculate_hash_join_output_order(
-    join_type: &JoinType,
-    maybe_left_order: Option<&[PhysicalSortExpr]>,
-    maybe_right_order: Option<&[PhysicalSortExpr]>,
-    left_len: usize,
-) -> Result<Option<Vec<PhysicalSortExpr>>> {
-    match maybe_right_order {
-        Some(right_order) => {
-            let result = match join_type {
-                JoinType::Inner => {
-                    // We modify the indices of the right order columns because their
-                    // columns are appended to the right side of the left schema.
-                    let mut adjusted_right_order =
-                        adjust_right_order(right_order, left_len)?;
-                    if let Some(left_order) = maybe_left_order {
-                        adjusted_right_order.extend_from_slice(left_order);
-                    }
-                    Some(adjusted_right_order)
-                }
-                JoinType::RightAnti | JoinType::RightSemi => Some(right_order.to_vec()),
-                _ => None,
-            };
-
-            Ok(result)
+/// Calculate output ordering of SortMergeJoin
+pub fn calculate_join_output_ordering(
+    left_ordering: LexOrderingRef,
+    right_ordering: LexOrderingRef,
+    join_type: JoinType,
+    on_columns: &[(Column, Column)],
+    left_columns_len: usize,
+    maintains_input_order: &[bool],
+    probe_side: JoinProbeSide,
+) -> Result<Option<LexOrdering>> {
+    // All joins have 2 children
+    assert_eq!(maintains_input_order.len(), 2);
+    let left_maintains = maintains_input_order[0];
+    let right_maintains = maintains_input_order[1];
+    let (mut right_ordering, on_columns) = match join_type {
+        // In these cases right ordering should be added with left side length,
+        // since right table appended to the left table
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+            let updated_on_columns = on_columns
+                .iter()
+                .map(|(left, right)| {
+                    (
+                        left.clone(),
+                        Column::new(right.name(), right.index() + left_columns_len),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let updated_right_ordering =
+                add_offset_to_lex_ordering(right_ordering, left_columns_len)?;
+            (updated_right_ordering, updated_on_columns)
         }
-        None => Ok(None),
-    }
+        _ => (right_ordering.to_vec(), on_columns.to_vec()),
+    };
+    let output_ordering = match (left_maintains, right_maintains) {
+        (true, true) => {
+            return Err(DataFusionError::Execution(
+                "Cannot maintain ordering of both sides".to_string(),
+            ))
+        }
+        (true, false) => {
+            // Special case, we can prefix ordering of right side with the ordering of left side.
+            if join_type == JoinType::Inner && probe_side == JoinProbeSide::Left {
+                replace_on_columns_of_right_ordering(
+                    &on_columns,
+                    &mut right_ordering,
+                    left_columns_len,
+                );
+                merge_vectors(left_ordering, &right_ordering)
+            } else {
+                left_ordering.to_vec()
+            }
+        }
+        (false, true) => {
+            // Special case, we can prefix ordering of left side with the ordering of right side.
+            if join_type == JoinType::Inner && probe_side == JoinProbeSide::Right {
+                merge_vectors(&right_ordering, left_ordering)
+            } else {
+                right_ordering
+            }
+        }
+        // Doesn't maintain ordering, output ordering is None.
+        (false, false) => return Ok(None),
+    };
+    Ok((!output_ordering.is_empty()).then_some(output_ordering))
 }
 
 /// Combine the Equivalence Properties for Join Node
@@ -286,7 +315,7 @@ pub fn cross_join_equivalence_properties(
 }
 
 /// Keeps which side is used as Probe for join operation
-#[derive(PartialEq, Clone, Hash, Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinProbeSide {
     /// left side is ProbeSide
     Left,

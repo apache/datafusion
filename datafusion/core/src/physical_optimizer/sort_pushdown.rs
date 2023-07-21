@@ -16,7 +16,9 @@
 // under the License.
 use crate::physical_optimizer::utils::{add_sort_above, is_limit, is_union, is_window};
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::utils::JoinSide;
+use crate::physical_plan::joins::utils::{
+    calculate_join_output_ordering, JoinProbeSide, JoinSide,
+};
 use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
@@ -31,7 +33,6 @@ use datafusion_physical_expr::utils::{
 };
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 use itertools::izip;
-use std::ops::Deref;
 use std::sync::Arc;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
@@ -223,31 +224,24 @@ fn pushdown_requirement_to_children(
         let expr_source_side =
             expr_source_sides(&parent_required_expr, smj.join_type, left_columns_len);
         match expr_source_side {
-            Some(JoinSide::Left) if maintains_input_order[0] => {
-                try_pushdown_requirements_to_join(
-                    plan,
+            Some(JoinSide::Left) => try_pushdown_requirements_to_join_v2(
+                smj,
+                parent_required,
+                parent_required_expr,
+                JoinSide::Left,
+            ),
+            Some(JoinSide::Right) => {
+                let right_offset =
+                    smj.schema().fields.len() - smj.right.schema().fields.len();
+                let new_right_required =
+                    shift_right_required(parent_required.ok_or_else(err)?, right_offset)?;
+                let new_right_required_expr = PhysicalSortRequirement::to_sort_exprs(
+                    new_right_required.iter().cloned(),
+                );
+                try_pushdown_requirements_to_join_v2(
+                    smj,
                     parent_required,
-                    parent_required_expr,
-                    JoinSide::Left,
-                )
-            }
-            Some(JoinSide::Right) if maintains_input_order[1] => {
-                let new_right_required = match smj.join_type {
-                    JoinType::Inner | JoinType::Right => shift_right_required(
-                        parent_required.ok_or_else(err)?,
-                        left_columns_len,
-                    )?,
-                    JoinType::RightSemi | JoinType::RightAnti => {
-                        parent_required.ok_or_else(err)?.to_vec()
-                    }
-                    _ => Err(DataFusionError::Plan(
-                        "Unexpected SortMergeJoin type here".to_string(),
-                    ))?,
-                };
-                try_pushdown_requirements_to_join(
-                    plan,
-                    Some(new_right_required.deref()),
-                    parent_required_expr,
+                    new_right_required_expr,
                     JoinSide::Right,
                 )
             }
@@ -316,38 +310,53 @@ fn determine_children_requirement(
         RequirementsCompatibility::NonCompatible
     }
 }
-
-fn try_pushdown_requirements_to_join(
-    plan: &Arc<dyn ExecutionPlan>,
+fn try_pushdown_requirements_to_join_v2(
+    smj: &SortMergeJoinExec,
     parent_required: Option<&[PhysicalSortRequirement]>,
     sort_expr: Vec<PhysicalSortExpr>,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
-    let child_idx = match push_side {
-        JoinSide::Left => 0,
-        JoinSide::Right => 1,
+    let left_ordering = smj.left.output_ordering().unwrap_or(&[]);
+    let right_ordering = smj.right.output_ordering().unwrap_or(&[]);
+    let new_output_ordering = match push_side {
+        JoinSide::Left => calculate_join_output_ordering(
+            &sort_expr,
+            right_ordering,
+            smj.join_type,
+            &smj.on,
+            smj.left.schema().fields.len(),
+            &smj.maintains_input_order(),
+            JoinProbeSide::Left,
+        )?,
+        JoinSide::Right => calculate_join_output_ordering(
+            left_ordering,
+            &sort_expr,
+            smj.join_type,
+            &smj.on,
+            smj.left.schema().fields.len(),
+            &smj.maintains_input_order(),
+            JoinProbeSide::Left,
+        )?,
     };
-    let required_input_ordering = plan.required_input_ordering();
-    let request_child = required_input_ordering[child_idx].as_deref();
-    let child_plan = plan.children()[child_idx].clone();
-    match determine_children_requirement(parent_required, request_child, child_plan) {
-        RequirementsCompatibility::Satisfy => Ok(None),
-        RequirementsCompatibility::Compatible(adjusted) => {
-            let new_adjusted = match push_side {
-                JoinSide::Left => {
-                    vec![adjusted, required_input_ordering[1].clone()]
-                }
-                JoinSide::Right => {
-                    vec![required_input_ordering[0].clone(), adjusted]
-                }
-            };
-            Ok(Some(new_adjusted))
-        }
-        RequirementsCompatibility::NonCompatible => {
-            // Can not push down, add new SortExec
-            add_sort_above(&mut plan.clone(), sort_expr, None)?;
-            Ok(None)
-        }
+    if ordering_satisfy_requirement(
+        new_output_ordering.as_deref(),
+        parent_required,
+        || smj.equivalence_properties(),
+        || smj.ordering_equivalence_properties(),
+    ) {
+        let required_input_ordering = smj.required_input_ordering();
+        let new_req = Some(PhysicalSortRequirement::from_sort_exprs(&sort_expr));
+        let new_adjusted = match push_side {
+            JoinSide::Left => {
+                vec![new_req, required_input_ordering[1].clone()]
+            }
+            JoinSide::Right => {
+                vec![required_input_ordering[0].clone(), new_req]
+            }
+        };
+        Ok(Some(new_adjusted))
+    } else {
+        Ok(None)
     }
 }
 

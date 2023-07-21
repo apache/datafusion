@@ -26,7 +26,7 @@ use std::{any::Any, usize, vec};
 
 use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    calculate_hash_join_output_order, combine_join_ordering_equivalence_properties,
+    calculate_join_output_ordering, combine_join_ordering_equivalence_properties,
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinProbeSide,
     JoinSide,
 };
@@ -123,6 +123,16 @@ pub struct HashJoinExec {
     pub(crate) null_equals_null: bool,
 }
 
+fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
+    vec![
+        false,
+        matches!(
+            join_type,
+            JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
+        ),
+    ]
+}
+
 impl HashJoinExec {
     /// Tries to create a new [HashJoinExec].
     /// # Error
@@ -151,11 +161,20 @@ impl HashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let output_order = calculate_hash_join_output_order(
-            join_type,
-            left.output_ordering(),
-            right.output_ordering(),
-            left.schema().fields().len(),
+        // let output_order = calculate_hash_join_output_order(
+        //     join_type,
+        //     left.output_ordering(),
+        //     right.output_ordering(),
+        //     left.schema().fields().len(),
+        // )?;
+        let output_order = calculate_join_output_ordering(
+            left.output_ordering().unwrap_or(&[]),
+            right.output_ordering().unwrap_or(&[]),
+            *join_type,
+            &on,
+            left_schema.fields.len(),
+            &maintains_input_order(*join_type),
+            JoinProbeSide::Right,
         )?;
 
         Ok(HashJoinExec {
@@ -355,13 +374,7 @@ impl ExecutionPlan for HashJoinExec {
     // are processed sequentially in the probe phase, and unmatched rows are directly output
     // as results, these results tend to retain the order of the probe side table.
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![
-            false,
-            matches!(
-                self.join_type,
-                JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
-            ),
-        ]
+        maintains_input_order(self.join_type)
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
