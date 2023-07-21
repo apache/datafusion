@@ -16,27 +16,10 @@
 // under the License.
 
 //! DataFusion benchmark runner
-use datafusion::error::Result;
-use structopt::StructOpt;
-
-pub mod run;
+pub mod clickbench;
 pub mod tpch;
 
+mod options;
+mod run;
+pub use options::CommonOpt;
 pub use run::{BenchQuery, BenchmarkRun};
-
-#[derive(Debug, StructOpt)]
-#[structopt(about = "benchmark command")]
-enum Options {
-    Tpch(tpch::RunOpt),
-    TpchConvert(tpch::ConvertOpt),
-}
-
-// Main benchmark runner entrypoint
-pub async fn main() -> Result<()> {
-    env_logger::init();
-
-    match Options::from_args() {
-        Options::Tpch(opt) => opt.run().await,
-        Options::TpchConvert(opt) => opt.run().await,
-    }
-}
