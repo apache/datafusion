@@ -25,12 +25,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use ahash::RandomState;
-use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
+use crate::physical_plan::aggregates::group_values::{new_group_values, GroupValues};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     PhysicalGroupBy,
@@ -41,10 +39,9 @@ use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::Result;
-use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
-use hashbrown::raw::RawTable;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -58,181 +55,6 @@ pub(crate) enum ExecutionState {
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
-
-/// An interning store for group keys
-trait GroupValues: Send {
-    /// Calculates the `groups` for each input row of `cols`
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
-
-    /// Returns the number of bytes used by this [`GroupValues`]
-    fn size(&self) -> usize;
-
-    /// Returns true if this [`GroupValues`] is empty
-    fn is_empty(&self) -> bool;
-
-    /// The number of values stored in this [`GroupValues`]
-    fn len(&self) -> usize;
-
-    /// Emits the group values
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
-}
-
-/// A [`GroupValues`] making use of [`Rows`]
-struct GroupValuesRows {
-    /// Converter for the group values
-    row_converter: RowConverter,
-
-    /// Logically maps group values to a group_index in
-    /// [`Self::group_values`] and in each accumulator
-    ///
-    /// Uses the raw API of hashbrown to avoid actually storing the
-    /// keys (group values) in the table
-    ///
-    /// keys: u64 hashes of the GroupValue
-    /// values: (hash, group_index)
-    map: RawTable<(u64, usize)>,
-
-    /// The size of `map` in bytes
-    map_size: usize,
-
-    /// The actual group by values, stored in arrow [`Row`] format.
-    /// `group_values[i]` holds the group value for group_index `i`.
-    ///
-    /// The row format is used to compare group keys quickly and store
-    /// them efficiently in memory. Quick comparison is especially
-    /// important for multi-column group keys.
-    ///
-    /// [`Row`]: arrow::row::Row
-    group_values: Rows,
-
-    // buffer to be reused to store hashes
-    hashes_buffer: Vec<u64>,
-
-    /// Random state for creating hashes
-    random_state: RandomState,
-}
-
-impl GroupValuesRows {
-    fn try_new(schema: SchemaRef) -> Result<Self> {
-        let row_converter = RowConverter::new(
-            schema
-                .fields()
-                .iter()
-                .map(|f| SortField::new(f.data_type().clone()))
-                .collect(),
-        )?;
-
-        let map = RawTable::with_capacity(0);
-        let group_values = row_converter.empty_rows(0, 0);
-
-        Ok(Self {
-            row_converter,
-            map,
-            map_size: 0,
-            group_values,
-            hashes_buffer: Default::default(),
-            random_state: Default::default(),
-        })
-    }
-}
-
-impl GroupValues for GroupValuesRows {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // Convert the group keys into the row format
-        // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
-        let group_rows = self.row_converter.convert_columns(cols)?;
-        let n_rows = group_rows.num_rows();
-
-        // tracks to which group each of the input rows belongs
-        groups.clear();
-
-        // 1.1 Calculate the group keys for the group values
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
-
-        for (row, &hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.get_mut(hash, |(_hash, group_idx)| {
-                // verify that a group that we are inserting with hash is
-                // actually the same key value as the group in
-                // existing_idx  (aka group_values @ row)
-                group_rows.row(row) == self.group_values.row(*group_idx)
-            });
-
-            let group_idx = match entry {
-                // Existing group_index for this group value
-                Some((_hash, group_idx)) => *group_idx,
-                //  1.2 Need to create new entry for the group
-                None => {
-                    // Add new entry to aggr_state and save newly created index
-                    let group_idx = self.group_values.num_rows();
-                    self.group_values.push(group_rows.row(row));
-
-                    // for hasher function, use precomputed hash value
-                    self.map.insert_accounted(
-                        (hash, group_idx),
-                        |(hash, _group_index)| *hash,
-                        &mut self.map_size,
-                    );
-                    group_idx
-                }
-            };
-            groups.push(group_idx);
-        }
-
-        Ok(())
-    }
-
-    fn size(&self) -> usize {
-        self.row_converter.size()
-            + self.group_values.size()
-            + self.map_size
-            + self.hashes_buffer.allocated_size()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    fn len(&self) -> usize {
-        self.group_values.num_rows()
-    }
-
-    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        Ok(match emit_to {
-            EmitTo::All => {
-                // Eventually we may also want to clear the hash table here
-                self.row_converter.convert_rows(&self.group_values)?
-            }
-            EmitTo::First(n) => {
-                let groups_rows = self.group_values.iter().take(n);
-                let output = self.row_converter.convert_rows(groups_rows)?;
-                // Clear out first n group keys by copying them to a new Rows.
-                // TODO file some ticket in arrow-rs to make this more efficent?
-                let mut new_group_values = self.row_converter.empty_rows(0, 0);
-                for row in self.group_values.iter().skip(n) {
-                    new_group_values.push(row);
-                }
-                std::mem::swap(&mut new_group_values, &mut self.group_values);
-
-                // SAFETY: self.map outlives iterator and is not modified concurrently
-                unsafe {
-                    for bucket in self.map.iter() {
-                        // Decrement group index by n
-                        match bucket.as_ref().1.checked_sub(n) {
-                            // Group index was >= n, shift value down
-                            Some(sub) => bucket.as_mut().1 = sub,
-                            // Group index was < n, so remove from table
-                            None => self.map.erase(bucket),
-                        }
-                    }
-                }
-                output
-            }
-        })
-    }
-}
 
 /// Hash based Grouping Aggregator
 ///
@@ -416,8 +238,7 @@ impl GroupedHashAggregateStream {
             .transpose()?
             .unwrap_or(GroupOrdering::None);
 
-        let group = Box::new(GroupValuesRows::try_new(group_schema)?);
-
+        let group_values = new_group_values(group_schema)?;
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -431,7 +252,7 @@ impl GroupedHashAggregateStream {
             filter_expressions,
             group_by: agg_group_by,
             reservation,
-            group_values: group,
+            group_values,
             current_group_indices: Default::default(),
             exec_state,
             baseline_metrics,
