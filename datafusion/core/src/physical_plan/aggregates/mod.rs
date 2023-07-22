@@ -44,6 +44,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod group_values;
 mod no_grouping;
 mod order;
 mod row_hash;
