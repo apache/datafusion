@@ -454,6 +454,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_has_header(self.has_header)
             .with_delimiter(self.delimiter)
             .with_quote(self.quote)
+            .with_escape(self.escape)
             .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
             .with_file_compression_type(self.file_compression_type.to_owned());
 
