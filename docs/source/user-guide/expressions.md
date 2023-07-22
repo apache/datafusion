@@ -191,8 +191,10 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | array_position(array, element)            | Searches for an element in the array, returns first occurrence.                                  |
 | array_positions(array, element)           | Searches for an element in the array, returns all occurrences.                                   |
 | array_prepend(array, element)             | Prepends an element to the beginning of an array.                                                |
-| array_remove(array, element)              | Removes all elements equal to the given value from the array.                                    |
-| array_replace(array, from, to)            | Replaces a specified element with another specified element.                                     |
+| array_remove(array, element)              | Removes one element from the array equal to the given value.                                     |
+| array_removes(array, element)             | Removes all elements from the array equal to the given value.                                    |
+| array_replace(array, from, to)            | Replaces one occurrence of the specified element with another specified element.                 |
+| array_replaces(array, from, to)           | Replaces all occurrences of the specified element with another specified element.                |
 | array_to_string(array, delimeter)         | Converts each element to its text representation.                                                |
 | cardinality(array)                        | Returns the total number of elements in the array.                                               |
 | make_array(value1, [value2 [, ...]])      | Returns an Arrow array using the specified input expressions.                                    |
