@@ -583,13 +583,25 @@ scalar_expr!(
     ArrayRemove,
     array_remove,
     array element,
-    "removes all elements equal to the given value from the array."
+    "removes one element from the array equal to the given value."
+);
+scalar_expr!(
+    ArrayRemoves,
+    array_removes,
+    array element,
+    "removes all elements from the array equal to the given value."
 );
 scalar_expr!(
     ArrayReplace,
     array_replace,
     array from to,
-    "replaces a specified element with another specified element."
+    "replaces one occurrence of the specified element with another specified element."
+);
+scalar_expr!(
+    ArrayReplaces,
+    array_replaces,
+    array from to,
+    "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
     ArrayToString,
@@ -1009,7 +1021,9 @@ mod test {
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
+        test_scalar_expr!(ArrayRemoves, array_removes, array, element);
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
+        test_scalar_expr!(ArrayReplaces, array_replaces, array, from, to);
         test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);

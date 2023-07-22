@@ -343,7 +343,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayRemoves => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayReplaces => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
@@ -456,16 +458,7 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayAppend => match &input_expr_types[0] {
-                List(_) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    input_expr_types[1].clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
-            },
+            BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
                 for input_expr_type in input_expr_types {
@@ -501,31 +494,11 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPositions => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
-            BuiltinScalarFunction::ArrayPrepend => Ok(List(Arc::new(Field::new(
-                "item",
-                input_expr_types[0].clone(),
-                true,
-            )))),
-            BuiltinScalarFunction::ArrayRemove => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
-            },
-            BuiltinScalarFunction::ArrayReplace => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
-            },
+            BuiltinScalarFunction::ArrayPrepend => Ok(input_expr_types[1].clone()),
+            BuiltinScalarFunction::ArrayRemove => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayRemoves => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayReplace => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayReplaces => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
@@ -806,9 +779,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayPrepend => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayReplace => {
-                Signature::variadic_any(self.volatility())
-            }
+            BuiltinScalarFunction::ArrayRemoves => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
+            BuiltinScalarFunction::ArrayReplaces => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())
             }
@@ -1256,8 +1229,10 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ArrayPosition => &["array_position"],
         BuiltinScalarFunction::ArrayPositions => &["array_positions"],
         BuiltinScalarFunction::ArrayPrepend => &["array_prepend"],
-        BuiltinScalarFunction::ArrayRemove => &["array_remove"],
-        BuiltinScalarFunction::ArrayReplace => &["array_replace"],
+        BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
+        BuiltinScalarFunction::ArrayRemoves => &["array_removes", "list_removes"],
+        BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
+        BuiltinScalarFunction::ArrayReplaces => &["array_replaces", "list_replaces"],
         BuiltinScalarFunction::ArrayToString => &["array_to_string"],
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array"],
