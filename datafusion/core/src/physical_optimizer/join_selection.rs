@@ -348,6 +348,8 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
     }
 }
 
+/// This subrule tries to modify a given plan so that it can
+/// optimize hash and cross joins in the plan according to available statistical information.
 fn statistical_join_selection_subrule(
     plan: Arc<dyn ExecutionPlan>,
     collect_left_threshold: usize,
