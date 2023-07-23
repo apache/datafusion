@@ -23,17 +23,26 @@
 
 <img src="https://arrow.apache.org/datafusion/_images/DataFusion-Logo-Background-White.png" width="256" alt="logo"/>
 
-DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
-[Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
-in-memory format. [Python Bindings](https://github.com/apache/arrow-datafusion-python) are also available.
+DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org) in-memory format. [Python Bindings](https://github.com/apache/arrow-datafusion-python) are also available.
 
 DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
 
-https://arrow.apache.org/datafusion/ contains the project's documentation.
+Here's are links to the documentation:
+
+* [Rust API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
+* [Python API](https://arrow.apache.org/datafusion-python/)
 
 ## Using DataFusion
 
 The [example usage] section in the user guide and the [datafusion-examples] code in the crate contain information on using DataFusion.
+
+## Notable projects that are build with DataFusion
+
+DataFusion is great for building other data projects like SQL interfaces on query engines and time series platforms.  Here are some of the large projects that are built with DataFusion:
+
+* [roapi](https://github.com/roapi/roapi): Easily create APIs for slow moving datasets.
+* [dask-sql](https://github.com/dask-contrib/dask-sql): SQL interface for Dask query engine.
+* [influxdb_iox](https://github.com/influxdata/influxdb_iox): real-time analytics datastore.
 
 ## Contributing to DataFusion
 
