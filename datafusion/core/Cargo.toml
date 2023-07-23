@@ -105,6 +105,7 @@ ctor = "0.2.0"
 doc-comment = "0.3"
 env_logger = "0.10"
 half = "2.2.1"
+home = "0.5"
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 regex = "1.5.4"
