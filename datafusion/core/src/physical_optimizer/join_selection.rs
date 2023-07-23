@@ -215,7 +215,7 @@ impl PhysicalOptimizerRule for JoinSelection {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
-        // Next, we make pipeline-fixing modifications to joins so as to accommodate
+        // First, we make pipeline-fixing modifications to joins so as to accommodate
         // unbounded inputs. Each pipeline-fixing subrule, which is a function
         // of type `PipelineFixerSubrule`, takes a single [`PipelineStatePropagator`]
         // argument storing state variables that indicate the unboundedness status
