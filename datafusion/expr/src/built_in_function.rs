@@ -807,9 +807,13 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayPrepend => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayRemove => {
+                Signature::variadic_any(self.volatility())
+            }
             BuiltinScalarFunction::ArrayRemoves => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
+            BuiltinScalarFunction::ArrayReplace => {
+                Signature::variadic_any(self.volatility())
+            }
             BuiltinScalarFunction::ArrayReplaces => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())

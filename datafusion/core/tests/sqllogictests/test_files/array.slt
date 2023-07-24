@@ -915,13 +915,25 @@ select array_replace(make_array(1, 2, 3, 4), 2, 3), array_replace(make_array(1, 
 ----
 [1, 3, 3, 4] [1, 0, 4, 5, 4, 6, 7] [1, 2, 3]
 
-# array_replace scalar function #2 (element is list)
+# array_replace scalar function #2 (with optional argument)
+query ???
+select array_replace(make_array(1, 2, 3, 4), 2, 3, 2), array_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0, 2), array_replace(make_array(1, 2, 3), 4, 0, 3);
+----
+[1, 3, 3, 4] [1, 0, 0, 5, 4, 6, 7] [1, 2, 3]
+
+# array_replace scalar function #3 (element is list)
 query ??
 select array_replace(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], [1, 1, 1]), array_replace(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], [3, 1, 4]);
 ----
 [[1, 2, 3], [1, 1, 1], [5, 5, 5], [4, 5, 6], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]]
 
-# list_replace scalar function #3 (function alias `list_replace`)
+# array_replace scalar function #4 (element is list; with optional argument)
+query ??
+select array_replace(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], [1, 1, 1], 2), array_replace(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], [3, 1, 4], 2);
+----
+[[1, 2, 3], [1, 1, 1], [5, 5, 5], [1, 1, 1], [7, 8, 9]] [[1, 3, 2], [3, 1, 4], [3, 1, 4], [5, 3, 1], [1, 3, 2]]
+
+# list_replace scalar function #5 (function alias `list_replace`)
 query ???
 select list_replace(make_array(1, 2, 3, 4), 2, 3), list_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), list_replace(make_array(1, 2, 3), 4, 0);
 ----
@@ -1151,13 +1163,25 @@ select array_remove(make_array(1, 2, 2, 1, 1), 2), array_remove(make_array(1.0, 
 ----
 [1, 2, 1, 1] [2.0, 2.0, 1.0, 1.0] [h, e, l, o]
 
-# array_remove scalar function #2 (element is list)
+# array_remove scalar function #2 (with optional argument)
+query ???
+select array_remove(make_array(1, 2, 2, 1, 1), 2, 2), array_remove(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0, 2), array_remove(make_array('h', 'e', 'l', 'l', 'o'), 'l', 3);
+----
+[1, 1, 1] [2.0, 2.0, 1.0] [h, e, o]
+
+# array_remove scalar function #3 (element is list)
 query ??
 select array_remove(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6]), array_remove(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4]);
 ----
 [[1, 2, 3], [5, 5, 5], [4, 5, 6], [7, 8, 9]] [[1, 3, 2], [2, 3, 4], [5, 3, 1], [1, 3, 2]]
 
-# list_remove scalar function #3 (function alias `array_remove`)
+# array_remove scalar function #4 (element is list; with optional argument)
+query ??
+select array_remove(make_array([1, 2, 3], [4, 5, 6], [5, 5, 5], [4, 5, 6], [7, 8, 9]), [4, 5, 6], 2), array_remove(make_array([1, 3, 2], [2, 3, 4], [2, 3, 4], [5, 3, 1], [1, 3, 2]), [2, 3, 4], 2);
+----
+[[1, 2, 3], [5, 5, 5], [7, 8, 9]] [[1, 3, 2], [5, 3, 1], [1, 3, 2]]
+
+# list_remove scalar function #5 (function alias `array_remove`)
 query ???
 select list_remove(make_array(1, 2, 2, 1, 1), 2), list_remove(make_array(1.0, 2.0, 2.0, 1.0, 1.0), 1.0), list_remove(make_array('h', 'e', 'l', 'l', 'o'), 'l');
 ----

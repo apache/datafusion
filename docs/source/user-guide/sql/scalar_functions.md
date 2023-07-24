@@ -1780,9 +1780,11 @@ _Alias of [array_prepend](#array_prepend)._
 ### `array_remove`
 
 Removes one element from the array equal to the given value.
+With optional argument removes `max` elements from the array equal to the given value.
 
 ```
 array_remove(array, element)
+array_remove(array, element, max)
 ```
 
 #### Arguments
@@ -1790,16 +1792,24 @@ array_remove(array, element)
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to be removed from the array.
+- **max**: Number of occurrences to be removed.
 
 #### Example
 
 ```
-❯ select array_remove([1, 2, 2, 3, 1, 4], 2);
-+--------------------------------------------+
-| array_remove(List([1,2,2,3,1,4]),Int64(2)) |
-+--------------------------------------------+
-| [1, 2, 3, 1, 4]                            |
-+--------------------------------------------+
+❯ select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
++----------------------------------------------+
+| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
++----------------------------------------------+
+| [1, 2, 3, 2, 1, 4]                           |
++----------------------------------------------+
+
+❯ select array_remove([1, 2, 2, 3, 2, 1, 4], 2, 2);
++-------------------------------------------------------+
+| array_remove(List([1,2,2,3,2,1,4]),Int64(2),Int64(2)) |
++-------------------------------------------------------+
+| [1, 3, 2, 1, 4]                                       |
++-------------------------------------------------------+
 ```
 
 ### `array_removes`
@@ -1819,20 +1829,22 @@ array_removes(array, element)
 #### Example
 
 ```
-❯ select array_removes([1, 2, 2, 3, 1, 4], 2);
-+---------------------------------------------+
-| array_removes(List([1,2,2,3,1,4]),Int64(2)) |
-+---------------------------------------------+
-| [1, 3, 1, 4]                                |
-+---------------------------------------------+
+❯ select array_removes([1, 2, 2, 3, 2, 1, 4], 2);
++-----------------------------------------------+
+| array_removes(List([1,2,2,3,2,1,4]),Int64(2)) |
++-----------------------------------------------+
+| [1, 3, 1, 4]                                  |
++-----------------------------------------------+
 ```
 
 ### `array_replace`
 
 Replaces one occurrence of the specified element with another specified element.
+With optional argument replaces `max` occurrences of the specified element with another specified element.
 
 ```
 array_replace(array, from, to)
+array_replace(array, from, to, max)
 ```
 
 #### Arguments
@@ -1841,16 +1853,24 @@ array_replace(array, from, to)
   Can be a constant, column, or function, and any combination of array operators.
 - **from**: Initial element.
 - **to**: Final element.
+- **max**: Number of occurrences to be replaced.
 
 #### Example
 
 ```
-❯ select array_replace([1, 2, 2, 3, 1, 4], 2, 5);
-+------------------------------------------------------+
-| array_replace(List([1,2,2,3,1,4]),Int64(2),Int64(5)) |
-+------------------------------------------------------+
-| [1, 5, 2, 3, 1, 4]                                   |
-+------------------------------------------------------+
+❯ select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
++--------------------------------------------------------+
+| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++--------------------------------------------------------+
+| [1, 5, 2, 3, 2, 1, 4]                                  |
++--------------------------------------------------------+
+
+❯ select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-----------------------------------------------------------------+
+| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-----------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                           |
++-----------------------------------------------------------------+
 ```
 
 ### `array_replaces`
@@ -1871,12 +1891,12 @@ array_replaces(array, from, to)
 #### Example
 
 ```
-❯ select array_replaces([1, 2, 2, 3, 1, 4], 2, 5);
-+-------------------------------------------------------+
-| array_replaces(List([1,2,2,3,1,4]),Int64(2),Int64(5)) |
-+-------------------------------------------------------+
-| [1, 5, 5, 3, 1, 4]                                    |
-+-------------------------------------------------------+
+❯ select array_replaces([1, 2, 2, 3, 2, 1, 4], 2, 5);
++---------------------------------------------------------+
+| array_replaces(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++---------------------------------------------------------+
+| [1, 5, 5, 3, 5, 1, 4]                                   |
++---------------------------------------------------------+
 ```
 
 ### `array_to_string`

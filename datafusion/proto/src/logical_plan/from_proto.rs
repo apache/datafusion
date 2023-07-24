@@ -1240,28 +1240,61 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::ArrayPosition => Ok(array_position(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                    parse_expr(&args[2], registry)?,
-                )),
+                ScalarFunction::ArrayPosition => {
+                    if args.len() > 2 {
+                        assert_eq!(args.len(), 3);
+                        Ok(array_position(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                            parse_expr(&args[2], registry)?,
+                        ))
+                    } else {
+                        Ok(array_position(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                        ))
+                    }
+                }
                 ScalarFunction::ArrayPositions => Ok(array_positions(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::ArrayRemove => Ok(array_remove(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
+                ScalarFunction::ArrayRemove => {
+                    if args.len() > 2 {
+                        assert_eq!(args.len(), 3);
+                        Ok(array_remove(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                            parse_expr(&args[2], registry)?,
+                        ))
+                    } else {
+                        Ok(array_remove(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                        ))
+                    }
+                }
                 ScalarFunction::ArrayRemoves => Ok(array_removes(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::ArrayReplace => Ok(array_replace(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                    parse_expr(&args[2], registry)?,
-                )),
+                ScalarFunction::ArrayReplace => {
+                    if args.len() > 3 {
+                        assert_eq!(args.len(), 4);
+                        Ok(array_replace(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                            parse_expr(&args[2], registry)?,
+                            parse_expr(&args[3], registry)?,
+                        ))
+                    } else {
+                        Ok(array_replace(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                            parse_expr(&args[2], registry)?,
+                        ))
+                    }
+                }
                 ScalarFunction::ArrayReplaces => Ok(array_replaces(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1278,10 +1311,17 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::ArrayLength => Ok(array_length(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
+                ScalarFunction::ArrayLength => {
+                    if args.len() > 1 {
+                        assert_eq!(args.len(), 2);
+                        Ok(array_length(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                        ))
+                    } else {
+                        Ok(array_length(parse_expr(&args[0], registry)?))
+                    }
+                }
                 ScalarFunction::ArrayDims => {
                     Ok(array_dims(parse_expr(&args[0], registry)?))
                 }
