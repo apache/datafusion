@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! tpch binary only entrypoint
-
+//! DataFusion benchmark runner
 use datafusion::error::Result;
-use datafusion_benchmarks::tpch;
+
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -29,31 +28,22 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+use datafusion_benchmarks::tpch;
+
 #[derive(Debug, StructOpt)]
 #[structopt(about = "benchmark command")]
-enum BenchmarkSubCommandOpt {
-    #[structopt(name = "datafusion")]
-    DataFusionBenchmark(tpch::RunOpt),
+enum Options {
+    Tpch(tpch::RunOpt),
+    TpchConvert(tpch::ConvertOpt),
 }
 
-#[derive(Debug, StructOpt)]
-#[structopt(name = "TPC-H", about = "TPC-H Benchmarks.")]
-enum TpchOpt {
-    Benchmark(BenchmarkSubCommandOpt),
-    Convert(tpch::ConvertOpt),
-}
-
-/// 'tpch' entry point, with tortured command line arguments
-///
-/// This is kept to be backwards compatible with the benchmark names prior to
-/// <https://github.com/apache/arrow-datafusion/issues/6994>
+// Main benchmark runner entrypoint
 #[tokio::main]
-async fn main() -> Result<()> {
+pub async fn main() -> Result<()> {
     env_logger::init();
-    match TpchOpt::from_args() {
-        TpchOpt::Benchmark(BenchmarkSubCommandOpt::DataFusionBenchmark(opt)) => {
-            opt.run().await
-        }
-        TpchOpt::Convert(opt) => opt.run().await,
+
+    match Options::from_args() {
+        Options::Tpch(opt) => opt.run().await,
+        Options::TpchConvert(opt) => opt.run().await,
     }
 }
