@@ -456,7 +456,7 @@ pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
             Ok(DataType::Decimal128(new_precision, *scale))
         }
         DataType::Decimal256(precision, scale) => {
-            // in the spark, the sum type of avg is DECIMAL(min(38,precision+10), s)
+            // in Spark the sum type of avg is DECIMAL(min(38,precision+10), s)
             let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal256(new_precision, *scale))
         }
