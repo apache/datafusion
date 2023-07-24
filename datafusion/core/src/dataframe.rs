@@ -1014,7 +1014,7 @@ impl DataFrame {
     /// ```
     pub fn with_column_renamed(
         self,
-        old_name: &str,
+        old_name: impl Into<String>,
         new_name: &str,
     ) -> Result<DataFrame> {
         let ident_opts = self
