@@ -1037,9 +1037,9 @@ mod test {
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
-        test_scalar_expr!(ArrayRemove, array_remove, array, element);
+        test_scalar_expr!(ArrayRemove, array_remove, array, element, max);
         test_scalar_expr!(ArrayRemoves, array_removes, array, element);
-        test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
+        test_scalar_expr!(ArrayReplace, array_replace, array, from, to, max);
         test_scalar_expr!(ArrayReplaces, array_replaces, array, from, to);
         test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
