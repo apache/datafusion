@@ -99,6 +99,10 @@ impl Column {
     }
 
     /// Deserialize a fully qualified name string into a column
+    ///
+    /// Treats the name as a SQL identifier. For example
+    /// `foo.BAR` would be parsed to a reference to relation `foo`, column name `bar` (lower case)
+    /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name: &str = &flat_name.into();
         Self::from_idents(&mut parse_identifiers_normalized(flat_name, false))
