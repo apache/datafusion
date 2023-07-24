@@ -1014,12 +1014,21 @@ impl DataFrame {
     /// ```
     pub fn with_column_renamed(
         self,
-        old_name: impl Into<Column>,
+        old_name: &str,
         new_name: &str,
     ) -> Result<DataFrame> {
-        let old_name: Column = old_name.into();
+        let ident_opts = self
+            .session_state
+            .config_options()
+            .sql_parser
+            .enable_ident_normalization;
+        let old_column: Column = if ident_opts {
+            Column::from_qualified_name(old_name)
+        } else {
+            Column::from_qualified_name_ignore_case(old_name)
+        };
 
-        let field_to_rename = match self.plan.schema().field_from_column(&old_name) {
+        let field_to_rename = match self.plan.schema().field_from_column(&old_column) {
             Ok(field) => field,
             // no-op if field not found
             Err(DataFusionError::SchemaError(SchemaError::FieldNotFound { .. })) => {
@@ -1825,6 +1834,58 @@ mod tests {
                 "+-----+----+-----+----+----+-----+",
             ],
             &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_column_renamed_case_sensitive() -> Result<()> {
+        let config =
+            SessionConfig::from_string_hash_map(std::collections::HashMap::from([(
+                "datafusion.sql_parser.enable_ident_normalization".to_owned(),
+                "false".to_owned(),
+            )]))?;
+        let mut ctx = SessionContext::with_config(config);
+        let name = "aggregate_test_100";
+        register_aggregate_csv(&mut ctx, name).await?;
+        let df = ctx.table(name);
+
+        let df = df
+            .await?
+            .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
+            .limit(0, Some(1))?
+            .sort(vec![
+                // make the test deterministic
+                col("c1").sort(true, true),
+                col("c2").sort(true, true),
+                col("c3").sort(true, true),
+            ])?
+            .select_columns(&["c1"])?;
+
+        let df_renamed = df.clone().with_column_renamed("c1", "CoLuMn1")?;
+
+        let res = &df_renamed.clone().collect().await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+---------+",
+                "| CoLuMn1 |",
+                "+---------+",
+                "| a       |",
+                "+---------+",
+            ],
+            res
+        );
+
+        let df_renamed = df_renamed
+            .with_column_renamed("CoLuMn1", "c1")?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq!(
+            vec!["+----+", "| c1 |", "+----+", "| a  |", "+----+",],
+            &df_renamed
         );
 
         Ok(())

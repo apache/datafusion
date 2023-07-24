@@ -67,11 +67,7 @@ impl Column {
         }
     }
 
-    /// Deserialize a fully qualified name string into a column
-    pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
-        let flat_name = flat_name.into();
-        let mut idents = parse_identifiers_normalized(&flat_name);
-
+    fn from_idents(idents: &mut Vec<String>) -> Option<Self> {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
             2 => (
@@ -97,9 +93,29 @@ impl Column {
             ),
             // any expression that failed to parse or has more than 4 period delimited
             // identifiers will be treated as an unqualified column name
-            _ => (None, flat_name),
+            _ => return None,
         };
-        Self { relation, name }
+        Some(Self { relation, name })
+    }
+
+    /// Deserialize a fully qualified name string into a column
+    pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
+        let flat_name: &str = &flat_name.into();
+        Self::from_idents(&mut parse_identifiers_normalized(flat_name, false))
+            .unwrap_or_else(|| Self {
+                relation: None,
+                name: flat_name.to_owned(),
+            })
+    }
+
+    /// Deserialize a fully qualified name string into a column preserving column text case
+    pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
+        let flat_name: &str = &flat_name.into();
+        Self::from_idents(&mut parse_identifiers_normalized(flat_name, true))
+            .unwrap_or_else(|| Self {
+                relation: None,
+                name: flat_name.to_owned(),
+            })
     }
 
     /// Serialize column into a flat name string
