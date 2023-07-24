@@ -1048,6 +1048,7 @@ async fn timestamp_sub_with_tz() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
 async fn time_comparison() -> Result<()> {
     let ctx = SessionContext::new();
 
