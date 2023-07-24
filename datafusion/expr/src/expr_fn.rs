@@ -598,8 +598,8 @@ scalar_expr!(
 scalar_expr!(
     ArrayRemove,
     array_remove,
-    array element,
-    "removes one element from the array equal to the given value."
+    array element max,
+    "removes `max` elements from the array equal to the given value."
 );
 scalar_expr!(
     ArrayRemoves,
@@ -610,8 +610,8 @@ scalar_expr!(
 scalar_expr!(
     ArrayReplace,
     array_replace,
-    array from to,
-    "replaces one occurrence of the specified element with another specified element."
+    array from to max,
+    "replaces `max` occurrences of the specified element with another specified element."
 );
 scalar_expr!(
     ArrayReplaces,
