@@ -86,7 +86,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let select_into = select.into.unwrap();
                 LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
                     name: self.object_name_to_table_reference(select_into.name)?,
-                    primary_key: Vec::new(),
+                    constraints: Vec::new(),
                     input: Arc::new(plan),
                     if_not_exists: false,
                     or_replace: false,

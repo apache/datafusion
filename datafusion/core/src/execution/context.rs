@@ -470,13 +470,12 @@ impl SessionContext {
             input,
             if_not_exists,
             or_replace,
-            primary_key,
+            constraints,
         } = cmd;
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
         let input = self.state().optimize(&input)?;
         let table = self.table(&name).await;
-
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
@@ -495,28 +494,13 @@ impl SessionContext {
             )),
             (_, _, Err(_)) => {
                 let df_schema = input.schema();
-                // Get primary key indices in the schema:
-                let primary_keys = primary_key
-                    .iter()
-                    .map(|pk| {
-                        df_schema
-                            .fields()
-                            .iter()
-                            .position(|item| item.qualified_name() == pk.flat_name())
-                            .ok_or_else(|| {
-                                DataFusionError::Execution(
-                                    "Primary key doesn't exist".to_string(),
-                                )
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
                 let schema = Arc::new(df_schema.as_ref().into());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
                 let table = Arc::new(
-                    MemTable::try_new(schema, batches)?.with_primary_keys(primary_keys),
+                    // pass constrains to the mem table.
+                    MemTable::try_new(schema, batches)?.with_constraints(constraints),
                 );
 
                 self.register_table(&name, table)?;

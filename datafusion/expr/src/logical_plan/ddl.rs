@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_common::OwnedSchemaReference;
 use datafusion_common::{
-    parsers::CompressionTypeVariant, DFSchemaRef, OwnedTableReference,
+    parsers::CompressionTypeVariant, Constraint, DFSchemaRef, OwnedTableReference,
 };
-use datafusion_common::{Column, OwnedSchemaReference};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{
@@ -117,14 +117,14 @@ impl DdlStatement {
                     }
                     DdlStatement::CreateMemoryTable(CreateMemoryTable {
                         name,
-                        primary_key,
+                        constraints,
                         ..
                     }) => {
                         let pk: Vec<String> =
-                            primary_key.iter().map(|c| c.name.to_string()).collect();
+                            constraints.iter().map(|c| format!("{:?}", c)).collect();
                         let mut pk = pk.join(", ");
                         if !pk.is_empty() {
-                            pk = format!(" primary_key=[{pk}]");
+                            pk = format!(" constraints=[{pk}]");
                         }
                         write!(f, "CreateMemoryTable: {name:?}{pk}")
                     }
@@ -222,8 +222,8 @@ impl Hash for CreateExternalTable {
 pub struct CreateMemoryTable {
     /// The table name
     pub name: OwnedTableReference,
-    /// The ordered list of columns in the primary key, or an empty vector if none
-    pub primary_key: Vec<Column>,
+    /// The list of constraints in the schema, such as primary key, unique, etc.
+    pub constraints: Vec<Constraint>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists

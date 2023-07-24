@@ -37,8 +37,8 @@ pub mod utils;
 
 pub use column::Column;
 pub use dfschema::{
-    DFField, DFSchema, DFSchemaRef, Dependency, ExprSchema, FunctionalDependence,
-    FunctionalDependencies, SchemaExt, ToDFSchema,
+    Constraint, DFField, DFSchema, DFSchemaRef, Dependency, ExprSchema,
+    FunctionalDependence, FunctionalDependencies, SchemaExt, ToDFSchema,
 };
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::SchemaExt;
+use datafusion_common::{Constraint, SchemaExt};
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -52,7 +52,7 @@ pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 pub struct MemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<PartitionData>,
-    primary_keys: Option<Vec<usize>>,
+    constraints: Option<Vec<Constraint>>,
 }
 
 impl MemTable {
@@ -77,14 +77,14 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
-            primary_keys: None,
+            constraints: None,
         })
     }
 
-    /// Assign primary keys
-    pub fn with_primary_keys(mut self, primary_keys: Vec<usize>) -> Self {
-        if !primary_keys.is_empty() {
-            self.primary_keys = Some(primary_keys);
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Vec<Constraint>) -> Self {
+        if !constraints.is_empty() {
+            self.constraints = Some(constraints);
         }
         self
     }
@@ -163,8 +163,8 @@ impl TableProvider for MemTable {
         self.schema.clone()
     }
 
-    fn primary_keys(&self) -> Option<&[usize]> {
-        self.primary_keys.as_deref()
+    fn constraints(&self) -> Option<&[Constraint]> {
+        self.constraints.as_deref()
     }
 
     fn table_type(&self) -> TableType {

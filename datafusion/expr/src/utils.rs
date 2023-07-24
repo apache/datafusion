@@ -924,7 +924,7 @@ pub fn from_plan(
         })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
             CreateMemoryTable {
                 input: Arc::new(inputs[0].clone()),
-                primary_key: vec![],
+                constraints: vec![],
                 name: name.clone(),
                 if_not_exists: *if_not_exists,
                 or_replace: *or_replace,

@@ -816,11 +816,12 @@ impl LogicalPlanBuilder {
 
     /// Apply a cross join
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
-        let schema = self.plan.schema().join(right.schema())?;
+        let join_schema =
+            build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
         Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
             left: Arc::new(self.plan),
             right: Arc::new(right),
-            schema: DFSchemaRef::new(schema),
+            schema: DFSchemaRef::new(join_schema),
         })))
     }
 
@@ -2022,11 +2023,13 @@ mod tests {
             FunctionalDependencies::new(vec![FunctionalDependence::new(
                 vec![1],
                 vec![0, 1, 2],
+                true,
             )]);
         let res = fund_dependencies.project_functional_dependencies(&[1, 2], 2);
         let expected = FunctionalDependencies::new(vec![FunctionalDependence::new(
             vec![0],
             vec![0, 1],
+            true,
         )]);
         assert_eq!(res, expected);
     }

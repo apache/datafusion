@@ -19,7 +19,7 @@
 
 use crate::{Expr, LogicalPlan};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Result;
+use datafusion_common::{Constraint, Result};
 use std::any::Any;
 
 /// Indicates whether and how a filter expression can be handled by a
@@ -65,7 +65,7 @@ pub trait TableSource: Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Get primary key indices, if one exists.
-    fn primary_keys(&self) -> Option<&[usize]> {
+    fn primary_keys(&self) -> Option<&[Constraint]> {
         None
     }
 

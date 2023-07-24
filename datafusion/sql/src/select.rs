@@ -434,29 +434,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = input.schema();
         let mut new_group_by_exprs = group_by_exprs.clone();
         let fields = schema.fields();
-        for group_by_expr in &group_by_exprs {
-            if let Some(target_indices) = schema.get_target_functional_dependencies(
-                group_by_expr.display_name()?.as_str(),
-            ) {
-                // Calculate dependent fields names with determinant group by expression
-                let associated_field_names = target_indices
-                    .iter()
-                    .map(|idx| fields[*idx].qualified_name())
-                    .collect::<Vec<_>>();
-                // Expand group by exprs with select_exprs
-                // If groupby expr is determinant key, we can use its
-                // dependent keys in select statements also.
-                // Expand group expression with dependent select expressions.
-                for expr in select_exprs {
-                    let expr_name = format!("{}", expr);
-                    if !new_group_by_exprs.contains(expr)
-                        && associated_field_names.contains(&expr_name)
-                    {
-                        new_group_by_exprs.push(expr.clone());
-                    }
+        let group_by_expr_names = group_by_exprs
+            .iter()
+            .map(|group_by_expr| group_by_expr.display_name())
+            .collect::<Result<Vec<_>>>()?;
+        // get targets that can be used in select, even if they do not occur in aggregation.
+        if let Some(target_indices) =
+            schema.get_target_functional_dependencies(&group_by_expr_names)
+        {
+            // Calculate dependent fields names with determinant group by expression
+            let associated_field_names = target_indices
+                .iter()
+                .map(|idx| fields[*idx].qualified_name())
+                .collect::<Vec<_>>();
+            // Expand group by exprs with select_exprs
+            // If groupby expr is determinant key, we can use its
+            // dependent keys in select statements also.
+            // Expand group expression with dependent select expressions.
+            for expr in select_exprs {
+                let expr_name = format!("{}", expr);
+                if !new_group_by_exprs.contains(expr)
+                    && associated_field_names.contains(&expr_name)
+                {
+                    new_group_by_exprs.push(expr.clone());
                 }
             }
         }
+
         let group_by_exprs = new_group_by_exprs;
 
         // create the aggregate plan

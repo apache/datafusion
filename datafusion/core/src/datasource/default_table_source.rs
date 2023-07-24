@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::datasource::TableProvider;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::DataFusionError;
+use datafusion_common::{Constraint, DataFusionError};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 
 /// DataFusion default table source, wrapping TableProvider
@@ -55,8 +55,8 @@ impl TableSource for DefaultTableSource {
     }
 
     /// Get a reference to primary key indices, if a primary key exists.
-    fn primary_keys(&self) -> Option<&[usize]> {
-        self.table_provider.primary_keys()
+    fn primary_keys(&self) -> Option<&[Constraint]> {
+        self.table_provider.constraints()
     }
 
     /// Tests whether the table provider can make use of any or all filter expressions

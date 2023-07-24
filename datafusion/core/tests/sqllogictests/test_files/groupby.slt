@@ -2874,6 +2874,39 @@ CREATE TABLE sales_global_with_pk (zip_code INT,
           (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
 
+# create a table for testing, where primary key is composite
+statement ok
+CREATE TABLE sales_global_with_composite_pk (zip_code INT,
+          country VARCHAR(3),
+          sn INT,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT,
+          primary key(sn, ts)
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
+
+# create a table for testing, where sn is unique key
+statement ok
+CREATE TABLE sales_global_with_unique (zip_code INT,
+          country VARCHAR(3),
+          sn INT,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT,
+          unique(sn)
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
+          (1, 'TUR', NULL, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
+
 # when group by contains primary key expression
 # we can use all the expressions in the table during selection
 # (not just group by expressions + aggregation result)
@@ -2957,6 +2990,92 @@ SELECT r.sn, SUM(l.amount), r.amount
 2 375 75
 3 300 200
 4 100 100
+
+# when primary key consists of composite columns
+# to associate it with other fields, aggregate should contain all the composite columns
+query IRR
+SELECT r.sn, SUM(l.amount), r.amount
+  FROM sales_global_with_composite_pk AS l
+  JOIN sales_global_with_composite_pk AS r
+  ON l.sn >= r.sn
+  GROUP BY r.sn, r.ts
+  ORDER BY r.sn
+----
+0 455 30
+1 425 50
+2 375 75
+3 300 200
+4 100 100
+
+# when primary key consists of composite columns
+# to associate it with other fields, aggregate should contain all the composite columns
+# if any of the composite column is missing, we cannot use associated indices, inside select expression
+# below query should fail
+statement error DataFusion error: Error during planning: Projection references non-aggregate values: Expression r.amount could not be resolved from available columns: r.sn, SUM\(l.amount\)
+SELECT r.sn, SUM(l.amount), r.amount
+  FROM sales_global_with_composite_pk AS l
+  JOIN sales_global_with_composite_pk AS r
+  ON l.sn >= r.sn
+  GROUP BY r.sn
+  ORDER BY r.sn
+
+# left join should propagate right side constraint,
+# if right side is a primary key (unique and doesn't contain null)
+query IRR
+SELECT r.sn, r.amount, SUM(r.amount)
+  FROM (SELECT *
+    FROM sales_global_with_pk as l
+    LEFT JOIN sales_global_with_pk as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY r.sn
+ORDER BY r.sn
+----
+0 30 120
+1 50 150
+2 75 150
+4 100 100
+NULL NULL NULL
+
+# left join shouldn't propagate right side constraint,
+# if right side is a unique key (unique and can contain null)
+# Please note that, above query and this one is same except the constraint in the table.
+statement error DataFusion error: Error during planning: Projection references non-aggregate values: Expression r.amount could not be resolved from available columns: r.sn, SUM\(r.amount\)
+SELECT r.sn, r.amount, SUM(r.amount)
+  FROM (SELECT *
+    FROM sales_global_with_unique as l
+    LEFT JOIN sales_global_with_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY r.sn
+ORDER BY r.sn
+
+# left semi join should propagate constraint of left side as is.
+query IRR
+SELECT l.sn, l.amount, SUM(l.amount)
+  FROM (SELECT *
+    FROM sales_global_with_unique as l
+    LEFT SEMI JOIN sales_global_with_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY l.sn
+ORDER BY l.sn
+----
+1 50 50
+2 75 75
+3 200 200
+4 100 100
+NULL 100 100
+
+# Similarly, left anti join should propagate constraint of left side as is.
+query IRR
+SELECT l.sn, l.amount, SUM(l.amount)
+  FROM (SELECT *
+    FROM sales_global_with_unique as l
+    LEFT ANTI JOIN sales_global_with_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY l.sn
+ORDER BY l.sn
+----
+0 30 30
+
 
 # primary key should be aware from which columns it is associated
 statement error DataFusion error: Error during planning: Projection references non-aggregate values: Expression r.sn could not be resolved from available columns: l.sn, SUM\(l.amount\)
