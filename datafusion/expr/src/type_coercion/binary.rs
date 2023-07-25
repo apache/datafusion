@@ -20,6 +20,7 @@
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
 use datafusion_common::DataFusionError;
@@ -248,6 +249,17 @@ fn math_decimal_coercion(
         (Int8 | Int16 | Int32 | Int64, Decimal128(_, _)) => {
             Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone()))
         }
+        (Decimal256(_, _), Decimal256(_, _)) => {
+            Some((lhs_type.clone(), rhs_type.clone()))
+        }
+        (Decimal256(_, _), Int8 | Int16 | Int32 | Int64) => Some((
+            lhs_type.clone(),
+            coerce_numeric_type_to_decimal256(rhs_type)?,
+        )),
+        (Int8 | Int16 | Int32 | Int64, Decimal256(_, _)) => Some((
+            coerce_numeric_type_to_decimal256(lhs_type)?,
+            rhs_type.clone(),
+        )),
         _ => None,
     }
 }
@@ -383,6 +395,11 @@ fn comparison_binary_numeric_coercion(
         }
         (Decimal128(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
         (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
+        (Decimal256(_, _), Decimal256(_, _)) => {
+            get_wider_decimal_type(lhs_type, rhs_type)
+        }
+        (Decimal256(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
+        (_, Decimal256(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
         // The following match arms encode the following logic: Given the two
@@ -427,9 +444,15 @@ fn get_comparison_common_decimal_type(
     other_type: &DataType,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    let other_decimal_type = coerce_numeric_type_to_decimal(other_type)?;
-    match (decimal_type, &other_decimal_type) {
-        (d1 @ Decimal128(_, _), d2 @ Decimal128(_, _)) => get_wider_decimal_type(d1, d2),
+    match decimal_type {
+        Decimal128(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal(other_type)?;
+            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        }
+        Decimal256(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal256(other_type)?;
+            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        }
         _ => None,
     }
 }
@@ -449,6 +472,12 @@ fn get_wider_decimal_type(
             let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
             Some(create_decimal_type((range + s) as u8, s))
         }
+        (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => {
+            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+            let s = *s1.max(s2);
+            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
+            Some(create_decimal256_type((range + s) as u8, s))
+        }
         (_, _) => None,
     }
 }
@@ -467,6 +496,24 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float32 => Some(Decimal128(14, 7)),
         Float64 => Some(Decimal128(30, 15)),
+        _ => None,
+    }
+}
+
+/// Convert the numeric data type to the decimal data type.
+/// Now, we just support the signed integer type and floating-point type.
+fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    // This conversion rule is from spark
+    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
+    match numeric_type {
+        Int8 => Some(Decimal256(3, 0)),
+        Int16 => Some(Decimal256(5, 0)),
+        Int32 => Some(Decimal256(10, 0)),
+        Int64 => Some(Decimal256(20, 0)),
+        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
+        Float32 => Some(Decimal256(14, 7)),
+        Float64 => Some(Decimal256(30, 15)),
         _ => None,
     }
 }
@@ -514,6 +561,13 @@ fn create_decimal_type(precision: u8, scale: i8) -> DataType {
     DataType::Decimal128(
         DECIMAL128_MAX_PRECISION.min(precision),
         DECIMAL128_MAX_SCALE.min(scale),
+    )
+}
+
+fn create_decimal256_type(precision: u8, scale: i8) -> DataType {
+    DataType::Decimal256(
+        DECIMAL256_MAX_PRECISION.min(precision),
+        DECIMAL256_MAX_SCALE.min(scale),
     )
 }
 

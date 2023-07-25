@@ -33,7 +33,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
-    aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map, reverse_order_bys,
@@ -45,6 +44,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod group_values;
 mod no_grouping;
 mod order;
 mod row_hash;
@@ -1093,7 +1093,6 @@ fn merge_expressions(
 }
 
 pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
-pub(crate) type RowAccumulatorItem = Box<dyn RowAccumulator>;
 
 fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
@@ -1101,21 +1100,6 @@ fn create_accumulators(
     aggr_expr
         .iter()
         .map(|expr| expr.create_accumulator())
-        .collect::<Result<Vec<_>>>()
-}
-
-#[allow(dead_code)]
-fn create_row_accumulators(
-    aggr_expr: &[Arc<dyn AggregateExpr>],
-) -> Result<Vec<RowAccumulatorItem>> {
-    let mut state_index = 0;
-    aggr_expr
-        .iter()
-        .map(|expr| {
-            let result = expr.create_row_accumulator(state_index);
-            state_index += expr.state_fields().unwrap().len();
-            result
-        })
         .collect::<Result<Vec<_>>>()
 }
 

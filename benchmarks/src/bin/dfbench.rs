@@ -15,31 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
-digraph G {
+//! DataFusion benchmark runner
+use datafusion::error::Result;
 
-    datafusion_common
+use structopt::StructOpt;
 
-	datafusion_expr -> datafusion_common
+#[cfg(feature = "snmalloc")]
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-	datafusion_sql -> datafusion_common
-	datafusion_sql -> datafusion_expr
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-	datafusion_optimizer -> datafusion_common
-	datafusion_optimizer -> datafusion_expr
+use datafusion_benchmarks::tpch;
 
-	datafusion_physical_expr -> datafusion_common
-	datafusion_physical_expr -> datafusion_expr
+#[derive(Debug, StructOpt)]
+#[structopt(about = "benchmark command")]
+enum Options {
+    Tpch(tpch::RunOpt),
+    TpchConvert(tpch::ConvertOpt),
+}
 
+// Main benchmark runner entrypoint
+#[tokio::main]
+pub async fn main() -> Result<()> {
+    env_logger::init();
 
-	datafusion -> datafusion_common
-	datafusion -> datafusion_expr
-	datafusion -> datafusion_optimizer
-	datafusion -> datafusion_physical_expr
-	datafusion -> datafusion_sql
-
-	datafusion_proto -> datafusion
-
-	datafusion_substrait -> datafusion
-
-	datafusion_cli -> datafusion
+    match Options::from_args() {
+        Options::Tpch(opt) => opt.run().await,
+        Options::TpchConvert(opt) => opt.run().await,
+    }
 }
