@@ -2750,11 +2750,18 @@ impl ScalarValue {
         scale: i8,
         size: usize,
     ) -> Decimal128Array {
-        std::iter::repeat(value)
-            .take(size)
-            .collect::<Decimal128Array>()
-            .with_precision_and_scale(precision, scale)
-            .unwrap()
+        match value {
+            Some(val) => Decimal128Array::from(vec![val; size])
+                .with_precision_and_scale(precision, scale)
+                .unwrap(),
+            None => {
+                let mut builder = Decimal128Array::builder(size)
+                    .with_precision_and_scale(precision, scale)
+                    .unwrap();
+                builder.append_nulls(size);
+                builder.finish()
+            }
+        }
     }
 
     /// Converts a scalar value into an array of `size` rows.

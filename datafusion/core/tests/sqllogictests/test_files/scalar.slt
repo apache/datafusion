@@ -912,6 +912,12 @@ select trunc(a), trunc(b), trunc(c) from small_floats;
 0 0 0
 0 0 1
 
+# trunc with precision
+query RRRRR rowsort
+select trunc(4.267, 3), trunc(1.1234, 2), trunc(-1.1231, 6), trunc(1.2837284, 2), trunc(1.1, 0);
+----
+4.267 1.12 -1.1231 1.28 1
+
 ## bitwise and
 
 # bitwise and with column and scalar
@@ -1089,6 +1095,18 @@ FROM t1
 999
 999
 999
+
+# issue: https://github.com/apache/arrow-datafusion/issues/7004
+query B
+select case c1
+    when 'foo' then TRUE
+    when 'bar' then FALSE
+end from t1
+----
+NULL
+NULL
+NULL
+NULL
 
 statement ok
 drop table t1

@@ -973,3 +973,14 @@ false
 false
 true
 true
+
+
+# issue: https://github.com/apache/arrow-datafusion/issues/7027
+query TTTT rowsort
+SELECT * FROM
+    (VALUES ('catan-prod1-daily', 'success')) as jobs(cron_job_name, status)
+  JOIN
+    (VALUES ('catan-prod1-daily', 'high')) as severity(cron_job_name, level)
+  ON (severity.cron_job_name = jobs.cron_job_name);
+----
+catan-prod1-daily success catan-prod1-daily high

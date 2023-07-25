@@ -30,17 +30,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::*;
-use arrow::compute::{concat_batches, take, SortOptions};
-use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::PhysicalSortRequirement;
-use futures::{Stream, StreamExt};
-
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
+    add_offset_to_lex_ordering, add_offset_to_ordering_equivalence_classes,
     build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
     estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
 };
@@ -50,13 +43,20 @@ use crate::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use datafusion_common::DataFusionError;
-use datafusion_common::JoinType;
-use datafusion_common::Result;
+
+use arrow::array::*;
+use arrow::compute::{concat_batches, take, SortOptions};
+use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::utils::normalize_sort_exprs;
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use futures::{Stream, StreamExt};
+use itertools::Itertools;
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -84,6 +84,38 @@ pub struct SortMergeJoinExec {
     pub(crate) sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
+}
+
+/// Replaces the right column (first index in the `on_column` tuple) with
+/// the left column (zeroth index in the tuple) inside `right_ordering`.
+fn replace_on_columns_of_right_ordering(
+    on_columns: &[(Column, Column)],
+    right_ordering: &mut [PhysicalSortExpr],
+    left_columns_len: usize,
+) {
+    for (left_col, right_col) in on_columns {
+        let right_col =
+            Column::new(right_col.name(), right_col.index() + left_columns_len);
+        for item in right_ordering.iter_mut() {
+            if let Some(col) = item.expr.as_any().downcast_ref::<Column>() {
+                if right_col.eq(col) {
+                    item.expr = Arc::new(left_col.clone()) as _;
+                }
+            }
+        }
+    }
+}
+
+/// Merge left and right sort expressions, checking for duplicates.
+fn merge_vectors(
+    left: &[PhysicalSortExpr],
+    right: &[PhysicalSortExpr],
+) -> Vec<PhysicalSortExpr> {
+    left.iter()
+        .cloned()
+        .chain(right.iter().cloned())
+        .unique()
+        .collect()
 }
 
 impl SortMergeJoinExec {
@@ -134,10 +166,26 @@ impl SortMergeJoinExec {
             .unzip();
 
         let output_ordering = match join_type {
-            JoinType::Inner
-            | JoinType::Left
-            | JoinType::LeftSemi
-            | JoinType::LeftAnti => {
+            JoinType::Inner => {
+                match (left.output_ordering(), right.output_ordering()) {
+                    // If both sides have orderings, ordering of the right hand side
+                    // can be appended to the left side ordering for inner joins.
+                    (Some(left_ordering), Some(right_ordering)) => {
+                        let left_columns_len = left.schema().fields.len();
+                        let mut right_ordering =
+                            add_offset_to_lex_ordering(right_ordering, left_columns_len)?;
+                        replace_on_columns_of_right_ordering(
+                            &on,
+                            &mut right_ordering,
+                            left_columns_len,
+                        );
+                        Some(merge_vectors(left_ordering, &right_ordering))
+                    }
+                    (Some(left_ordering), _) => Some(left_ordering.to_vec()),
+                    _ => None,
+                }
+            }
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
                 left.output_ordering().map(|sort_exprs| sort_exprs.to_vec())
             }
             JoinType::RightSemi | JoinType::RightAnti => right
@@ -148,29 +196,7 @@ impl SortMergeJoinExec {
                 right
                     .output_ordering()
                     .map(|sort_exprs| {
-                        let new_sort_exprs: Result<Vec<PhysicalSortExpr>> = sort_exprs
-                            .iter()
-                            .map(|e| {
-                                let new_expr =
-                                    e.expr.clone().transform_down(&|e| match e
-                                        .as_any()
-                                        .downcast_ref::<Column>(
-                                    ) {
-                                        Some(col) => {
-                                            Ok(Transformed::Yes(Arc::new(Column::new(
-                                                col.name(),
-                                                left_columns_len + col.index(),
-                                            ))))
-                                        }
-                                        None => Ok(Transformed::No(e)),
-                                    });
-                                Ok(PhysicalSortExpr {
-                                    expr: new_expr?,
-                                    options: e.options,
-                                })
-                            })
-                            .collect();
-                        new_sort_exprs
+                        add_offset_to_lex_ordering(sort_exprs, left_columns_len)
                     })
                     .map_or(Ok(None), |v| v.map(Some))?
             }
@@ -293,6 +319,65 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.on(),
             self.schema(),
         )
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        let left_columns_len = self.left.schema().fields.len();
+        let left_oeq_properties = self.left.ordering_equivalence_properties();
+        let right_oeq_properties = self.right.ordering_equivalence_properties();
+        match self.join_type {
+            JoinType::Inner => {
+                // Since left side is the stream side for this `SortMergeJoin` implementation,
+                // global ordering of the left table is preserved at the output. Hence, left
+                // side ordering equivalences are still valid.
+                new_properties.extend(left_oeq_properties.classes().iter().cloned());
+                if let Some(output_ordering) = &self.output_ordering {
+                    // Update right table ordering equivalence expression indices; i.e.
+                    // add left table size as an offset.
+                    let updated_right_oeq_classes =
+                        add_offset_to_ordering_equivalence_classes(
+                            right_oeq_properties.classes(),
+                            left_columns_len,
+                        )
+                        .unwrap();
+                    let left_output_ordering = self.left.output_ordering().unwrap_or(&[]);
+                    // Right side ordering equivalence properties should be prepended with
+                    // those of the left side while constructing output ordering equivalence
+                    // properties for `SortMergeJoin`. As an example;
+                    //
+                    // If the right table ordering equivalences contain `b ASC`, and the output
+                    // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
+                    // for the right table should be converted to `a ASC, b ASC` before it is added
+                    // to the ordering equivalences of `SortMergeJoinExec`.
+                    for oeq_class in updated_right_oeq_classes {
+                        for ordering in oeq_class.others() {
+                            // Entries inside ordering equivalence should be normalized before insertion.
+                            let normalized_ordering = normalize_sort_exprs(
+                                ordering,
+                                self.equivalence_properties().classes(),
+                                &[],
+                            );
+                            let new_oeq_ordering =
+                                merge_vectors(left_output_ordering, &normalized_ordering);
+                            new_properties.add_equal_conditions((
+                                output_ordering,
+                                &new_oeq_ordering,
+                            ));
+                        }
+                    }
+                }
+            }
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+                new_properties.extend(left_oeq_properties.classes().iter().cloned());
+            }
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                new_properties.extend(right_oeq_properties.classes().iter().cloned());
+            }
+            // All ordering equivalences from left and/or right sides are invalidated.
+            _ => {}
+        }
+        new_properties
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -17,9 +17,6 @@
 
 //! Defines the LIMIT plan
 
-use futures::stream::Stream;
-use futures::stream::StreamExt;
-use log::trace;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -28,19 +25,21 @@ use std::task::{Context, Poll};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
+
+use super::expressions::PhysicalSortExpr;
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{DataFusionError, Result};
-
-use super::expressions::PhysicalSortExpr;
-use super::DisplayAs;
-use super::{
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
-};
-
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
+
+use futures::stream::Stream;
+use futures::stream::StreamExt;
+use log::trace;
 
 /// Limit execution plan
 #[derive(Debug)]
@@ -138,6 +137,10 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(
@@ -315,6 +318,10 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(

@@ -392,7 +392,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
         BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
         BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
-        BuiltinScalarFunction::Trunc => Arc::new(math_expressions::trunc),
+        BuiltinScalarFunction::Trunc => {
+            Arc::new(|args| make_scalar_function(math_expressions::trunc)(args))
+        }
         BuiltinScalarFunction::Pi => Arc::new(math_expressions::pi),
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function(math_expressions::power)(args))
@@ -414,8 +416,14 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayConcat => {
             Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
         }
-        BuiltinScalarFunction::ArrayContains => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_contains)(args))
+        BuiltinScalarFunction::ArrayHasAll => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_has_all)(args))
+        }
+        BuiltinScalarFunction::ArrayHasAny => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_has_any)(args))
+        }
+        BuiltinScalarFunction::ArrayHas => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_has)(args))
         }
         BuiltinScalarFunction::ArrayDims => {
             Arc::new(|args| make_scalar_function(array_expressions::array_dims)(args))

@@ -34,7 +34,7 @@ use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::TableSource;
-use datafusion_expr::{col, AggregateUDF, Expr, ScalarUDF, SubqueryAlias};
+use datafusion_expr::{col, AggregateUDF, Expr, ScalarUDF};
 
 use crate::utils::make_decimal_type;
 
@@ -222,18 +222,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Schema::new(fields))
     }
 
-    /// Apply the given TableAlias to the top-level projection.
+    /// Apply the given TableAlias to the input plan
     pub(crate) fn apply_table_alias(
         &self,
         plan: LogicalPlan,
         alias: TableAlias,
     ) -> Result<LogicalPlan> {
-        let apply_name_plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-            plan,
-            self.normalizer.normalize(alias.name),
-        )?);
+        let plan = self.apply_expr_alias(plan, alias.columns)?;
 
-        self.apply_expr_alias(apply_name_plan, alias.columns)
+        LogicalPlanBuilder::from(plan)
+            .alias(self.normalizer.normalize(alias.name))?
+            .build()
     }
 
     pub(crate) fn apply_expr_alias(

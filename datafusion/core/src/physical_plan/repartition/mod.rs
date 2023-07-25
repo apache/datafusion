@@ -24,19 +24,16 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
+use crate::physical_plan::common::transpose;
 use crate::physical_plan::hash_utils::create_hashes;
+use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::repartition::distributor_channels::{
     channels, partition_aware_channels,
 };
+use crate::physical_plan::sorts::streaming_merge;
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
-use arrow::array::{ArrayRef, UInt64Builder};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
-use log::trace;
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
@@ -45,14 +42,18 @@ use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 
-use crate::physical_plan::common::transpose;
-use crate::physical_plan::metrics::BaselineMetrics;
-use crate::physical_plan::sorts::streaming_merge;
+use arrow::array::{ArrayRef, UInt64Builder};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalExpr};
+
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
+use log::trace;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
@@ -238,8 +239,67 @@ impl BatchPartitioner {
     }
 }
 
-/// The repartition operator maps N input partitions to M output partitions based on a
-/// partitioning scheme. No guarantees are made about the order of the resulting partitions.
+/// Maps `N` input partitions to `M` output partitions based on a
+/// [`Partitioning`] scheme.
+///
+/// # Background
+///
+/// DataFusion, like most other commercial systems, with the the
+/// notable exception of DuckDB, uses the "Exchange Operator" based
+/// approach to parallelism which works well in practice given
+/// sufficient care in implementation.
+///
+/// DataFusion's planner picks the target number of partitions and
+/// then `RepartionExec` redistributes [`RecordBatch`]es to that number
+/// of output partitions.
+///
+/// For example, given `target_partitions=3` (trying to use 3 cores)
+/// but scanning an input with 2 partitions, `RepartitionExec` can be
+/// used to get 3 even streams of `RecordBatch`es
+///
+///
+///```text
+///        ▲                  ▲                  ▲
+///        │                  │                  │
+///        │                  │                  │
+///        │                  │                  │
+///┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+///│    GroupBy    │  │    GroupBy    │  │    GroupBy    │
+///│   (Partial)   │  │   (Partial)   │  │   (Partial)   │
+///└───────────────┘  └───────────────┘  └───────────────┘
+///        ▲                  ▲                  ▲
+///        └──────────────────┼──────────────────┘
+///                           │
+///              ┌─────────────────────────┐
+///              │     RepartitionExec     │
+///              │   (hash/round robin)    │
+///              └─────────────────────────┘
+///                         ▲   ▲
+///             ┌───────────┘   └───────────┐
+///             │                           │
+///             │                           │
+///        .─────────.                 .─────────.
+///     ,─'           '─.           ,─'           '─.
+///    ;      Input      :         ;      Input      :
+///    :   Partition 0   ;         :   Partition 1   ;
+///     ╲               ╱           ╲               ╱
+///      '─.         ,─'             '─.         ,─'
+///         `───────'                   `───────'
+///```
+///
+/// # Output Ordering
+///
+/// No guarantees are made about the order of the resulting
+/// partitions unless `preserve_order` is set.
+///
+/// # Footnote
+///
+/// The "Exchange Operator" was first described in the 1989 paper
+/// [Encapsulation of parallelism in the Volcano query processing
+/// system
+/// Paper](https://w6113.github.io/files/papers/volcanoparallelism-89.pdf)
+/// which uses the term "Exchange" for the concept of repartitioning
+/// data across threads.
 #[derive(Debug)]
 pub struct RepartitionExec {
     /// Input execution plan
@@ -397,6 +457,10 @@ impl ExecutionPlan for RepartitionExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn execute(

@@ -18140,10 +18140,12 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayToString => "ArrayToString",
             Self::Cardinality => "Cardinality",
             Self::TrimArray => "TrimArray",
-            Self::ArrayContains => "ArrayContains",
             Self::Encode => "Encode",
             Self::Decode => "Decode",
             Self::Cot => "Cot",
+            Self::ArrayHas => "ArrayHas",
+            Self::ArrayHasAny => "ArrayHasAny",
+            Self::ArrayHasAll => "ArrayHasAll",
         };
         serializer.serialize_str(variant)
     }
@@ -18255,10 +18257,12 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayToString",
             "Cardinality",
             "TrimArray",
-            "ArrayContains",
             "Encode",
             "Decode",
             "Cot",
+            "ArrayHas",
+            "ArrayHasAny",
+            "ArrayHasAll",
         ];
 
         struct GeneratedVisitor;
@@ -18401,10 +18405,12 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayToString" => Ok(ScalarFunction::ArrayToString),
                     "Cardinality" => Ok(ScalarFunction::Cardinality),
                     "TrimArray" => Ok(ScalarFunction::TrimArray),
-                    "ArrayContains" => Ok(ScalarFunction::ArrayContains),
                     "Encode" => Ok(ScalarFunction::Encode),
                     "Decode" => Ok(ScalarFunction::Decode),
                     "Cot" => Ok(ScalarFunction::Cot),
+                    "ArrayHas" => Ok(ScalarFunction::ArrayHas),
+                    "ArrayHasAny" => Ok(ScalarFunction::ArrayHasAny),
+                    "ArrayHasAll" => Ok(ScalarFunction::ArrayHasAll),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

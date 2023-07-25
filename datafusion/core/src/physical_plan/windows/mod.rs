@@ -350,8 +350,7 @@ pub(crate) fn window_ordering_equivalence(
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
             builtin_window_expr
-                .get_built_in_func_expr()
-                .add_equal_orderings(&mut builder);
+                .add_equal_orderings(&mut builder, || input.equivalence_properties());
         }
     }
     builder.build()
