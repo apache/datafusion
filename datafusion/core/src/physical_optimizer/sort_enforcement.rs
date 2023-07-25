@@ -36,8 +36,8 @@
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::replace_with_order_preserving_versions::{
-    replace_with_order_preserving_versions, PlanWithPipelineFixer,
+use crate::physical_optimizer::replace_with_order_preserving_variants::{
+    replace_with_order_preserving_variants, PlanWithPipelineFixer,
 };
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
@@ -372,7 +372,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
         let plan_with_pipeline_fixer = PlanWithPipelineFixer::new(new_plan);
         let updated_plan =
             plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| {
-                replace_with_order_preserving_versions(
+                replace_with_order_preserving_variants(
                     plan_with_pipeline_fixer,
                     false,
                     true,
