@@ -246,13 +246,14 @@ pub fn get_arrayref_at_indices(
         .collect()
 }
 
-pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
+pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
         .into_iter()
         .map(|id| match id.quote_style {
             Some(_) => id.value,
-            None => id.value.to_ascii_lowercase(),
+            None if ignore_case => id.value,
+            _ => id.value.to_ascii_lowercase(),
         })
         .collect::<Vec<_>>()
 }
