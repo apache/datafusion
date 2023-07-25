@@ -88,6 +88,10 @@ message ProjectionColumns {
 message CsvFormat {
   bool has_header = 1;
   string delimiter = 2;
+  string quote = 3;
+  oneof optional_escape {
+    string escape = 4;
+  }
 }
 
 message ParquetFormat {
@@ -1269,6 +1273,10 @@ message CsvScanExecNode {
   FileScanExecConf base_conf = 1;
   bool has_header = 2;
   string delimiter = 3;
+  string quote = 4;
+  oneof optional_escape {
+    string escape = 5;
+  }
 }
 
 message AvroScanExecNode {
