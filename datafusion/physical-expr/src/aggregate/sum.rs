@@ -28,6 +28,7 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
+use arrow::array::Decimal256Array;
 use arrow::compute;
 use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
@@ -39,8 +40,8 @@ use arrow::{
     datatypes::Field,
 };
 use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type,
-    UInt64Type,
+    Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int32Type, Int64Type,
+    UInt32Type, UInt64Type,
 };
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -169,6 +170,10 @@ impl AggregateExpr for Sum {
                 instantiate_primitive_accumulator!(self, Decimal128Type, |x, y| x
                     .add_assign(y))
             }
+            DataType::Decimal256(_, _) => {
+                instantiate_primitive_accumulator!(self, Decimal256Type, |x, y| *x =
+                    *x + y)
+            }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "GroupsAccumulator not supported for {}: {}",
                 self.name, self.data_type
@@ -250,6 +255,16 @@ fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: i8) -> Result<Scal
     Ok(ScalarValue::Decimal128(result, precision, scale))
 }
 
+fn sum_decimal256_batch(
+    values: &ArrayRef,
+    precision: u8,
+    scale: i8,
+) -> Result<ScalarValue> {
+    let array = downcast_value!(values, Decimal256Array);
+    let result = compute::sum(array);
+    Ok(ScalarValue::Decimal256(result, precision, scale))
+}
+
 // sums the array and returns a ScalarValue of its corresponding type.
 pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<ScalarValue> {
     // TODO refine the cast kernel in arrow-rs
@@ -262,6 +277,9 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
     Ok(match values.data_type() {
         DataType::Decimal128(precision, scale) => {
             sum_decimal_batch(values, *precision, *scale)?
+        }
+        DataType::Decimal256(precision, scale) => {
+            sum_decimal256_batch(values, *precision, *scale)?
         }
         DataType::Float64 => typed_sum_delta_batch!(values, Float64Array, Float64),
         DataType::Float32 => typed_sum_delta_batch!(values, Float32Array, Float32),

@@ -77,12 +77,12 @@ impl Avg {
         // the internal sum data type of avg just support FLOAT64 and Decimal data type.
         assert!(matches!(
             sum_data_type,
-            DataType::Float64 | DataType::Decimal128(_, _)
+            DataType::Float64 | DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
         ));
         // the result of avg just support FLOAT64 and Decimal data type.
         assert!(matches!(
             rt_data_type,
-            DataType::Float64 | DataType::Decimal128(_, _)
+            DataType::Float64 | DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
         ));
         Self {
             name: name.into(),
