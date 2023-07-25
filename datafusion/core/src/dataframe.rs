@@ -149,7 +149,8 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, project_plan))
     }
 
-    /// Expand each list element of a column to multiple rows.
+    /// Expand each list element of a column to multiple rows. See
+    /// [Unnest] for more details.
     ///
     /// ```
     /// # use datafusion::prelude::*;
@@ -162,6 +163,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    /// [Unnest]: crate::logical_expr::Unnest
     pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .unnest_column(column)?

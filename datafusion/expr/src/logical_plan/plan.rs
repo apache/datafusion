@@ -1763,23 +1763,46 @@ pub enum Partitioning {
     DistributeBy(Vec<Expr>),
 }
 
-/// Unnest a column that contains a nested list type.
+/// Unnest a column that contains a nested list type, replicating
+/// values in the other, non nested rows.
 ///
-/// For example, calling unnest(c1) results in the following:
+/// Conceptually this operation is like joining each row with all the
+/// values in the list column.
 ///
+/// If `preserve_nulls` is false, the default, nulls and empty lists
+/// from the input column are not carried through to the output.
+///
+/// If `preserve_nulls` is true, nulls from the input column are
+/// carried through to the output.
+///
+/// # Examples
+///
+/// ## `Unnest(c1)`, preserve_nulls: false
 /// ```text
-/// ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
-/// │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
-/// ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
-/// │  null   │ │  B  │                │    2    │ │  A  │
-/// ├─────────┤ ├─────┤ ────────────▶  ├─────────┤ ├─────┤
-/// │   {}    │ │  D  │                │  null   │ │  B  │
-/// ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
-/// │   {3}   │ │  E  │                │  null   │ │  D  │
-/// └─────────┘ └─────┘                ├─────────┤ ├─────┤
-///   c1         c2                    │    3    │ │  E  │
-///                                    └─────────┘ └─────┘
-///                                        c1        c2
+///      ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
+///      │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
+///      ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+///      │  null   │ │  B  │                │    2    │ │  A  │
+///      ├─────────┤ ├─────┤ ────────────▶  ├─────────┤ ├─────┤
+///      │   {}    │ │  D  │                │    3    │ │  E  │
+///      ├─────────┤ ├─────┤                └─────────┘ └─────┘
+///      │   {3}   │ │  E  │                    c1        c2
+///      └─────────┘ └─────┘
+///        c1         c2
+/// ```
+///
+/// ## `Unnest(c1)`, preserve_nulls: true
+/// ```text
+///      ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
+///      │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
+///      ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+///      │  null   │ │  B  │                │    2    │ │  A  │
+///      ├─────────┤ ├─────┤ ────────────▶  ├─────────┤ ├─────┤
+///      │   {}    │ │  D  │                │  null   │ │  B  │
+///      ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
+///      │   {3}   │ │  E  │                │    3    │ │  E  │
+///      └─────────┘ └─────┘                └─────────┘ └─────┘
+///        c1         c2                        c1        c2
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Unnest {

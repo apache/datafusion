@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the unnest column plan for unnesting values in a column that contains a list
-//! type, conceptually is like joining each row with all the values in the list column.
+//! [UnnestExec] for unnesting / flattening Lists
+
 use arrow::array::{
     new_null_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
     FixedSizeListArray, Int32Array, LargeListArray, ListArray, PrimitiveArray,
@@ -43,24 +43,10 @@ use crate::physical_plan::{
 
 use super::DisplayAs;
 
-/// Unnest the given column by joining the row with each value in the nested type.
+/// Unnest the given column by joining the row with each value in the
+/// nested type. See [Unnest] for details and examples
 ///
-/// For example, calling unnest(c1) results in the following:
-///
-/// ```text
-/// ┌─────────┐ ┌─────┐                ┌─────────┐ ┌─────┐
-/// │ {1, 2}  │ │  A  │   Unnest       │    1    │ │  A  │
-/// ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
-/// │  null   │ │  B  │                │    2    │ │  A  │
-/// ├─────────┤ ├─────┤ ────────────▶  ├─────────┤ ├─────┤
-/// │   {}    │ │  D  │                │  null   │ │  B  │
-/// ├─────────┤ ├─────┤                ├─────────┤ ├─────┤
-/// │   {3}   │ │  E  │                │  null   │ │  D  │
-/// └─────────┘ └─────┘                ├─────────┤ ├─────┤
-///   c1         c2                    │    3    │ │  E  │
-///                                    └─────────┘ └─────┘
-///                                        c1        c2
-/// ```
+/// [Unnest]: crate::logical_expr::Unnest
 #[derive(Debug)]
 pub struct UnnestExec {
     /// Input execution plan
