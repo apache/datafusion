@@ -264,10 +264,9 @@ impl LogicalPlanBuilder {
         }
 
         let schema = table_source.schema();
-        let n_field = schema.fields.len();
-        let func_dependencies = FunctionalDependencies::new_from_primary_keys(
-            table_source.primary_keys(),
-            n_field,
+        let func_dependencies = FunctionalDependencies::new_from_constraints(
+            table_source.constraints(),
+            schema.fields.len(),
         );
 
         let projected_schema = projection
@@ -1233,7 +1232,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }))
 }
 
-/// This function projects functional dependencies of `input` according
+/// This function projects functional dependencies of the `input` plan according
 /// to projection expressions `exprs`.
 pub(crate) fn project_functional_dependencies(
     exprs: &[Expr],
@@ -1255,8 +1254,9 @@ pub(crate) fn project_functional_dependencies(
                 .position(|item| item.qualified_name() == expr_name)
         })
         .collect::<Vec<_>>();
-    let input_func_dependencies = input.schema().functional_dependencies();
-    Ok(input_func_dependencies
+    Ok(input
+        .schema()
+        .functional_dependencies()
         .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
@@ -1267,7 +1267,7 @@ fn contains_grouping_set(group_expr: &[Expr]) -> bool {
         .any(|expr| matches!(expr, Expr::GroupingSet(_)))
 }
 
-/// Calculates functional dependencies for aggregate expressions
+/// Calculates functional dependencies for aggregate expressions.
 pub(crate) fn aggregate_functional_dependencies(
     // Expressions in the GROUP BY clause:
     group_expr: &[Expr],
@@ -1280,7 +1280,7 @@ pub(crate) fn aggregate_functional_dependencies(
     // whether the GROUP BY in question contains a grouping set expression:
     // - If so, the functional dependencies will be empty because we cannot guarantee
     //   that GROUP BY expression results will be unique.
-    // - Otherwise, it may be possible to propagate functional dependencies
+    // - Otherwise, it may be possible to propagate functional dependencies.
     if !contains_grouping_set(group_expr) {
         let group_by_expr_names = group_expr
             .iter()
@@ -1493,7 +1493,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
     let schema = Arc::new(
         DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
-            // We can use existing functional dependencies:
+            // We can use the existing functional dependencies:
             .with_functional_dependencies(input_schema.functional_dependencies().clone()),
     );
 
@@ -1506,16 +1506,16 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
 #[cfg(test)]
 mod tests {
+    use crate::logical_plan::StringifiedPlan;
+    use crate::{col, in_subquery, lit, scalar_subquery, sum};
     use crate::{expr, expr_fn::exists};
+
+    use super::*;
+
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{
         FunctionalDependence, OwnedTableReference, SchemaError, TableReference,
     };
-
-    use crate::logical_plan::StringifiedPlan;
-
-    use super::*;
-    use crate::{col, in_subquery, lit, scalar_subquery, sum};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {

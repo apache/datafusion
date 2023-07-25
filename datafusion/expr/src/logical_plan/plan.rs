@@ -33,6 +33,9 @@ use crate::utils::{
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
 };
+
+use super::DdlStatement;
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
@@ -41,16 +44,14 @@ use datafusion_common::{
     plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     OwnedTableReference, Result, ScalarValue,
 };
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
-use super::DdlStatement;
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -1272,7 +1273,8 @@ impl Projection {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
-        // update functional dependencies of `input` according to projection exprs.
+        // Update functional dependencies of `input` according to projection
+        // expressions:
         let id_key_groups = project_functional_dependencies(&expr, &input)?;
         let schema = schema.as_ref().clone();
         let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
@@ -1326,7 +1328,8 @@ impl SubqueryAlias {
     ) -> Result<Self> {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
-        // Since schema is same, other than qualifier, we can use existing functional dependencies
+        // Since schema is the same, other than qualifier, we can use existing
+        // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(&alias, &schema)?
@@ -1414,7 +1417,7 @@ impl Window {
             .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
         let metadata = input.schema().metadata().clone();
 
-        // Update functional dependencies for window
+        // Update functional dependencies for window:
         let mut window_func_dependencies =
             input.schema().functional_dependencies().clone();
         window_func_dependencies.extend_target_indices(window_fields.len());

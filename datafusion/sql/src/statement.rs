@@ -23,6 +23,7 @@ use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
+
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -30,6 +31,7 @@ use datafusion_common::{
     DataFusionError, ExprSchema, OwnedTableReference, Result, SchemaReference,
     TableReference, ToDFSchema,
 };
+use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -49,9 +51,8 @@ use sqlparser::ast::{
     SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint,
     TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
-
-use datafusion_expr::expr::Placeholder;
 use sqlparser::parser::ParserError::ParserError;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 

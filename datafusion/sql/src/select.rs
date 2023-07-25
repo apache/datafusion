@@ -15,12 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs,
 };
+
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
 };
@@ -32,12 +37,8 @@ use datafusion_expr::utils::{
 use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
-
-use datafusion_expr::expr::Alias;
 use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
-use std::collections::HashSet;
-use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logic plan from an SQL select
@@ -438,19 +439,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .map(|group_by_expr| group_by_expr.display_name())
             .collect::<Result<Vec<_>>>()?;
-        // get targets that can be used in select, even if they do not occur in aggregation.
+        // Get targets that can be used in a select, even if they do not occur in aggregation:
         if let Some(target_indices) =
             schema.get_target_functional_dependencies(&group_by_expr_names)
         {
-            // Calculate dependent fields names with determinant group by expression
+            // Calculate dependent fields names with determinant GROUP BY expression:
             let associated_field_names = target_indices
                 .iter()
                 .map(|idx| fields[*idx].qualified_name())
                 .collect::<Vec<_>>();
-            // Expand group by exprs with select_exprs
-            // If groupby expr is determinant key, we can use its
-            // dependent keys in select statements also.
-            // Expand group expression with dependent select expressions.
+            // Expand GROUP BY expressions with select expressions: If a GROUP
+            // BY expression is a determinant key, we can use its dependent
+            // columns in select statements also.
             for expr in select_exprs {
                 let expr_name = format!("{}", expr);
                 if !new_group_by_exprs.contains(expr)

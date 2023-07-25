@@ -54,8 +54,8 @@ impl TableSource for DefaultTableSource {
         self.table_provider.schema()
     }
 
-    /// Get a reference to primary key indices, if a primary key exists.
-    fn primary_keys(&self) -> Option<&[Constraint]> {
+    /// Get a reference to applicable constraints, if any exists.
+    fn constraints(&self) -> Option<&[Constraint]> {
         self.table_provider.constraints()
     }
 

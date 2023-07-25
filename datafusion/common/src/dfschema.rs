@@ -33,50 +33,55 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
 
-/// Stores constraint about the table.
+/// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Constraint {
-    // columns together form a primary key (are unique and not null)
+    /// Columns with the given indices form a composite primary key (they are
+    /// jointly unique and not nullable):
     PrimaryKey(Vec<usize>),
-    // columns together form a unique key
+    /// Columns with the given indices form a composite unique key:
     Unique(Vec<usize>),
 }
 
-/// Stores functional dependence in the schema.
-/// Functional dependence defines relationship between determinants and dependents.
-/// The value of determinant keys uniquely determines the value of dependents. A determinant key
-/// is a column whose value determines values of some other (dependent) columns.
-/// If two rows have the same determinant key, dependent columns in these rows
-/// are necessarily the same. If the determinant key is unique, the set of
+/// This object defines a functional dependence in the schema. A functional
+/// dependence defines a relationship between determinant keys and dependent
+/// columns. A determinant key is a column, or a set of columns, whose value
+/// uniquely determines values of some other (dependent) columns. If two rows
+/// have the same determinant key, dependent columns in these rows are
+/// necessarily the same. If the determinant key is unique, the set of
 /// dependent columns is equal to the entire schema and the determinant key can
-/// serve as a primary key. Note that a primary key may "downgrade" into an
-/// determinant key due to an operation such as a join, and this object is used to
-/// track dependence relationships in such cases.
-/// For more information about functional dependency see
-/// Indices of determinants are stored in `source_indices`, and  indices of
-/// dependents are stored in `target_indices`
+/// serve as a primary key. Note that a primary key may "downgrade" into a
+/// determinant key due to an operation such as a join, and this object is
+/// used to track dependence relationships in such cases. For more information
+/// on functional dependencies, see:
 /// <https://www.scaler.com/topics/dbms/functional-dependency-in-dbms/>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionalDependence {
+    // Column indices of the (possibly composite) determinant key:
     pub source_indices: Vec<usize>,
-    /// Nullable keeps track of whether one of the `source_indices` can receive NULL values.
-    /// if constraint at the source is `unique`, this flag is `true`.
-    /// if constraint at the source is `primary key`, this flag is `false`.
-    /// Please note that, as schema changes between different stages in the plan,
-    /// this property may change. (Such as LEFT JOIN, RIGHT JOIN).
-    pub nullable: bool,
-    pub mode: Dependency,
+    // Column indices of dependent column(s):
     pub target_indices: Vec<usize>,
+    /// Flag indicating whether one of the `source_indices` can receive NULL values.
+    /// For a data source, if the constraint in question is `Constraint::Unique`,
+    /// this flag is `true`. If the constraint in question is `Constraint::PrimaryKey`,
+    /// this flag is `false`.
+    /// Note that as the schema changes between different stages in a plan,
+    /// such as after LEFT JOIN or RIGHT JOIN operations, this property may
+    /// change.
+    pub nullable: bool,
+    // The functional dependency mode:
+    pub mode: Dependency,
 }
 
-/// Describes functional dependency mode
+/// Describes functional dependency mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dependency {
-    Single, // unique constraint
-    Multi,  // non unique (e.g. multipart primary key)
+    Single, // A determinant key may occur only once.
+    Multi,  // A determinant key may occur multiple times (in multiple rows).
 }
 
 impl FunctionalDependence {
+    // Creates a new functional dependence.
     pub fn new(
         source_indices: Vec<usize>,
         target_indices: Vec<usize>,
@@ -84,11 +89,10 @@ impl FunctionalDependence {
     ) -> Self {
         Self {
             source_indices,
-            nullable,
-            // Dependency::Multi is the most relaxed mode
-            // hence, if not specified this is the safest approach
-            mode: Dependency::Multi,
             target_indices,
+            nullable,
+            // Start with the least restrictive mode by default:
+            mode: Dependency::Multi,
         }
     }
 
@@ -98,70 +102,74 @@ impl FunctionalDependence {
     }
 }
 
-/// Encapsulate functional dependencies
+/// This object encapsulates all functional dependencies in a given relation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionalDependencies {
-    inner: Vec<FunctionalDependence>,
+    deps: Vec<FunctionalDependence>,
 }
 
 impl FunctionalDependencies {
-    /// Create an empty `FunctionalDependencies`
+    /// Creates an empty `FunctionalDependencies` object.
     pub fn empty() -> Self {
-        Self { inner: vec![] }
+        Self { deps: vec![] }
     }
 
-    /// Create a new `FunctionalDependencies` from vector of `FunctionalDependence`s.
-    pub fn new(functional_dependencies: Vec<FunctionalDependence>) -> Self {
-        Self {
-            inner: functional_dependencies,
-        }
+    /// Creates a new `FunctionalDependencies` object from a vector of
+    /// `FunctionalDependence` objects.
+    pub fn new(dependencies: Vec<FunctionalDependence>) -> Self {
+        Self { deps: dependencies }
     }
 
-    pub fn new_from_primary_keys(
+    /// Creates a new `FunctionalDependencies` object from the given constraints.
+    pub fn new_from_constraints(
         constraints: Option<&[Constraint]>,
         n_field: usize,
     ) -> Self {
         if let Some(constraints) = constraints {
-            // All the field indices are associated, with whole table. since it is primary key.
-            let target_indices = (0..n_field).collect::<Vec<_>>();
+            // Construct dependency objects based on each individual constraint:
             let dependencies = constraints
                 .iter()
                 .map(|constraint| {
+                    // All the field indices are associated with the whole table
+                    // since we are dealing with table level constraints:
                     let dependency = match constraint {
                         Constraint::PrimaryKey(indices) => FunctionalDependence::new(
                             indices.to_vec(),
-                            target_indices.clone(),
+                            (0..n_field).collect::<Vec<_>>(),
                             false,
                         ),
                         Constraint::Unique(indices) => FunctionalDependence::new(
                             indices.to_vec(),
-                            target_indices.clone(),
+                            (0..n_field).collect::<Vec<_>>(),
                             true,
                         ),
                     };
-                    // As primary keys are guaranteed to be unique, set `mode` of functional dependency to `Dependency::Single`.
+                    // As primary keys are guaranteed to be unique, set the
+                    // functional dependency mode to `Dependency::Single`:
                     dependency.with_mode(Dependency::Single)
                 })
                 .collect::<Vec<_>>();
             Self::new(dependencies)
         } else {
+            // There is no constraint, return an empty object:
             Self::empty()
         }
     }
 
     pub fn with_dependency(mut self, mode: Dependency) -> Self {
-        self.inner.iter_mut().for_each(|item| item.mode = mode);
+        self.deps.iter_mut().for_each(|item| item.mode = mode);
         self
     }
 
+    /// Merges the given functional dependencies with these.
     pub fn extend(&mut self, other: FunctionalDependencies) {
-        self.inner.extend(other.inner);
+        self.deps.extend(other.deps);
     }
 
-    /// Add `offset` value to `source_indices` and `target_indices`
-    /// for each functional dependency
+    /// Adds the `offset` value to `source_indices` and `target_indices` for
+    /// each functional dependency.
     pub fn add_offset(&mut self, offset: usize) {
-        self.inner.iter_mut().for_each(
+        self.deps.iter_mut().for_each(
             |FunctionalDependence {
                  source_indices,
                  target_indices,
@@ -173,29 +181,28 @@ impl FunctionalDependencies {
         )
     }
 
-    /// Update `source_indices`, and `target_indices` of each `FunctionalDependence`
-    /// using the index mapping in `proj_indices`.
-    /// Assume that `proj_indices` is \[2, 5, 8\] and functional dependence is
-    /// \[5\] (`source_indices`) -> \[5, 8\] (`target_indices`) in `df_schema`.
-    /// Then, the return value will be \[1\] -> \[1, 2\].
-    /// This means that the first index of the `proj_indices` (5) is a determinant key
-    /// (stored at `source_indices`), and its key is dependent keys are at indices 1 and 2 (in
-    /// the updated schema) (stored at `target_indices`).
-    /// Please note that: In the updated schema, fields at indices \[2, 5, 8\] will be at \[0, 1, 2\].
+    /// Updates `source_indices` and `target_indices` of each functional
+    /// dependence using the index mapping given in `proj_indices`.
+    ///
+    /// Assume that `proj_indices` is \[2, 5, 8\] and we have a functional
+    /// dependence \[5\] (`source_indices`) -> \[5, 8\] (`target_indices`).
+    /// In the updated schema, fields at indices \[2, 5, 8\] will transform
+    /// to \[0, 1, 2\]. Therefore, the resulting functional dependence will
+    /// be \[1\] -> \[1, 2\].
     pub fn project_functional_dependencies(
         &self,
         proj_indices: &[usize],
-        // If dependency mode is Single. Association covers whole table. `n_out`
-        // stores schema field length to be able to correctly associate with whole table.
+        // The argument `n_out` denotes the schema field length, which is needed
+        // to correctly associate a `Single`-mode dependence with the whole table.
         n_out: usize,
     ) -> FunctionalDependencies {
         let mut projected_func_dependencies = vec![];
         for FunctionalDependence {
             source_indices,
+            target_indices,
             nullable,
             mode,
-            target_indices,
-        } in &self.inner
+        } in &self.deps
         {
             let new_source_indices =
                 update_elements_with_matching_indices(source_indices, proj_indices);
@@ -206,8 +213,8 @@ impl FunctionalDependencies {
                 // Update associations according to projection:
                 update_elements_with_matching_indices(target_indices, proj_indices)
             };
-            // All of the composite indices should still valid after projection,
-            // otherwise functional dependency cannot be propagated.
+            // All of the composite indices should still be valid after projection;
+            // otherwise, functional dependency cannot be propagated.
             if new_source_indices.len() == source_indices.len() {
                 let new_func_dependence = FunctionalDependence::new(
                     new_source_indices,
@@ -221,83 +228,88 @@ impl FunctionalDependencies {
         FunctionalDependencies::new(projected_func_dependencies)
     }
 
+    /// This function joins this set of functional dependencies with the `other`
+    /// according to the given `join_type`.
     pub fn join(
         &self,
         other: &FunctionalDependencies,
         join_type: &JoinType,
         left_cols_len: usize,
     ) -> FunctionalDependencies {
-        // Get mutable versions of left and right side dependencies
+        // Get mutable copies of left and right side dependencies:
         let mut right_func_dependencies = other.clone();
         let mut left_func_dependencies = self.clone();
 
         match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Right => {
-                // Add offset to right schema
+                // Add offset to right schema:
                 right_func_dependencies.add_offset(left_cols_len);
 
-                // result may have multiple values, hence set dependency mode to multi
+                // Result may have multiple values, update the dependency mode:
                 left_func_dependencies =
                     left_func_dependencies.with_dependency(Dependency::Multi);
                 right_func_dependencies =
                     right_func_dependencies.with_dependency(Dependency::Multi);
 
                 if *join_type == JoinType::Left {
-                    // downgrade right side, since this side may have additional null values
+                    // Downgrade the right side, since it may have additional NULL values:
                     right_func_dependencies.downgrade_dependencies();
                 } else if *join_type == JoinType::Right {
-                    // downgrade left side, since this side may have additional null values
+                    // Downgrade the left side, since it may have additional NULL values:
                     left_func_dependencies.downgrade_dependencies();
                 }
-                // Combine left and right functional dependencies
+                // Combine left and right functional dependencies:
                 left_func_dependencies.extend(right_func_dependencies);
                 left_func_dependencies
             }
             JoinType::LeftSemi | JoinType::LeftAnti => {
-                // LeftSemi and LeftAnti preserves functional dependencies of left side.
+                // These joins preserve functional dependencies of the left side:
                 left_func_dependencies
             }
             JoinType::RightSemi | JoinType::RightAnti => {
-                // RightSemi and RightAnti preserves functional dependencies of right side.
+                // These joins preserve functional dependencies of the right side:
                 right_func_dependencies
             }
             JoinType::Full => {
-                // All of the functional dependencies are lost.
+                // All of the functional dependencies are lost in a FULL join:
                 FunctionalDependencies::empty()
             }
         }
     }
 
-    // This case occurs, when current dependency gets a new null value.
-    // If dependency is UNIQUE(e.g nullable), new null value invalidates dependency
-    // If dependency is PRIMARY KEY(e.g not nullable), new null value turns it into
-    // UNIQUE mode.
+    /// This function downgrades a functional dependency when nullability becomes
+    /// a possibility:
+    /// - If the dependency in question is UNIQUE (i.e. nullable), a new null value
+    ///   invalidates the dependency.
+    /// - If the dependency in question is PRIMARY KEY (i.e. not nullable), a new
+    ///   null value turns it into UNIQUE mode.
     fn downgrade_dependencies(&mut self) {
-        // Delete nullable dependencies, since they will no longer be
-        // functional dependency
-        self.inner.retain(|item| !item.nullable);
-        self.inner.iter_mut().for_each(|item| item.nullable = true);
+        // Delete nullable dependencies, since they are no longer valid:
+        self.deps.retain(|item| !item.nullable);
+        self.deps.iter_mut().for_each(|item| item.nullable = true);
     }
 
+    /// This function ensures that functional dependencies involving uniquely
+    /// occuring determinant keys cover their entire table in terms of
+    /// dependent columns.
     pub fn extend_target_indices(&mut self, n_out: usize) {
-        // if unique cover whole table
-        let new_target_indices = (0..n_out).collect::<Vec<_>>();
-        self.inner.iter_mut().for_each(
+        self.deps.iter_mut().for_each(
             |FunctionalDependence {
                  mode,
                  target_indices,
                  ..
              }| {
+                // If unique, cover the whole table:
                 if *mode == Dependency::Single {
-                    *target_indices = new_target_indices.clone()
+                    *target_indices = (0..n_out).collect::<Vec<_>>();
                 }
             },
         )
     }
 }
 
-// Update entries inside the `entries` vector with their corresponding index
-// inside the `proj_indices` vector.
+/// Updates entries inside the `entries` vector with their corresponding
+/// indices inside the `proj_indices` vector.
 fn update_elements_with_matching_indices(
     entries: &[usize],
     proj_indices: &[usize],
@@ -398,15 +410,16 @@ impl DFSchema {
         )
     }
 
+    /// Updates functional dependencies when there is a GROUP BY expression.
     pub fn aggregate_functional_dependencies(
         &self,
         group_by_expr_names: &[String],
         n_out: usize,
     ) -> FunctionalDependencies {
         let mut aggregate_func_dependencies = vec![];
-        // Association covers whole table:
+        // Association covers the whole table:
         let target_indices = (0..n_out).collect::<Vec<_>>();
-        // Get functional dependencies of the schema.
+        // Get functional dependencies of the schema:
         let func_dependencies = self.functional_dependencies();
         let fields = self.fields();
         for FunctionalDependence {
@@ -414,23 +427,23 @@ impl DFSchema {
             nullable,
             mode,
             ..
-        } in &func_dependencies.inner
+        } in &func_dependencies.deps
         {
-            // keep source_indices in HashSet to prevent duplicate entries
+            // Keep source indices in a `HashSet` to prevent duplicate entries:
             let mut new_source_indices = HashSet::new();
             let source_field_names = source_indices
                 .iter()
                 .map(|&idx| fields[idx].qualified_name())
                 .collect::<Vec<_>>();
             for (idx, group_by_expr_name) in group_by_expr_names.iter().enumerate() {
-                // When one of the input determinant expressions, matches with the GROUP
-                // BY expression, add the index of the GROUP BY expression as
-                // a new determinant key.
+                // When one of the input determinant expressions matches with
+                // the GROUP BY expression, add the index of the GROUP BY
+                // expression as a new determinant key:
                 if source_field_names.contains(group_by_expr_name) {
                     new_source_indices.insert(idx);
                 }
             }
-            // All of the composite, indices occur in group by expression
+            // All of the composite indices occur in the GROUP BY expression:
             if new_source_indices.len() == source_indices.len() {
                 aggregate_func_dependencies.push(
                     FunctionalDependence::new(
@@ -443,20 +456,19 @@ impl DFSchema {
                 );
             }
         }
-        // Guaranteed to be unique after aggregation, since it has a single
-        // expression (e.g. GROUP BY a):
+        // If we have a single GROUP BY key, we can guarantee uniqueness after
+        // aggregation:
         if group_by_expr_names.len() == 1 {
-            // If `source_indices` contain 0, delete this functional group
-            // because it will be added anyway with mode `Dependency::Single`
-            // flag set.
+            // If `source_indices` contain 0, delete this functional dependency
+            // as it will be added anyway with mode `Dependency::Single`:
             if let Some(idx) = aggregate_func_dependencies
                 .iter()
                 .position(|item| item.source_indices.contains(&0))
             {
-                // delete the functional dependency that contains 0th idx.
+                // Delete the functional dependency that contains zeroth idx:
                 aggregate_func_dependencies.remove(idx);
             }
-            // Add a new functional dependence that is associated with whole table.
+            // Add a new functional dependency associated with the whole table:
             aggregate_func_dependencies.push(
                 // Safest behaviour to do is add new functional dependency as nullable.
                 // TODO: use nullable property of group by expr here.
@@ -472,25 +484,25 @@ impl DFSchema {
         group_by_expr_names: &[String],
     ) -> Option<Vec<usize>> {
         let mut combined_target_indices = HashSet::new();
-        let func_dependencies = self.functional_dependencies();
+        let dependencies = self.functional_dependencies();
         let field_names = self
             .fields()
             .iter()
-            .map(|elem| elem.qualified_name())
+            .map(|item| item.qualified_name())
             .collect::<Vec<_>>();
         for FunctionalDependence {
             source_indices,
             target_indices,
             ..
-        } in &func_dependencies.inner
+        } in &dependencies.deps
         {
             let source_key_names = source_indices
                 .iter()
                 .map(|id_key_idx| field_names[*id_key_idx].clone())
                 .collect::<Vec<_>>();
-            // group by expression contains a determinant from a functional dependency
-            // In this case, we can use associated fields after aggregation
-            // even if they are not part of group by expressions
+            // If the GROUP BY expression contains a determinant key, we can use
+            // the associated fields after aggregation even if they are not part
+            // of the GROUP BY expression.
             if source_key_names
                 .iter()
                 .all(|source_key_name| group_by_expr_names.contains(source_key_name))
@@ -502,7 +514,7 @@ impl DFSchema {
             .then_some(combined_target_indices.iter().cloned().collect::<Vec<_>>())
     }
 
-    /// Assign functional dependencies
+    /// Assigns functional dependencies.
     pub fn with_functional_dependencies(
         mut self,
         functional_dependencies: FunctionalDependencies,

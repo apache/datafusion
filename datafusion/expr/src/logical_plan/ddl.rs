@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::OwnedSchemaReference;
-use datafusion_common::{
-    parsers::CompressionTypeVariant, Constraint, DFSchemaRef, OwnedTableReference,
-};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{
@@ -27,6 +23,11 @@ use std::{
 };
 
 use crate::{Expr, LogicalPlan};
+
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{
+    Constraint, DFSchemaRef, OwnedSchemaReference, OwnedTableReference,
+};
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Clone, PartialEq, Eq, Hash)]
