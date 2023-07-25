@@ -772,14 +772,9 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Binary, Binary) | (Utf8, Binary) | (Binary, Utf8) => Some(Binary),
-        (LargeBinary, LargeBinary)
-        | (Binary, LargeBinary)
-        | (LargeBinary, Binary)
-        | (Utf8, LargeBinary)
-        | (LargeBinary, Utf8)
-        | (LargeUtf8, LargeBinary)
-        | (LargeBinary, LargeUtf8) => Some(LargeBinary),
+        (Binary | Utf8, Binary) | (Binary, Utf8) => Some(Binary),
+        (LargeBinary | Binary | Utf8 | LargeUtf8, LargeBinary)
+        | (LargeBinary, Binary | Utf8 | LargeUtf8) => Some(LargeBinary),
         _ => None,
     }
 }
