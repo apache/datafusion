@@ -1044,6 +1044,30 @@ async fn unnest_columns() -> Result<()> {
     Ok(())
 }
 
+
+#[tokio::test]
+async fn unnest_column_nulls() -> Result<()> {
+    let df = table_with_lists_and_nulls().await?;
+    let results = df.clone().collect().await?;
+    let expected = vec![
+        "+----------+------------------------------------------------+--------------------+",
+        "+----------+------------------------------------------------+--------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Unnest ignoring nulls
+    let results = df
+        .unnest_column("points")?
+        .collect().await?;
+    let expected = vec![
+        "+----------+------------------------------------------------+--------------------+",
+        "+----------+------------------------------------------------+--------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn unnest_fixed_list() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
@@ -1358,6 +1382,34 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
     ctx.register_batch("shapes", batch)?;
     ctx.table("shapes").await
 }
+
+
+/// Create a data frame that contains nested types.
+///
+/// Create a data frame with a list
+/// - list if integers
+/// - A list of tags.
+async fn table_with_lists_and_nulls() -> Result<DataFrame> {
+
+    let mut list_builder = ListBuilder::new(UInt32Builder::new());
+    let mut id_builder = StringBuilder::new();
+
+
+    id_builder.append_value("A");
+    list_builder.values().append_value(1);
+    list_builder.values().append_value(2);
+    list_builder.append(true);
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("list", Arc::new(list_builder.finish()) as ArrayRef),
+        ("id", Arc::new(id_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    ctx.table("shapes").await
+}
+
 
 pub async fn register_alltypes_tiny_pages_parquet(ctx: &SessionContext) -> Result<()> {
     let testdata = parquet_test_data();
