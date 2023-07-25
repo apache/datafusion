@@ -55,15 +55,23 @@ pub struct UnnestExec {
     schema: SchemaRef,
     /// The unnest column
     column: Column,
+    /// Should input nulls be preserved
+    preserve_nulls: bool,
 }
 
 impl UnnestExec {
     /// Create a new [UnnestExec].
-    pub fn new(input: Arc<dyn ExecutionPlan>, column: Column, schema: SchemaRef) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        column: Column,
+        schema: SchemaRef,
+        preserve_nulls: bool,
+    ) -> Self {
         UnnestExec {
             input,
             schema,
             column,
+            preserve_nulls,
         }
     }
 }
@@ -110,6 +118,7 @@ impl ExecutionPlan for UnnestExec {
             children[0].clone(),
             self.column.clone(),
             self.schema.clone(),
+            self.preserve_nulls,
         )))
     }
 

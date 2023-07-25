@@ -998,7 +998,12 @@ pub fn from_plan(
             Ok(plan.clone())
         }
         LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
-        LogicalPlan::Unnest(Unnest { column, schema, .. }) => {
+        LogicalPlan::Unnest(Unnest {
+            column,
+            schema,
+            preserve_nulls,
+            ..
+        }) => {
             // Update schema with unnested column type.
             let input = Arc::new(inputs[0].clone());
             let nested_field = input.schema().field_from_column(column)?;
@@ -1025,6 +1030,7 @@ pub fn from_plan(
                 input,
                 column: column.clone(),
                 schema,
+                preserve_nulls: *preserve_nulls,
             }))
         }
     }

@@ -1226,8 +1226,12 @@ impl LogicalPlan {
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }
-                    LogicalPlan::Unnest(Unnest { column, .. }) => {
-                        write!(f, "Unnest: {column}")
+                    LogicalPlan::Unnest(Unnest {
+                        column,
+                        preserve_nulls,
+                        ..
+                    }) => {
+                        write!(f, "Unnest: {column} preserve_nulls: {preserve_nulls}")
                     }
                 }
             }
@@ -1812,6 +1816,8 @@ pub struct Unnest {
     pub column: Column,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
+    /// Should nulls in the input be preserved? Defaults to false
+    pub preserve_nulls: bool,
 }
 
 #[cfg(test)]

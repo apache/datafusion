@@ -942,6 +942,7 @@ async fn right_anti_filter_push_down() -> Result<()> {
 
 #[tokio::test]
 async fn unnest_columns() -> Result<()> {
+    let preserve_nulls = true;
     const NUM_ROWS: usize = 4;
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.collect().await?;
@@ -959,7 +960,7 @@ async fn unnest_columns() -> Result<()> {
 
     // Unnest tags
     let df = table_with_nested_types(NUM_ROWS).await?;
-    let results = df.unnest_column("tags")?.collect().await?;
+    let results = df.unnest_column("tags", preserve_nulls)?.collect().await?;
     let expected = vec![
         "+----------+------------------------------------------------+------+",
         "| shape_id | points                                         | tags |",
@@ -977,12 +978,15 @@ async fn unnest_columns() -> Result<()> {
 
     // Test aggregate results for tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
-    let count = df.unnest_column("tags")?.count().await?;
+    let count = df.unnest_column("tags", preserve_nulls)?.count().await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
     // Unnest points
     let df = table_with_nested_types(NUM_ROWS).await?;
-    let results = df.unnest_column("points")?.collect().await?;
+    let results = df
+        .unnest_column("points", preserve_nulls)?
+        .collect()
+        .await?;
     let expected = vec![
         "+----------+-----------------+--------------------+",
         "| shape_id | points          | tags               |",
@@ -1001,14 +1005,14 @@ async fn unnest_columns() -> Result<()> {
 
     // Test aggregate results for points.
     let df = table_with_nested_types(NUM_ROWS).await?;
-    let count = df.unnest_column("points")?.count().await?;
+    let count = df.unnest_column("points", preserve_nulls)?.count().await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
     // Unnest both points and tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df
-        .unnest_column("points")?
-        .unnest_column("tags")?
+        .unnest_column("points", preserve_nulls)?
+        .unnest_column("tags", preserve_nulls)?
         .collect()
         .await?;
     let expected = vec![
@@ -1035,8 +1039,8 @@ async fn unnest_columns() -> Result<()> {
     // Test aggregate results for points and tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
     let count = df
-        .unnest_column("points")?
-        .unnest_column("tags")?
+        .unnest_column("points", preserve_nulls)?
+        .unnest_column("tags", preserve_nulls)?
         .count()
         .await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
@@ -1044,26 +1048,57 @@ async fn unnest_columns() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn unnest_column_nulls() -> Result<()> {
     let df = table_with_lists_and_nulls().await?;
     let results = df.clone().collect().await?;
     let expected = vec![
-        "+----------+------------------------------------------------+--------------------+",
-        "+----------+------------------------------------------------+--------------------+",
+        "+--------+----+",
+        "| list   | id |",
+        "+--------+----+",
+        "| [1, 2] | A  |",
+        "|        | B  |",
+        "| []     | C  |",
+        "| [3]    | D  |",
+        "+--------+----+",
     ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_batches_eq!(expected, &results);
 
-    // Unnest ignoring nulls
+    // Unnest, preserving nulls (row with B is preserved)
+    let preserve_nulls = true;
     let results = df
-        .unnest_column("points")?
-        .collect().await?;
+        .clone()
+        .unnest_column("list", preserve_nulls)?
+        .collect()
+        .await?;
     let expected = vec![
-        "+----------+------------------------------------------------+--------------------+",
-        "+----------+------------------------------------------------+--------------------+",
+        "+------+----+",
+        "| list | id |",
+        "+------+----+",
+        "| 1    | A  |",
+        "| 2    | A  |",
+        "|      | B  |",
+        "| 3    | D  |",
+        "+------+----+",
     ];
-    assert_batches_sorted_eq!(expected, &results);
+    assert_batches_eq!(expected, &results);
+
+    // Unnest without preserving
+    // NOTE this is incorrect,
+    // see https://github.com/apache/arrow-datafusion/pull/7002
+    let preserve_nulls = false;
+    let results = df.unnest_column("list", preserve_nulls)?.collect().await?;
+    let expected = vec![
+        "+------+----+",
+        "| list | id |",
+        "+------+----+",
+        "| 1    | A  |",
+        "| 2    | A  |",
+        "|      | B  |", // this row should not be here
+        "| 3    | D  |",
+        "+------+----+",
+    ];
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }
@@ -1116,7 +1151,8 @@ async fn unnest_fixed_list() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &results);
 
-    let results = df.unnest_column("tags")?.collect().await?;
+    let preserve_nulls = true;
+    let results = df.unnest_column("tags", preserve_nulls)?.collect().await?;
     let expected = vec![
         "+----------+-------+",
         "| shape_id | tags  |",
@@ -1180,7 +1216,8 @@ async fn unnest_fixed_list_nonull() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &results);
 
-    let results = df.unnest_column("tags")?.collect().await?;
+    let preserve_nulls = true;
+    let results = df.unnest_column("tags", preserve_nulls)?.collect().await?;
     let expected = vec![
         "+----------+-------+",
         "| shape_id | tags  |",
@@ -1223,8 +1260,9 @@ async fn unnest_aggregate_columns() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     let df = table_with_nested_types(NUM_ROWS).await?;
+    let preserve_nulls = true;
     let results = df
-        .unnest_column("tags")?
+        .unnest_column("tags", preserve_nulls)?
         .aggregate(vec![], vec![count(col("tags"))])?
         .collect()
         .await?;
@@ -1383,22 +1421,29 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
     ctx.table("shapes").await
 }
 
-
-/// Create a data frame that contains nested types.
-///
-/// Create a data frame with a list
-/// - list if integers
-/// - A list of tags.
+/// A a data frame that a list of integers and string IDs
 async fn table_with_lists_and_nulls() -> Result<DataFrame> {
-
     let mut list_builder = ListBuilder::new(UInt32Builder::new());
     let mut id_builder = StringBuilder::new();
 
-
-    id_builder.append_value("A");
+    // [1, 2],  A
     list_builder.values().append_value(1);
     list_builder.values().append_value(2);
     list_builder.append(true);
+    id_builder.append_value("A");
+
+    // NULL, B
+    list_builder.append(false);
+    id_builder.append_value("B");
+
+    // [],  C
+    list_builder.append(true);
+    id_builder.append_value("C");
+
+    // [3], D
+    list_builder.values().append_value(3);
+    list_builder.append(true);
+    id_builder.append_value("D");
 
     let batch = RecordBatch::try_from_iter(vec![
         ("list", Arc::new(list_builder.finish()) as ArrayRef),
@@ -1409,7 +1454,6 @@ async fn table_with_lists_and_nulls() -> Result<DataFrame> {
     ctx.register_batch("shapes", batch)?;
     ctx.table("shapes").await
 }
-
 
 pub async fn register_alltypes_tiny_pages_parquet(ctx: &SessionContext) -> Result<()> {
     let testdata = parquet_test_data();

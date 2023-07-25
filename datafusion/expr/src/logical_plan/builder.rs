@@ -1021,9 +1021,20 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Unnest the given column.
-    pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        Ok(Self::from(unnest(self.plan, column.into())?))
+    /// Unnest the given column, optionally preserving nulls. See
+    /// [Unnest] for examples and more details.
+    ///
+    /// [Unnest]: crate::logical_expr::Unnest
+    pub fn unnest_column(
+        self,
+        column: impl Into<Column>,
+        preserve_nulls: bool,
+    ) -> Result<Self> {
+        Ok(Self::from(unnest(
+            self.plan,
+            column.into(),
+            preserve_nulls,
+        )?))
     }
 }
 
@@ -1366,8 +1377,15 @@ impl TableSource for LogicalTableSource {
     }
 }
 
-/// Create an unnest plan.
-pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
+/// Create an unnest plan for the given column, optionally preserving nulls. See
+/// [Unnest] for examples and more details.
+///
+/// [Unnest]: crate::logical_expr::Unnest
+pub fn unnest(
+    input: LogicalPlan,
+    column: Column,
+    preserve_nulls: bool,
+) -> Result<LogicalPlan> {
     let unnest_field = input.schema().field_from_column(&column)?;
 
     // Extract the type of the nested field in the list.
@@ -1409,6 +1427,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         input: Arc::new(input),
         column: unnested_field.qualified_column(),
         schema,
+        preserve_nulls,
     }))
 }
 
