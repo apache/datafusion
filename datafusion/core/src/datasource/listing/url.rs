@@ -20,11 +20,12 @@ use datafusion_common::{DataFusionError, Result};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
+use home;
 use itertools::Itertools;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use percent_encoding;
-use std::process::Command;
+use std::env;
 use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
@@ -92,28 +93,36 @@ impl ListingTableUrl {
     /// * Home directory expansion: "~/test.csv" expands to "/Users/user1/test.csv"
     /// * Environment variable expansion: "$HOME/$DATA/test.csv" expands to
     /// "/Users/user1/data/test.csv"
-    fn expand_path_prefix(prefix: &str) -> Result<String, DataFusionError> {
-        let error_msg = format!("Failed to perform shell expansion in path: {prefix}");
+    fn expand_path_prefix(path: &str) -> Result<String, DataFusionError> {
+        let home_dir = home::home_dir()
+            .unwrap()
+            .into_os_string()
+            .into_string()
+            .unwrap();
 
-        let expanded_dir_output = Command::new("sh")
-            .arg("-c")
-            .arg(&format!("echo {prefix}"))
-            .output()
-            .map_err(|_| DataFusionError::Internal(error_msg.clone()))?;
+        let path = path.replace('~', &home_dir);
 
-        let expand_dir_result = if expanded_dir_output.status.success() {
-            String::from_utf8(expanded_dir_output.stdout)
-                .map(|mut s| {
-                    assert!(s.ends_with('\n')); // echo will append trailing \n
-                    s.truncate(s.len() - 1);
-                    s
-                })
-                .map_err(|_| DataFusionError::Internal(String::new()))
-        } else {
-            Err(DataFusionError::Internal(String::new()))
-        };
+        let parts = path.split("/").collect::<Vec<_>>();
+        let mut expanded_parts = Vec::new();
 
-        expand_dir_result.map_err(|_| DataFusionError::Internal(error_msg))
+        for part in parts {
+            if part.starts_with('$') {
+                let envvar_name = &part[1..];
+                match env::var(envvar_name) {
+                    Ok(value) => expanded_parts.push(value),
+                    Err(_) => {
+                        return Err(DataFusionError::Internal(format!(
+                            "Failed to perform shell expansion in path: {}\nUnable to find environment variable ${}",
+                            path, envvar_name
+                        )))
+                    }
+                }
+            } else {
+                expanded_parts.push(part.to_string());
+            }
+        }
+
+        Ok(expanded_parts.join("/"))
     }
 
     /// Creates a new [`ListingTableUrl`] interpreting `s` as a filesystem path
@@ -372,7 +381,7 @@ mod tests {
 
         #[cfg(not(target_os = "windows"))]
         #[test]
-        fn test_path_homedir_expansion() -> Result<()> {
+        fn test_path_expansion_homedir() -> Result<()> {
             let expanded_home_dir = ListingTableUrl::expand_path_prefix("~")?;
             let home_dir = home::home_dir()
                 .unwrap()
@@ -389,7 +398,7 @@ mod tests {
 
         #[cfg(not(target_os = "windows"))]
         #[tokio::test]
-        async fn test_path_envvar_expansion() -> Result<()> {
+        async fn test_path_expansion_envvar() -> Result<()> {
             let ctx = SessionContext::new();
             let testdata = test_util::arrow_test_data();
             env::set_var("TESTDIR", testdata);
@@ -414,6 +423,30 @@ mod tests {
             ];
             assert_batches_eq!(expected, &query_result);
             Ok(())
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        #[tokio::test]
+        async fn test_path_expansion_invalid() {
+            let ctx = SessionContext::new();
+            let result = ctx
+                .sql(
+                    "CREATE EXTERNAL TABLE foo (
+                  c1 FLOAT NOT NULL,
+                  c2 DOUBLE NOT NULL,
+                  c3 BOOLEAN NOT NULL
+                )
+                STORED AS CSV
+                WITH HEADER ROW
+                LOCATION '~/$INVALID_ENVVAR/foo.csv'",
+                )
+                .await;
+
+            match result {
+                Ok(_) => panic!("Should panic for invalid environment variable."),
+                Err(e) => assert!(format!("{:?}", e)
+                    .contains("Unable to find environment variable $INVALID_ENVVAR")),
+            }
         }
     }
 }
