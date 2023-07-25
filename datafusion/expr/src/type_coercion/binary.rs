@@ -315,6 +315,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -766,6 +767,23 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
     }
 }
 
+/// Coercion rules for Binaries: the type that both lhs and rhs can be
+/// casted to for the purpose of a computation
+fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Binary, Binary) | (Utf8, Binary) | (Binary, Utf8) => Some(Binary),
+        (LargeBinary, LargeBinary)
+        | (Binary, LargeBinary)
+        | (LargeBinary, Binary)
+        | (Utf8, LargeBinary)
+        | (LargeBinary, Utf8)
+        | (LargeUtf8, LargeBinary)
+        | (LargeBinary, LargeUtf8) => Some(LargeBinary),
+        _ => None,
+    }
+}
+
 /// coercion rules for like operations.
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
@@ -1036,10 +1054,13 @@ mod tests {
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), Some(Utf8));
 
-        // Can not coerce values of Binary to int,  cannot support this
+        // Since we can coerce values of Utf8 to Binary can support this
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Binary));
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), None);
+        assert_eq!(
+            dictionary_coercion(&lhs_type, &rhs_type, true),
+            Some(Binary)
+        );
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Utf8;
@@ -1438,6 +1459,70 @@ mod tests {
             DataType::Decimal128(10, 3),
             Operator::GtEq,
             DataType::Decimal128(15, 3)
+        );
+
+        // Binary
+        test_coercion_binary_rule!(
+            DataType::Binary,
+            DataType::Binary,
+            Operator::Eq,
+            DataType::Binary
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Binary,
+            Operator::Eq,
+            DataType::Binary
+        );
+        test_coercion_binary_rule!(
+            DataType::Binary,
+            DataType::Utf8,
+            Operator::Eq,
+            DataType::Binary
+        );
+
+        // LargeBinary
+        test_coercion_binary_rule!(
+            DataType::LargeBinary,
+            DataType::LargeBinary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::Binary,
+            DataType::LargeBinary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeBinary,
+            DataType::Binary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::LargeBinary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeBinary,
+            DataType::Utf8,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeUtf8,
+            DataType::LargeBinary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeBinary,
+            DataType::LargeUtf8,
+            Operator::Eq,
+            DataType::LargeBinary
         );
 
         // TODO add other data type
