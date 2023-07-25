@@ -69,7 +69,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -942,10 +942,9 @@ impl DefaultPhysicalPlanner {
                                 })
                                 .collect::<Vec<_>>();
                             let projection =
-                                logical_plan::Projection::try_new_with_schema(
+                                Projection::try_new(
                                     final_join_result,
                                     Arc::new(join_plan),
-                                    join_schema.clone(),
                                 )?;
                             LogicalPlan::Projection(projection)
                         } else {
