@@ -95,9 +95,16 @@ SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 statement error Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
-# csv_query_array_agg_unsupported
-statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
-SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100
+# array agg can use order by
+query ?
+SELECT array_agg(c13 ORDER BY c13)
+FROM
+  (SELECT *
+  FROM aggregate_test_100
+  ORDER BY c13
+  LIMIT 5) as t1
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
 
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
@@ -1222,10 +1229,6 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 3 395 20.789473684211 123 -101 19
 4 29 1.260869565217 123 -117 23
 5 -194 -13.857142857143 118 -101 14
-
-# csv_query_array_agg_unsupported
-statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
-SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
 # csv_query_array_cube_agg_with_overflow
 query TIIRIII
