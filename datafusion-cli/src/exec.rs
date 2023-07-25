@@ -88,7 +88,8 @@ pub async fn exec_from_lines(
     }
 
     // run the left over query if the last statement doesn't contain ‘;’
-    if !query.is_empty() {
+    // ignore if it only consists of '\n'
+    if query.contains(|c| c != '\n') {
         match exec_and_print(ctx, print_options, query).await {
             Ok(_) => {}
             Err(err) => println!("{err}"),
