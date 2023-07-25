@@ -120,7 +120,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         Operator::Divide|
         Operator::Modulo =>  {
             // TODO: this logic would be easier to follow if the functions were inlined
-            if let Some(ret) = mathematics_temporal_result_type(lhs, rhs) {
+            if let Some(ret) = mathematics_temporal_result_type(lhs, rhs, op) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: lhs.clone(),
@@ -130,7 +130,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             } else if let Some(coerced) = temporal_coercion(lhs, rhs) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
-                let ret = mathematics_temporal_result_type(&coerced, &coerced).ok_or_else(|| {
+                let ret = mathematics_temporal_result_type(&coerced, &coerced, op).ok_or_else(|| {
                     DataFusionError::Plan(format!(
                         "Cannot get result type for temporal operation {coerced} {op} {coerced}"
                     ))
@@ -169,6 +169,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
 fn mathematics_temporal_result_type(
     lhs_type: &DataType,
     rhs_type: &DataType,
+    op: &Operator,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::IntervalUnit::*;
@@ -176,12 +177,14 @@ fn mathematics_temporal_result_type(
 
     match (lhs_type, rhs_type) {
         // datetime +/- interval
-        (Interval(_), Timestamp(_, _)) => Some(rhs_type.clone()),
-        (Timestamp(_, _), Interval(_)) => Some(lhs_type.clone()),
-        (Interval(_), Date32) => Some(rhs_type.clone()),
-        (Date32, Interval(_)) => Some(lhs_type.clone()),
-        (Interval(_), Date64) => Some(rhs_type.clone()),
-        (Date64, Interval(_)) => Some(lhs_type.clone()),
+        (Timestamp(_, _) | Date32 | Date64, Interval(_)) => Some(lhs_type.clone()),
+        (Interval(_), Timestamp(_, _) | Date32 | Date64) => {
+            if matches!(op, Operator::Plus) {
+                Some(rhs_type.clone())
+            } else {
+                None
+            }
+        }
         // interval +/-
         (Interval(l), Interval(h)) if l == h => Some(lhs_type.clone()),
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
