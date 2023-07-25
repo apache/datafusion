@@ -18,7 +18,7 @@
 //! Execution plan for reading CSV files
 
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::listing::FileRange;
+use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -34,6 +34,7 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+use tokio::io::AsyncWriteExt;
 
 use super::FileScanConfig;
 
@@ -43,10 +44,8 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::local::LocalFileSystem;
 use object_store::{GetOptions, GetResult, ObjectStore};
 use std::any::Any;
-use std::fs;
 use std::io::Cursor;
 use std::ops::Range;
-use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::JoinSet;
@@ -60,6 +59,8 @@ pub struct CsvExec {
     projected_output_ordering: Vec<LexOrdering>,
     has_header: bool,
     delimiter: u8,
+    quote: u8,
+    escape: Option<u8>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Compression type of the file associated with CsvExec
@@ -72,6 +73,8 @@ impl CsvExec {
         base_config: FileScanConfig,
         has_header: bool,
         delimiter: u8,
+        quote: u8,
+        escape: Option<u8>,
         file_compression_type: FileCompressionType,
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
@@ -84,6 +87,8 @@ impl CsvExec {
             projected_output_ordering,
             has_header,
             delimiter,
+            quote,
+            escape,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
         }
@@ -100,6 +105,16 @@ impl CsvExec {
     /// A column delimiter
     pub fn delimiter(&self) -> u8 {
         self.delimiter
+    }
+
+    /// The quote character
+    pub fn quote(&self) -> u8 {
+        self.quote
+    }
+
+    /// The escape character
+    pub fn escape(&self) -> Option<u8> {
+        self.escape
     }
 
     /// Redistribute files across partitions according to their size
@@ -204,6 +219,8 @@ impl ExecutionPlan for CsvExec {
             file_projection: self.base_config.file_column_projection_indices(),
             has_header: self.has_header,
             delimiter: self.delimiter,
+            quote: self.quote,
+            escape: self.escape,
             object_store,
         });
 
@@ -233,6 +250,8 @@ pub struct CsvConfig {
     file_projection: Option<Vec<usize>>,
     has_header: bool,
     delimiter: u8,
+    quote: u8,
+    escape: Option<u8>,
     object_store: Arc<dyn ObjectStore>,
 }
 
@@ -244,6 +263,7 @@ impl CsvConfig {
         file_projection: Option<Vec<usize>>,
         has_header: bool,
         delimiter: u8,
+        quote: u8,
         object_store: Arc<dyn ObjectStore>,
     ) -> Self {
         Self {
@@ -252,6 +272,8 @@ impl CsvConfig {
             file_projection,
             has_header,
             delimiter,
+            quote,
+            escape: None,
             object_store,
         }
     }
@@ -262,8 +284,11 @@ impl CsvConfig {
         let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
             .has_header(self.has_header)
             .with_delimiter(self.delimiter)
+            .with_quote(self.quote)
             .with_batch_size(self.batch_size);
-
+        if let Some(escape) = self.escape {
+            builder = builder.with_escape(escape);
+        }
         if let Some(p) = &self.file_projection {
             builder = builder.with_projection(p.clone());
         }
@@ -566,30 +591,37 @@ pub async fn plan_to_csv(
     path: impl AsRef<str>,
 ) -> Result<()> {
     let path = path.as_ref();
-    // create directory to contain the CSV files (one per partition)
-    let fs_path = Path::new(path);
-    if let Err(e) = fs::create_dir(fs_path) {
-        return Err(DataFusionError::Execution(format!(
-            "Could not create directory {path}: {e:?}"
-        )));
-    }
-
+    let parsed = ListingTableUrl::parse(path)?;
+    let object_store_url = parsed.object_store();
+    let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
-        let plan = plan.clone();
-        let filename = format!("part-{i}.csv");
-        let path = fs_path.join(filename);
-        let file = fs::File::create(path)?;
-        let mut writer = csv::Writer::new(file);
-        let stream = plan.execute(i, task_ctx.clone())?;
+        let storeref = store.clone();
+        let plan: Arc<dyn ExecutionPlan> = plan.clone();
+        let filename = format!("{}/part-{i}.csv", parsed.prefix());
+        let file = object_store::path::Path::parse(filename)?;
 
+        let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let result: Result<()> = stream
-                .map(|batch| writer.write(&batch?))
-                .try_collect()
+            let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
+            let mut buffer = Vec::with_capacity(1024);
+            //only write headers on first iteration
+            let mut write_headers = true;
+            while let Some(batch) = stream.next().await.transpose()? {
+                let mut writer = csv::WriterBuilder::new()
+                    .has_headers(write_headers)
+                    .build(buffer);
+                writer.write(&batch)?;
+                buffer = writer.into_inner();
+                multipart_writer.write_all(&buffer).await?;
+                buffer.clear();
+                //prevent writing headers more than once
+                write_headers = false;
+            }
+            multipart_writer
+                .shutdown()
                 .await
-                .map_err(DataFusionError::from);
-            result
+                .map_err(DataFusionError::from)
         });
     }
 
@@ -656,7 +688,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.projection = Some(vec![0, 2, 4]);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -712,7 +751,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.projection = Some(vec![4, 0, 2]);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -768,7 +814,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.limit = Some(5);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(13, csv.projected_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
@@ -824,7 +877,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.limit = Some(5);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(14, csv.base_config.file_schema.fields().len());
         assert_eq!(14, csv.projected_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
@@ -878,7 +938,14 @@ mod tests {
 
         // we don't have `/date=xx/` in the path but that is ok because
         // partitions are resolved during scan anyway
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(2, csv.projected_schema.fields().len());
         assert_eq!(2, csv.schema().fields().len());
@@ -964,7 +1031,14 @@ mod tests {
         .unwrap();
 
         let config = partitioned_csv_config(file_schema, file_groups).unwrap();
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();
@@ -1033,14 +1107,20 @@ mod tests {
     #[tokio::test]
     async fn write_csv_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
+
+        // register a local file system object store
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.runtime_env().register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
-        let tmp_dir = TempDir::new()?;
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+
+        let out_dir_url = "file://local/out";
         let e = df
-            .write_csv(&out_dir)
+            .write_csv(out_dir_url)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -1064,10 +1144,18 @@ mod tests {
         )
         .await?;
 
+        // register a local file system object store
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+
+        ctx.runtime_env().register_object_store(&local_url, local);
+
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_csv(&out_dir).await?;
+        df.write_csv(out_dir_url).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();

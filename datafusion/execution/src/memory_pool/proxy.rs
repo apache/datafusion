@@ -84,7 +84,7 @@ impl<T> RawTableAllocExt for RawTable<T> {
             Err(x) => {
                 // need to request more memory
 
-                let bump_elements = (self.capacity() * 2).max(16);
+                let bump_elements = self.capacity().max(16);
                 let bump_size = bump_elements * std::mem::size_of::<T>();
                 *accounting = (*accounting).checked_add(bump_size).expect("overflow");
 

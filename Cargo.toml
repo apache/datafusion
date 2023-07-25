@@ -17,7 +17,7 @@
 
 [workspace]
 exclude = ["datafusion-cli"]
-members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/proto", "datafusion/proto/gen", "datafusion/row", "datafusion/sql", "datafusion/substrait", "datafusion-examples", "test-utils", "benchmarks",
+members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/substrait", "datafusion-examples", "test-utils", "benchmarks",
 ]
 resolver = "2"
 
@@ -29,7 +29,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.64"
-version = "27.0.0"
+version = "28.0.0"
 
 [workspace.dependencies]
 arrow = { version = "43.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
@@ -38,7 +38,7 @@ arrow-buffer = { version = "43.0.0", default-features = false }
 arrow-flight = { version = "43.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "43.0.0", default-features = false }
 parquet = { version = "43.0.0", features = ["arrow", "async", "object_store"] }
-sqlparser = { version = "0.35", features = ["visitor"] }
+sqlparser = { version = "0.36.1", features = ["visitor"] }
 
 [profile.release]
 codegen-units = 1

@@ -133,9 +133,7 @@ impl ExprSchemable for Expr {
                 ref right,
                 ref op,
             }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
-            Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
-                Ok(DataType::Boolean)
-            }
+            Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
                 data_type.clone().ok_or_else(|| {
                     DataFusionError::Plan(
@@ -256,7 +254,6 @@ impl ExprSchemable for Expr {
                 ..
             }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
             Expr::Like(Like { expr, pattern, .. })
-            | Expr::ILike(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }

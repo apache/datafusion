@@ -883,6 +883,8 @@ mod tests {
             },
             true,
             0,
+            b'"',
+            None,
             FileCompressionType::UNCOMPRESSED,
         ))
     }

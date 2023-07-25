@@ -330,13 +330,17 @@
 //! ```
 //!
 //! [`ExecutionPlan`]s process data using the [Apache Arrow] memory
-//! format, largely with functions from the [arrow] crate. When
-//! [`execute`] is called, a [`SendableRecordBatchStream`] is returned
-//! that produces the desired output as a [`Stream`] of [`RecordBatch`]es.
+//! format, making heavy use of functions from the [arrow]
+//! crate. Calling [`execute`] produces 1 or more partitions of data,
+//! consisting an operator that implements
+//! [`SendableRecordBatchStream`].
 //!
-//! Values are
-//! represented with [`ColumnarValue`], which are either single
-//! constant values ([`ScalarValue`]) or Arrow Arrays ([`ArrayRef`]).
+//! Values are represented with [`ColumnarValue`], which are either
+//! [`ScalarValue`] (single constant values) or [`ArrayRef`] (Arrow
+//! Arrays).
+//!
+//! Balanced parallelism is achieved using [`RepartitionExec`], which
+//! implements a [Volcano style] "Exchange".
 //!
 //! [`execute`]: physical_plan::ExecutionPlan::execute
 //! [`SendableRecordBatchStream`]: crate::physical_plan::SendableRecordBatchStream
@@ -345,9 +349,10 @@
 //! [`ArrayRef`]: arrow::array::ArrayRef
 //! [`Stream`]: futures::stream::Stream
 //!
-//!
 //! See the [implementors of `ExecutionPlan`] for a list of physical operators available.
 //!
+//! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
+//! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
 //!
 //! ## State Management and Configuration
@@ -393,7 +398,6 @@
 //! * [datafusion_execution]: State and structures needed for execution
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
-//! * [datafusion_row]: Row based representation
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
 //!
 //! [sqlparser]: https://docs.rs/sqlparser/latest/sqlparser
@@ -461,11 +465,6 @@ pub mod optimizer {
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr {
     pub use datafusion_physical_expr::*;
-}
-
-/// re-export of [`datafusion_row`] crate
-pub mod row {
-    pub use datafusion_row::*;
 }
 
 /// re-export of [`datafusion_sql`] crate

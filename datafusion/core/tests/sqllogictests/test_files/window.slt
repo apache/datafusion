@@ -714,8 +714,13 @@ LIMIT 5
 26861 3
 
 
-#fn window_frame_ranges_preceding_following
-statement error DataFusion error: Internal error: Operator \- is not implemented for types
+# fn window_frame_ranges_preceding_following
+# when value is outside type range (10000 is outside range of tiny int (type of c2)),
+# we should treat values as infinite, hence
+# "SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),"
+# is functionally equivalent to
+# "SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),"
+query III
 SELECT
 SUM(c4) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
 SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),
@@ -723,6 +728,13 @@ COUNT(*) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
 FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
+----
+52276 781 56
+260620 781 63
+-28623 781 37
+260620 781 63
+260620 781 63
+
 
 
 #fn window_frame_ranges_ntile
@@ -927,23 +939,6 @@ COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECE
 FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
-
-
-#fn window_frame_groups_preceding_following_desc
-query III
-SELECT
-SUM(c4) OVER(ORDER BY c2 DESC GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-SUM(c3) OVER(ORDER BY c2 DESC GROUPS BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),
-COUNT(*) OVER(ORDER BY c2 DESC GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-FROM aggregate_test_100
-ORDER BY c9
-LIMIT 5
-----
-52276 781 56
-260620 781 63
--28623 781 37
-260620 781 63
-260620 781 63
 
 #fn window_frame_groups_order_by_null_desc
 query I
@@ -3106,6 +3101,95 @@ CoalesceBatchesExec: target_batch_size=4096
 ------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, ROW_NUMBER() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@5 as rn1]
 --------BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+# this is a negative test for asserting that window functions (other than ROW_NUMBER)
+# are not added to ordering equivalence
+# physical plan should contain SortExec.
+query TT
+EXPLAIN SELECT c9, sum1 FROM (SELECT c9,
+                       SUM(c9) OVER(ORDER BY c9 DESC) as sum1
+                       FROM aggregate_test_100
+                       ORDER BY c9 DESC)
+       ORDER BY sum1, c9 DESC
+       LIMIT 5
+----
+logical_plan
+Limit: skip=0, fetch=5
+--Sort: sum1 ASC NULLS LAST, aggregate_test_100.c9 DESC NULLS FIRST, fetch=5
+----Sort: aggregate_test_100.c9 DESC NULLS FIRST
+------Projection: aggregate_test_100.c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS sum1
+--------WindowAggr: windowExpr=[[SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+----------TableScan: aggregate_test_100 projection=[c9]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+--SortExec: fetch=5, expr=[sum1@1 ASC NULLS LAST,c9@0 DESC]
+----ProjectionExec: expr=[c9@0 as c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as sum1]
+------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+--------SortExec: expr=[c9@0 DESC]
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], has_header=true
+
+# Query below should work when its input is unbounded
+# because ordering of ROW_NUMBER, RANK result is added to the ordering equivalence
+# and final plan doesn't contain SortExec.
+query IIII
+SELECT a, d, rn1, rank1 FROM (SELECT a, d,
+                       ROW_NUMBER() OVER(ORDER BY a ASC) as rn1,
+                       RANK() OVER(ORDER BY a ASC) as rank1
+                       FROM annotated_data_infinite2
+                       ORDER BY a ASC)
+       ORDER BY rn1, rank1, a ASC
+       LIMIT 5
+----
+0 0 1 1
+0 2 2 1
+0 0 3 1
+0 0 4 1
+0 1 5 1
+
+# this is a negative test for asserting that ROW_NUMBER is not
+# added to the ordering equivalence when it contains partition by.
+# physical plan should contain SortExec. Since source is unbounded
+# pipeline checker should raise error, when plan contains SortExec.
+statement error DataFusion error: PipelineChecker
+SELECT a, d, rn1 FROM (SELECT a, d,
+                       ROW_NUMBER() OVER(PARTITION BY d ORDER BY a ASC) as rn1
+                       FROM annotated_data_infinite2
+                       ORDER BY a ASC)
+       ORDER BY rn1, a ASC
+       LIMIT 5
+
+# when partition by expressions match with existing ordering
+# row number can be appended to existing ordering
+# below query should work, without breaking pipeline.
+query III
+SELECT a, d, rn1 FROM (SELECT a, b, c, d,
+                       ROW_NUMBER() OVER(PARTITION BY b, c, a) as rn1
+                       FROM annotated_data_infinite2
+                       ORDER BY a ASC)
+       ORDER BY a, b, c, rn1
+       LIMIT 5
+----
+0 0 1
+0 2 1
+0 0 1
+0 0 1
+0 1 1
+
+# projection should propagate ordering equivalence successfully
+# when expression contains alias
+query III
+SELECT a_new, d, rn1 FROM (SELECT d, a as a_new,
+                       ROW_NUMBER() OVER(ORDER BY a ASC) as rn1
+                       FROM annotated_data_infinite2
+                       ORDER BY a_new ASC)
+       ORDER BY a_new ASC, rn1
+       LIMIT 5
+----
+0 0 1
+0 2 2
+0 0 3
+0 0 4
+0 1 5
 
 statement ok
 drop table annotated_data_finite2

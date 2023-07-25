@@ -617,9 +617,9 @@ fn select_nested_with_filters() {
 fn table_with_column_alias() {
     let sql = "SELECT a, b, c
                    FROM lineitem l (a, b, c)";
-    let expected = "Projection: a, b, c\
-        \n  Projection: l.l_item_id AS a, l.l_description AS b, l.price AS c\
-        \n    SubqueryAlias: l\
+    let expected = "Projection: l.a, l.b, l.c\
+        \n  SubqueryAlias: l\
+        \n    Projection: lineitem.l_item_id AS a, lineitem.l_description AS b, lineitem.price AS c\
         \n      TableScan: lineitem";
 
     quick_test(sql, expected);
@@ -1186,9 +1186,9 @@ fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
 fn select_from_typed_string_values() {
     quick_test(
             "SELECT col1, col2 FROM (VALUES (TIMESTAMP '2021-06-10 17:01:00Z', DATE '2004-04-09')) as t (col1, col2)",
-            "Projection: col1, col2\
-            \n  Projection: t.column1 AS col1, t.column2 AS col2\
-            \n    SubqueryAlias: t\
+            "Projection: t.col1, t.col2\
+            \n  SubqueryAlias: t\
+            \n    Projection: column1 AS col1, column2 AS col2\
             \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
         );
 }
@@ -2969,9 +2969,9 @@ fn cte_with_column_names() {
         ) \
         SELECT * FROM numbers;";
 
-    let expected = "Projection: a, b, c\
-        \n  Projection: numbers.Int64(1) AS a, numbers.Int64(2) AS b, numbers.Int64(3) AS c\
-        \n    SubqueryAlias: numbers\
+    let expected = "Projection: numbers.a, numbers.b, numbers.c\
+        \n  SubqueryAlias: numbers\
+        \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
         \n      Projection: Int64(1), Int64(2), Int64(3)\
         \n        EmptyRelation";
 
@@ -2987,9 +2987,9 @@ fn cte_with_column_aliases_precedence() {
         ) \
         SELECT * FROM numbers;";
 
-    let expected = "Projection: a, b, c\
-        \n  Projection: numbers.x AS a, numbers.y AS b, numbers.z AS c\
-        \n    SubqueryAlias: numbers\
+    let expected = "Projection: numbers.a, numbers.b, numbers.c\
+        \n  SubqueryAlias: numbers\
+        \n    Projection: x AS a, y AS b, z AS c\
         \n      Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z\
         \n        EmptyRelation";
     quick_test(sql, expected)
@@ -4015,9 +4015,9 @@ fn test_prepare_statement_to_plan_value_list() {
     let sql = "PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);";
 
     let expected_plan = "Prepare: \"my_plan\" [Utf8, Utf8] \
-        \n  Projection: num, letter\
-        \n    Projection: t.column1 AS num, t.column2 AS letter\
-        \n      SubqueryAlias: t\
+        \n  Projection: t.num, t.letter\
+        \n    SubqueryAlias: t\
+        \n      Projection: column1 AS num, column2 AS letter\
         \n        Values: (Int64(1), $1), (Int64(2), $2)";
 
     let expected_dt = "[Utf8, Utf8]";
@@ -4030,9 +4030,9 @@ fn test_prepare_statement_to_plan_value_list() {
         ScalarValue::Utf8(Some("a".to_string())),
         ScalarValue::Utf8(Some("b".to_string())),
     ];
-    let expected_plan = "Projection: num, letter\
-        \n  Projection: t.column1 AS num, t.column2 AS letter\
-        \n    SubqueryAlias: t\
+    let expected_plan = "Projection: t.num, t.letter\
+        \n  SubqueryAlias: t\
+        \n    Projection: column1 AS num, column2 AS letter\
         \n      Values: (Int64(1), Utf8(\"a\")), (Int64(2), Utf8(\"b\"))";
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
@@ -4063,9 +4063,9 @@ fn test_table_alias() {
           (select age from person) t2 \
         ) as f (c1, c2)";
 
-    let expected = "Projection: c1, c2\
-        \n  Projection: f.id AS c1, f.age AS c2\
-        \n    SubqueryAlias: f\
+    let expected = "Projection: f.c1, f.c2\
+        \n  SubqueryAlias: f\
+        \n    Projection: t1.id AS c1, t2.age AS c2\
         \n      CrossJoin:\
         \n        SubqueryAlias: t1\
         \n          Projection: person.id\
