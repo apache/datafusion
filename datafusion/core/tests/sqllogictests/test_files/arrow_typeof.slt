@@ -180,23 +180,29 @@ drop table foo
 
 statement ok
 create table foo as select
-  arrow_cast(100, 'Decimal128(5,2)') as col_d128
-  -- Can't make a decimal 156:
-  -- This feature is not implemented: Can't create a scalar from array of type "Decimal256(3, 2)"
-  --arrow_cast(100, 'Decimal256(5,2)') as col_d256
+  arrow_cast(100, 'Decimal128(5,2)') as col_d128,
+  arrow_cast(100, 'Decimal256(5,2)') as col_d256
 ;
 
 
 ## Ensure each column in the table has the expected type
 
-query T
+query TT
 SELECT
-  arrow_typeof(col_d128)
-  -- arrow_typeof(col_d256),
+  arrow_typeof(col_d128),
+  arrow_typeof(col_d256)
   FROM foo;
 ----
-Decimal128(5, 2)
+Decimal128(5, 2) Decimal256(5, 2)
 
+
+query RR
+SELECT
+  col_d128,
+  col_d256
+  FROM foo;
+----
+100 100.00
 
 statement ok
 drop table foo

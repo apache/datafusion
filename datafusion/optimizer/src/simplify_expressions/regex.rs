@@ -86,13 +86,10 @@ impl OperatorMode {
             expr,
             pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(pattern)))),
             escape_char: None,
+            case_insensitive: self.i,
         };
 
-        if self.i {
-            Expr::ILike(like)
-        } else {
-            Expr::Like(like)
-        }
+        Expr::Like(like)
     }
 
     fn expr_matches_literal(&self, left: Box<Expr>, right: Box<Expr>) -> Expr {

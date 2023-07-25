@@ -24,7 +24,7 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields};
+use crate::utils::{columnize_expr, compare_sort_expr};
 use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
@@ -1321,19 +1321,9 @@ pub fn project(
     }
     validate_unique_names("Projections", projected_expr.iter())?;
 
-    // Update input functional dependencies according to projection.
-    let projected_func_dependencies =
-        project_functional_dependencies(&projected_expr, &plan)?;
-    let input_schema = DFSchema::new_with_metadata(
-        exprlist_to_fields(&projected_expr, &plan)?,
-        plan.schema().metadata().clone(),
-    )?
-    .with_functional_dependencies(projected_func_dependencies);
-
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+    Ok(LogicalPlan::Projection(Projection::try_new(
         projected_expr,
         Arc::new(plan.clone()),
-        DFSchemaRef::new(input_schema),
     )?))
 }
 

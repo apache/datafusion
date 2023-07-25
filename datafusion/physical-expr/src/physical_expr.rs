@@ -15,24 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Schema};
-
-use arrow::record_batch::RecordBatch;
-
-use datafusion_common::utils::DataPtr;
-use datafusion_common::{
-    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
-};
-use datafusion_expr::ColumnarValue;
-
-use std::cmp::Ordering;
-use std::fmt::{Debug, Display};
+use crate::expressions::Column;
+use crate::intervals::cp_solver::PropagationResult;
+use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
+use crate::utils::collect_columns;
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
+use arrow::datatypes::{DataType, Schema};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::DataPtr;
+use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
+use datafusion_expr::ColumnarValue;
 
-use crate::intervals::Interval;
 use std::any::Any;
+use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -78,12 +75,6 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>>;
-
-    /// Return the boundaries of this expression. This method (and all the
-    /// related APIs) are experimental and subject to change.
-    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
-        context
-    }
 
     /// Computes bounds for the expression using interval arithmetic.
     fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
@@ -139,6 +130,143 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 }
 
+/// Attempts to refine column boundaries and compute a selectivity value.
+///
+/// The function accepts boundaries of the input columns in the `context` parameter.
+/// It then tries to tighten these boundaries based on the provided `expr`.
+/// The resulting selectivity value is calculated by comparing the initial and final boundaries.
+/// The computation assumes that the data within the column is uniformly distributed and not sorted.
+///
+/// # Arguments
+///
+/// * `context` - The context holding input column boundaries.
+/// * `expr` - The expression used to shrink the column boundaries.
+///
+/// # Returns
+///
+/// * `AnalysisContext` constructed by pruned boundaries and a selectivity value.
+pub fn analyze(
+    expr: &Arc<dyn PhysicalExpr>,
+    context: AnalysisContext,
+) -> Result<AnalysisContext> {
+    let target_boundaries = context.boundaries.ok_or_else(|| {
+        DataFusionError::Internal("No column exists at the input to filter".to_string())
+    })?;
+
+    let mut graph = ExprIntervalGraph::try_new(expr.clone())?;
+
+    let columns: Vec<Arc<dyn PhysicalExpr>> = collect_columns(expr)
+        .into_iter()
+        .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
+        .collect();
+
+    let target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)> =
+        graph.gather_node_indices(columns.as_slice());
+
+    let mut target_indices_and_boundaries: Vec<(usize, Interval)> =
+        target_expr_and_indices
+            .iter()
+            .filter_map(|(expr, i)| {
+                target_boundaries.iter().find_map(|bound| {
+                    expr.as_any()
+                        .downcast_ref::<Column>()
+                        .filter(|expr_column| bound.column.eq(*expr_column))
+                        .map(|_| (*i, bound.interval.clone()))
+                })
+            })
+            .collect();
+
+    match graph.update_ranges(&mut target_indices_and_boundaries)? {
+        PropagationResult::Success => {
+            shrink_boundaries(expr, graph, target_boundaries, target_expr_and_indices)
+        }
+        PropagationResult::Infeasible => {
+            Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
+        }
+        PropagationResult::CannotPropagate => {
+            Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
+        }
+    }
+}
+
+/// If the `PropagationResult` indicates success, this function calculates the
+/// selectivity value by comparing the initial and final column boundaries.
+/// Following this, it constructs and returns a new `AnalysisContext` with the
+/// updated parameters.
+fn shrink_boundaries(
+    expr: &Arc<dyn PhysicalExpr>,
+    mut graph: ExprIntervalGraph,
+    mut target_boundaries: Vec<ExprBoundaries>,
+    target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
+) -> Result<AnalysisContext> {
+    let initial_boundaries = target_boundaries.clone();
+    target_expr_and_indices.iter().for_each(|(expr, i)| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            if let Some(bound) = target_boundaries
+                .iter_mut()
+                .find(|bound| bound.column.eq(column))
+            {
+                bound.interval = graph.get_interval(*i);
+            };
+        }
+    });
+    let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
+    let (_, root_index) = graph_nodes.first().ok_or_else(|| {
+        DataFusionError::Internal("Error in constructing predicate graph".to_string())
+    })?;
+    let final_result = graph.get_interval(*root_index);
+
+    let selectivity = calculate_selectivity(
+        &final_result.lower.value,
+        &final_result.upper.value,
+        &target_boundaries,
+        &initial_boundaries,
+    )?;
+
+    if !(0.0..=1.0).contains(&selectivity) {
+        return Err(DataFusionError::Internal(format!(
+            "Selectivity is out of limit: {}",
+            selectivity
+        )));
+    }
+
+    Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
+}
+
+/// This function calculates the filter predicate's selectivity by comparing
+/// the initial and pruned column boundaries. Selectivity is defined as the
+/// ratio of rows in a table that satisfy the filter's predicate.
+///
+/// An exact propagation result at the root, i.e. `[true, true]` or `[false, false]`,
+/// leads to early exit (returning a selectivity value of either 1.0 or 0.0). In such
+/// a case, `[true, true]` indicates that all data values satisfy the predicate (hence,
+/// selectivity is 1.0), and `[false, false]` suggests that no data value meets the
+/// predicate (therefore, selectivity is 0.0).
+fn calculate_selectivity(
+    lower_value: &ScalarValue,
+    upper_value: &ScalarValue,
+    target_boundaries: &[ExprBoundaries],
+    initial_boundaries: &[ExprBoundaries],
+) -> Result<f64> {
+    match (lower_value, upper_value) {
+        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Ok(1.0),
+        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => Ok(0.0),
+        _ => {
+            // Since the intervals are assumed uniform and the values
+            // are not correlated, we need to multiply the selectivities
+            // of multiple columns to get the overall selectivity.
+            target_boundaries.iter().enumerate().try_fold(
+                1.0,
+                |acc, (i, ExprBoundaries { interval, .. })| {
+                    let temp =
+                        cardinality_ratio(&initial_boundaries[i].interval, interval)?;
+                    Ok(acc * temp)
+                },
+            )
+        }
+    }
+}
+
 impl Hash for dyn PhysicalExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.dyn_hash(state);
@@ -152,58 +280,42 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// the boundaries for all known columns.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnalysisContext {
-    /// A list of known column boundaries, ordered by the index
-    /// of the column in the current schema.
-    pub column_boundaries: Vec<Option<ExprBoundaries>>,
-    // Result of the current analysis.
-    pub boundaries: Option<ExprBoundaries>,
+    // A list of known column boundaries, ordered by the index
+    // of the column in the current schema.
+    pub boundaries: Option<Vec<ExprBoundaries>>,
+    /// The estimated percentage of rows that this expression would select, if
+    /// it were to be used as a boolean predicate on a filter. The value will be
+    /// between 0.0 (selects nothing) and 1.0 (selects everything).
+    pub selectivity: Option<f64>,
 }
 
 impl AnalysisContext {
-    pub fn new(
-        input_schema: &Schema,
-        column_boundaries: Vec<Option<ExprBoundaries>>,
-    ) -> Self {
-        assert_eq!(input_schema.fields().len(), column_boundaries.len());
+    pub fn new(boundaries: Vec<ExprBoundaries>) -> Self {
         Self {
-            column_boundaries,
-            boundaries: None,
+            boundaries: Some(boundaries),
+            selectivity: None,
         }
     }
 
+    pub fn with_selectivity(mut self, selectivity: f64) -> Self {
+        self.selectivity = Some(selectivity);
+        self
+    }
+
     /// Create a new analysis context from column statistics.
-    pub fn from_statistics(input_schema: &Schema, statistics: &Statistics) -> Self {
-        // Even if the underlying statistics object doesn't have any column level statistics,
-        // we can still create an analysis context with the same number of columns and see whether
-        // we can infer it during the way.
-        let column_boundaries = match &statistics.column_statistics {
-            Some(columns) => columns
-                .iter()
-                .map(ExprBoundaries::from_column)
-                .collect::<Vec<_>>(),
-            None => vec![None; input_schema.fields().len()],
-        };
-        Self::new(input_schema, column_boundaries)
-    }
-
-    pub fn boundaries(&self) -> Option<&ExprBoundaries> {
-        self.boundaries.as_ref()
-    }
-
-    /// Set the result of the current analysis.
-    pub fn with_boundaries(mut self, result: Option<ExprBoundaries>) -> Self {
-        self.boundaries = result;
-        self
-    }
-
-    /// Update the boundaries of a column.
-    pub fn with_column_update(
-        mut self,
-        column: usize,
-        boundaries: ExprBoundaries,
+    pub fn from_statistics(
+        input_schema: &Schema,
+        statistics: &[ColumnStatistics],
     ) -> Self {
-        self.column_boundaries[column] = Some(boundaries);
-        self
+        let mut column_boundaries = vec![];
+        for (idx, stats) in statistics.iter().enumerate() {
+            column_boundaries.push(ExprBoundaries::from_column(
+                stats,
+                input_schema.fields()[idx].name().clone(),
+                idx,
+            ));
+        }
+        Self::new(column_boundaries)
     }
 }
 
@@ -211,64 +323,29 @@ impl AnalysisContext {
 /// if it were to be an expression, if it were to be evaluated.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExprBoundaries {
-    /// Minimum value this expression's result can have.
-    pub min_value: ScalarValue,
-    /// Maximum value this expression's result can have.
-    pub max_value: ScalarValue,
+    pub column: Column,
+    /// Minimum and maximum values this expression can have.
+    pub interval: Interval,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Option<usize>,
-    /// The estimated percantage of rows that this expression would select, if
-    /// it were to be used as a boolean predicate on a filter. The value will be
-    /// between 0.0 (selects nothing) and 1.0 (selects everything).
-    pub selectivity: Option<f64>,
 }
 
 impl ExprBoundaries {
-    /// Create a new `ExprBoundaries`.
-    pub fn new(
-        min_value: ScalarValue,
-        max_value: ScalarValue,
-        distinct_count: Option<usize>,
-    ) -> Self {
-        Self::new_with_selectivity(min_value, max_value, distinct_count, None)
-    }
-
-    /// Create a new `ExprBoundaries` with a selectivity value.
-    pub fn new_with_selectivity(
-        min_value: ScalarValue,
-        max_value: ScalarValue,
-        distinct_count: Option<usize>,
-        selectivity: Option<f64>,
-    ) -> Self {
-        assert!(!matches!(
-            min_value.partial_cmp(&max_value),
-            Some(Ordering::Greater)
-        ));
+    /// Create a new `ExprBoundaries` object from column level statistics.
+    pub fn from_column(stats: &ColumnStatistics, col: String, index: usize) -> Self {
         Self {
-            min_value,
-            max_value,
-            distinct_count,
-            selectivity,
-        }
-    }
-
-    /// Create a new `ExprBoundaries` from a column level statistics.
-    pub fn from_column(column: &ColumnStatistics) -> Option<Self> {
-        Some(Self {
-            min_value: column.min_value.clone()?,
-            max_value: column.max_value.clone()?,
-            distinct_count: column.distinct_count,
-            selectivity: None,
-        })
-    }
-
-    /// Try to reduce the boundaries into a single scalar value, if possible.
-    pub fn reduce(&self) -> Option<ScalarValue> {
-        // TODO: should we check distinct_count is `Some(1) | None`?
-        if self.min_value == self.max_value {
-            Some(self.min_value.clone())
-        } else {
-            None
+            column: Column::new(&col, index),
+            interval: Interval::new(
+                IntervalBound::new(
+                    stats.min_value.clone().unwrap_or(ScalarValue::Null),
+                    false,
+                ),
+                IntervalBound::new(
+                    stats.max_value.clone().unwrap_or(ScalarValue::Null),
+                    false,
+                ),
+            ),
+            distinct_count: stats.distinct_count,
         }
     }
 }
@@ -360,7 +437,7 @@ macro_rules! analysis_expect {
     ($context: ident, $expr: expr) => {
         match $expr {
             Some(expr) => expr,
-            None => return $context.with_boundaries(None),
+            None => return Ok($context.with_boundaries(None)),
         }
     };
 }
@@ -439,33 +516,6 @@ mod tests {
         let result = as_boolean_array(&result)?;
 
         assert_eq!(&expected, result);
-        Ok(())
-    }
-
-    #[test]
-    fn reduce_boundaries() -> Result<()> {
-        let different_boundaries = ExprBoundaries::new(
-            ScalarValue::Int32(Some(1)),
-            ScalarValue::Int32(Some(10)),
-            None,
-        );
-        assert_eq!(different_boundaries.reduce(), None);
-
-        let scalar_boundaries = ExprBoundaries::new(
-            ScalarValue::Int32(Some(1)),
-            ScalarValue::Int32(Some(1)),
-            None,
-        );
-        assert_eq!(
-            scalar_boundaries.reduce(),
-            Some(ScalarValue::Int32(Some(1)))
-        );
-
-        // Can still reduce.
-        let no_boundaries =
-            ExprBoundaries::new(ScalarValue::Int32(None), ScalarValue::Int32(None), None);
-        assert_eq!(no_boundaries.reduce(), Some(ScalarValue::Int32(None)));
-
         Ok(())
     }
 }

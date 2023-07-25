@@ -2222,16 +2222,6 @@ FRA [200.0, 50.0] 250
 TUR [100.0, 75.0] 175
 GRC [80.0, 30.0] 110
 
-# test_ordering_sensitive_multiple_req
-# Currently we do not support multiple ordering requirement for aggregation
-# once this support is added. This test should change
-# See issue: https://github.com/sqlparser-rs/sqlparser-rs/issues/875
-statement error DataFusion error: This feature is not implemented: ARRAY_AGG only supports a single ORDER BY expression\. Got 2
-SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC, s.country DESC) AS amounts,
-    SUM(s.amount ORDER BY s.amount DESC) AS sum1
-  FROM sales_global AS s
-  GROUP BY s.country
-
 # test_ordering_sensitive_aggregation3
 # When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
 # test below should raise Plan Error.

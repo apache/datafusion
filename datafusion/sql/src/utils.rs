@@ -248,33 +248,26 @@ where
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive,
             }) => Ok(Expr::Like(Like::new(
                 *negated,
                 Box::new(clone_with_replacement(expr, replacement_fn)?),
                 Box::new(clone_with_replacement(pattern, replacement_fn)?),
                 *escape_char,
-            ))),
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Ok(Expr::ILike(Like::new(
-                *negated,
-                Box::new(clone_with_replacement(expr, replacement_fn)?),
-                Box::new(clone_with_replacement(pattern, replacement_fn)?),
-                *escape_char,
+                *case_insensitive,
             ))),
             Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive,
             }) => Ok(Expr::SimilarTo(Like::new(
                 *negated,
                 Box::new(clone_with_replacement(expr, replacement_fn)?),
                 Box::new(clone_with_replacement(pattern, replacement_fn)?),
                 *escape_char,
+                *case_insensitive,
             ))),
             Expr::Case(case) => Ok(Expr::Case(Case::new(
                 match &case.expr {
