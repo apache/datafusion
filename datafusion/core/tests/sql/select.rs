@@ -372,13 +372,13 @@ async fn query_on_string_dictionary() -> Result<()> {
     let sql = "SELECT d1, COUNT(*) FROM test group by d1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------+-----------------+",
-        "| d1    | COUNT(UInt8(1)) |",
-        "+-------+-----------------+",
-        "| one   | 1               |",
-        "|       | 1               |",
-        "| three | 1               |",
-        "+-------+-----------------+",
+        "+-------+----------+",
+        "| d1    | COUNT(*) |",
+        "+-------+----------+",
+        "|       | 1        |",
+        "| one   | 1        |",
+        "| three | 1        |",
+        "+-------+----------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
 
