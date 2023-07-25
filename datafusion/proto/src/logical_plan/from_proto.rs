@@ -38,11 +38,11 @@ use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
     array_has, array_has_all, array_has_any, array_length, array_ndims, array_position,
-    array_positions, array_prepend, array_remove, array_removes, array_replace,
-    array_replaces, array_to_string, ascii, asin, asinh, atan, atan2, atanh, bit_length,
-    btrim, cardinality, cbrt, ceil, character_length, chr, coalesce, concat_expr,
-    concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin, date_part,
-    date_trunc, degrees, digest, exp,
+    array_positions, array_prepend, array_remove, array_remove_all, array_remove_n,
+    array_replace, array_replace_all, array_replace_n, array_to_string, ascii, asin,
+    asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -463,9 +463,11 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
-            ScalarFunction::ArrayRemoves => Self::ArrayRemoves,
+            ScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
+            ScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
-            ScalarFunction::ArrayReplaces => Self::ArrayReplaces,
+            ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
+            ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
@@ -1252,9 +1254,13 @@ pub fn parse_expr(
                 ScalarFunction::ArrayRemove => Ok(array_remove(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayRemoveN => Ok(array_remove_n(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
-                ScalarFunction::ArrayRemoves => Ok(array_removes(
+                ScalarFunction::ArrayRemoveAll => Ok(array_remove_all(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
@@ -1262,9 +1268,14 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::ArrayReplaceN => Ok(array_replace_n(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
                     parse_expr(&args[3], registry)?,
                 )),
-                ScalarFunction::ArrayReplaces => Ok(array_replaces(
+                ScalarFunction::ArrayReplaceAll => Ok(array_replace_all(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,

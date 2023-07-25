@@ -2268,8 +2268,10 @@ pub enum ScalarFunction {
     ArrayHas = 104,
     ArrayHasAny = 105,
     ArrayHasAll = 106,
-    ArrayRemoves = 107,
-    ArrayReplaces = 108,
+    ArrayRemoveN = 107,
+    ArrayReplaceN = 108,
+    ArrayRemoveAll = 109,
+    ArrayReplaceAll = 110,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2384,8 +2386,10 @@ impl ScalarFunction {
             ScalarFunction::ArrayHas => "ArrayHas",
             ScalarFunction::ArrayHasAny => "ArrayHasAny",
             ScalarFunction::ArrayHasAll => "ArrayHasAll",
-            ScalarFunction::ArrayRemoves => "ArrayRemoves",
-            ScalarFunction::ArrayReplaces => "ArrayReplaces",
+            ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
+            ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
+            ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
+            ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2497,8 +2501,10 @@ impl ScalarFunction {
             "ArrayHas" => Some(Self::ArrayHas),
             "ArrayHasAny" => Some(Self::ArrayHasAny),
             "ArrayHasAll" => Some(Self::ArrayHasAll),
-            "ArrayRemoves" => Some(Self::ArrayRemoves),
-            "ArrayReplaces" => Some(Self::ArrayReplaces),
+            "ArrayRemoveN" => Some(Self::ArrayRemoveN),
+            "ArrayReplaceN" => Some(Self::ArrayReplaceN),
+            "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
+            "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             _ => None,
         }
     }

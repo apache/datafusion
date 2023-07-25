@@ -569,8 +569,10 @@ enum ScalarFunction {
   ArrayHas = 104;
   ArrayHasAny = 105;
   ArrayHasAll = 106;
-  ArrayRemoves = 107;
-  ArrayReplaces = 108;
+  ArrayRemoveN = 107;
+  ArrayReplaceN = 108;
+  ArrayRemoveAll = 109;
+  ArrayReplaceAll = 110;
 }
 
 message ScalarFunctionNode {

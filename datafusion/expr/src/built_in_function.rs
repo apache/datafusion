@@ -141,12 +141,16 @@ pub enum BuiltinScalarFunction {
     ArrayPrepend,
     /// array_remove
     ArrayRemove,
-    /// array_removes
-    ArrayRemoves,
+    /// array_remove_n
+    ArrayRemoveN,
+    /// array_remove_all
+    ArrayRemoveAll,
     /// array_replace
     ArrayReplace,
-    /// array_replaces
-    ArrayReplaces,
+    /// array_replace_n
+    ArrayReplaceN,
+    /// array_replace_all
+    ArrayReplaceAll,
     /// array_to_string
     ArrayToString,
     /// cardinality
@@ -349,9 +353,11 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayRemoves => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayRemoveN => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayRemoveAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayReplaces => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
@@ -523,9 +529,11 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayPrepend => Ok(input_expr_types[1].clone()),
             BuiltinScalarFunction::ArrayRemove => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayRemoves => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayRemoveN => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayRemoveAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayReplace => Ok(input_expr_types[0].clone()),
-            BuiltinScalarFunction::ArrayReplaces => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayReplaceN => Ok(input_expr_types[0].clone()),
+            BuiltinScalarFunction::ArrayReplaceAll => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
@@ -807,14 +815,14 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayPrepend => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayRemove => {
-                Signature::variadic_any(self.volatility())
+            BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
+            BuiltinScalarFunction::ArrayRemoveAll => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayReplace => Signature::any(3, self.volatility()),
+            BuiltinScalarFunction::ArrayReplaceN => Signature::any(4, self.volatility()),
+            BuiltinScalarFunction::ArrayReplaceAll => {
+                Signature::any(3, self.volatility())
             }
-            BuiltinScalarFunction::ArrayRemoves => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayReplace => {
-                Signature::variadic_any(self.volatility())
-            }
-            BuiltinScalarFunction::ArrayReplaces => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayToString => {
                 Signature::variadic_any(self.volatility())
             }
@@ -1292,9 +1300,13 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "list_push_front",
         ],
         BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
-        BuiltinScalarFunction::ArrayRemoves => &["array_removes", "list_removes"],
+        BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
+        BuiltinScalarFunction::ArrayRemoveAll => &["array_remove_all", "list_remove_all"],
         BuiltinScalarFunction::ArrayReplace => &["array_replace", "list_replace"],
-        BuiltinScalarFunction::ArrayReplaces => &["array_replaces", "list_replaces"],
+        BuiltinScalarFunction::ArrayReplaceN => &["array_replace_n", "list_replace_n"],
+        BuiltinScalarFunction::ArrayReplaceAll => {
+            &["array_replace_all", "list_replace_all"]
+        }
         BuiltinScalarFunction::ArrayToString => &[
             "array_to_string",
             "list_to_string",

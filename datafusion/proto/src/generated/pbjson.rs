@@ -18070,8 +18070,10 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayHas => "ArrayHas",
             Self::ArrayHasAny => "ArrayHasAny",
             Self::ArrayHasAll => "ArrayHasAll",
-            Self::ArrayRemoves => "ArrayRemoves",
-            Self::ArrayReplaces => "ArrayReplaces",
+            Self::ArrayRemoveN => "ArrayRemoveN",
+            Self::ArrayReplaceN => "ArrayReplaceN",
+            Self::ArrayRemoveAll => "ArrayRemoveAll",
+            Self::ArrayReplaceAll => "ArrayReplaceAll",
         };
         serializer.serialize_str(variant)
     }
@@ -18189,8 +18191,10 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayHas",
             "ArrayHasAny",
             "ArrayHasAll",
-            "ArrayRemoves",
-            "ArrayReplaces",
+            "ArrayRemoveN",
+            "ArrayReplaceN",
+            "ArrayRemoveAll",
+            "ArrayReplaceAll",
         ];
 
         struct GeneratedVisitor;
@@ -18339,8 +18343,10 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayHas" => Ok(ScalarFunction::ArrayHas),
                     "ArrayHasAny" => Ok(ScalarFunction::ArrayHasAny),
                     "ArrayHasAll" => Ok(ScalarFunction::ArrayHasAll),
-                    "ArrayRemoves" => Ok(ScalarFunction::ArrayRemoves),
-                    "ArrayReplaces" => Ok(ScalarFunction::ArrayReplaces),
+                    "ArrayRemoveN" => Ok(ScalarFunction::ArrayRemoveN),
+                    "ArrayReplaceN" => Ok(ScalarFunction::ArrayReplaceN),
+                    "ArrayRemoveAll" => Ok(ScalarFunction::ArrayRemoveAll),
+                    "ArrayReplaceAll" => Ok(ScalarFunction::ArrayReplaceAll),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
