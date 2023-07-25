@@ -289,7 +289,60 @@ mod tests {
     use crate::{assert_batches_eq, test_util};
     use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray, DictionaryArray};
 
+    use crate::datasource::streaming::StreamingTableExec;
+    use crate::physical_plan::streaming::PartitionStream;
+    use crate::physical_plan::stream::RecordBatchStreamAdapter;
+
     use super::*;
+
+    struct InfiniteStream {
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+    }
+    
+    impl PartitionStream for InfiniteStream {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+    
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            // We create an iterator from the record batches and map them into Ok values,
+            // converting the iterator into a futures::stream::Stream
+            Box::pin(RecordBatchStreamAdapter::new(
+                self.schema.clone(),
+                futures::stream::iter(self.batches.clone()).map(Ok),
+            ))
+        }
+    }    
+
+    #[tokio::test]
+    async fn test_dict_merge_inf() {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        
+        // Need to generate batches of batches
+        let batches: Vec<_> = AccessLogGenerator::new()
+        .with_row_limit(1000)
+        .with_max_batch_size(50)
+        .collect();
+
+        let schema = batches[0].schema();
+
+        let sort = vec![
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            }
+        ];
+
+        let exec = StreamingTableExec::try_new(schema, vec![Arc::new(InfiniteStream {
+            schema: batches[0].schema(),
+            batches: batches.clone(),
+        })], true).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let collected = collect(merge, task_ctx).await.unwrap();
+
+    }
 
     #[tokio::test]
     async fn test_dict_merge() {
