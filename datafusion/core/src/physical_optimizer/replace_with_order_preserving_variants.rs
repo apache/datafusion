@@ -15,11 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule that replaces executors that lost ordering with their order preserving variants.
-//! when it is helpful, either in terms for performance or to fix pipeline.
+//! Optimizer rule that replaces executors that lose ordering with their
+//! order-preserving variants when it is helpful; either in terms of
+//! performance or to accommodate unbounded streams by fixing the pipeline.
+
 use crate::error::Result;
 use crate::physical_optimizer::sort_enforcement::{unbounded_output, ExecTree};
+use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
 use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use super::utils::is_repartition;
@@ -27,27 +31,31 @@ use super::utils::is_repartition;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_physical_expr::utils::ordering_satisfy;
 
-use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use std::sync::Arc;
 
+/// For a given `plan`, this object carries the information one needs from its
+/// descendants to decide whether it is beneficial to replace order-losing (but
+/// somewhat faster) variants of certain operators with their order-preserving
+/// (but somewhat slower) cousins.
 #[derive(Debug, Clone)]
-pub(crate) struct PlanWithPipelineFixer {
+pub(crate) struct OrderPreservationContext {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     ordering_onwards: Vec<Option<ExecTree>>,
 }
 
-impl PlanWithPipelineFixer {
+impl OrderPreservationContext {
+    /// Creates a "default" order-preservation context.
     pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let length = plan.children().len();
-        PlanWithPipelineFixer {
+        OrderPreservationContext {
             plan,
             ordering_onwards: vec![None; length],
         }
     }
 
+    /// Creates a new order-preservation context from those of children nodes.
     pub fn new_from_children_nodes(
-        children_nodes: Vec<PlanWithPipelineFixer>,
+        children_nodes: Vec<OrderPreservationContext>,
         parent_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
         let children_plans = children_nodes
@@ -67,12 +75,10 @@ impl PlanWithPipelineFixer {
                 if plan.children().is_empty() {
                     // Plan has no children, there is nothing to propagate.
                     None
-                } else if (is_repartition(&plan)
-                    && !plan.maintains_input_order()[0]
-                    && ordering_onwards[0].is_none())
-                    || (is_coalesce_partitions(&plan)
-                        && plan.children()[0].output_ordering().is_some()
-                        && ordering_onwards[0].is_none())
+                } else if ordering_onwards[0].is_none()
+                    && ((is_repartition(&plan) && !plan.maintains_input_order()[0])
+                        || (is_coalesce_partitions(&plan)
+                            && plan.children()[0].output_ordering().is_some()))
                 {
                     Some(ExecTree::new(plan, idx, vec![]))
                 } else {
@@ -95,35 +101,34 @@ impl PlanWithPipelineFixer {
             })
             .collect();
         let plan = with_new_children_if_necessary(parent_plan, children_plans)?.into();
-        Ok(PlanWithPipelineFixer {
+        Ok(OrderPreservationContext {
             plan,
             ordering_onwards,
         })
     }
 
-    pub fn children(&self) -> Vec<PlanWithPipelineFixer> {
+    /// Computes order-preservation contexts for every child of the plan.
+    pub fn children(&self) -> Vec<OrderPreservationContext> {
         self.plan
             .children()
             .into_iter()
-            .map(|child| PlanWithPipelineFixer::new(child))
+            .map(|child| OrderPreservationContext::new(child))
             .collect()
     }
 }
 
-impl TreeNode for PlanWithPipelineFixer {
+impl TreeNode for OrderPreservationContext {
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        let children = self.children();
-        for child in children {
+        for child in self.children() {
             match op(&child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
             }
         }
-
         Ok(VisitRecursion::Continue)
     }
 
@@ -139,32 +144,36 @@ impl TreeNode for PlanWithPipelineFixer {
                 .into_iter()
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
-            PlanWithPipelineFixer::new_from_children_nodes(children_nodes, self.plan)
+            OrderPreservationContext::new_from_children_nodes(children_nodes, self.plan)
         }
     }
 }
 
-/// Calculates updated plan by replacing executors that lost ordering
-/// inside the `ExecTree`, with their order preserving variant.
+/// Calculates the updated plan by replacing executors that lose ordering
+/// inside the `ExecTree` with their order-preserving variants. This will
+/// generate an alternative plan, which will be accepted or rejected later on
+/// depending on whether it helps us remove a `SortExec`.
 fn get_updated_plan(
     exec_tree: &ExecTree,
-    // replacing `RepartitionExec` with `SortPreservingRepartitionExec` is desirable
+    // Flag indicating that it is desirable to replace `RepartitionExec`s with
+    // `SortPreservingRepartitionExec`s:
     is_spr_better: bool,
-    // replacing `CoalescePartitionsExec` with `SortPreservingMergeExec` is desirable
+    // Flag indicating that it is desirable to replace `CoalescePartitionsExec`s
+    // with `SortPreservingMergeExec`s:
     is_spm_better: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan = exec_tree.plan.clone();
 
     let mut children = plan.children();
-    // Update children and their descendants that are at the ExecTree.
+    // Update children and their descendants in the given tree:
     for item in &exec_tree.children {
         children[item.idx] = get_updated_plan(item, is_spr_better, is_spm_better)?;
     }
-    // Construct plan with updated children
+    // Construct the plan with updated children:
     let mut plan = plan.with_new_children(children)?;
 
-    // When `RepartitionExec` doesn't preserve ordering,
-    // replace it with `SortPreservingRepartitionExec`
+    // When a `RepartitionExec` doesn't preserve ordering, replace it with
+    // a `SortPreservingRepartitionExec` if appropriate:
     if is_repartition(&plan) && !plan.maintains_input_order()[0] && is_spr_better {
         let child = plan.children()[0].clone();
         plan = Arc::new(
@@ -172,8 +181,8 @@ fn get_updated_plan(
                 .with_preserve_order(),
         ) as _
     }
-    // When input of `CoalescePartitionsExec` has an ordering
-    // replace it with `SortPreservingMergeExec`
+    // When the input of a `CoalescePartitionsExec` has an ordering, replace it
+    // with a `SortPreservingMergeExec` if appropriate:
     if is_coalesce_partitions(&plan)
         && plan.children()[0].output_ordering().is_some()
         && is_spm_better
@@ -187,42 +196,44 @@ fn get_updated_plan(
     Ok(plan)
 }
 
-/// The `replace_with_order_preserving_variants` optimizer sub-rule tries to remove `SortExec`s
-/// from the physical plan, by replacing Executors that do not preserve ordering, with its
-/// its order preserving variant (such as `RepartitionExec` with `SortPreservingRepartitionExec`
-/// , `CoalescePartitionsExec` with `SortPreservingMergeExec`).
-/// If this replacement is helpful for removing `SortExec`, plan is updated.
-/// If not so, old plan is used without modification.
+/// The `replace_with_order_preserving_variants` optimizer sub-rule tries to
+/// remove `SortExec`s from the physical plan by replacing operators that do
+/// not preserve ordering with their order-preserving variants; i.e. by replacing
+/// `RepartitionExec`s with `SortPreservingRepartitionExec`s or by replacing
+/// `CoalescePartitionsExec`s with `SortPreservingMergeExec`s.
+///
+/// If this replacement is helpful for removing a `SortExec`, it updates the plan.
+/// Otherwise, it leaves the plan unchanged.
 ///
 /// The algorithm flow is simply like this:
 /// 1. Visit nodes of the physical plan bottom-up and look for `SortExec` nodes.
-/// 1_1. During iteration, build `ExecTree` to keep track of executors that maintain ordering
-///      (or that can maintain ordering when replaced by its order preserving variant).
-///      until `SortExec`.
-/// 2. When a `SortExec` is found, update child of `SortExec` by replacing executors that do not
-///    preserve ordering in the `ExecTree` with their order preserving variant.
+/// 1_1. During the traversal, build an `ExecTree` to keep track of operators
+///      that maintain ordering (or can maintain ordering when replaced by an
+///      order-preserving variant) until a `SortExec` is found.
+/// 2. When a `SortExec` is found, update the child of the `SortExec` by replacing
+///    operators that do not preserve ordering in the `ExecTree` with their order
+///    preserving variants.
 /// 3. Check if the `SortExec` is still necessary in the updated plan by comparing
 ///    its input ordering with the output ordering it imposes. We do this because
-///     replacing executors that lost ordering with their order preserving variant enables us
-///     to preserve the previously lost ordering during at the input of `SortExec`.
-/// 5_1. If the `SortExec` in question turns out to be unnecessary, remove it and use
-///      updated plan. Otherwise, use the original plan.
-/// 6. Continue the bottom-up iteration until another `SortExec` is seen, or the iterations finish.
+///    replacing operators that lose ordering with their order-preserving variants
+///    enables us to preserve the previously lost ordering at the input of `SortExec`.
+/// 4. If the `SortExec` in question turns out to be unnecessary, remove it and use
+///     updated plan. Otherwise, use the original plan.
+/// 5. Continue the bottom-up traversal until another `SortExec` is seen, or the traversal
+///    is complete.
 pub(crate) fn replace_with_order_preserving_variants(
-    requirements: PlanWithPipelineFixer,
-    // If `true` it means that, changing `RepartitionExec` with
-    // `SortPreservingRepartitionExec` is desirable when it helps
-    // to remove `SortExec` from plan.
-    // `false` means that, above conversion is not beneficial to do,
-    // this conversion should only be used to fix pipeline (streaming).
+    requirements: OrderPreservationContext,
+    // A flag indicating that replacing `RepartitionExec`s with
+    // `SortPreservingRepartitionExec`s is desirable when it helps
+    // to remove a `SortExec` from the plan. If this flag is `false`,
+    // this replacement should only be made to fix the pipeline (streaming).
     is_spr_better: bool,
-    // If `true` it means that, changing `CoalescePartitionsExec` with
-    // `SortPreservingMergeExec` is desirable when it helps
-    // to remove `SortExec` from plan.
-    // `false` means that, above conversion is not beneficial to do,
-    // this conversion should only be used to fix pipeline (streaming).
+    // A flag indicating that replacing `CoalescePartitionsExec`s with
+    // `SortPreservingMergeExec`s is desirable when it helps to remove
+    // a `SortExec` from the plan. If this flag is `false`, this replacement
+    // should only be made to fix the pipeline (streaming).
     is_spm_better: bool,
-) -> Result<Transformed<PlanWithPipelineFixer>> {
+) -> Result<Transformed<OrderPreservationContext>> {
     let plan = &requirements.plan;
     let ordering_onwards = &requirements.ordering_onwards;
     if is_sort(plan) {
@@ -231,22 +242,22 @@ pub(crate) fn replace_with_order_preserving_variants(
         } else {
             return Ok(Transformed::No(requirements));
         };
-        // For unbounded cases, do replacement with order preserving variant in any case. Because doing so
-        // is helpful to fix pipeline.
+        // For unbounded cases, replace with the order-preserving variant in
+        // any case, as doing so helps fix the pipeline.
         let is_unbounded = unbounded_output(plan);
         let updated_sort_input = get_updated_plan(
             exec_tree,
             is_spr_better | is_unbounded,
             is_spm_better | is_unbounded,
         )?;
-        // If this sort is unnecessary, we should remove it:
+        // If this sort is unnecessary, we should remove it and update the plan:
         if ordering_satisfy(
             updated_sort_input.output_ordering(),
             plan.output_ordering(),
             || updated_sort_input.equivalence_properties(),
             || updated_sort_input.ordering_equivalence_properties(),
         ) {
-            return Ok(Transformed::Yes(PlanWithPipelineFixer {
+            return Ok(Transformed::Yes(OrderPreservationContext {
                 plan: updated_sort_input,
                 ordering_onwards: vec![None],
             }));
@@ -307,7 +318,7 @@ mod tests {
 
             // Run the rule top-down
             // let optimized_physical_plan = physical_plan.transform_down(&replace_repartition_execs)?;
-            let plan_with_pipeline_fixer = PlanWithPipelineFixer::new(physical_plan);
+            let plan_with_pipeline_fixer = OrderPreservationContext::new(physical_plan);
             let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false))?;
             let optimized_physical_plan = parallel.plan;
 
