@@ -471,9 +471,14 @@ impl DFSchema {
             // Add a new functional dependency associated with the whole table:
             aggregate_func_dependencies.push(
                 // Safest behaviour to do is add new functional dependency as nullable.
-                // TODO: use nullable property of group by expr here.
-                FunctionalDependence::new(vec![0], target_indices, true)
-                    .with_mode(Dependency::Single),
+                // Use nullable property of group by expression (field at index 0).
+                // It determines functional dependency mode of aggregate expression output.
+                FunctionalDependence::new(
+                    vec![0],
+                    target_indices,
+                    fields[0].is_nullable(),
+                )
+                .with_mode(Dependency::Single),
             );
         }
         FunctionalDependencies::new(aggregate_func_dependencies)
