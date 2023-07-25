@@ -102,12 +102,11 @@ impl ListingTableUrl {
 
         let path = path.replace('~', &home_dir);
 
-        let parts = path.split("/").collect::<Vec<_>>();
+        let parts = path.split('/').collect::<Vec<_>>();
         let mut expanded_parts = Vec::new();
 
         for part in parts {
-            if part.starts_with('$') {
-                let envvar_name = &part[1..];
+            if let Some(envvar_name) = part.strip_prefix('$') {
                 match env::var(envvar_name) {
                     Ok(value) => expanded_parts.push(value),
                     Err(_) => {
