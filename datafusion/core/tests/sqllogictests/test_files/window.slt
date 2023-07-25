@@ -715,7 +715,7 @@ LIMIT 5
 
 
 #fn window_frame_ranges_preceding_following
-statement error DataFusion error: Internal error: Operator \- is not implemented for types
+query III
 SELECT
 SUM(c4) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
 SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),
@@ -723,6 +723,12 @@ COUNT(*) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
 FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
+----
+52276 781 56
+260620 781 63
+-28623 781 37
+260620 781 63
+260620 781 63
 
 
 #fn window_frame_ranges_ntile
