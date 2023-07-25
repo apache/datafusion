@@ -1273,8 +1273,8 @@ pub(crate) fn aggregate_functional_dependencies(
     group_expr: &[Expr],
     // Input plan of the aggregate:
     input: &LogicalPlan,
-    // Schema field length:
-    n_out: usize,
+    // Aggregate schema
+    aggr_schema: &DFSchema,
 ) -> Result<FunctionalDependencies> {
     // We can do a case analysis on how to propagate functional dependencies based on
     // whether the GROUP BY in question contains a grouping set expression:
@@ -1288,7 +1288,7 @@ pub(crate) fn aggregate_functional_dependencies(
             .collect::<Result<Vec<_>>>()?;
         let aggregate_func_dependencies = input
             .schema()
-            .aggregate_functional_dependencies(&group_by_expr_names, n_out);
+            .aggregate_functional_dependencies(&group_by_expr_names, aggr_schema);
         Ok(aggregate_func_dependencies)
     } else {
         Ok(FunctionalDependencies::empty())

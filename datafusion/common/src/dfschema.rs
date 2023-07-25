@@ -414,14 +414,15 @@ impl DFSchema {
     pub fn aggregate_functional_dependencies(
         &self,
         group_by_expr_names: &[String],
-        n_out: usize,
+        aggr_schema: &DFSchema,
     ) -> FunctionalDependencies {
         let mut aggregate_func_dependencies = vec![];
+        let fields = self.fields();
+        let aggregate_fields = aggr_schema.fields();
         // Association covers the whole table:
-        let target_indices = (0..n_out).collect::<Vec<_>>();
+        let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
         // Get functional dependencies of the schema:
         let func_dependencies = self.functional_dependencies();
-        let fields = self.fields();
         for FunctionalDependence {
             source_indices,
             nullable,
@@ -470,10 +471,13 @@ impl DFSchema {
             }
             // Add a new functional dependency associated with the whole table:
             aggregate_func_dependencies.push(
-                // Safest behaviour to do is add new functional dependency as nullable.
-                // TODO: Use nullable property of group by expression
-                FunctionalDependence::new(vec![0], target_indices, true)
-                    .with_mode(Dependency::Single),
+                // Use nullable property of the group by expression
+                FunctionalDependence::new(
+                    vec![0],
+                    target_indices,
+                    aggregate_fields[0].is_nullable(),
+                )
+                .with_mode(Dependency::Single),
             );
         }
         FunctionalDependencies::new(aggregate_func_dependencies)

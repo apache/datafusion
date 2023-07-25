@@ -1667,11 +1667,8 @@ impl Aggregate {
             )));
         }
 
-        let aggregate_func_dependencies = aggregate_functional_dependencies(
-            &group_expr,
-            &input,
-            schema.fields().len(),
-        )?;
+        let aggregate_func_dependencies =
+            aggregate_functional_dependencies(&group_expr, &input, &schema)?;
         let new_schema = schema.as_ref().clone();
         let schema = Arc::new(
             new_schema.with_functional_dependencies(aggregate_func_dependencies),
