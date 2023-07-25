@@ -15,18 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::SchemaBuilder;
-use std::fs;
-use std::path::Path;
-use std::time::Instant;
+//! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
-use datafusion::prelude::*;
+use arrow::datatypes::SchemaBuilder;
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
     error::{DataFusionError, Result},
 };
-use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
+use std::fs;
+
+mod run;
+pub use run::RunOpt;
+
+mod convert;
+pub use convert::ConvertOpt;
 
 pub const TPCH_TABLES: &[&str] = &[
     "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region",
@@ -164,78 +166,6 @@ pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
             "invalid query. Expected value between 1 and 22".to_owned(),
         ))
     }
-}
-
-/// Conver tbl (csv) file to parquet
-pub async fn convert_tbl(
-    input_path: &str,
-    output_path: &str,
-    file_format: &str,
-    partitions: usize,
-    batch_size: usize,
-    compression: Compression,
-) -> Result<()> {
-    let output_root_path = Path::new(output_path);
-    for table in TPCH_TABLES {
-        let start = Instant::now();
-        let schema = get_tbl_tpch_table_schema(table);
-
-        let input_path = format!("{input_path}/{table}.tbl");
-        let options = CsvReadOptions::new()
-            .schema(&schema)
-            .has_header(false)
-            .delimiter(b'|')
-            .file_extension(".tbl");
-
-        let config = SessionConfig::new().with_batch_size(batch_size);
-        let ctx = SessionContext::with_config(config);
-
-        // build plan to read the TBL file
-        let mut csv = ctx.read_csv(&input_path, options).await?;
-
-        // Select all apart from the padding column
-        let selection = csv
-            .schema()
-            .fields()
-            .iter()
-            .take(schema.fields.len() - 1)
-            .map(|d| Expr::Column(d.qualified_column()))
-            .collect();
-
-        csv = csv.select(selection)?;
-        // optionally, repartition the file
-        if partitions > 1 {
-            csv = csv.repartition(Partitioning::RoundRobinBatch(partitions))?
-        }
-
-        // create the physical plan
-        let csv = csv.create_physical_plan().await?;
-
-        let output_path = output_root_path.join(table);
-        let output_path = output_path.to_str().unwrap().to_owned();
-
-        println!(
-            "Converting '{}' to {} files in directory '{}'",
-            &input_path, &file_format, &output_path
-        );
-        match file_format {
-            "csv" => ctx.write_csv(csv, output_path).await?,
-            "parquet" => {
-                let props = WriterProperties::builder()
-                    .set_compression(compression)
-                    .build();
-                ctx.write_parquet(csv, output_path, Some(props)).await?
-            }
-            other => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Invalid output format: {other}"
-                )));
-            }
-        }
-        println!("Conversion completed in {} ms", start.elapsed().as_millis());
-    }
-
-    Ok(())
 }
 
 pub const QUERY_LIMIT: [Option<usize>; 22] = [

@@ -62,12 +62,12 @@ bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { version = "0.4.23", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "27.0.0", features = ["parquet", "object_store"] }
-datafusion-execution = { path = "../execution", version = "27.0.0" }
-datafusion-expr = { path = "../expr", version = "27.0.0" }
-datafusion-optimizer = { path = "../optimizer", version = "27.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "27.0.0", default-features = false }
-datafusion-sql = { path = "../sql", version = "27.0.0" }
+datafusion-common = { path = "../common", version = "28.0.0", features = ["parquet", "object_store"] }
+datafusion-execution = { path = "../execution", version = "28.0.0" }
+datafusion-expr = { path = "../expr", version = "28.0.0" }
+datafusion-optimizer = { path = "../optimizer", version = "28.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "28.0.0", default-features = false }
+datafusion-sql = { path = "../sql", version = "28.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
