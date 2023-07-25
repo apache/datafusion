@@ -714,8 +714,13 @@ LIMIT 5
 26861 3
 
 
-#fn window_frame_ranges_preceding_following
-statement error DataFusion error: Internal error: Operator \- is not implemented for types
+# fn window_frame_ranges_preceding_following
+# when value is outside type range (10000 is outside range of tiny int (type of c2)),
+# we should treat values as infinite, hence
+# "SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),"
+# is functionally equivalent to
+# "SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),"
+query III
 SELECT
 SUM(c4) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
 SUM(c3) OVER(ORDER BY c2 RANGE BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),
@@ -723,6 +728,13 @@ COUNT(*) OVER(ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
 FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
+----
+52276 781 56
+260620 781 63
+-28623 781 37
+260620 781 63
+260620 781 63
+
 
 
 #fn window_frame_ranges_ntile
@@ -927,23 +939,6 @@ COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECE
 FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
-
-
-#fn window_frame_groups_preceding_following_desc
-query III
-SELECT
-SUM(c4) OVER(ORDER BY c2 DESC GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-SUM(c3) OVER(ORDER BY c2 DESC GROUPS BETWEEN 10000 PRECEDING AND 10000 FOLLOWING),
-COUNT(*) OVER(ORDER BY c2 DESC GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-FROM aggregate_test_100
-ORDER BY c9
-LIMIT 5
-----
-52276 781 56
-260620 781 63
--28623 781 37
-260620 781 63
-260620 781 63
 
 #fn window_frame_groups_order_by_null_desc
 query I

@@ -20,6 +20,7 @@
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
 use datafusion_common::DataFusionError;
@@ -119,7 +120,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         Operator::Divide|
         Operator::Modulo =>  {
             // TODO: this logic would be easier to follow if the functions were inlined
-            if let Some(ret) = mathematics_temporal_result_type(lhs, rhs) {
+            if let Some(ret) = mathematics_temporal_result_type(lhs, rhs, op) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: lhs.clone(),
@@ -129,7 +130,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             } else if let Some(coerced) = temporal_coercion(lhs, rhs) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
-                let ret = mathematics_temporal_result_type(&coerced, &coerced).ok_or_else(|| {
+                let ret = mathematics_temporal_result_type(&coerced, &coerced, op).ok_or_else(|| {
                     DataFusionError::Plan(format!(
                         "Cannot get result type for temporal operation {coerced} {op} {coerced}"
                     ))
@@ -168,6 +169,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
 fn mathematics_temporal_result_type(
     lhs_type: &DataType,
     rhs_type: &DataType,
+    op: &Operator,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::IntervalUnit::*;
@@ -175,12 +177,14 @@ fn mathematics_temporal_result_type(
 
     match (lhs_type, rhs_type) {
         // datetime +/- interval
-        (Interval(_), Timestamp(_, _)) => Some(rhs_type.clone()),
-        (Timestamp(_, _), Interval(_)) => Some(lhs_type.clone()),
-        (Interval(_), Date32) => Some(rhs_type.clone()),
-        (Date32, Interval(_)) => Some(lhs_type.clone()),
-        (Interval(_), Date64) => Some(rhs_type.clone()),
-        (Date64, Interval(_)) => Some(lhs_type.clone()),
+        (Timestamp(_, _) | Date32 | Date64, Interval(_)) => Some(lhs_type.clone()),
+        (Interval(_), Timestamp(_, _) | Date32 | Date64) => {
+            if matches!(op, Operator::Plus) {
+                Some(rhs_type.clone())
+            } else {
+                None
+            }
+        }
         // interval +/-
         (Interval(l), Interval(h)) if l == h => Some(lhs_type.clone()),
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
@@ -248,6 +252,17 @@ fn math_decimal_coercion(
         (Int8 | Int16 | Int32 | Int64, Decimal128(_, _)) => {
             Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone()))
         }
+        (Decimal256(_, _), Decimal256(_, _)) => {
+            Some((lhs_type.clone(), rhs_type.clone()))
+        }
+        (Decimal256(_, _), Int8 | Int16 | Int32 | Int64) => Some((
+            lhs_type.clone(),
+            coerce_numeric_type_to_decimal256(rhs_type)?,
+        )),
+        (Int8 | Int16 | Int32 | Int64, Decimal256(_, _)) => Some((
+            coerce_numeric_type_to_decimal256(lhs_type)?,
+            rhs_type.clone(),
+        )),
         _ => None,
     }
 }
@@ -303,6 +318,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -383,6 +399,11 @@ fn comparison_binary_numeric_coercion(
         }
         (Decimal128(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
         (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
+        (Decimal256(_, _), Decimal256(_, _)) => {
+            get_wider_decimal_type(lhs_type, rhs_type)
+        }
+        (Decimal256(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
+        (_, Decimal256(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
         // The following match arms encode the following logic: Given the two
@@ -427,9 +448,15 @@ fn get_comparison_common_decimal_type(
     other_type: &DataType,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    let other_decimal_type = coerce_numeric_type_to_decimal(other_type)?;
-    match (decimal_type, &other_decimal_type) {
-        (d1 @ Decimal128(_, _), d2 @ Decimal128(_, _)) => get_wider_decimal_type(d1, d2),
+    match decimal_type {
+        Decimal128(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal(other_type)?;
+            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        }
+        Decimal256(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal256(other_type)?;
+            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        }
         _ => None,
     }
 }
@@ -449,6 +476,12 @@ fn get_wider_decimal_type(
             let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
             Some(create_decimal_type((range + s) as u8, s))
         }
+        (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => {
+            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+            let s = *s1.max(s2);
+            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
+            Some(create_decimal256_type((range + s) as u8, s))
+        }
         (_, _) => None,
     }
 }
@@ -467,6 +500,24 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float32 => Some(Decimal128(14, 7)),
         Float64 => Some(Decimal128(30, 15)),
+        _ => None,
+    }
+}
+
+/// Convert the numeric data type to the decimal data type.
+/// Now, we just support the signed integer type and floating-point type.
+fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    // This conversion rule is from spark
+    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
+    match numeric_type {
+        Int8 => Some(Decimal256(3, 0)),
+        Int16 => Some(Decimal256(5, 0)),
+        Int32 => Some(Decimal256(10, 0)),
+        Int64 => Some(Decimal256(20, 0)),
+        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
+        Float32 => Some(Decimal256(14, 7)),
+        Float64 => Some(Decimal256(30, 15)),
         _ => None,
     }
 }
@@ -514,6 +565,13 @@ fn create_decimal_type(precision: u8, scale: i8) -> DataType {
     DataType::Decimal128(
         DECIMAL128_MAX_PRECISION.min(precision),
         DECIMAL128_MAX_SCALE.min(scale),
+    )
+}
+
+fn create_decimal256_type(precision: u8, scale: i8) -> DataType {
+    DataType::Decimal256(
+        DECIMAL256_MAX_PRECISION.min(precision),
+        DECIMAL256_MAX_SCALE.min(scale),
     )
 }
 
@@ -708,6 +766,18 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         (List(_), List(_)) => Some(lhs_type.clone()),
         (List(_), _) => Some(lhs_type.clone()),
         (_, List(_)) => Some(rhs_type.clone()),
+        _ => None,
+    }
+}
+
+/// Coercion rules for Binaries: the type that both lhs and rhs can be
+/// casted to for the purpose of a computation
+fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Binary | Utf8, Binary) | (Binary, Utf8) => Some(Binary),
+        (LargeBinary | Binary | Utf8 | LargeUtf8, LargeBinary)
+        | (LargeBinary, Binary | Utf8 | LargeUtf8) => Some(LargeBinary),
         _ => None,
     }
 }
@@ -982,10 +1052,13 @@ mod tests {
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), Some(Utf8));
 
-        // Can not coerce values of Binary to int,  cannot support this
+        // Since we can coerce values of Utf8 to Binary can support this
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Dictionary(Box::new(Int8), Box::new(Binary));
-        assert_eq!(dictionary_coercion(&lhs_type, &rhs_type, true), None);
+        assert_eq!(
+            dictionary_coercion(&lhs_type, &rhs_type, true),
+            Some(Binary)
+        );
 
         let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
         let rhs_type = Utf8;
@@ -1384,6 +1457,70 @@ mod tests {
             DataType::Decimal128(10, 3),
             Operator::GtEq,
             DataType::Decimal128(15, 3)
+        );
+
+        // Binary
+        test_coercion_binary_rule!(
+            DataType::Binary,
+            DataType::Binary,
+            Operator::Eq,
+            DataType::Binary
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Binary,
+            Operator::Eq,
+            DataType::Binary
+        );
+        test_coercion_binary_rule!(
+            DataType::Binary,
+            DataType::Utf8,
+            Operator::Eq,
+            DataType::Binary
+        );
+
+        // LargeBinary
+        test_coercion_binary_rule!(
+            DataType::LargeBinary,
+            DataType::LargeBinary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::Binary,
+            DataType::LargeBinary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeBinary,
+            DataType::Binary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::LargeBinary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeBinary,
+            DataType::Utf8,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeUtf8,
+            DataType::LargeBinary,
+            Operator::Eq,
+            DataType::LargeBinary
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeBinary,
+            DataType::LargeUtf8,
+            Operator::Eq,
+            DataType::LargeBinary
         );
 
         // TODO add other data type

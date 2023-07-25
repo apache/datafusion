@@ -1522,19 +1522,49 @@ array_concat(array[, ..., array_n])
 - list_cat
 - list_concat
 
-### `array_contains`
+### `array_has`
 
-Returns true, if each element of the second array appears in the first array, otherwise false.
+Returns true if the array contains the element
 
 ```
-array_contains(first_array, second_array)
+array_has(array, element)
 ```
 
 #### Arguments
 
-- **first_array**: Array expression.
+- **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
-- **second_array**: Array expression.
+- **element**: Scalar or Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+### `array_has_all`
+
+Returns true if all elements of sub-array exist in array
+
+```
+array_has_all(array, sub-array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **sub-array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+### `array_has_any`
+
+Returns true if any elements exist in both arrays
+
+```
+array_has_any(array, sub-array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **sub-array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 
 ### `array_dims`
