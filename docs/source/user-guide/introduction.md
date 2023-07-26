@@ -99,6 +99,7 @@ Here are some of the projects known to use DataFusion:
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
+- [Exon](https://github.com/wheretrue/exon/tree/main) Analysis toolkit for life-science applications
 - [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Flock](https://github.com/flock-lab/flock)
