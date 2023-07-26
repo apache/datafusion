@@ -17,6 +17,8 @@
 
 //! Collection of testing utility functions that are leveraged by the query optimizer rules
 
+use std::sync::Arc;
+
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use crate::error::Result;
@@ -24,25 +26,28 @@ use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGro
 use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::utils::{JoinFilter, JoinOn};
+use crate::physical_plan::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::streaming::StreamingTableExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::create_window_expr;
 use crate::physical_plan::{displayable, ExecutionPlan, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
-use arrow_schema::{Schema, SchemaRef, SortOptions};
-use async_trait::async_trait;
-use datafusion_common::{JoinType, Statistics};
+
+use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use datafusion_common::{JoinType, ScalarValue, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunction};
+use datafusion_expr::{AggregateFunction, Operator, WindowFrame, WindowFunction};
 use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numerical_expr;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use std::sync::Arc;
+
+use async_trait::async_trait;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -355,4 +360,101 @@ pub fn sort_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortExec::new(sort_exprs, input))
+}
+
+pub fn prunable_filter(left_index: ColumnIndex, right_index: ColumnIndex) -> JoinFilter {
+    // Filter columns, ensure first batches will have matching rows.
+    let intermediate_schema = Schema::new(vec![
+        Field::new("0", DataType::Int32, true),
+        Field::new("1", DataType::Int32, true),
+    ]);
+    let column_indices = vec![left_index, right_index];
+    let filter_expr = gen_conjunctive_numerical_expr(
+        col("0", &intermediate_schema).unwrap(),
+        col("1", &intermediate_schema).unwrap(),
+        (
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Plus,
+            Operator::Plus,
+        ),
+        ScalarValue::Int32(Some(0)),
+        ScalarValue::Int32(Some(3)),
+        ScalarValue::Int32(Some(0)),
+        ScalarValue::Int32(Some(3)),
+        (Operator::Gt, Operator::Lt),
+    );
+    JoinFilter::new(filter_expr, column_indices, intermediate_schema)
+}
+
+pub fn memory_exec_with_sort(
+    schema: &SchemaRef,
+    sort: Option<Vec<PhysicalSortExpr>>,
+) -> Arc<dyn ExecutionPlan> {
+    let mem = MemoryExec::try_new(&[], schema.clone(), None).unwrap();
+    Arc::new(if let Some(sort) = sort {
+        mem.with_sort_information(sort)
+    } else {
+        mem
+    })
+}
+
+pub fn streaming_table_exec(
+    schema: &SchemaRef,
+    sort: Option<Vec<PhysicalSortExpr>>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        StreamingTableExec::try_new(schema.clone(), vec![], None, sort, true).unwrap(),
+    )
+}
+
+#[macro_export]
+macro_rules! assert_optimized_orthogonal {
+    ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr) => {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        let physical_plan = $PLAN;
+        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+
+        let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
+            .iter().map(|s| *s).collect();
+
+        assert_eq!(
+            expected_plan_lines, actual,
+            "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES
+            .iter().map(|s| *s).collect();
+        //
+        // Run JoinSelection - EnforceSorting
+        let optimized_physical_plan = JoinSelection::new().optimize(physical_plan.clone(), state.config_options())?;
+        let optimized_physical_plan =
+            EnforceSorting::new().optimize(optimized_physical_plan, state.config_options())?;
+
+        assert_eq!(physical_plan.schema(), optimized_physical_plan.schema());
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&optimized_physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        // Run EnforceSorting - JoinSelection
+        let optimized_physical_plan_2 =
+            EnforceSorting::new().optimize(physical_plan.clone(), state.config_options())?;
+        let optimized_physical_plan_2 = JoinSelection::new().optimize(optimized_physical_plan_2.clone(), state.config_options())?;
+
+        assert_eq!(physical_plan.schema(), optimized_physical_plan_2.schema());
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&optimized_physical_plan_2);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+    };
 }

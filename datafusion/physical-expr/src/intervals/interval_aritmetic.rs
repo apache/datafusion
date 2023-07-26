@@ -252,7 +252,7 @@ impl Interval {
 
     /// This function returns the data type of this interval. If both endpoints
     /// do not have the same data type, returns an error.
-    pub(crate) fn get_datatype(&self) -> Result<DataType> {
+    pub fn get_datatype(&self) -> Result<DataType> {
         let lower_type = self.lower.get_datatype();
         let upper_type = self.upper.get_datatype();
         if lower_type == upper_type {

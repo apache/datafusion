@@ -109,7 +109,7 @@ fn supports_swap(join_type: JoinType) -> bool {
 
 /// This function returns the new join type we get after swapping the given
 /// join's inputs.
-fn swap_join_type(join_type: JoinType) -> JoinType {
+pub(crate) fn swap_join_type(join_type: JoinType) -> JoinType {
     match join_type {
         JoinType::Inner => JoinType::Inner,
         JoinType::Full => JoinType::Full,
@@ -164,7 +164,7 @@ fn swap_hash_join(
 /// the output should not be impacted. This function creates the expressions
 /// that will allow to swap back the values from the original left as the first
 /// columns and those on the right next.
-fn swap_reverting_projection(
+pub(crate) fn swap_reverting_projection(
     left_schema: &Schema,
     right_schema: &Schema,
 ) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
@@ -214,8 +214,16 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // First, we inspect all joins in the plan and make necessary modifications
+        // to preserve output orderings when necessary:
+        let plan_with_hash_joins = crate::physical_optimizer::join_pipeline_selection::PlanWithCorrespondingHashJoin::new(plan);
+        let state = plan_with_hash_joins
+            .transform_up(&|p| crate::physical_optimizer::join_pipeline_selection::select_joins_to_preserve_order_subrule(p, config))?;
+        // Finalize the order-preserving join selection procedure by inspecting
+        // the root of the plan tree:
+        let plan = crate::physical_optimizer::join_pipeline_selection::finalize_order_preserving_joins_at_root(state, config)?;
         let pipeline = PipelineStatePropagator::new(plan);
-        // First, we make pipeline-fixing modifications to joins so as to accommodate
+        // Next, we make pipeline-fixing modifications to joins so as to accommodate
         // unbounded inputs. Each pipeline-fixing subrule, which is a function
         // of type `PipelineFixerSubrule`, takes a single [`PipelineStatePropagator`]
         // argument storing state variables that indicate the unboundedness status

@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use crate::physical_plan::joins::HashJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -30,6 +31,7 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::ExecutionPlan;
+
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -143,7 +145,6 @@ pub fn is_sort_preserving_merge(plan: &Arc<dyn ExecutionPlan>) -> bool {
 pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<CoalescePartitionsExec>()
 }
-
 /// Checks whether the given operator is a [`UnionExec`].
 pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<UnionExec>()
@@ -152,6 +153,11 @@ pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
 /// Checks whether the given operator is a [`RepartitionExec`].
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<RepartitionExec>()
+}
+
+/// Checks whether the given operator is a [`HashJoinExec`].
+pub fn is_hash_join(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<HashJoinExec>()
 }
 
 #[cfg(test)]
