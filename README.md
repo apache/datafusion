@@ -19,8 +19,6 @@
 
 # DataFusion
 
-[![Coverage Status](https://codecov.io/gh/apache/arrow-datafusion/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-datafusion?branch=master)
-
 <img src="https://arrow.apache.org/datafusion/_images/DataFusion-Logo-Background-White.png" width="256" alt="logo"/>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
