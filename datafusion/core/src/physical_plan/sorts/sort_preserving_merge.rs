@@ -333,9 +333,6 @@ mod tests {
 
             // build a record batch out of col `a` and col `b`
             let batch: RecordBatch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
-
-            // println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()]).unwrap().to_string());
-
             Some((batch, next_state))
         }).boxed()
     }
