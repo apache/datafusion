@@ -918,6 +918,12 @@ select trunc(4.267, 3), trunc(1.1234, 2), trunc(-1.1231, 6), trunc(1.2837284, 2)
 ----
 4.267 1.12 -1.1231 1.28 1
 
+# trunc with negative precision should truncate digits left of decimal
+query R
+select trunc(12345.678, -3);
+----
+12000
+
 # trunc with columns and precision
 query RRR rowsort
 select
