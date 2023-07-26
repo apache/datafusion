@@ -270,14 +270,15 @@ mod tests {
     use std::char::from_u32;
     use std::iter::FromIterator;
     use rand::Rng;
+    use std::pin::Pin;
 
     use arrow::array::ArrayRef;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, Int32Type};
     use arrow::record_batch::RecordBatch;
     use datafusion_execution::config::SessionConfig;
-    use futures::{FutureExt, StreamExt};
     use tempfile::TempDir;
+    use futures::{FutureExt, StreamExt, stream::BoxStream};
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
@@ -296,12 +297,53 @@ mod tests {
     use crate::datasource::{streaming::StreamingTable, TableProvider};
 
     use super::*;
+    
+    fn make_infinite_sorted_stream() -> BoxStream<'static, RecordBatch> {
+        futures::stream::unfold(0, |state| async move {
+            // stop the stream at 1 batch now. 
+            // Need to figure out how all the columns in the batches are sorted.
+            if state >= 1 {
+                return None;
+            }
 
-    struct InfiniteStream {
-        schema: SchemaRef,
-        batches: Vec<RecordBatch>,
+            let next_state = state + 1;
+            
+            // building col `a`
+            let values = 
+                StringArray::from_iter_values([
+                    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 
+                    "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", 
+                    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+                ]);
+            let mut keys_vector: Vec<i32> = Vec::new();
+            for _i in 1..=8192 {
+                keys_vector.push(rand::thread_rng().gen_range(0..=2));
+            }
+            let keys = Int32Array::from(keys_vector);
+            let col_a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());        
+
+            // building col `b`
+            let mut values: Vec<String> = Vec::new();
+            for _i in 1..=8192 {
+                let ascii_value = rand::thread_rng().gen_range(97..=110);
+                values.push(String::from(from_u32(ascii_value).unwrap()));
+                values.sort();
+            }
+            let col_b: ArrayRef = Arc::new(StringArray::from(values));
+
+            // build a record batch out of col `a` and col `b`
+            let batch: RecordBatch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+
+            // println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()]).unwrap().to_string());
+
+            Some((batch, next_state))
+        }).boxed()
     }
     
+    struct InfiniteStream {
+        schema: SchemaRef,
+    }
+
     impl PartitionStream for InfiniteStream {
         fn schema(&self) -> &SchemaRef {
             &self.schema
@@ -312,57 +354,30 @@ mod tests {
             // converting the iterator into a futures::stream::Stream
             Box::pin(RecordBatchStreamAdapter::new(
                 self.schema.clone(),
-                futures::stream::iter(self.batches.clone()).map(Ok),
+                make_infinite_sorted_stream().map(Ok)
             ))
         }
-    }    
+    }
 
     #[tokio::test]
     async fn test_dict_merge_inf() {
         let session_ctx = SessionContext::new();
         let task_ctx: Arc<TaskContext> = session_ctx.task_ctx();
 
-        // build a set of 100 million batches
-        let mut batches: Vec<RecordBatch> = Vec::new();
-        for _i in 1..=2 {
-            // println!("i: {}", _i);
-            // building col `a`
-            let values = 
-                StringArray::from_iter_values([
-                    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 
-                    "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", 
-                    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
-                ]);
-            let mut keys_vector: Vec<i32> = Vec::new();
-            for _i in 1..=10 {
-                keys_vector.push(rand::thread_rng().gen_range(0..=2));
-            }
-            let keys = Int32Array::from(keys_vector);
-            let col_a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());        
+        let schema = SchemaRef::new(Schema::new(vec![
+            Field::new("a", DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)), false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
 
-            // building col `b`
-            let mut values: Vec<String> = Vec::new();
-            for _i in 1..=10 {
-                let ascii_value = rand::thread_rng().gen_range(97..=110);
-                values.push(String::from(from_u32(ascii_value).unwrap()));
-                values.sort();
-            }
+        let stream_1 = Arc::new(InfiniteStream {
+            schema: schema.clone(),
+        });
 
-            let col_b: ArrayRef = Arc::new(StringArray::from(values));
+        let stream_2 = Arc::new(InfiniteStream {
+            schema: schema.clone(),
+        });
 
-            // build a record batch out of col `a` and col `b`
-            let batch: RecordBatch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
-
-            // print the batch
-            println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()]).unwrap().to_string());
-
-            batches.push(batch);
-        }
-
-        println!("Result: ");
-
-        // get the schema of the stream of batches
-        let schema = batches[0].schema();
+        println!("SortPreservingMergeExec result: ");
 
         let sort = vec![
             PhysicalSortExpr {
@@ -371,42 +386,16 @@ mod tests {
             }
         ];
         
-        let provider = StreamingTable::try_new(schema, vec![Arc::new(InfiniteStream {
-            schema: batches[0].schema(),
-            batches: batches.clone(),
-        })]).unwrap();
+        let provider = StreamingTable::try_new(schema, vec![stream_1, stream_2]).unwrap();
 
-        let exec = provider.scan(&session_ctx.state(), None, &[], None).await.unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
-        let collected = collect(merge, task_ctx).await.unwrap();
-        collected.iter().for_each(|batch| {
-            println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+        let plan = provider.scan(&session_ctx.state(), None, &[], None).await.unwrap();
+        let exec = Arc::new(SortPreservingMergeExec::new(sort, plan));
+        let mut stream = exec.execute(0, task_ctx).unwrap();
+        while let Some(batch) = stream.next().await {
+            println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.unwrap().clone()])
                 .unwrap()
                 .to_string());
-        });
-
-        // // sort the batches by col `b`
-        // let sort = vec![
-        //     PhysicalSortExpr {
-        //         expr: col("b", &schema).unwrap(),
-        //         options: Default::default(),
-        //     }
-        // ];
-        
-        // // create a streaming table exec node
-        // let exec = MemoryExec::try_new(&[batches], schema, None).unwrap();
-        
-        // // create a sort preserving merge exec node
-        // let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
-
-        // // execute and collect the result
-        // let collected = collect(merge, task_ctx).await.unwrap();
-        // collected.iter().for_each(|batch| {
-        //     println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()])
-        //         .unwrap()
-        //         .to_string());
-        // });
-
+        }
     }
 
     #[tokio::test]
