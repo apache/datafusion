@@ -291,9 +291,9 @@ mod tests {
     use crate::{assert_batches_eq, test_util};
     use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray, DictionaryArray};
 
-    // use crate::datasource::streaming::StreamingTableExec;
     use crate::physical_plan::streaming::PartitionStream;
     use crate::physical_plan::stream::RecordBatchStreamAdapter;
+    use crate::datasource::{streaming::StreamingTable, TableProvider};
 
     use super::*;
 
@@ -325,9 +325,14 @@ mod tests {
         // build a set of 100 million batches
         let mut batches: Vec<RecordBatch> = Vec::new();
         for _i in 1..=2 {
+            // println!("i: {}", _i);
             // building col `a`
             let values = 
-                StringArray::from_iter_values(["x", "y", "z"]);
+                StringArray::from_iter_values([
+                    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 
+                    "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", 
+                    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+                ]);
             let mut keys_vector: Vec<i32> = Vec::new();
             for _i in 1..=10 {
                 keys_vector.push(rand::thread_rng().gen_range(0..=2));
@@ -338,9 +343,11 @@ mod tests {
             // building col `b`
             let mut values: Vec<String> = Vec::new();
             for _i in 1..=10 {
-                let ascii_value = rand::thread_rng().gen_range(97..=122);
+                let ascii_value = rand::thread_rng().gen_range(97..=110);
                 values.push(String::from(from_u32(ascii_value).unwrap()));
+                values.sort();
             }
+
             let col_b: ArrayRef = Arc::new(StringArray::from(values));
 
             // build a record batch out of col `a` and col `b`
@@ -352,10 +359,11 @@ mod tests {
             batches.push(batch);
         }
 
+        println!("Result: ");
+
         // get the schema of the stream of batches
         let schema = batches[0].schema();
 
-        // sort the batches by col `b`
         let sort = vec![
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
@@ -363,19 +371,41 @@ mod tests {
             }
         ];
         
-        // create a streaming table exec node
-        let exec = MemoryExec::try_new(&[batches], schema, None).unwrap();
-        
-        // create a sort preserving merge exec node
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let provider = StreamingTable::try_new(schema, vec![Arc::new(InfiniteStream {
+            schema: batches[0].schema(),
+            batches: batches.clone(),
+        })]).unwrap();
 
-        // execute and collect the result
+        let exec = provider.scan(&session_ctx.state(), None, &[], None).await.unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
         let collected = collect(merge, task_ctx).await.unwrap();
         collected.iter().for_each(|batch| {
             println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()])
                 .unwrap()
                 .to_string());
         });
+
+        // // sort the batches by col `b`
+        // let sort = vec![
+        //     PhysicalSortExpr {
+        //         expr: col("b", &schema).unwrap(),
+        //         options: Default::default(),
+        //     }
+        // ];
+        
+        // // create a streaming table exec node
+        // let exec = MemoryExec::try_new(&[batches], schema, None).unwrap();
+        
+        // // create a sort preserving merge exec node
+        // let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+
+        // // execute and collect the result
+        // let collected = collect(merge, task_ctx).await.unwrap();
+        // collected.iter().for_each(|batch| {
+        //     println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+        //         .unwrap()
+        //         .to_string());
+        // });
 
     }
 
