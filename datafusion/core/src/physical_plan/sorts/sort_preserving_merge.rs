@@ -267,6 +267,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 #[cfg(test)]
 mod tests {
+    use std::char::from_u32;
     use std::iter::FromIterator;
     use rand::Rng;
 
@@ -328,24 +329,25 @@ mod tests {
             let values = 
                 StringArray::from_iter_values(["x", "y", "z"]);
             let mut keys_vector: Vec<i32> = Vec::new();
-            for _i in 1..=8192 {
+            for _i in 1..=10 {
                 keys_vector.push(rand::thread_rng().gen_range(0..=2));
             }
             let keys = Int32Array::from(keys_vector);
             let col_a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());        
 
             // building col `b`
-            let mut values: Vec<i32> = Vec::new();
-            for _i in 1..=8192 {
-                values.push(rand::thread_rng().gen_range(1..=999));
+            let mut values: Vec<String> = Vec::new();
+            for _i in 1..=10 {
+                let ascii_value = rand::thread_rng().gen_range(97..=122);
+                values.push(String::from(from_u32(ascii_value).unwrap()));
             }
-            let col_b: ArrayRef = Arc::new(Int32Array::from(values));
+            let col_b: ArrayRef = Arc::new(StringArray::from(values));
 
             // build a record batch out of col `a` and col `b`
-            let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+            let batch: RecordBatch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
 
             // print the batch
-            // println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()]).unwrap().to_string());
+            println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()]).unwrap().to_string());
 
             batches.push(batch);
         }
@@ -373,8 +375,6 @@ mod tests {
             println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()])
                 .unwrap()
                 .to_string());
-
-            println!("batch len: {}", batch.num_rows());
         });
 
     }
