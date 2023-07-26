@@ -1148,6 +1148,24 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     )),
                 }),
             },
+            ScalarValue::Decimal256(val, p, s) => match *val {
+                Some(v) => {
+                    let array = v.to_be_bytes();
+                    let vec_val: Vec<u8> = array.to_vec();
+                    Ok(protobuf::ScalarValue {
+                        value: Some(Value::Decimal256Value(protobuf::Decimal256 {
+                            value: vec_val,
+                            p: *p as i64,
+                            s: *s as i64,
+                        })),
+                    })
+                }
+                None => Ok(protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::NullValue(
+                        (&data_type).try_into()?,
+                    )),
+                }),
+            },
             ScalarValue::Date64(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date64Value(*s))
             }
@@ -1382,7 +1400,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
-            BuiltinScalarFunction::ArrayContains => Self::ArrayContains,
+            BuiltinScalarFunction::ArrayHasAll => Self::ArrayHasAll,
+            BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
+            BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
             BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
             BuiltinScalarFunction::ArrayFill => Self::ArrayFill,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,

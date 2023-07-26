@@ -398,7 +398,6 @@
 //! * [datafusion_execution]: State and structures needed for execution
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
-//! * [datafusion_row]: Row based representation
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
 //!
 //! [sqlparser]: https://docs.rs/sqlparser/latest/sqlparser
@@ -466,11 +465,6 @@ pub mod optimizer {
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr {
     pub use datafusion_physical_expr::*;
-}
-
-/// re-export of [`datafusion_row`] crate
-pub mod row {
-    pub use datafusion_row::*;
 }
 
 /// re-export of [`datafusion_sql`] crate

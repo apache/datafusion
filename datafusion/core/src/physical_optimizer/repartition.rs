@@ -396,6 +396,8 @@ mod tests {
             scan_config(false, true),
             false,
             b',',
+            b'"',
+            None,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -411,6 +413,8 @@ mod tests {
             scan_config(false, false),
             false,
             b',',
+            b'"',
+            None,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -426,6 +430,8 @@ mod tests {
             scan_config(true, true),
             false,
             b',',
+            b'"',
+            None,
             FileCompressionType::UNCOMPRESSED,
         ))
     }
@@ -992,6 +998,8 @@ mod tests {
                 scan_config(false, true),
                 false,
                 b',',
+                b'"',
+                None,
                 compression_type,
             )));
 
