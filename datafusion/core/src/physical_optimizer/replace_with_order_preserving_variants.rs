@@ -66,10 +66,9 @@ impl OrderPreservationContext {
             .into_iter()
             .enumerate()
             .map(|(idx, item)| {
-                // Leaves of the `coalesce_onwards` tree are `CoalescePartitionsExec`
-                // operators. This tree collects all the intermediate executors that
-                // maintain a single partition. If we just saw a `CoalescePartitionsExec`
-                // operator, we reset the tree and start accumulating.
+                // `ordering_onwards` tree keeps track of executors that maintain
+                // ordering, (or that can maintain ordering with the replacement of
+                // its variant)
                 let plan = item.plan;
                 let ordering_onwards = item.ordering_onwards;
                 if plan.children().is_empty() {
@@ -247,8 +246,8 @@ pub(crate) fn replace_with_order_preserving_variants(
         let is_unbounded = unbounded_output(plan);
         let updated_sort_input = get_updated_plan(
             exec_tree,
-            is_spr_better | is_unbounded,
-            is_spm_better | is_unbounded,
+            is_spr_better || is_unbounded,
+            is_spm_better || is_unbounded,
         )?;
         // If this sort is unnecessary, we should remove it and update the plan:
         if ordering_satisfy(

@@ -383,7 +383,6 @@ impl PhysicalOptimizerRule for EnforceSorting {
         // missed by the bottom-up traversal:
         let sort_pushdown = SortPushDown::init(updated_plan.plan);
         let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
-        // adjusted.plan.transform_down(&replace_repartition_execs)
         Ok(adjusted.plan)
     }
 
@@ -1399,10 +1398,11 @@ mod tests {
     /// `$EXPECTED_PLAN_LINES`: input plan
     /// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
     /// `$PLAN`: the plan to optimized
+    /// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
     ///
     macro_rules! assert_optimized {
-        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $RepartitionSorts: expr) => {
-            let config = SessionConfig::new().with_repartition_sorts($RepartitionSorts);
+        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
+            let config = SessionConfig::new().with_repartition_sorts($REPARTITION_SORTS);
             let session_ctx = SessionContext::with_config(config);
             let state = session_ctx.state();
 
