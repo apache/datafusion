@@ -97,7 +97,7 @@ impl ProjectionExec {
 
         // construct a map from the input columns to the output columns of the Projection
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
-        for (expression, name) in expr.iter() {
+        for (expr_idx, (expression, name)) in expr.iter().enumerate() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
                 // For some executors, logical and physical plan schema fields
                 // are not the same. The information in a `Column` comes from
@@ -107,11 +107,10 @@ impl ProjectionExec {
                 let idx = column.index();
                 let matching_input_field = input_schema.field(idx);
                 let matching_input_column = Column::new(matching_input_field.name(), idx);
-                let new_col_idx = schema.index_of(name)?;
                 let entry = columns_map
                     .entry(matching_input_column)
                     .or_insert_with(Vec::new);
-                entry.push(Column::new(name, new_col_idx));
+                entry.push(Column::new(name, expr_idx));
             };
         }
 

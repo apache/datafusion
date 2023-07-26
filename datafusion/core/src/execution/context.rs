@@ -2175,13 +2175,11 @@ mod tests {
     async fn create_variable_err() -> Result<()> {
         let ctx = SessionContext::new();
 
-        let err = plan_and_collect(&ctx, "SElECT @=   X#=?!~ 5")
-            .await
-            .unwrap_err();
+        let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
 
         assert_eq!(
             err.to_string(),
-            "Error during planning: variable [\"@\"] has no type information"
+            "Error during planning: variable [\"@=\"] has no type information"
         );
         Ok(())
     }
@@ -2250,7 +2248,7 @@ mod tests {
         // Note capitalization
         let my_avg = create_udaf(
             "MY_AVG",
-            DataType::Float64,
+            vec![DataType::Float64],
             Arc::new(DataType::Float64),
             Volatility::Immutable,
             Arc::new(|_| {

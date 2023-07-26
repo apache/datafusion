@@ -26,7 +26,7 @@ use crate::protobuf::{
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+    i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
     UnionFields, UnionMode,
 };
 use datafusion::execution::registry::FunctionRegistry;
@@ -644,6 +644,14 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let array = vec_to_array(val.value.clone());
                 Self::Decimal128(
                     Some(i128::from_be_bytes(array)),
+                    val.p as u8,
+                    val.s as i8,
+                )
+            }
+            Value::Decimal256Value(val) => {
+                let array = vec_to_array(val.value.clone());
+                Self::Decimal256(
+                    Some(i256::from_be_bytes(array)),
                     val.p as u8,
                     val.s as i8,
                 )
