@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dict_merge_inf() {
+    async fn test_dict_merge_infinite() {
         let session_ctx = SessionContext::new();
         let task_ctx: Arc<TaskContext> = session_ctx.task_ctx();
 
