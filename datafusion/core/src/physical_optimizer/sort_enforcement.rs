@@ -36,7 +36,9 @@
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::replace_repartition_execs::replace_repartition_execs;
+use crate::physical_optimizer::replace_with_order_preserving_variants::{
+    replace_with_order_preserving_variants, OrderPreservationContext,
+};
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
     add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
@@ -78,7 +80,7 @@ impl EnforceSorting {
 /// This object implements a tree that we use while keeping track of paths
 /// leading to [`SortExec`]s.
 #[derive(Debug, Clone)]
-struct ExecTree {
+pub(crate) struct ExecTree {
     /// The `ExecutionPlan` associated with this node
     pub plan: Arc<dyn ExecutionPlan>,
     /// Child index of the plan in its parent
@@ -367,11 +369,21 @@ impl PhysicalOptimizerRule for EnforceSorting {
         } else {
             adjusted.plan
         };
+        let plan_with_pipeline_fixer = OrderPreservationContext::new(new_plan);
+        let updated_plan =
+            plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| {
+                replace_with_order_preserving_variants(
+                    plan_with_pipeline_fixer,
+                    false,
+                    true,
+                )
+            })?;
+
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
-        let sort_pushdown = SortPushDown::init(new_plan);
+        let sort_pushdown = SortPushDown::init(updated_plan.plan);
         let adjusted = sort_pushdown.transform_down(&pushdown_sorts)?;
-        adjusted.plan.transform_down(&replace_repartition_execs)
+        Ok(adjusted.plan)
     }
 
     fn name(&self) -> &str {
@@ -985,7 +997,7 @@ mod tests {
         Linear, PartiallySorted, Sorted,
     };
     use crate::physical_plan::{displayable, Partitioning};
-    use crate::prelude::SessionContext;
+    use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::csv_exec_sorted;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1386,10 +1398,12 @@ mod tests {
     /// `$EXPECTED_PLAN_LINES`: input plan
     /// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
     /// `$PLAN`: the plan to optimized
+    /// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
     ///
     macro_rules! assert_optimized {
-        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr) => {
-            let session_ctx = SessionContext::new();
+        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
+            let config = SessionConfig::new().with_repartition_sorts($REPARTITION_SORTS);
+            let session_ctx = SessionContext::with_config(config);
             let state = session_ctx.state();
 
             let physical_plan = $PLAN;
@@ -1437,7 +1451,7 @@ mod tests {
             "SortExec: expr=[nullable_col@0 ASC]",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1500,7 +1514,7 @@ mod tests {
             "        SortExec: expr=[non_nullable_col@1 DESC]",
             "          MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1521,7 +1535,7 @@ mod tests {
             "SortExec: expr=[nullable_col@0 ASC]",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1547,7 +1561,7 @@ mod tests {
             "SortExec: expr=[nullable_col@0 ASC]",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1586,7 +1600,7 @@ mod tests {
             "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
             "    MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1630,7 +1644,7 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
             "      MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1687,7 +1701,7 @@ mod tests {
             "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
             "          MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1718,7 +1732,7 @@ mod tests {
             "  MemoryExec: partitions=0, partition_sizes=[]",
             "  ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1747,7 +1761,7 @@ mod tests {
             "SortExec: expr=[nullable_col@0 ASC]",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1793,7 +1807,7 @@ mod tests {
             "            SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "              ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1816,7 +1830,7 @@ mod tests {
             "SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1843,7 +1857,7 @@ mod tests {
             "SortExec: expr=[non_nullable_col@1 ASC]",
             "  MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1870,7 +1884,7 @@ mod tests {
         ];
         // should not add a sort at the output of the union, input plan should not be changed
         let expected_optimized = expected_input.clone();
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1901,7 +1915,7 @@ mod tests {
         ];
         // should not add a sort at the output of the union, input plan should not be changed
         let expected_optimized = expected_input.clone();
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1941,7 +1955,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -1986,7 +2000,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2031,7 +2045,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2081,7 +2095,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2133,7 +2147,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2171,7 +2185,7 @@ mod tests {
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_output, physical_plan);
+        assert_optimized!(expected_input, expected_output, physical_plan, true);
         Ok(())
     }
 
@@ -2223,7 +2237,7 @@ mod tests {
             "  ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "  ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2274,7 +2288,7 @@ mod tests {
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2314,7 +2328,7 @@ mod tests {
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2369,7 +2383,7 @@ mod tests {
             "        SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 DESC NULLS LAST]",
             "          ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2442,7 +2456,7 @@ mod tests {
                     ]
                 }
             };
-            assert_optimized!(expected_input, expected_optimized, physical_plan);
+            assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         }
         Ok(())
     }
@@ -2518,7 +2532,7 @@ mod tests {
                     ]
                 }
             };
-            assert_optimized!(expected_input, expected_optimized, physical_plan);
+            assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         }
         Ok(())
     }
@@ -2562,7 +2576,7 @@ mod tests {
             "    SortExec: expr=[col_a@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
         // order by (nullable_col, col_b, col_a)
         let sort_exprs2 = vec![
@@ -2588,7 +2602,7 @@ mod tests {
             "    SortExec: expr=[col_a@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
         Ok(())
     }
@@ -2628,7 +2642,7 @@ mod tests {
             "      SortExec: expr=[nullable_col@0 ASC,non_nullable_col@1 ASC]",
             "        MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2666,7 +2680,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2749,7 +2763,7 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=0",
             "      MemoryExec: partitions=0, partition_sizes=[]",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2780,7 +2794,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 
@@ -2810,7 +2824,37 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
         ];
-        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_lost_ordering_unbounded_parallelize_off() -> Result<()> {
+        let schema = create_test_schema3()?;
+        let sort_exprs = vec![sort_expr("a", &schema)];
+        let source = csv_exec_sorted(&schema, sort_exprs, true);
+        let repartition_rr = repartition_exec(source);
+        let repartition_hash = Arc::new(RepartitionExec::try_new(
+            repartition_rr,
+            Partitioning::Hash(vec![col("c", &schema).unwrap()], 10),
+        )?) as _;
+        let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
+        let physical_plan = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
+
+        let expected_input = vec![
+            "SortExec: expr=[a@0 ASC]",
+            "  CoalescePartitionsExec",
+            "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
+        ];
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, false);
         Ok(())
     }
 }
