@@ -1,0 +1,13 @@
+As of 21 July 2023, Synnada, Inc. makes two types of contributions to the Apache Arrow/Datafusion project:
+
+1. Contributions Synnada, Inc. and its employees donate to the Apache Software
+Foundation, which merge with Apache Software Foundation's Arrow/Datafusion
+repository.
+2. Contributions and extensions Synnada Inc. retains the copyright to, which
+stay in Synnada Inc.'s fork repository. Synnada Inc. currently does not offer
+any licenses for these contributions and default copyright laws apply.
+See the SYNNADA-CONTRIBUTIONS file for a list of these contributions.
+
+Synnada, Inc. extensions are separate from the Apache Software Foundation
+copyrighted codebase. Synnada, Inc. claims no copyright or control over the
+Apache Software Foundation copyrighted portions of this software.
