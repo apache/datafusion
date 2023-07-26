@@ -920,12 +920,16 @@ select trunc(4.267, 3), trunc(1.1234, 2), trunc(-1.1231, 6), trunc(1.2837284, 2)
 
 # trunc with columns and precision
 query RRR rowsort
-select trunc(a, 3) as a3, trunc(a, 1) as a1, trunc(arrow_cast(a, 'Float64'), 3) as a3_f64 from small_floats;
+select
+  trunc(sqrt(abs(a)), 3) as a3,
+  trunc(sqrt(abs(a)), 1) as a1,
+  trunc(arrow_cast(sqrt(abs(a)), 'Float64'), 3) as a3_f64
+from small_floats;
 ----
--0.7 -0.7 -0.7
--1 -1 -1
-0.2 0.2 0.2
-0.5 0.5 0.5
+0.447 0.4 0.447
+0.707 0.7 0.707
+0.837 0.8 0.837
+1 1 1
 
 ## bitwise and
 
