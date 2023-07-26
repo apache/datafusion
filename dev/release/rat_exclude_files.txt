@@ -135,3 +135,6 @@ datafusion/proto/src/generated/prost.rs
 .github/ISSUE_TEMPLATE/bug_report.yml
 .github/ISSUE_TEMPLATE/feature_request.yml
 .github/workflows/docs.yaml
+SYNNADA-CONTRIBUTIONS.txt
+SYNNADA-README.md
+SYNNADA-NOTICE.txt
