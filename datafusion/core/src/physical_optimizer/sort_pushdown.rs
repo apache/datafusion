@@ -16,9 +16,7 @@
 // under the License.
 use crate::physical_optimizer::utils::{add_sort_above, is_limit, is_union, is_window};
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::utils::{
-    calculate_join_output_ordering, JoinProbeSide, JoinSide,
-};
+use crate::physical_plan::joins::utils::{calculate_join_output_ordering, JoinSide};
 use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
@@ -326,7 +324,7 @@ fn try_pushdown_requirements_to_join_v2(
             &smj.on,
             smj.left.schema().fields.len(),
             &smj.maintains_input_order(),
-            JoinProbeSide::Left,
+            Some(JoinSide::Left),
         )?,
         JoinSide::Right => calculate_join_output_ordering(
             left_ordering,
@@ -335,7 +333,7 @@ fn try_pushdown_requirements_to_join_v2(
             &smj.on,
             smj.left.schema().fields.len(),
             &smj.maintains_input_order(),
-            JoinProbeSide::Left,
+            Some(JoinSide::Left),
         )?,
     };
     if ordering_satisfy_requirement(

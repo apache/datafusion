@@ -35,8 +35,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
     build_join_schema, calculate_join_output_ordering, check_join_is_valid,
     combine_join_equivalence_properties, combine_join_ordering_equivalence_properties,
-    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
-    JoinProbeSide,
+    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn, JoinSide,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
@@ -139,7 +138,7 @@ impl SortMergeJoinExec {
             &on,
             left_schema.fields.len(),
             &maintains_input_order(join_type),
-            JoinProbeSide::Left,
+            Some(JoinSide::Left),
         )?;
 
         let schema =
@@ -272,7 +271,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             &self.right,
             self.schema(),
             &self.maintains_input_order(),
-            JoinProbeSide::Left,
+            Some(JoinSide::Left),
             self.equivalence_properties(),
         )
         .unwrap()

@@ -177,7 +177,7 @@ pub fn calculate_join_output_ordering(
     on_columns: &[(Column, Column)],
     left_columns_len: usize,
     maintains_input_order: &[bool],
-    probe_side: JoinProbeSide,
+    probe_side: Option<JoinSide>,
 ) -> Result<Option<LexOrdering>> {
     // All joins have 2 children
     assert_eq!(maintains_input_order.len(), 2);
@@ -210,7 +210,7 @@ pub fn calculate_join_output_ordering(
         }
         (true, false) => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
-            if join_type == JoinType::Inner && probe_side == JoinProbeSide::Left {
+            if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
                     &on_columns,
                     &mut right_ordering,
@@ -223,7 +223,7 @@ pub fn calculate_join_output_ordering(
         }
         (false, true) => {
             // Special case, we can prefix ordering of left side with the ordering of right side.
-            if join_type == JoinType::Inner && probe_side == JoinProbeSide::Right {
+            if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 merge_vectors(&right_ordering, left_ordering)
             } else {
                 right_ordering
@@ -314,17 +314,6 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
-/// Keeps which side is used as Probe for join operation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinProbeSide {
-    /// left side is ProbeSide
-    Left,
-    /// right side is ProbeSide
-    Right,
-    /// Probe side alternates between left and right
-    Alternating,
-}
-
 fn get_updated_right_ordering_equivalence_properties(
     join_type: &JoinType,
     right_oeq_classes: &[OrderingEquivalentClass],
@@ -386,7 +375,7 @@ pub fn combine_join_ordering_equivalence_properties(
     right: &Arc<dyn ExecutionPlan>,
     schema: SchemaRef,
     maintains_input_order: &[bool],
-    probe_side: JoinProbeSide,
+    probe_side: Option<JoinSide>,
     join_eq_properties: EquivalenceProperties,
 ) -> Result<OrderingEquivalenceProperties> {
     let mut new_properties = OrderingEquivalenceProperties::new(schema);
@@ -405,7 +394,7 @@ pub fn combine_join_ordering_equivalence_properties(
         }
         (true, false) => {
             new_properties.extend(left_oeq_properties.classes().iter().cloned());
-            if probe_side == JoinProbeSide::Left
+            if probe_side == Some(JoinSide::Left)
                 && right.output_ordering().is_some()
                 && *join_type == JoinType::Inner
             {
@@ -440,7 +429,7 @@ pub fn combine_join_ordering_equivalence_properties(
                 left_columns_len,
             )?;
             new_properties.extend(right_oeq_classes);
-            if probe_side == JoinProbeSide::Right
+            if probe_side == Some(JoinSide::Right)
                 && left.output_ordering().is_some()
                 && *join_type == JoinType::Inner
             {
