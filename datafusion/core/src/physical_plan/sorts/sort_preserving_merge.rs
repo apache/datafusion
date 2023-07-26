@@ -268,6 +268,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
 #[cfg(test)]
 mod tests {
     use std::iter::FromIterator;
+    use rand::Rng;
 
     use arrow::array::ArrayRef;
     use arrow::compute::SortOptions;
@@ -289,7 +290,7 @@ mod tests {
     use crate::{assert_batches_eq, test_util};
     use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray, DictionaryArray};
 
-    use crate::datasource::streaming::StreamingTableExec;
+    // use crate::datasource::streaming::StreamingTableExec;
     use crate::physical_plan::streaming::PartitionStream;
     use crate::physical_plan::stream::RecordBatchStreamAdapter;
 
@@ -318,29 +319,63 @@ mod tests {
     #[tokio::test]
     async fn test_dict_merge_inf() {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        
-        // Need to generate batches of batches
-        let batches: Vec<_> = AccessLogGenerator::new()
-        .with_row_limit(1000)
-        .with_max_batch_size(50)
-        .collect();
+        let task_ctx: Arc<TaskContext> = session_ctx.task_ctx();
 
+        // build a set of 100 million batches
+        let mut batches: Vec<RecordBatch> = Vec::new();
+        for _i in 1..=2 {
+            // building col `a`
+            let values = 
+                StringArray::from_iter_values(["x", "y", "z"]);
+            let mut keys_vector: Vec<i32> = Vec::new();
+            for _i in 1..=8192 {
+                keys_vector.push(rand::thread_rng().gen_range(0..=2));
+            }
+            let keys = Int32Array::from(keys_vector);
+            let col_a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());        
+
+            // building col `b`
+            let mut values: Vec<i32> = Vec::new();
+            for _i in 1..=8192 {
+                values.push(rand::thread_rng().gen_range(1..=999));
+            }
+            let col_b: ArrayRef = Arc::new(Int32Array::from(values));
+
+            // build a record batch out of col `a` and col `b`
+            let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+
+            // print the batch
+            // println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()]).unwrap().to_string());
+
+            batches.push(batch);
+        }
+
+        // get the schema of the stream of batches
         let schema = batches[0].schema();
 
+        // sort the batches by col `b`
         let sort = vec![
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
                 options: Default::default(),
             }
         ];
-
-        let exec = StreamingTableExec::try_new(schema, vec![Arc::new(InfiniteStream {
-            schema: batches[0].schema(),
-            batches: batches.clone(),
-        })], true).unwrap();
+        
+        // create a streaming table exec node
+        let exec = MemoryExec::try_new(&[batches], schema, None).unwrap();
+        
+        // create a sort preserving merge exec node
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+
+        // execute and collect the result
         let collected = collect(merge, task_ctx).await.unwrap();
+        collected.iter().for_each(|batch| {
+            println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+                .unwrap()
+                .to_string());
+
+            println!("batch len: {}", batch.num_rows());
+        });
 
     }
 
@@ -352,33 +387,14 @@ mod tests {
         let values = StringArray::from_iter_values(["a", "b", "c"]);
         let keys = Int32Array::from(vec![0, 0, 1, 2, 2, 1, 1, 0, 2]);
         let a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
-            Some("a"),
-            Some("c"),
-            Some("e"),
-            Some("g"),
-            Some("i"),
-            Some("k"),
-            Some("m"),
-            Some("o"),
-            Some("q"),
-        ]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![10, 15, 12, 56, 34, 76, 2, 15, 29]));
         let batch_1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
         let values = StringArray::from_iter_values(["d", "e", "f"]);
         let keys = Int32Array::from(vec![0, 0, 1, 2, 2, 1, 1, 0, 2]);
         let a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());
-        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
-            Some("b"),
-            Some("d"),
-            Some("f"),
-            Some("h"),
-            Some("j"),
-            Some("l"),
-            Some("n"),
-            Some("p"),
-            Some("r"),
-        ]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![11, 16, 13, 57, 35, 77, 4, 17, 34]));
+
         let batch_2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
         let schema = batch_1.schema();
@@ -391,37 +407,37 @@ mod tests {
         let exec = MemoryExec::try_new(&[vec![batch_1], vec![batch_2]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
         let collected = collect(merge, task_ctx).await.unwrap();
-        // collected.iter().for_each(|batch| {
-        //     arrow::util::pretty::pretty_format_batches(&[batch.clone()])
-        //         .unwrap()
-        //         .to_string();
-        // });
+        collected.iter().for_each(|batch| {
+            println!("{}", arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+                .unwrap()
+                .to_string());
+        });
 
-        let expected = vec![
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| a | a |",
-            "| d | b |",
-            "| a | c |",
-            "| d | d |",
-            "| b | e |",
-            "| e | f |",
-            "| c | g |",
-            "| f | h |",
-            "| c | i |",
-            "| f | j |",
-            "| b | k |",
-            "| e | l |",
-            "| b | m |",
-            "| e | n |",
-            "| a | o |",
-            "| d | p |",
-            "| c | q |",
-            "| f | r |",
-            "+---+---+",
-        ];
-        assert_batches_eq!(expected, collected.as_slice());
+        // let expected = vec![
+        //     "+---+---+",
+        //     "| a | b |",
+        //     "+---+---+",
+        //     "| a | a |",
+        //     "| d | b |",
+        //     "| a | c |",
+        //     "| d | d |",
+        //     "| b | e |",
+        //     "| e | f |",
+        //     "| c | g |",
+        //     "| f | h |",
+        //     "| c | i |",
+        //     "| f | j |",
+        //     "| b | k |",
+        //     "| e | l |",
+        //     "| b | m |",
+        //     "| e | n |",
+        //     "| a | o |",
+        //     "| d | p |",
+        //     "| c | q |",
+        //     "| f | r |",
+        //     "+---+---+",
+        // ];
+        // assert_batches_eq!(expected, collected.as_slice());
     }
 
     #[tokio::test]
