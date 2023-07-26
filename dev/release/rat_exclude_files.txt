@@ -138,3 +138,5 @@ datafusion/proto/src/generated/prost.rs
 SYNNADA-CONTRIBUTIONS.txt
 SYNNADA-README.md
 SYNNADA-NOTICE.txt
+datafusion/core/src/physical_optimizer/join_pipeline_selection.rs
+

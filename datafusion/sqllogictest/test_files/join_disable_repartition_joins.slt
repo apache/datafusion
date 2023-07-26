@@ -26,6 +26,331 @@ set datafusion.optimizer.repartition_joins = false;
 include ./join.slt
 
 statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS orders (
+                o_orderkey BIGINT,
+                o_custkey BIGINT,
+                o_orderstatus VARCHAR,
+                o_totalprice DECIMAL(15, 2),
+                o_orderdate DATE,
+                o_orderpriority VARCHAR,
+                o_clerk VARCHAR,
+                o_shippriority INTEGER,
+                o_comment VARCHAR,
+                o_rev VARCHAR,
+        ) STORED AS CSV DELIMITER '|'
+        WITH ORDER (o_orderkey ASC)
+        LOCATION 'tests/tpch-csv/orders.csv';
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS lineitem (
+                    l_orderkey BIGINT,
+                    l_partkey BIGINT,
+                    l_suppkey BIGINT,
+                    l_linenumber INTEGER,
+                    l_quantity DECIMAL(15, 2),
+                    l_extendedprice DECIMAL(15, 2),
+                    l_discount DECIMAL(15, 2),
+                    l_tax DECIMAL(15, 2),
+                    l_returnflag VARCHAR,
+                    l_linestatus VARCHAR,
+                    l_shipdate DATE,
+                    l_commitdate DATE,
+                    l_receiptdate DATE,
+                    l_shipinstruct VARCHAR,
+                    l_shipmode VARCHAR,
+                    l_comment VARCHAR,
+                    l_rev VARCHAR,
+            ) STORED AS CSV DELIMITER '|'
+            WITH ORDER (l_orderkey)
+            LOCATION 'tests/tpch-csv/lineitem.csv';
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS customer (
+                c_custkey BIGINT,
+                c_name VARCHAR,
+                c_address VARCHAR,
+                c_nationkey BIGINT,
+                c_phone VARCHAR,
+                c_acctbal DECIMAL(15, 2),
+                c_mktsegment VARCHAR,
+                c_comment VARCHAR,
+                c_rev VARCHAR,
+                    ) STORED AS CSV DELIMITER '|' LOCATION 'tests/tpch-csv/customer.csv'
+                    WITH ORDER (c_custkey ASC);
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS nation (
+                    n_nationkey BIGINT,
+                    n_name VARCHAR,
+                    n_regionkey BIGINT,
+                    n_comment VARCHAR,
+                    n_rev VARCHAR,
+            ) STORED AS CSV DELIMITER '|'
+            WITH ORDER (n_nationkey ASC)
+            LOCATION 'tests/tpch-csv/nation.csv';
+
+# explain multiple sort merge join replacement
+query TT
+EXPLAIN SELECT
+                subquery.c_custkey,
+                subquery.c_nationkey,
+                subquery.order_count,
+                subquery.price_rank,
+                nation.n_name
+            FROM
+                (
+                    SELECT
+                        customer.c_custkey,
+                        customer.c_nationkey,
+                        COUNT(DISTINCT orders.o_orderkey) OVER(PARTITION BY customer.c_custkey ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as order_count,
+                        ROW_NUMBER() OVER(ORDER BY customer.c_custkey) as price_rank
+                    FROM
+                        customer
+                    INNER JOIN orders ON customer.c_custkey = orders.o_orderkey
+                    INNER JOIN lineitem ON lineitem.l_orderkey = orders.o_orderkey
+                    WHERE
+                        lineitem.l_returnflag = 'R'
+                        AND orders.o_orderstatus = 'F'
+                        AND customer.c_acctbal > 1000
+                ) as subquery
+            INNER JOIN nation ON subquery.c_custkey = nation.n_nationkey
+            WHERE
+                subquery.order_count > 10
+            ORDER BY
+                subquery.c_custkey,
+                price_rank;
+----
+logical_plan
+Sort: subquery.c_custkey ASC NULLS LAST, subquery.price_rank ASC NULLS LAST
+--Projection: subquery.c_custkey, subquery.c_nationkey, subquery.order_count, subquery.price_rank, nation.n_name
+----Inner Join: subquery.c_custkey = nation.n_nationkey
+------SubqueryAlias: subquery
+--------Projection: customer.c_custkey, customer.c_nationkey, COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS order_count, ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS price_rank
+----------Filter: COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING > Int64(10)
+------------WindowAggr: windowExpr=[[ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+--------------Projection: customer.c_custkey, customer.c_nationkey, COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+----------------WindowAggr: windowExpr=[[COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+------------------Projection: customer.c_custkey, customer.c_nationkey, orders.o_orderkey
+--------------------Inner Join: orders.o_orderkey = lineitem.l_orderkey
+----------------------Inner Join: customer.c_custkey = orders.o_orderkey
+------------------------Projection: customer.c_custkey, customer.c_nationkey
+--------------------------Filter: customer.c_acctbal > Decimal128(Some(100000),15,2)
+----------------------------TableScan: customer projection=[c_custkey, c_nationkey, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(100000),15,2)]
+------------------------Projection: orders.o_orderkey
+--------------------------Filter: orders.o_orderstatus = Utf8("F")
+----------------------------TableScan: orders projection=[o_orderkey, o_orderstatus], partial_filters=[orders.o_orderstatus = Utf8("F")]
+----------------------Projection: lineitem.l_orderkey
+------------------------Filter: lineitem.l_returnflag = Utf8("R")
+--------------------------TableScan: lineitem projection=[l_orderkey, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8("R")]
+------TableScan: nation projection=[n_nationkey, n_name]
+physical_plan
+ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, order_count@2 as order_count, price_rank@3 as price_rank, n_name@5 as n_name]
+--SortMergeJoin: join_type=Inner, on=[(c_custkey@0, n_nationkey@0)]
+----ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@2 as order_count, ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as price_rank]
+------CoalesceBatchesExec: target_batch_size=8192
+--------FilterExec: COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@2 > 10
+----------BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
+--------------BoundedWindowAggExec: wdw=[COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
+----------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, o_orderkey@2 as o_orderkey]
+------------------SortMergeJoin: join_type=Inner, on=[(o_orderkey@2, l_orderkey@0)]
+--------------------SortMergeJoin: join_type=Inner, on=[(c_custkey@0, o_orderkey@0)]
+----------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 1), input_partitions=1
+--------------------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey]
+----------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------FilterExec: c_acctbal@2 > Some(100000),15,2
+--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/customer.csv]]}, projection=[c_custkey, c_nationkey, c_acctbal], infinite_source=true, output_ordering=[c_custkey@0 ASC NULLS LAST], has_header=false
+----------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 1), input_partitions=1
+--------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey]
+----------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------FilterExec: o_orderstatus@1 = F
+--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/orders.csv]]}, projection=[o_orderkey, o_orderstatus], infinite_source=true, output_ordering=[o_orderkey@0 ASC NULLS LAST], has_header=false
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 1), input_partitions=1
+------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey]
+--------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------FilterExec: l_returnflag@1 = R
+------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_orderkey, l_returnflag], infinite_source=true, output_ordering=[l_orderkey@0 ASC NULLS LAST], has_header=false
+----CoalesceBatchesExec: target_batch_size=8192
+------RepartitionExec: partitioning=Hash([n_nationkey@0], 1), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/nation.csv]]}, projection=[n_nationkey, n_name], infinite_source=true, output_ordering=[n_nationkey@0 ASC NULLS LAST], has_header=false
+
+
+query TT
+EXPLAIN SELECT
+    subquery.c_custkey,
+    subquery.c_nationkey,
+    subquery.order_count,
+    subquery.price_rank,
+    nation.n_name
+FROM
+    (
+        SELECT
+            customer.c_custkey,
+            customer.c_nationkey,
+            COUNT(DISTINCT orders.o_orderkey) OVER(PARTITION BY customer.c_custkey ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as order_count,
+            ROW_NUMBER() OVER(ORDER BY customer.c_custkey) as price_rank
+        FROM
+            customer
+        INNER JOIN orders ON customer.c_custkey = orders.o_orderkey
+        INNER JOIN lineitem ON lineitem.l_orderkey = orders.o_orderkey
+        WHERE
+            lineitem.l_returnflag = 'R'
+            AND orders.o_orderstatus = 'F'
+            AND customer.c_acctbal > 1000
+    ) as subquery
+INNER JOIN nation ON subquery.c_custkey = nation.n_nationkey
+WHERE
+    subquery.order_count > 10
+ORDER BY
+    subquery.c_custkey,
+    price_rank
+----
+logical_plan
+Sort: subquery.c_custkey ASC NULLS LAST, subquery.price_rank ASC NULLS LAST
+--Projection: subquery.c_custkey, subquery.c_nationkey, subquery.order_count, subquery.price_rank, nation.n_name
+----Inner Join: subquery.c_custkey = nation.n_nationkey
+------SubqueryAlias: subquery
+--------Projection: customer.c_custkey, customer.c_nationkey, COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS order_count, ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS price_rank
+----------Filter: COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING > Int64(10)
+------------WindowAggr: windowExpr=[[ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+--------------Projection: customer.c_custkey, customer.c_nationkey, COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+----------------WindowAggr: windowExpr=[[COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+------------------Projection: customer.c_custkey, customer.c_nationkey, orders.o_orderkey
+--------------------Inner Join: orders.o_orderkey = lineitem.l_orderkey
+----------------------Inner Join: customer.c_custkey = orders.o_orderkey
+------------------------Projection: customer.c_custkey, customer.c_nationkey
+--------------------------Filter: customer.c_acctbal > Decimal128(Some(100000),15,2)
+----------------------------TableScan: customer projection=[c_custkey, c_nationkey, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(100000),15,2)]
+------------------------Projection: orders.o_orderkey
+--------------------------Filter: orders.o_orderstatus = Utf8("F")
+----------------------------TableScan: orders projection=[o_orderkey, o_orderstatus], partial_filters=[orders.o_orderstatus = Utf8("F")]
+----------------------Projection: lineitem.l_orderkey
+------------------------Filter: lineitem.l_returnflag = Utf8("R")
+--------------------------TableScan: lineitem projection=[l_orderkey, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8("R")]
+------TableScan: nation projection=[n_nationkey, n_name]
+physical_plan
+ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, order_count@2 as order_count, price_rank@3 as price_rank, n_name@5 as n_name]
+--SortMergeJoin: join_type=Inner, on=[(c_custkey@0, n_nationkey@0)]
+----ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@2 as order_count, ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as price_rank]
+------CoalesceBatchesExec: target_batch_size=8192
+--------FilterExec: COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@2 > 10
+----------BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
+--------------BoundedWindowAggExec: wdw=[COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "COUNT(orders.o_orderkey) PARTITION BY [customer.c_custkey] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
+----------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, o_orderkey@2 as o_orderkey]
+------------------SortMergeJoin: join_type=Inner, on=[(o_orderkey@2, l_orderkey@0)]
+--------------------SortMergeJoin: join_type=Inner, on=[(c_custkey@0, o_orderkey@0)]
+----------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------RepartitionExec: partitioning=Hash([c_custkey@0], 1), input_partitions=1
+--------------------------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey]
+----------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------FilterExec: c_acctbal@2 > Some(100000),15,2
+--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/customer.csv]]}, projection=[c_custkey, c_nationkey, c_acctbal], infinite_source=true, output_ordering=[c_custkey@0 ASC NULLS LAST], has_header=false
+----------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 1), input_partitions=1
+--------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey]
+----------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------FilterExec: o_orderstatus@1 = F
+--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/orders.csv]]}, projection=[o_orderkey, o_orderstatus], infinite_source=true, output_ordering=[o_orderkey@0 ASC NULLS LAST], has_header=false
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 1), input_partitions=1
+------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey]
+--------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------FilterExec: l_returnflag@1 = R
+------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_orderkey, l_returnflag], infinite_source=true, output_ordering=[l_orderkey@0 ASC NULLS LAST], has_header=false
+----CoalesceBatchesExec: target_batch_size=8192
+------RepartitionExec: partitioning=Hash([n_nationkey@0], 1), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/nation.csv]]}, projection=[n_nationkey, n_name], infinite_source=true, output_ordering=[n_nationkey@0 ASC NULLS LAST], has_header=false
+
+query TT
+EXPLAIN SELECT
+    subquery.c_custkey,
+    subquery.c_nationkey,
+    subquery.price_rank,
+    nation.n_name
+FROM nation
+INNER JOIN (
+        SELECT
+            customer.c_custkey,
+            customer.c_nationkey,
+            ROW_NUMBER() OVER(ORDER BY customer.c_custkey) as price_rank
+        FROM
+            customer
+    ) as subquery ON nation.n_nationkey = subquery.c_custkey
+ORDER BY
+    subquery.c_custkey,
+    price_rank;
+----
+logical_plan
+Sort: subquery.c_custkey ASC NULLS LAST, subquery.price_rank ASC NULLS LAST
+--Projection: subquery.c_custkey, subquery.c_nationkey, subquery.price_rank, nation.n_name
+----Inner Join: nation.n_nationkey = subquery.c_custkey
+------TableScan: nation projection=[n_nationkey, n_name]
+------SubqueryAlias: subquery
+--------Projection: customer.c_custkey, customer.c_nationkey, ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS price_rank
+----------WindowAggr: windowExpr=[[ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+------------TableScan: customer projection=[c_custkey, c_nationkey]
+physical_plan
+ProjectionExec: expr=[c_custkey@2 as c_custkey, c_nationkey@3 as c_nationkey, price_rank@4 as price_rank, n_name@1 as n_name]
+--ProjectionExec: expr=[n_nationkey@3 as n_nationkey, n_name@4 as n_name, c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, price_rank@2 as price_rank]
+----SortMergeJoin: join_type=Inner, on=[(c_custkey@0, n_nationkey@0)]
+------CoalesceBatchesExec: target_batch_size=8192
+--------RepartitionExec: partitioning=Hash([c_custkey@0], 1), input_partitions=1
+----------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as price_rank]
+------------BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/customer.csv]]}, projection=[c_custkey, c_nationkey], infinite_source=true, output_ordering=[c_custkey@0 ASC NULLS LAST], has_header=false
+------CoalesceBatchesExec: target_batch_size=8192
+--------RepartitionExec: partitioning=Hash([n_nationkey@0], 1), input_partitions=1
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/nation.csv]]}, projection=[n_nationkey, n_name], infinite_source=true, output_ordering=[n_nationkey@0 ASC NULLS LAST], has_header=false
+
+query TT
+EXPLAIN SELECT
+    subquery.c_custkey,
+    subquery.c_nationkey,
+    subquery.price_rank,
+    nation.n_name
+FROM
+    (
+        SELECT
+            customer.c_custkey,
+            customer.c_nationkey,
+            CAST(ROW_NUMBER() OVER(ORDER BY customer.c_custkey) as BIGINT) as price_rank
+        FROM
+            customer
+    ) as subquery
+INNER JOIN nation ON subquery.price_rank = nation.n_nationkey
+ORDER BY
+    subquery.c_custkey,
+    price_rank;
+----
+logical_plan
+Sort: subquery.c_custkey ASC NULLS LAST, subquery.price_rank ASC NULLS LAST
+--Projection: subquery.c_custkey, subquery.c_nationkey, subquery.price_rank, nation.n_name
+----Inner Join: subquery.price_rank = nation.n_nationkey
+------SubqueryAlias: subquery
+--------Projection: customer.c_custkey, customer.c_nationkey, CAST(ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS Int64) AS price_rank
+----------WindowAggr: windowExpr=[[ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+------------TableScan: customer projection=[c_custkey, c_nationkey]
+------TableScan: nation projection=[n_nationkey, n_name]
+physical_plan
+ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, price_rank@2 as price_rank, n_name@4 as n_name]
+--SortMergeJoin: join_type=Inner, on=[(price_rank@2, n_nationkey@0)]
+----CoalesceBatchesExec: target_batch_size=8192
+------RepartitionExec: partitioning=Hash([price_rank@2], 1), input_partitions=1
+--------ProjectionExec: expr=[c_custkey@0 as c_custkey, c_nationkey@1 as c_nationkey, CAST(ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 AS Int64) as price_rank]
+----------BoundedWindowAggExec: wdw=[ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "ROW_NUMBER() ORDER BY [customer.c_custkey ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/customer.csv]]}, projection=[c_custkey, c_nationkey], infinite_source=true, output_ordering=[c_custkey@0 ASC NULLS LAST], has_header=false
+----CoalesceBatchesExec: target_batch_size=8192
+------RepartitionExec: partitioning=Hash([n_nationkey@0], 1), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/nation.csv]]}, projection=[n_nationkey, n_name], infinite_source=true, output_ordering=[n_nationkey@0 ASC NULLS LAST], has_header=false
+
+statement ok
 CREATE EXTERNAL TABLE annotated_data (
   a0 INTEGER,
   a INTEGER,
@@ -99,15 +424,13 @@ Limit: skip=0, fetch=10
 ------------TableScan: annotated_data projection=[a, b, c, d], partial_filters=[annotated_data.d = Int32(3)]
 physical_plan
 GlobalLimitExec: skip=0, fetch=10
---SortPreservingMergeExec: [a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10
-----ProjectionExec: expr=[a@0 as a2, b@1 as b]
-------CoalesceBatchesExec: target_batch_size=8192
---------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)]
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
-----------CoalesceBatchesExec: target_batch_size=8192
-------------FilterExec: d@3 = 3
---------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+--ProjectionExec: expr=[a@0 as a2, b@1 as b]
+----CoalesceBatchesExec: target_batch_size=8192
+------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)]
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
+--------CoalesceBatchesExec: target_batch_size=8192
+----------FilterExec: d@3 = 3
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 # preserve_right_semi_join
 query II nosort

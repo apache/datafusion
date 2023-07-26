@@ -35,6 +35,7 @@ pub mod sort_enforcement;
 mod sort_pushdown;
 mod utils;
 
+mod join_pipeline_selection;
 #[cfg(test)]
 pub mod test_utils;
 
