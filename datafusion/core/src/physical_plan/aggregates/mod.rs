@@ -582,6 +582,8 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
+        // println!("order_by_expr:{:?}", order_by_expr);
+        // println!("mode: {:?}", mode);
         let schema = create_schema(
             &input.schema(),
             &group_by.expr,
@@ -589,6 +591,9 @@ impl AggregateExec {
             group_by.contains_null(),
             mode,
         )?;
+        // println!("group_expr: {:?}", group_expr);
+        // println!("input_schema fields names: {:?}", input.schema().fields().iter().map(|item| item.name()).collect::<Vec<_>>());
+        // println!("schema.fields names:():{:?}", schema.fields().iter().map(|item| item.name()).collect::<Vec<_>>());
 
         let schema = Arc::new(schema);
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
@@ -717,6 +722,7 @@ impl AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
+        // println!("self.mode: {:?}", self.mode);
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,

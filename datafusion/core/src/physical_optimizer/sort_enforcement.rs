@@ -2814,3 +2814,80 @@ mod tests {
         Ok(())
     }
 }
+
+mod test_bug {
+    use crate::physical_plan::{collect, ExecutionPlan};
+    use crate::prelude::SessionContext;
+    use arrow::util::pretty::print_batches;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use std::sync::Arc;
+    use datafusion_expr::LogicalPlan;
+
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
+        let formatted = crate::physical_plan::displayable(plan.as_ref())
+            .indent(true)
+            .to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+    }
+
+    fn print_logical_plan(plan: &LogicalPlan) -> () {
+        println!("{:#?}", plan);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_multi_partition_bug() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE TABLE sales_global (
+    sn INTEGER PRIMARY KEY,
+    ts TIMESTAMP,
+    currency VARCHAR(3),
+    amount DECIMAL(10,2)
+) as VALUES
+    (1, '2023-01-01 00:00:00'::timestamp, 'EUR', 100.00),
+    (2, '2023-01-02 00:00:00'::timestamp, 'EUR', 105.00),
+    (3, '2023-01-03 00:00:00'::timestamp, 'EUR', 110.00);",
+        )
+            .await?;
+
+        ctx.sql(
+            "CREATE TABLE exchange_rates (
+    sn INTEGER PRIMARY KEY,
+    ts TIMESTAMP,
+    currency_from VARCHAR(3),
+    currency_to VARCHAR(3),
+    rate DECIMAL(10,2)
+) as VALUES
+    (1, '2023-01-01 00:00:00'::timestamp, 'EUR', 'USD', 1.10),
+    (2, '2023-01-02 00:00:00'::timestamp, 'EUR', 'USD', 1.11),
+    (3, '2023-01-03 00:00:00'::timestamp, 'EUR', 'USD', 1.12);",
+        )
+            .await?;
+
+        let sql = "SELECT ARRAY_AGG(e.rate ORDER BY e.sn)
+FROM sales_global AS s
+JOIN exchange_rates AS e
+ON s.currency = e.currency_from AND
+   e.currency_to = 'USD' AND
+   s.ts >= e.ts
+GROUP BY s.sn
+ORDER BY s.sn;";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        println!("LOGICAL PLAN");
+        print_logical_plan(dataframe.logical_plan());
+        let physical_plan = dataframe.create_physical_plan().await?;
+        println!("PHYSICAL PLAN");
+        print_plan(&physical_plan);
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+        assert_eq!(0, 1);
+        Ok(())
+    }
+}
