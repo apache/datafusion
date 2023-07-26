@@ -277,14 +277,42 @@ pub async fn plan_to_json(
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
             let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
-            let mut buffer = Vec::with_capacity(1024);
-            while let Some(batch) = stream.next().await.transpose()? {
-                let mut writer = json::LineDelimitedWriter::new(buffer);
-                writer.write(&batch)?;
-                buffer = writer.into_inner();
-                multipart_writer.write_all(&buffer).await?;
-                buffer.clear();
+            
+            let mut inner_join_set = JoinSet::new();
+            while let Some(batch) = stream.try_next().await?{
+                inner_join_set.spawn(async move {
+                    let buffer = Vec::with_capacity(1024);
+                    let mut writer = json::LineDelimitedWriter::new(buffer);
+                    writer.write(&batch)?;
+                    let r: Result<Vec<u8>, DataFusionError> = Ok(writer.into_inner());
+                    r
+                });
             }
+
+            while let Some(result) = inner_join_set.join_next().await{
+                match result {
+                    Ok(r) => {
+                        let batch = r?;
+                        multipart_writer.write_all(&batch).await?;
+                    },
+                    Err(e) => {
+                        if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                            } else {
+                                unreachable!();
+                            }
+                        }
+                }
+            }
+            
+            // let mut buffer = Vec::with_capacity(1024);
+            // while let Some(batch) = stream.next().await.transpose()? {
+            //     let mut writer = json::LineDelimitedWriter::new(buffer);
+            //     writer.write(&batch)?;
+            //     buffer = writer.into_inner();
+            //     multipart_writer.write_all(&buffer).await?;
+            //     buffer.clear();
+            // }
             multipart_writer
                 .shutdown()
                 .await
