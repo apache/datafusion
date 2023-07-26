@@ -2248,7 +2248,7 @@ mod tests {
         // Note capitalization
         let my_avg = create_udaf(
             "MY_AVG",
-            DataType::Float64,
+            vec![DataType::Float64],
             Arc::new(DataType::Float64),
             Volatility::Immutable,
             Arc::new(|_| {

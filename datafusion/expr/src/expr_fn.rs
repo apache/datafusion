@@ -801,7 +801,7 @@ pub fn create_udf(
 /// The signature and state type must match the `Accumulator's implementation`.
 pub fn create_udaf(
     name: &str,
-    input_type: DataType,
+    input_type: Vec<DataType>,
     return_type: Arc<DataType>,
     volatility: Volatility,
     accumulator: AccumulatorFactoryFunction,
@@ -811,7 +811,7 @@ pub fn create_udaf(
     let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
     AggregateUDF::new(
         name,
-        &Signature::exact(vec![input_type], volatility),
+        &Signature::exact(input_type, volatility),
         &return_type,
         &accumulator,
         &state_type,
