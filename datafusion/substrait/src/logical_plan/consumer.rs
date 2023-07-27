@@ -474,7 +474,7 @@ pub async fn from_substrait_rel(
         Some(RelType::Set(set)) => match set_rel::SetOp::from_i32(set.op) {
             Some(set_op) => match set_op {
                 set_rel::SetOp::UnionAll => {
-                    assert!(set.inputs.len() > 0);
+                    assert!(!set.inputs.is_empty());
                     let mut union_builder = Ok(LogicalPlanBuilder::from(
                         from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
                     ));
