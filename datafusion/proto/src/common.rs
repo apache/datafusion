@@ -26,7 +26,7 @@ pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
     Ok(s.as_bytes()[0])
 }
 
-pub fn byte_to_string(b: u8, description: &str) -> Result<String> {
+pub(crate) fn byte_to_string(b: u8, description: &str) -> Result<String> {
     let b = &[b];
     let b = std::str::from_utf8(b).map_err(|_| {
         DataFusionError::Internal(format!(
