@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion benchmark runner
-pub mod clickbench;
-pub mod parquet_filter;
-pub mod sort;
-pub mod tpch;
-mod util;
-pub use util::*;
+//! Shared benchmark utilities
+mod access_log;
+mod options;
+mod run;
+
+pub use access_log::AccessLogOpt;
+pub use options::CommonOpt;
+pub use run::{BenchQuery, BenchmarkRun};
