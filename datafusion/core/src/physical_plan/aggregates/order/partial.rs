@@ -108,9 +108,10 @@ impl GroupOrderingPartial {
         ordering: &[PhysicalSortExpr],
     ) -> Result<Self> {
         assert!(!order_indices.is_empty());
-        assert_eq!(order_indices.len(), ordering.len());
+        assert!(order_indices.len() <= ordering.len());
 
-        let fields = ordering
+        // get only the section of ordering, that consist of group by expressions.
+        let fields = ordering[0..order_indices.len()]
             .iter()
             .map(|sort_expr| {
                 Ok(SortField::new_with_options(
