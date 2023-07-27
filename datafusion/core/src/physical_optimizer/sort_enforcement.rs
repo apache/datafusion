@@ -2821,8 +2821,8 @@ mod test_bug {
     use arrow::util::pretty::print_batches;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
-    use std::sync::Arc;
     use datafusion_expr::LogicalPlan;
+    use std::sync::Arc;
 
     fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
         let formatted = crate::physical_plan::displayable(plan.as_ref())
@@ -2853,7 +2853,7 @@ mod test_bug {
     (2, '2023-01-02 00:00:00'::timestamp, 'EUR', 105.00),
     (3, '2023-01-03 00:00:00'::timestamp, 'EUR', 110.00);",
         )
-            .await?;
+        .await?;
 
         ctx.sql(
             "CREATE TABLE exchange_rates (
@@ -2867,7 +2867,7 @@ mod test_bug {
     (2, '2023-01-02 00:00:00'::timestamp, 'EUR', 'USD', 1.11),
     (3, '2023-01-03 00:00:00'::timestamp, 'EUR', 'USD', 1.12);",
         )
-            .await?;
+        .await?;
 
         let sql = "SELECT ARRAY_AGG(e.rate ORDER BY e.sn)
 FROM sales_global AS s
@@ -2910,7 +2910,7 @@ WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
 LOCATION 'tests/data/window_2.csv';",
         )
-            .await?;
+        .await?;
 
         let sql = "SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
   FROM annotated_data_infinite2
@@ -2929,11 +2929,10 @@ LOCATION 'tests/data/window_2.csv';",
         Ok(())
     }
 
-
     #[tokio::test]
     #[ignore]
     async fn test_buggy_test3() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(2);
+        let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::with_config(config);
 
         ctx.sql(
@@ -2951,11 +2950,17 @@ LOCATION 'tests/data/window_2.csv';",
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
           (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)",
         )
-            .await?;
+        .await?;
 
-        let sql = "SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
-  FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
-  LAST_VALUE(amount ORDER BY amount DESC) AS fv2
+  //       let sql = "SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
+  // FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
+  // LAST_VALUE(amount ORDER BY amount DESC) AS fv2
+  // FROM sales_global
+  // GROUP BY country";
+
+        let sql ="SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
+    LAST_VALUE(amount ORDER BY ts DESC) as lv1,
+    SUM(amount ORDER BY ts DESC) as sum1
   FROM sales_global
   GROUP BY country";
 

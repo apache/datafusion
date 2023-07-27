@@ -342,6 +342,9 @@ fn calc_aggregation_ordering(
                 options: input_col.options,
             })
             .collect::<Vec<_>>();
+        println!("out_ordering:{:?}", out_ordering);
+        println!("existing_ordering:{:?}", existing_ordering);
+        println!("order_indices:{:?}", order_indices);
         AggregationOrdering {
             mode,
             order_indices,
@@ -495,16 +498,18 @@ fn calc_required_input_ordering(
             let mut requirement =
                 PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
             for req in aggregator_requirement {
-                if !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned) && requirement.iter().all(|item| req.expr.ne(&item.expr)) {
+                if !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned)
+                    && requirement.iter().all(|item| req.expr.ne(&item.expr))
+                {
                     requirement.push(req.clone());
                 }
-                // In partial mode, append required ordering of the aggregator to the output ordering.
-                // In case of multiple partitions, this enables us to reduce partitions correctly.
-                if matches!(mode, AggregateMode::Partial)
-                    && ordering.iter().all(|item| req.expr.ne(&item.expr))
-                {
-                    ordering.push(req.into());
-                }
+                // // In partial mode, append required ordering of the aggregator to the output ordering.
+                // // In case of multiple partitions, this enables us to reduce partitions correctly.
+                // if matches!(mode, AggregateMode::Partial)
+                //     && ordering.iter().all(|item| req.expr.ne(&item.expr))
+                // {
+                //     ordering.push(req.into());
+                // }
             }
             required_input_ordering = requirement;
         } else {
@@ -516,12 +521,15 @@ fn calc_required_input_ordering(
                 *aggregation_ordering = Some(AggregationOrdering {
                     mode: GroupByOrderMode::None,
                     order_indices: vec![],
-                    ordering: PhysicalSortRequirement::to_sort_exprs(
-                        aggregator_requirement.clone(),
-                    ),
+                    // ordering: PhysicalSortRequirement::to_sort_exprs(
+                    //     aggregator_requirement.clone(),
+                    // ),
+                    ordering: vec![],
                 });
             }
-            required_input_ordering = aggregator_requirement;
+            if !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned) {
+                required_input_ordering = aggregator_requirement;
+            }
         }
         // Keep track of the direction from which required_input_ordering is constructed:
         reverse_req = is_reverse;
@@ -650,7 +658,11 @@ impl AggregateExec {
         }
 
         let mut aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
-
+        println!("-----------------");
+        println!("input.output_ordering(): {:?}", input.output_ordering());
+        println!("mode: {:?}", mode);
+        println!("aggregation_ordering: {:?}", aggregation_ordering);
+        println!("aggr_expr: {:?}", aggr_expr);
         let required_input_ordering = calc_required_input_ordering(
             &input,
             &mut aggr_expr,
@@ -660,6 +672,9 @@ impl AggregateExec {
             &mut aggregation_ordering,
             &mode,
         )?;
+        println!("aggr_expr: {:?}", aggr_expr);
+        println!("required_input_ordering:{:?}", required_input_ordering);
+        println!("-----------------");
 
         Ok(AggregateExec {
             mode,

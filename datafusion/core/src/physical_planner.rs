@@ -75,7 +75,7 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use itertools::{multiunzip, Itertools, izip};
+use itertools::{izip, multiunzip, Itertools};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -719,6 +719,9 @@ impl DefaultPhysicalPlanner {
                         && session_state.config().target_partitions() > 1
                         && session_state.config().repartition_aggregations();
 
+                    let updated_aggregates = initial_aggr.aggr_expr.clone();
+                    let updated_order_bys = initial_aggr.order_by_expr.clone();
+
                     let (initial_aggr, next_partition_mode): (
                         Arc<dyn ExecutionPlan>,
                         AggregateMode,
@@ -769,12 +772,17 @@ impl DefaultPhysicalPlanner {
                     // println!("order_bys: {:?}", order_bys);
                     // println!("new_order_bys: {:?}", new_order_bys);
 
+                    println!("updated_order_bys: {:?}", updated_order_bys);
+                    println!("order_bys: {:?}", order_bys);
+                    println!("updated_aggregates: {:?}", updated_aggregates);
+                    println!("aggregates: {:?}", aggregates);
+
                     Ok(Arc::new(AggregateExec::try_new(
                         next_partition_mode,
                         final_grouping_set,
-                        aggregates,
+                        updated_aggregates,
                         filters,
-                        order_bys,
+                        updated_order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))
