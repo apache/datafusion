@@ -47,6 +47,7 @@ use substrait::proto::{
     join_rel, plan_rel, r#type,
     read_rel::ReadType,
     rel::RelType,
+    set_rel,
     sort_field::{SortDirection, SortKind::*},
     AggregateFunction, Expression, Plan, Rel, Type,
 };
@@ -468,6 +469,27 @@ pub async fn from_substrait_rel(
             }
             _ => Err(DataFusionError::NotImplemented(
                 "Only NamedTable reads are supported".to_string(),
+            )),
+        },
+        Some(RelType::Set(set)) => match set_rel::SetOp::from_i32(set.op) {
+            Some(set_op) => match set_op {
+                set_rel::SetOp::UnionAll => {
+                    assert!(set.inputs.len() > 0);
+                    let mut union_builder = Ok(LogicalPlanBuilder::from(
+                        from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
+                    ));
+                    for input in &set.inputs[1..] {
+                        union_builder = union_builder?
+                            .union(from_substrait_rel(ctx, input, extensions).await?);
+                    }
+                    union_builder?.build()
+                }
+                _ => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported set operator: {set_op:?}"
+                ))),
+            },
+            None => Err(DataFusionError::NotImplemented(
+                "Invalid set operation type None".to_string(),
             )),
         },
         Some(RelType::ExtensionLeaf(extension)) => {

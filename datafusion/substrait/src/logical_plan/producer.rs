@@ -62,10 +62,11 @@ use substrait::{
         join_rel, plan_rel, r#type,
         read_rel::{NamedTable, ReadType},
         rel::RelType,
+        set_rel,
         sort_field::{SortDirection, SortKind},
         AggregateFunction, AggregateRel, AggregationPhase, Expression, ExtensionLeafRel,
         ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
-        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot,
+        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot, SetRel,
         SortField, SortRel,
     },
     version,
@@ -320,6 +321,24 @@ pub fn to_substrait_rel(
             // Do nothing if encounters SubqueryAlias
             // since there is no corresponding relation type in Substrait
             to_substrait_rel(alias.input.as_ref(), ctx, extension_info)
+        }
+        LogicalPlan::Union(union) => {
+            let input_rels = union
+                .inputs
+                .iter()
+                .map(|input| to_substrait_rel(input.as_ref(), ctx, extension_info))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|ptr| *ptr)
+                .collect();
+            Ok(Box::new(Rel {
+                rel_type: Some(substrait::proto::rel::RelType::Set(SetRel {
+                    common: None,
+                    inputs: input_rels,
+                    op: set_rel::SetOp::UnionAll as i32, // UNION DISTINCT gets translated to AGGREGATION + UNION ALL
+                    advanced_extension: None,
+                })),
+            }))
         }
         LogicalPlan::Window(window) => {
             let input = to_substrait_rel(window.input.as_ref(), ctx, extension_info)?;
