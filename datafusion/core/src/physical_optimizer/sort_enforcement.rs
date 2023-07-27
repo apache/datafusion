@@ -2932,7 +2932,7 @@ LOCATION 'tests/data/window_2.csv';",
     #[tokio::test]
     #[ignore]
     async fn test_buggy_test3() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
+        let config = SessionConfig::new().with_target_partitions(2);
         let ctx = SessionContext::with_config(config);
 
         ctx.sql(
@@ -2958,11 +2958,14 @@ LOCATION 'tests/data/window_2.csv';",
         // FROM sales_global
         // GROUP BY country";
 
-        let sql = "SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
-    LAST_VALUE(amount ORDER BY ts DESC) as lv1,
-    SUM(amount ORDER BY ts DESC) as sum1
-  FROM sales_global
-  GROUP BY country";
+  //       let sql = "SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
+  //   LAST_VALUE(amount ORDER BY ts DESC) as lv1,
+  //   SUM(amount ORDER BY ts DESC) as sum1
+  // FROM sales_global
+  // GROUP BY country";
+
+        let sql ="SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
+  FROM sales_global";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
