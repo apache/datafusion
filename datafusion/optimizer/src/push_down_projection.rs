@@ -913,7 +913,7 @@ mod tests {
             .project(vec![lit(1_i64), lit(2_i64)])?
             .build()?;
         let expected = "Projection: Int64(1), Int64(2)\
-                      \n  TableScan: test projection=[a]";
+                      \n  TableScan: test projection=[]";
         assert_optimized_plan_eq(&plan, expected)
     }
 
@@ -960,7 +960,7 @@ mod tests {
 
         let expected = "\
         Projection: Int32(1) AS a\
-        \n  TableScan: test projection=[a]";
+        \n  TableScan: test projection=[]";
 
         assert_optimized_plan_eq(&plan, expected)
     }
