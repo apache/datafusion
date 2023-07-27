@@ -444,8 +444,24 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayPrepend => {
             Arc::new(|args| make_scalar_function(array_expressions::array_prepend)(args))
         }
-        BuiltinScalarFunction::ArrayRemove => Arc::new(array_expressions::array_remove),
-        BuiltinScalarFunction::ArrayReplace => Arc::new(array_expressions::array_replace),
+        BuiltinScalarFunction::ArrayRemove => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_remove)(args))
+        }
+        BuiltinScalarFunction::ArrayRemoveN => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_remove_n)(args))
+        }
+        BuiltinScalarFunction::ArrayRemoveAll => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_remove_all)(args)
+        }),
+        BuiltinScalarFunction::ArrayReplace => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_replace)(args))
+        }
+        BuiltinScalarFunction::ArrayReplaceN => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_replace_n)(args)
+        }),
+        BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_replace_all)(args)
+        }),
         BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
             make_scalar_function(array_expressions::array_to_string)(args)
         }),

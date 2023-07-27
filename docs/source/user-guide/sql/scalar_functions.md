@@ -1441,7 +1441,11 @@ from_unixtime(expression)
 - [array_push_back](#array_push_back)
 - [array_push_front](#array_push_front)
 - [array_remove](#array_remove)
+- [array_remove_n](#array_remove_n)
+- [array_remove_all](#array_remove_all)
 - [array_replace](#array_replace)
+- [array_replace_n](#array_replace_n)
+- [array_replace_all](#array_replace_all)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
 - [list_append](#list_append)
@@ -1457,6 +1461,12 @@ from_unixtime(expression)
 - [list_positions](#list_positions)
 - [list_push_back](#list_push_back)
 - [list_push_front](#list_push_front)
+- [list_remove](#list_remove)
+- [list_remove_n](#list_remove_n)
+- [list_remove_all](#list_remove_all)
+- [list_replace](#list_replace)
+- [list_replace_n](#list_replace_n)
+- [list_replace_all](#list_replace_all)
 - [list_to_string](#list_to_string)
 - [make_array](#make_array)
 - [make_list](#make_list)
@@ -1783,7 +1793,7 @@ _Alias of [array_prepend](#array_prepend)._
 
 ### `array_remove`
 
-Removes all elements equal to the given value from the array.
+Removes the first element from the array equal to the given value.
 
 ```
 array_remove(array, element)
@@ -1795,9 +1805,71 @@ array_remove(array, element)
   Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to be removed from the array.
 
+#### Example
+
+```
+❯ select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
++----------------------------------------------+
+| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
++----------------------------------------------+
+| [1, 2, 3, 2, 1, 4]                           |
++----------------------------------------------+
+```
+
+### `array_remove_n`
+
+Removes the first `max` elements from the array equal to the given value.
+
+```
+array_remove_n(array, element, max)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to be removed from the array.
+- **max**: Number of first occurrences to remove.
+
+#### Example
+
+```
+❯ select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
++---------------------------------------------------------+
+| array_remove_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(2)) |
++---------------------------------------------------------+
+| [1, 3, 2, 1, 4]                                         |
++---------------------------------------------------------+
+```
+
+### `array_remove_all`
+
+Removes all elements from the array equal to the given value.
+
+```
+array_remove_all(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to be removed from the array.
+
+#### Example
+
+```
+❯ select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
++--------------------------------------------------+
+| array_remove_all(List([1,2,2,3,2,1,4]),Int64(2)) |
++--------------------------------------------------+
+| [1, 3, 1, 4]                                     |
++--------------------------------------------------+
+```
+
 ### `array_replace`
 
-Replaces a specified element with another specified element.
+Replaces the first occurrence of the specified element with another specified element.
 
 ```
 array_replace(array, from, to)
@@ -1809,6 +1881,70 @@ array_replace(array, from, to)
   Can be a constant, column, or function, and any combination of array operators.
 - **from**: Initial element.
 - **to**: Final element.
+
+#### Example
+
+```
+❯ select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
++--------------------------------------------------------+
+| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++--------------------------------------------------------+
+| [1, 5, 2, 3, 2, 1, 4]                                  |
++--------------------------------------------------------+
+```
+
+### `array_replace_n`
+
+Replaces the first `max` occurrences of the specified element with another specified element.
+
+```
+array_replace_n(array, from, to, max)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **from**: Initial element.
+- **to**: Final element.
+- **max**: Number of first occurrences to replace.
+
+#### Example
+
+```
+❯ select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-------------------------------------------------------------------+
+| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-------------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                             |
++-------------------------------------------------------------------+
+```
+
+### `array_replace_all`
+
+Replaces all occurrences of the specified element with another specified element.
+
+```
+array_replace_all(array, from, to)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **from**: Initial element.
+- **to**: Final element.
+
+#### Example
+
+```
+❯ select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
++------------------------------------------------------------+
+| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++------------------------------------------------------------+
+| [1, 5, 5, 3, 5, 1, 4]                                      |
++------------------------------------------------------------+
+```
 
 ### `array_to_string`
 
@@ -1916,6 +2052,30 @@ _Alias of [array_append](#array_append)._
 ### `list_push_front`
 
 _Alias of [array_prepend](#array_prepend)._
+
+### `list_remove`
+
+_Alias of [array_remove](#array_remove)._
+
+### `list_remove_n`
+
+_Alias of [array_remove_n](#array_remove_n)._
+
+### `list_remove_all`
+
+_Alias of [array_remove_all](#array_remove_all)._
+
+### `list_replace`
+
+_Alias of [array_replace](#array_replace)._
+
+### `list_replace_n`
+
+_Alias of [array_replace_n](#array_replace_n)._
+
+### `list_replace_all`
+
+_Alias of [array_replace_all](#array_replace_all)._
 
 ### `list_to_string`
 
