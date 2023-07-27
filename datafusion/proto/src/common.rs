@@ -17,7 +17,7 @@
 
 use datafusion_common::{DataFusionError, Result};
 
-pub fn str_to_byte(s: &String, description: &str) -> Result<u8> {
+pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
     if s.len() != 1 {
         return Err(DataFusionError::Internal(format!(
             "Invalid CSV {description}: expected single character, got {s}"
