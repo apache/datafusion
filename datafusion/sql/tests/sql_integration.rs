@@ -2660,8 +2660,16 @@ impl ContextProvider for MockContextProvider {
                 Field::new("delivered", DataType::Boolean, false),
             ])),
             "array" => Ok(Schema::new(vec![
-                Field::new("left", DataType::List(Arc::new(Field::new("item", DataType::Int64, true))), false),
-                Field::new("right", DataType::List(Arc::new(Field::new("item", DataType::Int64, true))), false),
+                Field::new(
+                    "left",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+                Field::new(
+                    "right",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
             ])),
             "lineitem" => Ok(Schema::new(vec![
                 Field::new("l_item_id", DataType::UInt32, false),
