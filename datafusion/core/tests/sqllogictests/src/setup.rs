@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//use arrow::array::{
-//    BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
-//    StringArray, TimestampNanosecondArray,
-//};
 use arrow_schema::TimeUnit;
 use async_trait::async_trait;
 use datafusion::execution::context::SessionState;
