@@ -121,7 +121,7 @@ impl DdlStatement {
                         constraints,
                         ..
                     }) => {
-                        write!(f, "CreateMemoryTable: {name:?}{constraints:?}")
+                        write!(f, "CreateMemoryTable: {name:?}{constraints}")
                     }
                     DdlStatement::CreateView(CreateView { name, .. }) => {
                         write!(f, "CreateView: {name:?}")
