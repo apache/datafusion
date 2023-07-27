@@ -116,10 +116,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
-        let batch = match self.projection.is_empty() {
-            true => batch,
-            false => batch.project(&self.projection)?,
-        };
+        let batch = batch.project(&self.projection)?;
 
         // scoped timer updates on drop
         let mut timer = self.time.timer();

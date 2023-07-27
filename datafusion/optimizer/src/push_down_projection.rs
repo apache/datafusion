@@ -175,11 +175,6 @@ impl OptimizerRule for PushDownProjection {
             LogicalPlan::Union(union) => {
                 let mut required_columns = HashSet::new();
                 exprlist_to_columns(&projection.expr, &mut required_columns)?;
-                // When there is no projection, we need to add the first column to the projection
-                // Because if push empty down, children may output different columns.
-                if required_columns.is_empty() {
-                    required_columns.insert(union.schema.fields()[0].qualified_column());
-                }
                 // we don't push down projection expr, we just prune columns, so we just push column
                 // because push expr may cause more cost.
                 let projection_column_exprs = get_expr(&required_columns, &union.schema)?;
