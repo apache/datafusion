@@ -43,9 +43,10 @@ enum TpchOpt {
     Convert(tpch::ConvertOpt),
 }
 
-/// 'tpch' entry point, with tortured command line arguments
+/// 'tpch' entry point, with tortured command line arguments.  Please
+/// use `dbbench` instead.
 ///
-/// This is kept to be backwards compatible with the benchmark names prior to
+/// Note: this is kept to be backwards compatible with the benchmark names prior to
 /// <https://github.com/apache/arrow-datafusion/issues/6994>
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -35,7 +35,7 @@ BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 #CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
-CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --profile release-nonlto"}  # TEMP: for faster iterations
+CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --profile release-nonlto"}  # for faster iterations
 
 usage() {
     echo "
@@ -386,12 +386,18 @@ data_clickbench_partitioned() {
 
 # Runs the clickbench benchmark with a single large parquet file
 run_clickbench_1() {
-    echo "NOTICE: ClickBench (1 parquet file) is not yet supported"
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running clickbench (1 file) benchmark..."
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 10 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
 }
 
  # Runs the clickbench benchmark with a single large parquet file
 run_clickbench_partitioned() {
-    echo "NOTICE: ClickBench (1 parquet file) is not yet supported"
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running clickbench (partitioned, 100 files) benchmark..."
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 10 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
 }
 
 compare_benchmarks() {
