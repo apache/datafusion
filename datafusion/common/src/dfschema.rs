@@ -20,15 +20,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::error::{unqualified_field_not_found, DataFusionError, Result, SchemaError};
-use crate::{field_not_found, Column, OwnedTableReference, TableReference};
+use crate::{
+    field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
+};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use std::fmt::{Display, Formatter};
 
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -40,6 +42,8 @@ pub struct DFSchema {
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
+    /// Stores functional dependencies in the schema.
+    functional_dependencies: FunctionalDependencies,
 }
 
 impl DFSchema {
@@ -48,6 +52,7 @@ impl DFSchema {
         Self {
             fields: vec![],
             metadata: HashMap::new(),
+            functional_dependencies: FunctionalDependencies::empty(),
         }
     }
 
@@ -97,7 +102,11 @@ impl DFSchema {
                 ));
             }
         }
-        Ok(Self { fields, metadata })
+        Ok(Self {
+            fields,
+            metadata,
+            functional_dependencies: FunctionalDependencies::empty(),
+        })
     }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
@@ -114,6 +123,15 @@ impl DFSchema {
                 .collect(),
             schema.metadata().clone(),
         )
+    }
+
+    /// Assigns functional dependencies.
+    pub fn with_functional_dependencies(
+        mut self,
+        functional_dependencies: FunctionalDependencies,
+    ) -> Self {
+        self.functional_dependencies = functional_dependencies;
+        self
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields
@@ -470,6 +488,11 @@ impl DFSchema {
     /// Get metadata of this schema
     pub fn metadata(&self) -> &HashMap<String, String> {
         &self.metadata
+    }
+
+    /// Get functional dependencies
+    pub fn functional_dependencies(&self) -> &FunctionalDependencies {
+        &self.functional_dependencies
     }
 }
 

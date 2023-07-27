@@ -23,6 +23,7 @@ pub mod delta;
 mod dfschema;
 pub mod display;
 mod error;
+mod functional_dependencies;
 mod join_type;
 pub mod parsers;
 #[cfg(feature = "pyarrow")]
@@ -40,6 +41,10 @@ pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSc
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
+};
+pub use functional_dependencies::{
+    aggregate_functional_dependencies, get_target_functional_dependencies, Constraints,
+    Dependency, FunctionalDependence, FunctionalDependencies,
 };
 pub use join_type::{JoinConstraint, JoinType};
 pub use scalar::{ScalarType, ScalarValue};
