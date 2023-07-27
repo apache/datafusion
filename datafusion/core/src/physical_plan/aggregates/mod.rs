@@ -610,7 +610,7 @@ impl AggregateExec {
             .zip(order_by_expr.into_iter())
             .map(|(aggr_expr, fn_reqs)| {
                 // If aggregation function is ordering sensitive, keep ordering requirement as is; otherwise ignore requirement
-                if is_order_sensitive(aggr_expr) {
+                if is_order_sensitive(aggr_expr) && !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned){
                     fn_reqs
                 } else {
                     None
