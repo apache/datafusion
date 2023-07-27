@@ -504,16 +504,22 @@ tanh(numeric_expression)
 
 ### `trunc`
 
-Truncates a number toward zero (at the decimal point).
+Truncates a number to a whole number or truncated to the specified decimal places.
 
 ```
-trunc(numeric_expression)
+trunc(numeric_expression[, decimal_places])
 ```
 
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+- **decimal_places**: Optional. The number of decimal places to
+  truncate to. Defaults to 0 (truncate to a whole number). If
+  `decimal_places` is a positive integer, truncates digits to the
+  right of the decimal point. If `decimal_places` is a negative
+  integer, replaces digits to the left of the decimal point with `0`.
 
 ## Conditional Functions
 
