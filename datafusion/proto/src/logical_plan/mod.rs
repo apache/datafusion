@@ -353,10 +353,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }) => {
                             let mut csv = CsvFormat::default()
                             .with_has_header(*has_header)
-                            .with_delimiter(str_to_byte(delimiter)?)
-                            .with_quote(str_to_byte(quote)?);
+                            .with_delimiter(str_to_byte(delimiter, "delimiter")?)
+                            .with_quote(str_to_byte(quote, "quote")?);
                             if let Some(protobuf::csv_format::OptionalEscape::Escape(escape)) = optional_escape {
-                                csv = csv.with_quote(str_to_byte(escape)?);
+                                csv = csv.with_quote(str_to_byte(escape, "escape")?);
                             }
                             Arc::new(csv)},
                         FileFormatType::Avro(..) => Arc::new(AvroFormat),
@@ -850,12 +850,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Parquet(protobuf::ParquetFormat {})
                     } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
                         FileFormatType::Csv(protobuf::CsvFormat {
-                            delimiter: byte_to_string(csv.delimiter())?,
+                            delimiter: byte_to_string(csv.delimiter(), "delimiter")?,
                             has_header: csv.has_header(),
-                            quote: byte_to_string(csv.quote())?,
+                            quote: byte_to_string(csv.quote(), "quote")?,
                             optional_escape: if let Some(escape) = csv.escape() {
                                 Some(protobuf::csv_format::OptionalEscape::Escape(
-                                    byte_to_string(escape)?,
+                                    byte_to_string(escape, "escape")?,
                                 ))
                             } else {
                                 None
@@ -2688,7 +2688,7 @@ mod roundtrip_tests {
             // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
             "dummy_agg",
             // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
-            DataType::Float64,
+            vec![DataType::Float64],
             // the return type; DataFusion expects this to match the type returned by `evaluate`.
             Arc::new(DataType::Float64),
             Volatility::Immutable,
@@ -2874,7 +2874,7 @@ mod roundtrip_tests {
             // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
             "dummy_agg",
             // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
-            DataType::Float64,
+            vec![DataType::Float64],
             // the return type; DataFusion expects this to match the type returned by `evaluate`.
             Arc::new(DataType::Float64),
             Volatility::Immutable,

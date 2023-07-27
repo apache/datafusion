@@ -436,7 +436,15 @@ impl BuiltinScalarFunction {
         )
     }
 
-    /// Returns the dimension [`DataType`] of [`DataType::List`].
+    /// Returns the dimension [`DataType`] of [`DataType::List`] if
+    /// treated as a N-dimensional array.
+    ///
+    /// ## Examples:
+    ///
+    /// * `Int64` has dimension 1
+    /// * `List(Int64)` has dimension 2
+    /// * `List(List(Int64))` has dimension 3
+    /// * etc.
     fn return_dimension(self, input_expr_type: DataType) -> u64 {
         let mut res: u64 = 1;
         let mut current_data_type = input_expr_type;
