@@ -122,6 +122,19 @@ pub struct CsvFormat {
     pub has_header: bool,
     #[prost(string, tag = "2")]
     pub delimiter: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub quote: ::prost::alloc::string::String,
+    #[prost(oneof = "csv_format::OptionalEscape", tags = "4")]
+    pub optional_escape: ::core::option::Option<csv_format::OptionalEscape>,
+}
+/// Nested message and enum types in `CsvFormat`.
+pub mod csv_format {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalEscape {
+        #[prost(string, tag = "4")]
+        Escape(::prost::alloc::string::String),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1097,7 +1110,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1146,6 +1159,8 @@ pub mod scalar_value {
         ListValue(super::ScalarListValue),
         #[prost(message, tag = "20")]
         Decimal128Value(super::Decimal128),
+        #[prost(message, tag = "39")]
+        Decimal256Value(super::Decimal256),
         #[prost(int64, tag = "21")]
         Date64Value(i64),
         #[prost(int32, tag = "24")]
@@ -1181,6 +1196,16 @@ pub mod scalar_value {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Decimal128 {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag = "2")]
+    pub p: i64,
+    #[prost(int64, tag = "3")]
+    pub s: i64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal256 {
     #[prost(bytes = "vec", tag = "1")]
     pub value: ::prost::alloc::vec::Vec<u8>,
     #[prost(int64, tag = "2")]
@@ -1772,6 +1797,19 @@ pub struct CsvScanExecNode {
     pub has_header: bool,
     #[prost(string, tag = "3")]
     pub delimiter: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub quote: ::prost::alloc::string::String,
+    #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
+    pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
+}
+/// Nested message and enum types in `CsvScanExecNode`.
+pub mod csv_scan_exec_node {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalEscape {
+        #[prost(string, tag = "5")]
+        Escape(::prost::alloc::string::String),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

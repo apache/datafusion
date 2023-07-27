@@ -28,7 +28,7 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use datafusion::physical_optimizer::pipeline_fixer::PipelineFixer;
+use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion_common::assert_contains;
@@ -304,7 +304,7 @@ async fn run_streaming_test_with_config(
     // Disable all physical optimizer rules except the PipelineFixer rule to avoid sorts or
     // repartition, as they also have memory budgets that may be hit first
     let state = SessionState::with_config_rt(config, Arc::new(runtime))
-        .with_physical_optimizer_rules(vec![Arc::new(PipelineFixer::new())]);
+        .with_physical_optimizer_rules(vec![Arc::new(JoinSelection::new())]);
 
     // Create a new session context with the session state
     let ctx = SessionContext::with_state(state);

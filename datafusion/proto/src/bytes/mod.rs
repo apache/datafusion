@@ -124,7 +124,7 @@ impl Serializeable for Expr {
             fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
                 Ok(Arc::new(create_udaf(
                     name,
-                    arrow::datatypes::DataType::Null,
+                    vec![arrow::datatypes::DataType::Null],
                     Arc::new(arrow::datatypes::DataType::Null),
                     Volatility::Immutable,
                     Arc::new(|_| unimplemented!()),
