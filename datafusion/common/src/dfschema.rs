@@ -20,15 +20,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::error::{unqualified_field_not_found, DataFusionError, Result, SchemaError};
-use crate::{field_not_found, Column, OwnedTableReference, TableReference};
+use crate::{
+    field_not_found, Column, FunctionalDependencies, OwnedTableReference, TableReference,
+};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use std::fmt::{Display, Formatter};
 
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -40,6 +42,8 @@ pub struct DFSchema {
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
+    /// Stores functional dependencies in the schema.
+    functional_dependencies: FunctionalDependencies,
 }
 
 impl DFSchema {
@@ -48,6 +52,7 @@ impl DFSchema {
         Self {
             fields: vec![],
             metadata: HashMap::new(),
+            functional_dependencies: FunctionalDependencies::empty(),
         }
     }
 
@@ -97,7 +102,11 @@ impl DFSchema {
                 ));
             }
         }
-        Ok(Self { fields, metadata })
+        Ok(Self {
+            fields,
+            metadata,
+            functional_dependencies: FunctionalDependencies::empty(),
+        })
     }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
@@ -114,6 +123,15 @@ impl DFSchema {
                 .collect(),
             schema.metadata().clone(),
         )
+    }
+
+    /// Assigns functional dependencies.
+    pub fn with_functional_dependencies(
+        mut self,
+        functional_dependencies: FunctionalDependencies,
+    ) -> Self {
+        self.functional_dependencies = functional_dependencies;
+        self
     }
 
     /// Create a new schema that contains the fields from this schema followed by the fields
@@ -471,6 +489,11 @@ impl DFSchema {
     pub fn metadata(&self) -> &HashMap<String, String> {
         &self.metadata
     }
+
+    /// Get functional dependencies
+    pub fn functional_dependencies(&self) -> &FunctionalDependencies {
+        &self.functional_dependencies
+    }
 }
 
 impl From<DFSchema> for Schema {
@@ -581,6 +604,9 @@ pub trait ExprSchema: std::fmt::Debug {
 
     /// What is the datatype of this column?
     fn data_type(&self, col: &Column) -> Result<&DataType>;
+
+    /// Returns the column's optional metadata.
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -592,6 +618,10 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         self.as_ref().data_type(col)
     }
+
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+        ExprSchema::metadata(self.as_ref(), col)
+    }
 }
 
 impl ExprSchema for DFSchema {
@@ -601,6 +631,10 @@ impl ExprSchema for DFSchema {
 
     fn data_type(&self, col: &Column) -> Result<&DataType> {
         Ok(self.field_from_column(col)?.data_type())
+    }
+
+    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+        Ok(self.field_from_column(col)?.metadata())
     }
 }
 
@@ -661,6 +695,10 @@ impl DFField {
         self.field.is_nullable()
     }
 
+    pub fn metadata(&self) -> &HashMap<String, String> {
+        self.field.metadata()
+    }
+
     /// Returns a string to the `DFField`'s qualified name
     pub fn qualified_name(&self) -> String {
         if let Some(qualifier) = &self.qualifier {
@@ -705,6 +743,13 @@ impl DFField {
     /// Return field with nullable specified
     pub fn with_nullable(mut self, nullable: bool) -> Self {
         let f = self.field().as_ref().clone().with_nullable(nullable);
+        self.field = f.into();
+        self
+    }
+
+    /// Return field with new metadata
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        let f = self.field().as_ref().clone().with_metadata(metadata);
         self.field = f.into();
         self
     }

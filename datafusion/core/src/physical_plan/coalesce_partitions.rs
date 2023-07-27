@@ -21,18 +21,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
-use super::Statistics;
+use super::{DisplayAs, SendableRecordBatchStream, Statistics};
+
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
-use datafusion_common::{DataFusionError, Result};
 
-use super::SendableRecordBatchStream;
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
@@ -57,6 +56,20 @@ impl CoalescePartitionsExec {
     /// Input execution plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+}
+
+impl DisplayAs for CoalescePartitionsExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CoalescePartitionsExec")
+            }
+        }
     }
 }
 
@@ -142,18 +155,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
                 let stream = builder.build();
                 Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)))
-            }
-        }
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CoalescePartitionsExec")
             }
         }
     }

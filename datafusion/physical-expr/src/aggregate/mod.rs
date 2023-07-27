@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Field;
@@ -24,6 +23,8 @@ use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+
+use self::groups_accumulator::GroupsAccumulator;
 
 pub(crate) mod approx_distinct;
 pub(crate) mod approx_median;
@@ -45,9 +46,9 @@ pub(crate) mod median;
 #[macro_use]
 pub(crate) mod min_max;
 pub mod build_in;
+pub(crate) mod groups_accumulator;
 mod hyperloglog;
 pub mod moving_min_max;
-pub mod row_accumulator;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod sum;
@@ -99,22 +100,21 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
         "AggregateExpr: default name"
     }
 
-    /// If the aggregate expression is supported by row format
-    fn row_accumulator_supported(&self) -> bool {
+    /// If the aggregate expression has a specialized
+    /// [`GroupsAccumulator`] implementation. If this returns true,
+    /// `[Self::create_groups_accumulator`] will be called.
+    fn groups_accumulator_supported(&self) -> bool {
         false
     }
 
-    /// RowAccumulator to access/update row-based aggregation state in-place.
-    /// Currently, row accumulator only supports states of fixed-sized type.
+    /// Return a specialized [`GroupsAccumulator`] that manages state
+    /// for all groups.
     ///
-    /// We recommend implementing `RowAccumulator` along with the standard `Accumulator`,
-    /// when its state is of fixed size, as RowAccumulator is more memory efficient and CPU-friendly.
-    fn create_row_accumulator(
-        &self,
-        _start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
+    /// For maximum performance, a [`GroupsAccumulator`] should be
+    /// implemented in addition to [`Accumulator`].
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         Err(DataFusionError::NotImplemented(format!(
-            "RowAccumulator hasn't been implemented for {self:?} yet"
+            "GroupsAccumulator hasn't been implemented for {self:?} yet"
         )))
     }
 

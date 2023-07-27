@@ -26,14 +26,14 @@ use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 use crate::cast::{
-    as_decimal128_array, as_dictionary_array, as_fixed_size_binary_array,
-    as_fixed_size_list_array, as_list_array, as_struct_array,
+    as_decimal128_array, as_decimal256_array, as_dictionary_array,
+    as_fixed_size_binary_array, as_fixed_size_list_array, as_list_array, as_struct_array,
 };
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
 use arrow::buffer::NullBuffer;
 use arrow::compute::nullif;
-use arrow::datatypes::{FieldRef, Fields, SchemaBuilder};
+use arrow::datatypes::{i256, FieldRef, Fields, SchemaBuilder};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast_with_options, CastOptions},
@@ -47,6 +47,7 @@ use arrow::{
     },
 };
 use arrow_array::timezone::Tz;
+use arrow_array::ArrowNativeTypeOp;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
@@ -75,6 +76,8 @@ pub enum ScalarValue {
     Float64(Option<f64>),
     /// 128bit decimal, using the i128 to represent the decimal, precision scale
     Decimal128(Option<i128>, u8, i8),
+    /// 256bit decimal, using the i256 to represent the decimal, precision scale
+    Decimal256(Option<i256>, u8, i8),
     /// signed 8bit int
     Int8(Option<i8>),
     /// signed 16bit int
@@ -160,6 +163,10 @@ impl PartialEq for ScalarValue {
                 v1.eq(v2) && p1.eq(p2) && s1.eq(s2)
             }
             (Decimal128(_, _, _), _) => false,
+            (Decimal256(v1, p1, s1), Decimal256(v2, p2, s2)) => {
+                v1.eq(v2) && p1.eq(p2) && s1.eq(s2)
+            }
+            (Decimal256(_, _, _), _) => false,
             (Boolean(v1), Boolean(v2)) => v1.eq(v2),
             (Boolean(_), _) => false,
             (Float32(v1), Float32(v2)) => match (v1, v2) {
@@ -283,6 +290,15 @@ impl PartialOrd for ScalarValue {
                 }
             }
             (Decimal128(_, _, _), _) => None,
+            (Decimal256(v1, p1, s1), Decimal256(v2, p2, s2)) => {
+                if p1.eq(p2) && s1.eq(s2) {
+                    v1.partial_cmp(v2)
+                } else {
+                    // Two decimal values can be compared if they have the same precision and scale.
+                    None
+                }
+            }
+            (Decimal256(_, _, _), _) => None,
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
             (Float32(v1), Float32(v2)) => match (v1, v2) {
@@ -1038,6 +1054,7 @@ macro_rules! impl_op_arithmetic {
                 get_sign!($OPERATION),
                 true,
             )))),
+            // todo: Add Decimal256 support
             _ => Err(DataFusionError::Internal(format!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
@@ -1512,6 +1529,11 @@ impl std::hash::Hash for ScalarValue {
         use ScalarValue::*;
         match self {
             Decimal128(v, p, s) => {
+                v.hash(state);
+                p.hash(state);
+                s.hash(state)
+            }
+            Decimal256(v, p, s) => {
                 v.hash(state);
                 p.hash(state);
                 s.hash(state)
@@ -1994,6 +2016,9 @@ impl ScalarValue {
             ScalarValue::Decimal128(_, precision, scale) => {
                 DataType::Decimal128(*precision, *scale)
             }
+            ScalarValue::Decimal256(_, precision, scale) => {
+                DataType::Decimal256(*precision, *scale)
+            }
             ScalarValue::TimestampSecond(_, tz_opt) => {
                 DataType::Timestamp(TimeUnit::Second, tz_opt.clone())
             }
@@ -2083,6 +2108,9 @@ impl ScalarValue {
             ScalarValue::Decimal128(Some(v), precision, scale) => {
                 Ok(ScalarValue::Decimal128(Some(-v), *precision, *scale))
             }
+            ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
+                ScalarValue::Decimal256(Some(v.neg_wrapping()), *precision, *scale),
+            ),
             value => Err(DataFusionError::Internal(format!(
                 "Can not run arithmetic negative on scalar value {value:?}"
             ))),
@@ -2109,11 +2137,13 @@ impl ScalarValue {
         impl_checked_op!(self, rhs, checked_sub, -)
     }
 
+    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
     pub fn and<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, &&)
     }
 
+    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
     pub fn or<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, ||)
@@ -2152,6 +2182,7 @@ impl ScalarValue {
             ScalarValue::Float32(v) => v.is_none(),
             ScalarValue::Float64(v) => v.is_none(),
             ScalarValue::Decimal128(v, _, _) => v.is_none(),
+            ScalarValue::Decimal256(v, _, _) => v.is_none(),
             ScalarValue::Int8(v) => v.is_none(),
             ScalarValue::Int16(v) => v.is_none(),
             ScalarValue::Int32(v) => v.is_none(),
@@ -2413,10 +2444,10 @@ impl ScalarValue {
                     ScalarValue::iter_to_decimal_array(scalars, *precision, *scale)?;
                 Arc::new(decimal_array)
             }
-            DataType::Decimal256(_, _) => {
-                return Err(DataFusionError::Internal(
-                    "Decimal256 is not supported for ScalarValue".to_string(),
-                ));
+            DataType::Decimal256(precision, scale) => {
+                let decimal_array =
+                    ScalarValue::iter_to_decimal256_array(scalars, *precision, *scale)?;
+                Arc::new(decimal_array)
             }
             DataType::Null => ScalarValue::iter_to_null_array(scalars),
             DataType::Boolean => build_array_primitive!(BooleanArray, Boolean),
@@ -2678,6 +2709,22 @@ impl ScalarValue {
         Ok(array)
     }
 
+    fn iter_to_decimal256_array(
+        scalars: impl IntoIterator<Item = ScalarValue>,
+        precision: u8,
+        scale: i8,
+    ) -> Result<Decimal256Array> {
+        let array = scalars
+            .into_iter()
+            .map(|element: ScalarValue| match element {
+                ScalarValue::Decimal256(v1, _, _) => v1,
+                _ => unreachable!(),
+            })
+            .collect::<Decimal256Array>()
+            .with_precision_and_scale(precision, scale)?;
+        Ok(array)
+    }
+
     fn iter_to_array_list(
         scalars: impl IntoIterator<Item = ScalarValue>,
         data_type: &DataType,
@@ -2748,9 +2795,29 @@ impl ScalarValue {
         scale: i8,
         size: usize,
     ) -> Decimal128Array {
+        match value {
+            Some(val) => Decimal128Array::from(vec![val; size])
+                .with_precision_and_scale(precision, scale)
+                .unwrap(),
+            None => {
+                let mut builder = Decimal128Array::builder(size)
+                    .with_precision_and_scale(precision, scale)
+                    .unwrap();
+                builder.append_nulls(size);
+                builder.finish()
+            }
+        }
+    }
+
+    fn build_decimal256_array(
+        value: Option<i256>,
+        precision: u8,
+        scale: i8,
+        size: usize,
+    ) -> Decimal256Array {
         std::iter::repeat(value)
             .take(size)
-            .collect::<Decimal128Array>()
+            .collect::<Decimal256Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap()
     }
@@ -2760,6 +2827,9 @@ impl ScalarValue {
         match self {
             ScalarValue::Decimal128(e, precision, scale) => Arc::new(
                 ScalarValue::build_decimal_array(*e, *precision, *scale, size),
+            ),
+            ScalarValue::Decimal256(e, precision, scale) => Arc::new(
+                ScalarValue::build_decimal256_array(*e, *precision, *scale, size),
             ),
             ScalarValue::Boolean(e) => {
                 Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
@@ -3035,12 +3105,28 @@ impl ScalarValue {
         precision: u8,
         scale: i8,
     ) -> Result<ScalarValue> {
-        let array = as_decimal128_array(array)?;
-        if array.is_null(index) {
-            Ok(ScalarValue::Decimal128(None, precision, scale))
-        } else {
-            let value = array.value(index);
-            Ok(ScalarValue::Decimal128(Some(value), precision, scale))
+        match array.data_type() {
+            DataType::Decimal128(_, _) => {
+                let array = as_decimal128_array(array)?;
+                if array.is_null(index) {
+                    Ok(ScalarValue::Decimal128(None, precision, scale))
+                } else {
+                    let value = array.value(index);
+                    Ok(ScalarValue::Decimal128(Some(value), precision, scale))
+                }
+            }
+            DataType::Decimal256(_, _) => {
+                let array = as_decimal256_array(array)?;
+                if array.is_null(index) {
+                    Ok(ScalarValue::Decimal256(None, precision, scale))
+                } else {
+                    let value = array.value(index);
+                    Ok(ScalarValue::Decimal256(Some(value), precision, scale))
+                }
+            }
+            _ => Err(DataFusionError::Internal(
+                "Unsupported decimal type".to_string(),
+            )),
         }
     }
 
@@ -3054,6 +3140,11 @@ impl ScalarValue {
         Ok(match array.data_type() {
             DataType::Null => ScalarValue::Null,
             DataType::Decimal128(precision, scale) => {
+                ScalarValue::get_decimal_value_from_array(
+                    array, index, *precision, *scale,
+                )?
+            }
+            DataType::Decimal256(precision, scale) => {
                 ScalarValue::get_decimal_value_from_array(
                     array, index, *precision, *scale,
                 )?
@@ -3256,6 +3347,25 @@ impl ScalarValue {
         }
     }
 
+    fn eq_array_decimal256(
+        array: &ArrayRef,
+        index: usize,
+        value: Option<&i256>,
+        precision: u8,
+        scale: i8,
+    ) -> Result<bool> {
+        let array = as_decimal256_array(array)?;
+        if array.precision() != precision || array.scale() != scale {
+            return Ok(false);
+        }
+        let is_null = array.is_null(index);
+        if let Some(v) = value {
+            Ok(!array.is_null(index) && array.value(index) == *v)
+        } else {
+            Ok(is_null)
+        }
+    }
+
     /// Compares a single row of array @ index for equality with self,
     /// in an optimized fashion.
     ///
@@ -3277,6 +3387,16 @@ impl ScalarValue {
         match self {
             ScalarValue::Decimal128(v, precision, scale) => {
                 ScalarValue::eq_array_decimal(
+                    array,
+                    index,
+                    v.as_ref(),
+                    *precision,
+                    *scale,
+                )
+                .unwrap()
+            }
+            ScalarValue::Decimal256(v, precision, scale) => {
+                ScalarValue::eq_array_decimal256(
                     array,
                     index,
                     v.as_ref(),
@@ -3407,6 +3527,7 @@ impl ScalarValue {
                 | ScalarValue::Float32(_)
                 | ScalarValue::Float64(_)
                 | ScalarValue::Decimal128(_, _, _)
+                | ScalarValue::Decimal256(_, _, _)
                 | ScalarValue::Int8(_)
                 | ScalarValue::Int16(_)
                 | ScalarValue::Int32(_)
@@ -3638,6 +3759,22 @@ impl TryFrom<ScalarValue> for i128 {
     }
 }
 
+// special implementation for i256 because of Decimal128
+impl TryFrom<ScalarValue> for i256 {
+    type Error = DataFusionError;
+
+    fn try_from(value: ScalarValue) -> Result<Self> {
+        match value {
+            ScalarValue::Decimal256(Some(inner_value), _, _) => Ok(inner_value),
+            _ => Err(DataFusionError::Internal(format!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ))),
+        }
+    }
+}
+
 impl_try_from!(UInt8, u8);
 impl_try_from!(UInt16, u16);
 impl_try_from!(UInt32, u32);
@@ -3674,6 +3811,9 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::UInt64 => ScalarValue::UInt64(None),
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::Decimal128(None, *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(None, *precision, *scale)
             }
             DataType::Utf8 => ScalarValue::Utf8(None),
             DataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
@@ -3742,6 +3882,9 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(v, p, s) => {
+                write!(f, "{v:?},{p:?},{s:?}")?;
+            }
+            ScalarValue::Decimal256(v, p, s) => {
                 write!(f, "{v:?},{p:?},{s:?}")?;
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
@@ -3821,6 +3964,7 @@ impl fmt::Debug for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({self})"),
+            ScalarValue::Decimal256(_, _, _) => write!(f, "Decimal256({self})"),
             ScalarValue::Boolean(_) => write!(f, "Boolean({self})"),
             ScalarValue::Float32(_) => write!(f, "Float32({self})"),
             ScalarValue::Float64(_) => write!(f, "Float64({self})"),

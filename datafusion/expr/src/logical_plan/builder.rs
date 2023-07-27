@@ -24,7 +24,7 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields};
+use crate::utils::{columnize_expr, compare_sort_expr};
 use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
@@ -42,7 +42,8 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue, TableReference, ToDFSchema,
+    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
+    ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -263,10 +264,16 @@ impl LogicalPlanBuilder {
         }
 
         let schema = table_source.schema();
+        let func_dependencies = FunctionalDependencies::new_from_constraints(
+            table_source.constraints(),
+            schema.fields.len(),
+        );
 
         let projected_schema = projection
             .as_ref()
             .map(|p| {
+                let projected_func_dependencies =
+                    func_dependencies.project_functional_dependencies(p, p.len());
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
@@ -278,9 +285,14 @@ impl LogicalPlanBuilder {
                         .collect(),
                     schema.metadata().clone(),
                 )
+                .map(|df_schema| {
+                    df_schema.with_functional_dependencies(projected_func_dependencies)
+                })
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
+                DFSchema::try_from_qualified_schema(table_name.clone(), &schema).map(
+                    |df_schema| df_schema.with_functional_dependencies(func_dependencies),
+                )
             })?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
@@ -803,11 +815,12 @@ impl LogicalPlanBuilder {
 
     /// Apply a cross join
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
-        let schema = self.plan.schema().join(right.schema())?;
+        let join_schema =
+            build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
         Ok(Self::from(LogicalPlan::CrossJoin(CrossJoin {
             left: Arc::new(self.plan),
             right: Arc::new(right),
-            schema: DFSchemaRef::new(schema),
+            schema: DFSchemaRef::new(join_schema),
         })))
     }
 
@@ -1086,10 +1099,15 @@ pub fn build_join_schema(
             right_fields.clone()
         }
     };
-
+    let func_dependencies = left.functional_dependencies().join(
+        right.functional_dependencies(),
+        join_type,
+        left_fields.len(),
+    );
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata)
+    Ok(DFSchema::new_with_metadata(fields, metadata)?
+        .with_functional_dependencies(func_dependencies))
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1239,15 +1257,10 @@ pub fn project(
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
-    let input_schema = DFSchema::new_with_metadata(
-        exprlist_to_fields(&projected_expr, &plan)?,
-        plan.schema().metadata().clone(),
-    )?;
 
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+    Ok(LogicalPlan::Projection(Projection::try_new(
         projected_expr,
         Arc::new(plan.clone()),
-        DFSchemaRef::new(input_schema),
     )?))
 }
 
@@ -1405,10 +1418,11 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         })
         .collect::<Vec<_>>();
 
-    let schema = Arc::new(DFSchema::new_with_metadata(
-        fields,
-        input_schema.metadata().clone(),
-    )?);
+    let schema = Arc::new(
+        DFSchema::new_with_metadata(fields, input_schema.metadata().clone())?
+            // We can use the existing functional dependencies:
+            .with_functional_dependencies(input_schema.functional_dependencies().clone()),
+    );
 
     Ok(LogicalPlan::Unnest(Unnest {
         input: Arc::new(input),
@@ -1419,14 +1433,16 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{expr, expr_fn::exists};
-    use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
-
     use crate::logical_plan::StringifiedPlan;
+    use crate::{col, in_subquery, lit, scalar_subquery, sum};
+    use crate::{expr, expr_fn::exists};
 
     use super::*;
-    use crate::{col, in_subquery, lit, scalar_subquery, sum};
+
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{
+        FunctionalDependence, OwnedTableReference, SchemaError, TableReference,
+    };
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -1926,5 +1942,22 @@ mod tests {
             .build()?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_get_updated_id_keys() {
+        let fund_dependencies =
+            FunctionalDependencies::new(vec![FunctionalDependence::new(
+                vec![1],
+                vec![0, 1, 2],
+                true,
+            )]);
+        let res = fund_dependencies.project_functional_dependencies(&[1, 2], 2);
+        let expected = FunctionalDependencies::new(vec![FunctionalDependence::new(
+            vec![0],
+            vec![0, 1],
+            true,
+        )]);
+        assert_eq!(res, expected);
     }
 }

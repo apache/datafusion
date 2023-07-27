@@ -20,21 +20,25 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use log::{debug, trace};
-
 use crate::physical_plan::common::spawn_buffered;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::sorts::streaming_merge;
 use crate::physical_plan::{
-    expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
 };
+
+use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
+use datafusion_physical_expr::{
+    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
+};
+
+use log::{debug, trace};
 
 /// Sort preserving merge execution plan
 ///
@@ -107,6 +111,26 @@ impl SortPreservingMergeExec {
     }
 }
 
+impl DisplayAs for SortPreservingMergeExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))?;
+                if let Some(fetch) = self.fetch {
+                    write!(f, ", fetch={fetch}")?;
+                };
+
+                Ok(())
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for SortPreservingMergeExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -120,6 +144,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -140,6 +171,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -211,24 +246,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
                 Ok(result)
-            }
-        }
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))?;
-                if let Some(fetch) = self.fetch {
-                    write!(f, ", fetch={fetch}")?;
-                };
-
-                Ok(())
             }
         }
     }

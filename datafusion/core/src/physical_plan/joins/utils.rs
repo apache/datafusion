@@ -17,17 +17,6 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use arrow::array::{
-    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
-};
-use arrow::compute;
-use arrow::datatypes::{Field, Schema, SchemaBuilder};
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_physical_expr::expressions::Column;
-use futures::future::{BoxFuture, Shared};
-use futures::{ready, FutureExt};
-use parking_lot::Mutex;
 use std::cmp::max;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -36,20 +25,31 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{ScalarValue, SharedResult};
-
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
-
-use datafusion_common::JoinType;
-use datafusion_common::{DataFusionError, Result};
-
 use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::physical_plan::SchemaRef;
 use crate::physical_plan::{
     ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
+
+use arrow::array::{
+    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
+    UInt32Builder, UInt64Array,
+};
+use arrow::compute;
+use arrow::datatypes::{Field, Schema, SchemaBuilder};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{DataFusionError, JoinType, Result, ScalarValue, SharedResult};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalentClass, PhysicalExpr,
+    PhysicalSortExpr,
+};
+
+use futures::future::{BoxFuture, Shared};
+use futures::{ready, FutureExt};
+use parking_lot::Mutex;
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -147,6 +147,63 @@ pub fn adjust_right_output_partitioning(
     }
 }
 
+fn adjust_right_order(
+    right_order: &[PhysicalSortExpr],
+    left_columns_len: usize,
+) -> Result<Vec<PhysicalSortExpr>> {
+    right_order
+        .iter()
+        .map(|sort_expr| {
+            let expr = sort_expr.expr.clone();
+            let adjusted = expr.transform_up(&|expr| {
+                Ok(
+                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                        let new_col =
+                            Column::new(column.name(), column.index() + left_columns_len);
+                        Transformed::Yes(Arc::new(new_col))
+                    } else {
+                        Transformed::No(expr)
+                    },
+                )
+            })?;
+            Ok(PhysicalSortExpr {
+                expr: adjusted,
+                options: sort_expr.options,
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+}
+
+/// Calculate the output order for hash join.
+pub fn calculate_hash_join_output_order(
+    join_type: &JoinType,
+    maybe_left_order: Option<&[PhysicalSortExpr]>,
+    maybe_right_order: Option<&[PhysicalSortExpr]>,
+    left_len: usize,
+) -> Result<Option<Vec<PhysicalSortExpr>>> {
+    match maybe_right_order {
+        Some(right_order) => {
+            let result = match join_type {
+                JoinType::Inner => {
+                    // We modify the indices of the right order columns because their
+                    // columns are appended to the right side of the left schema.
+                    let mut adjusted_right_order =
+                        adjust_right_order(right_order, left_len)?;
+                    if let Some(left_order) = maybe_left_order {
+                        adjusted_right_order.extend_from_slice(left_order);
+                    }
+                    Some(adjusted_right_order)
+                }
+                JoinType::RightAnti | JoinType::RightSemi => Some(right_order.to_vec()),
+                _ => None,
+            };
+
+            Ok(result)
+        }
+        None => Ok(None),
+    }
+}
+
 /// Combine the Equivalence Properties for Join Node
 pub fn combine_join_equivalence_properties(
     join_type: JoinType,
@@ -224,6 +281,64 @@ pub fn cross_join_equivalence_properties(
         .collect::<Vec<_>>();
     new_properties.extend(new_right_properties);
     new_properties
+}
+
+/// Adds the `offset` value to `Column` indices inside `expr`. This function is
+/// generally used during the update of the right table schema in join operations.
+pub(crate) fn add_offset_to_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
+            col.name(),
+            offset + col.index(),
+        )))),
+        None => Ok(Transformed::No(e)),
+    })
+}
+
+/// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
+pub(crate) fn add_offset_to_sort_expr(
+    sort_expr: &PhysicalSortExpr,
+    offset: usize,
+) -> Result<PhysicalSortExpr> {
+    Ok(PhysicalSortExpr {
+        expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
+        options: sort_expr.options,
+    })
+}
+
+/// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
+/// inside `sort_exprs`.
+pub(crate) fn add_offset_to_lex_ordering(
+    sort_exprs: LexOrderingRef,
+    offset: usize,
+) -> Result<LexOrdering> {
+    sort_exprs
+        .iter()
+        .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
+        .collect()
+}
+
+/// Adds the `offset` value to `Column` indices for all expressions inside the
+/// given `OrderingEquivalentClass`es.
+pub(crate) fn add_offset_to_ordering_equivalence_classes(
+    oeq_classes: &[OrderingEquivalentClass],
+    offset: usize,
+) -> Result<Vec<OrderingEquivalentClass>> {
+    oeq_classes
+        .iter()
+        .map(|prop| {
+            let new_head = add_offset_to_lex_ordering(prop.head(), offset)?;
+            let new_others = prop
+                .others()
+                .iter()
+                .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(OrderingEquivalentClass::new(new_head, new_others))
+        })
+        .collect()
 }
 
 impl Display for JoinSide {

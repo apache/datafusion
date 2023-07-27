@@ -32,7 +32,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
-pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use futures::stream::{Stream, TryStreamExt};
@@ -55,7 +54,7 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
     fn schema(&self) -> SchemaRef;
 }
 
-/// Trait for a stream of record batches.
+/// Trait for a [`Stream`] of [`RecordBatch`]es
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
@@ -99,7 +98,7 @@ impl Stream for EmptyRecordBatchStream {
 /// [`ExecutionPlan`] can be displayed in a simplified form using the
 /// return value from [`displayable`] in addition to the (normally
 /// quite verbose) `Debug` output.
-pub trait ExecutionPlan: Debug + Send + Sync {
+pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns the execution plan as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -223,16 +222,6 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// `execute()` new metrics may appear in subsequent calls.
     fn metrics(&self) -> Option<MetricsSet> {
         None
-    }
-
-    /// Format this `ExecutionPlan` to `f` in the specified type.
-    ///
-    /// Should not include a newline
-    ///
-    /// Note this function prints a placeholder by default to preserve
-    /// backwards compatibility.
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ExecutionPlan(PlaceHolder)")
     }
 
     /// Returns the global output statistics for this `ExecutionPlan` node.

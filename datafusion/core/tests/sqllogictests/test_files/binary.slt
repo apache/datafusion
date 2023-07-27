@@ -16,7 +16,7 @@
 # under the License.
 
 #############
-## Tests for binary data types
+## Tests for Binary
 #############
 
 # Basic literals encoded as hex
@@ -44,6 +44,23 @@ FROM t;
 FF01 ff01 Utf8 Binary
 ABC 0abc Utf8 Binary
 000 0000 Utf8 Binary
+
+# comparisons
+query ?BBBB
+SELECT
+  column2,
+  -- binary compare with string
+  column2 = 'ABC',
+  column2 <> 'ABC',
+  -- binary compared with binary
+  column2 = X'ABC',
+  column2 <> X'ABC'
+FROM t;
+----
+ff01 false true false true
+0abc false true true false
+0000 false true false true
+
 
 # predicates
 query T?
@@ -73,3 +90,63 @@ GROUP BY column1;
 1
 1
 1
+
+statement ok
+drop table t;
+
+#############
+## Tests for FixedSizeBinary
+#############
+
+# fixed_size_binary
+statement ok
+CREATE TABLE t_source
+AS VALUES
+  (X'000102', X'000102'),
+  (X'003102', X'000102'),
+  (NULL,      X'000102'),
+  (X'FF0102', X'000102'),
+  (X'000102', X'000102')
+;
+
+# Create a table with FixedSizeBinary
+statement ok
+CREATE TABLE t
+AS SELECT
+  arrow_cast(column1, 'FixedSizeBinary(3)') as "column1",
+  arrow_cast(column2, 'FixedSizeBinary(3)') as "column2"
+FROM t_source;
+
+query ?T
+SELECT column1, arrow_typeof(column1) FROM t;
+----
+000102 FixedSizeBinary(3)
+003102 FixedSizeBinary(3)
+NULL FixedSizeBinary(3)
+ff0102 FixedSizeBinary(3)
+000102 FixedSizeBinary(3)
+
+# Comparison
+# https://github.com/apache/arrow-rs/pull/4492
+query error DataFusion error: Arrow error: Compute error: eq_dyn_binary_scalar only supports Binary or LargeBinary arrays
+SELECT
+  column1,
+  column2,
+  column1 = arrow_cast(X'000102', 'FixedSizeBinary(3)'),
+  column1 = column2
+FROM t
+
+
+# Comparison to different sized field
+query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation FixedSizeBinary\(3\) = FixedSizeBinary\(2\)
+SELECT column1, column1 = arrow_cast(X'0102', 'FixedSizeBinary(2)') FROM t
+
+# Comparison to different sized Binary
+query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation FixedSizeBinary\(3\) = Binary
+SELECT column1, column1 = X'0102' FROM t
+
+statement ok
+drop table t_source
+
+statement ok
+drop table t

@@ -18,6 +18,7 @@
 //! Execution plan for reading CSV files
 
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -33,16 +34,18 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+use tokio::io::AsyncWriteExt;
 
 use super::FileScanConfig;
 
 use bytes::{Buf, Bytes};
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
-use object_store::{GetResult, ObjectStore};
+use object_store::local::LocalFileSystem;
+use object_store::{GetOptions, GetResult, ObjectStore};
 use std::any::Any;
-use std::fs;
-use std::path::Path;
+use std::io::Cursor;
+use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::JoinSet;
@@ -56,9 +59,12 @@ pub struct CsvExec {
     projected_output_ordering: Vec<LexOrdering>,
     has_header: bool,
     delimiter: u8,
+    quote: u8,
+    escape: Option<u8>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    file_compression_type: FileCompressionType,
+    /// Compression type of the file associated with CsvExec
+    pub file_compression_type: FileCompressionType,
 }
 
 impl CsvExec {
@@ -67,6 +73,8 @@ impl CsvExec {
         base_config: FileScanConfig,
         has_header: bool,
         delimiter: u8,
+        quote: u8,
+        escape: Option<u8>,
         file_compression_type: FileCompressionType,
     ) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
@@ -79,6 +87,8 @@ impl CsvExec {
             projected_output_ordering,
             has_header,
             delimiter,
+            quote,
+            escape,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
         }
@@ -95,6 +105,56 @@ impl CsvExec {
     /// A column delimiter
     pub fn delimiter(&self) -> u8 {
         self.delimiter
+    }
+
+    /// The quote character
+    pub fn quote(&self) -> u8 {
+        self.quote
+    }
+
+    /// The escape character
+    pub fn escape(&self) -> Option<u8> {
+        self.escape
+    }
+
+    /// Redistribute files across partitions according to their size
+    /// See comments on `repartition_file_groups()` for more detail.
+    ///
+    /// Return `None` if can't get repartitioned(empty/compressed file).
+    pub fn get_repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+    ) -> Option<Self> {
+        // Parallel execution on compressed CSV file is not supported yet.
+        if self.file_compression_type.is_compressed() {
+            return None;
+        }
+
+        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
+            self.base_config.file_groups.clone(),
+            target_partitions,
+            repartition_file_min_size,
+        );
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut new_plan = self.clone();
+            new_plan.base_config.file_groups = repartitioned_file_groups;
+            return Some(new_plan);
+        }
+        None
+    }
+}
+
+impl DisplayAs for CsvExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "CsvExec: ")?;
+        self.base_config.fmt_as(t, f)?;
+        write!(f, ", has_header={}", self.has_header)
     }
 }
 
@@ -159,6 +219,8 @@ impl ExecutionPlan for CsvExec {
             file_projection: self.base_config.file_column_projection_indices(),
             has_header: self.has_header,
             delimiter: self.delimiter,
+            quote: self.quote,
+            escape: self.escape,
             object_store,
         });
 
@@ -169,16 +231,6 @@ impl ExecutionPlan for CsvExec {
         let stream =
             FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "CsvExec: ")?;
-        self.base_config.fmt_as(t, f)?;
-        write!(f, ", has_header={}", self.has_header)
     }
 
     fn statistics(&self) -> Statistics {
@@ -198,6 +250,8 @@ pub struct CsvConfig {
     file_projection: Option<Vec<usize>>,
     has_header: bool,
     delimiter: u8,
+    quote: u8,
+    escape: Option<u8>,
     object_store: Arc<dyn ObjectStore>,
 }
 
@@ -209,6 +263,7 @@ impl CsvConfig {
         file_projection: Option<Vec<usize>>,
         has_header: bool,
         delimiter: u8,
+        quote: u8,
         object_store: Arc<dyn ObjectStore>,
     ) -> Self {
         Self {
@@ -217,6 +272,8 @@ impl CsvConfig {
             file_projection,
             has_header,
             delimiter,
+            quote,
+            escape: None,
             object_store,
         }
     }
@@ -227,8 +284,11 @@ impl CsvConfig {
         let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
             .has_header(self.has_header)
             .with_delimiter(self.delimiter)
+            .with_quote(self.quote)
             .with_batch_size(self.batch_size);
-
+        if let Some(escape) = self.escape {
+            builder = builder.with_escape(escape);
+        }
         if let Some(p) = &self.file_projection {
             builder = builder.with_projection(p.clone());
         }
@@ -269,14 +329,223 @@ impl CsvOpener {
     }
 }
 
+/// Returns the position of the first newline in the byte stream, or the total length if no newline is found.
+fn find_first_newline_bytes<R: std::io::Read>(reader: &mut R) -> Result<usize> {
+    let mut buffer = [0; 1];
+    let mut index = 0;
+
+    loop {
+        let result = reader.read(&mut buffer);
+        match result {
+            Ok(n) => {
+                if n == 0 {
+                    return Ok(index); // End of file, no newline found
+                }
+                if buffer[0] == b'\n' {
+                    return Ok(index);
+                }
+                index += 1;
+            }
+            Err(e) => {
+                return Err(DataFusionError::IoError(e));
+            }
+        }
+    }
+}
+
+/// Returns the offset of the first newline in the object store range [start, end), or the end offset if no newline is found.
+async fn find_first_newline(
+    object_store: &Arc<dyn ObjectStore>,
+    location: &object_store::path::Path,
+    start_byte: usize,
+    end_byte: usize,
+) -> Result<usize> {
+    let options = GetOptions {
+        range: Some(Range {
+            start: start_byte,
+            end: end_byte,
+        }),
+        ..Default::default()
+    };
+
+    let offset = match object_store.get_opts(location, options).await? {
+        GetResult::File(_, _) => {
+            // Range currently is ignored for GetResult::File(...)
+            // Alternative get_range() will copy the whole range into memory, thus set a limit of
+            // max bytes to read to find the first newline
+            let max_line_length = 4096; // in bytes
+            let get_range_end_result = object_store
+                .get_range(
+                    location,
+                    Range {
+                        start: start_byte,
+                        end: std::cmp::min(start_byte + max_line_length, end_byte),
+                    },
+                )
+                .await;
+            let mut decoder_tail = Cursor::new(get_range_end_result?);
+            find_first_newline_bytes(&mut decoder_tail)?
+        }
+        GetResult::Stream(s) => {
+            let mut input = s.map_err(DataFusionError::from);
+            let mut buffered = Bytes::new();
+
+            let future_index = async move {
+                let mut index = 0;
+
+                loop {
+                    if buffered.is_empty() {
+                        match input.next().await {
+                            Some(Ok(b)) => buffered = b,
+                            Some(Err(e)) => return Err(e),
+                            None => return Ok(index),
+                        };
+                    }
+
+                    for byte in &buffered {
+                        if *byte == b'\n' {
+                            return Ok(index);
+                        }
+                        index += 1;
+                    }
+
+                    buffered.advance(buffered.len());
+                }
+            };
+            future_index.await?
+        }
+    };
+    Ok(offset)
+}
+
 impl FileOpener for CsvOpener {
+    /// Open a partitioned CSV file.
+    ///
+    /// If `file_meta.range` is `None`, the entire file is opened.
+    /// If `file_meta.range` is `Some(FileRange {start, end})`, this signifies that the partition
+    /// corresponds to the byte range [start, end) within the file.
+    ///
+    /// Note: `start` or `end` might be in the middle of some lines. In such cases, the following rules
+    /// are applied to determine which lines to read:
+    /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
+    /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
+    ///
+    /// Examples:
+    /// Consider the following partitions enclosed by braces `{}`:
+    ///
+    /// {A,1,2,3,4,5,6,7,8,9\n
+    ///  A,1,2,3,4,5,6,7,8,9\n}                           
+    ///  A,1,2,3,4,5,6,7,8,9\n
+    ///  The lines read would be: [0, 1]
+    ///
+    ///  A,{1,2,3,4,5,6,7,8,9\n
+    ///  A,1,2,3,4,5,6,7,8,9\n
+    ///  A},1,2,3,4,5,6,7,8,9\n
+    ///  The lines read would be: [1, 2]
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
-        let config = self.config.clone();
+        // `self.config.has_header` controls whether to skip reading the 1st line header
+        // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
+        // partition, then don't skip first line
+        let mut csv_has_header = self.config.has_header;
+        if let Some(FileRange { start, .. }) = file_meta.range {
+            if start != 0 {
+                csv_has_header = false;
+            }
+        }
+
+        let config = CsvConfig {
+            has_header: csv_has_header,
+            ..(*self.config).clone()
+        };
+
         let file_compression_type = self.file_compression_type.to_owned();
+
+        if file_meta.range.is_some() {
+            assert!(
+                !file_compression_type.is_compressed(),
+                "Reading compressed .csv in parallel is not supported"
+            );
+        }
+
         Ok(Box::pin(async move {
-            match config.object_store.get(file_meta.location()).await? {
+            let file_size = file_meta.object_meta.size;
+            // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
+            let (start_byte, end_byte) = match file_meta.range {
+                None => (0, file_size),
+                Some(FileRange { start, end }) => {
+                    let (start, end) = (start as usize, end as usize);
+                    // Partition byte range is [start, end), the boundary might be in the middle of
+                    // some line. Need to find out the exact line boundaries.
+                    let start_delta = if start != 0 {
+                        find_first_newline(
+                            &config.object_store,
+                            file_meta.location(),
+                            start - 1,
+                            file_size,
+                        )
+                        .await?
+                    } else {
+                        0
+                    };
+                    let end_delta = if end != file_size {
+                        find_first_newline(
+                            &config.object_store,
+                            file_meta.location(),
+                            end - 1,
+                            file_size,
+                        )
+                        .await?
+                    } else {
+                        0
+                    };
+                    (start + start_delta, end + end_delta)
+                }
+            };
+
+            // For special case: If `Range` has equal `start` and `end`, object store will fetch
+            // the whole file
+            let localfs: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+            let is_localfs = localfs.type_id() == config.object_store.type_id();
+            if start_byte == end_byte && !is_localfs {
+                return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed());
+            }
+
+            let options = GetOptions {
+                range: Some(Range {
+                    start: start_byte,
+                    end: end_byte,
+                }),
+                ..Default::default()
+            };
+
+            match config
+                .object_store
+                .get_opts(file_meta.location(), options)
+                .await?
+            {
                 GetResult::File(file, _) => {
-                    let decoder = file_compression_type.convert_read(file)?;
+                    let is_whole_file_scanned = file_meta.range.is_none();
+                    let decoder = if is_whole_file_scanned {
+                        // For special case: `get_range()` will interpret `start` and `end` as the
+                        // byte range after decompression for compressed files
+                        file_compression_type.convert_read(file)?
+                    } else {
+                        // Range currently is ignored for GetResult::File(...)
+                        let bytes = Cursor::new(
+                            config
+                                .object_store
+                                .get_range(
+                                    file_meta.location(),
+                                    Range {
+                                        start: start_byte,
+                                        end: end_byte,
+                                    },
+                                )
+                                .await?,
+                        );
+                        file_compression_type.convert_read(bytes)?
+                    };
+
                     Ok(futures::stream::iter(config.open(decoder)?).boxed())
                 }
                 GetResult::Stream(s) => {
@@ -322,30 +591,37 @@ pub async fn plan_to_csv(
     path: impl AsRef<str>,
 ) -> Result<()> {
     let path = path.as_ref();
-    // create directory to contain the CSV files (one per partition)
-    let fs_path = Path::new(path);
-    if let Err(e) = fs::create_dir(fs_path) {
-        return Err(DataFusionError::Execution(format!(
-            "Could not create directory {path}: {e:?}"
-        )));
-    }
-
+    let parsed = ListingTableUrl::parse(path)?;
+    let object_store_url = parsed.object_store();
+    let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
-        let plan = plan.clone();
-        let filename = format!("part-{i}.csv");
-        let path = fs_path.join(filename);
-        let file = fs::File::create(path)?;
-        let mut writer = csv::Writer::new(file);
-        let stream = plan.execute(i, task_ctx.clone())?;
+        let storeref = store.clone();
+        let plan: Arc<dyn ExecutionPlan> = plan.clone();
+        let filename = format!("{}/part-{i}.csv", parsed.prefix());
+        let file = object_store::path::Path::parse(filename)?;
 
+        let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let result: Result<()> = stream
-                .map(|batch| writer.write(&batch?))
-                .try_collect()
+            let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
+            let mut buffer = Vec::with_capacity(1024);
+            //only write headers on first iteration
+            let mut write_headers = true;
+            while let Some(batch) = stream.next().await.transpose()? {
+                let mut writer = csv::WriterBuilder::new()
+                    .has_headers(write_headers)
+                    .build(buffer);
+                writer.write(&batch)?;
+                buffer = writer.into_inner();
+                multipart_writer.write_all(&buffer).await?;
+                buffer.clear();
+                //prevent writing headers more than once
+                write_headers = false;
+            }
+            multipart_writer
+                .shutdown()
                 .await
-                .map_err(DataFusionError::from);
-            result
+                .map_err(DataFusionError::from)
         });
     }
 
@@ -412,7 +688,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.projection = Some(vec![0, 2, 4]);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -468,7 +751,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.projection = Some(vec![4, 0, 2]);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -524,7 +814,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.limit = Some(5);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(13, csv.projected_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
@@ -580,7 +877,14 @@ mod tests {
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
         config.limit = Some(5);
 
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(14, csv.base_config.file_schema.fields().len());
         assert_eq!(14, csv.projected_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
@@ -634,7 +938,14 @@ mod tests {
 
         // we don't have `/date=xx/` in the path but that is ok because
         // partitions are resolved during scan anyway
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
         assert_eq!(13, csv.base_config.file_schema.fields().len());
         assert_eq!(2, csv.projected_schema.fields().len());
         assert_eq!(2, csv.schema().fields().len());
@@ -720,7 +1031,14 @@ mod tests {
         .unwrap();
 
         let config = partitioned_csv_config(file_schema, file_groups).unwrap();
-        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+        let csv = CsvExec::new(
+            config,
+            true,
+            b',',
+            b'"',
+            None,
+            file_compression_type.to_owned(),
+        );
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();
@@ -789,14 +1107,20 @@ mod tests {
     #[tokio::test]
     async fn write_csv_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
+
+        // register a local file system object store
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.runtime_env().register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
-        let tmp_dir = TempDir::new()?;
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+
+        let out_dir_url = "file://local/out";
         let e = df
-            .write_csv(&out_dir)
+            .write_csv(out_dir_url)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -820,10 +1144,18 @@ mod tests {
         )
         .await?;
 
+        // register a local file system object store
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+
+        ctx.runtime_env().register_object_store(&local_url, local);
+
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_csv(&out_dir).await?;
+        df.write_csv(out_dir_url).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();

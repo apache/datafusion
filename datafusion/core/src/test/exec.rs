@@ -31,11 +31,11 @@ use arrow::{
 };
 use futures::Stream;
 
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::physical_plan::{expressions::PhysicalSortExpr, DisplayAs};
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::stream::RecordBatchReceiverStream,
@@ -153,6 +153,20 @@ impl MockExec {
     }
 }
 
+impl DisplayAs for MockExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "MockExec")
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for MockExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -225,18 +239,6 @@ impl ExecutionPlan for MockExec {
         }
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "MockExec")
-            }
-        }
-    }
-
     // Panics if one of the batches is an error
     fn statistics(&self) -> Statistics {
         let data: Result<Vec<_>> = self
@@ -292,6 +294,20 @@ impl BarrierExec {
         println!("BarrierExec::wait waiting on barrier");
         self.barrier.wait().await;
         println!("BarrierExec::wait done waiting");
+    }
+}
+
+impl DisplayAs for BarrierExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "BarrierExec")
+            }
+        }
     }
 }
 
@@ -352,18 +368,6 @@ impl ExecutionPlan for BarrierExec {
         Ok(builder.build())
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "BarrierExec")
-            }
-        }
-    }
-
     fn statistics(&self) -> Statistics {
         common::compute_record_batch_statistics(&self.data, &self.schema, None)
     }
@@ -389,6 +393,20 @@ impl ErrorExec {
             true,
         )]));
         Self { schema }
+    }
+}
+
+impl DisplayAs for ErrorExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "ErrorExec")
+            }
+        }
     }
 }
 
@@ -431,18 +449,6 @@ impl ExecutionPlan for ErrorExec {
         )))
     }
 
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "ErrorExec")
-            }
-        }
-    }
-
     fn statistics(&self) -> Statistics {
         Statistics::default()
     }
@@ -470,6 +476,26 @@ impl StatisticsExec {
         }
     }
 }
+
+impl DisplayAs for StatisticsExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "StatisticsExec: col_count={}, row_count={:?}",
+                    self.schema.fields().len(),
+                    self.stats.num_rows,
+                )
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for StatisticsExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -509,23 +535,6 @@ impl ExecutionPlan for StatisticsExec {
     fn statistics(&self) -> Statistics {
         self.stats.clone()
     }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "StatisticsExec: col_count={}, row_count={:?}",
-                    self.schema.fields().len(),
-                    self.stats.num_rows,
-                )
-            }
-        }
-    }
 }
 
 /// Execution plan that emits streams that block forever.
@@ -560,6 +569,20 @@ impl BlockingExec {
     /// loop. Use [`assert_strong_count_converges_to_zero`] to archive this.
     pub fn refs(&self) -> Weak<()> {
         Arc::downgrade(&self.refs)
+    }
+}
+
+impl DisplayAs for BlockingExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "BlockingExec",)
+            }
+        }
     }
 }
 
@@ -603,18 +626,6 @@ impl ExecutionPlan for BlockingExec {
             schema: Arc::clone(&self.schema),
             _refs: Arc::clone(&self.refs),
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "BlockingExec",)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {
@@ -697,6 +708,20 @@ impl PanicExec {
     }
 }
 
+impl DisplayAs for PanicExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "PanickingExec",)
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for PanicExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -741,18 +766,6 @@ impl ExecutionPlan for PanicExec {
             schema: Arc::clone(&self.schema),
             ready: false,
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "PanickingExec",)
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

@@ -69,7 +69,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -296,37 +296,20 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             expr,
             pattern,
             escape_char,
+            case_insensitive,
         }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
+            let op_name = if *case_insensitive { "ILIKE" } else { "LIKE" };
             let escape = if let Some(char) = escape_char {
                 format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{expr} NOT LIKE {pattern}{escape}"))
+                Ok(format!("{expr} NOT {op_name} {pattern}{escape}"))
             } else {
-                Ok(format!("{expr} LIKE {pattern}{escape}"))
-            }
-        }
-        Expr::ILike(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let escape = if let Some(char) = escape_char {
-                format!("CHAR '{char}'")
-            } else {
-                "".to_string()
-            };
-            if *negated {
-                Ok(format!("{expr} NOT ILIKE {pattern}{escape}"))
-            } else {
-                Ok(format!("{expr} ILIKE {pattern}{escape}"))
+                Ok(format!("{expr} {op_name} {pattern}{escape}"))
             }
         }
         Expr::SimilarTo(Like {
@@ -334,6 +317,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             expr,
             pattern,
             escape_char,
+            case_insensitive: _,
         }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
@@ -958,10 +942,9 @@ impl DefaultPhysicalPlanner {
                                 })
                                 .collect::<Vec<_>>();
                             let projection =
-                                logical_plan::Projection::try_new_with_schema(
+                                Projection::try_new(
                                     final_join_result,
                                     Arc::new(join_plan),
-                                    join_schema.clone(),
                                 )?;
                             LogicalPlan::Projection(projection)
                         } else {
@@ -1934,10 +1917,10 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
+    use crate::physical_plan::{DisplayAs, SendableRecordBatchStream};
     use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
@@ -2203,7 +2186,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {} }, \
+        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
@@ -2427,6 +2410,7 @@ mod tests {
             );
         }
     }
+
     struct ErrorExtensionPlanner {}
 
     #[async_trait]
@@ -2500,6 +2484,16 @@ mod tests {
         schema: SchemaRef,
     }
 
+    impl DisplayAs for NoOpExecutionPlan {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "NoOpExecutionPlan")
+                }
+            }
+        }
+    }
+
     impl ExecutionPlan for NoOpExecutionPlan {
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
@@ -2535,14 +2529,6 @@ mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
-        }
-
-        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-            match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "NoOpExecutionPlan")
-                }
-            }
         }
 
         fn statistics(&self) -> Statistics {
@@ -2607,5 +2593,35 @@ mod tests {
         Ok(LogicalPlanBuilder::from(
             ctx.read_csv(path, options).await?.into_optimized_plan()?,
         ))
+    }
+
+    #[tokio::test]
+    async fn test_display_plan_in_graphviz_format() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .project(vec![col("id") + lit(2)])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).await.unwrap();
+
+        let expected_graph = r###"
+// Begin DataFusion GraphViz Plan,
+// display it online here: https://dreampuf.github.io/GraphvizOnline
+
+digraph {
+    1[shape=box label="ProjectionExec: expr=[id@0 + 2 as employee.id + Int32(2)]", tooltip=""]
+    2[shape=box label="EmptyExec: produce_one_row=false", tooltip=""]
+    1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
+}
+// End DataFusion GraphViz Plan
+"###;
+
+        let generated_graph = format!("{}", displayable(&*plan).graphviz());
+
+        assert_eq!(expected_graph, generated_graph);
     }
 }

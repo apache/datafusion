@@ -26,7 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::SchemaExt;
+use datafusion_common::{Constraints, SchemaExt};
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -52,6 +52,7 @@ pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 pub struct MemTable {
     schema: SchemaRef,
     pub(crate) batches: Vec<PartitionData>,
+    constraints: Option<Constraints>,
 }
 
 impl MemTable {
@@ -76,7 +77,16 @@ impl MemTable {
                 .into_iter()
                 .map(|e| Arc::new(RwLock::new(e)))
                 .collect::<Vec<_>>(),
+            constraints: None,
         })
+    }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        if !constraints.is_empty() {
+            self.constraints = Some(constraints);
+        }
+        self
     }
 
     /// Create a mem table by reading from another data source
@@ -153,6 +163,10 @@ impl TableProvider for MemTable {
         self.schema.clone()
     }
 
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
+    }
+
     fn table_type(&self) -> TableType {
         TableType::Base
     }
@@ -169,8 +183,8 @@ impl TableProvider for MemTable {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
         }
-        Ok(Arc::new(MemoryExec::try_new_owned_data(
-            partitions,
+        Ok(Arc::new(MemoryExec::try_new(
+            &partitions,
             self.schema(),
             projection.cloned(),
         )?))

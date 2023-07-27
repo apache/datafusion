@@ -17,6 +17,7 @@
 
 //! Execution plan for reading line-delimited JSON files
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -36,13 +37,13 @@ use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, stream, StreamExt, TryStreamExt};
+use object_store;
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
-use std::fs;
 use std::io::BufReader;
-use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
+use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
 use super::FileScanConfig;
@@ -81,6 +82,17 @@ impl NdJsonExec {
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+}
+
+impl DisplayAs for NdJsonExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "JsonExec: ")?;
+        self.base_config.fmt_as(t, f)
     }
 }
 
@@ -147,15 +159,6 @@ impl ExecutionPlan for NdJsonExec {
             FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
 
         Ok(Box::pin(stream) as SendableRecordBatchStream)
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "JsonExec: ")?;
-        self.base_config.fmt_as(t, f)
     }
 
     fn statistics(&self) -> Statistics {
@@ -257,29 +260,31 @@ pub async fn plan_to_json(
     path: impl AsRef<str>,
 ) -> Result<()> {
     let path = path.as_ref();
-    // create directory to contain the CSV files (one per partition)
-    let fs_path = Path::new(path);
-    if let Err(e) = fs::create_dir(fs_path) {
-        return Err(DataFusionError::Execution(format!(
-            "Could not create directory {path}: {e:?}"
-        )));
-    }
-
+    let parsed = ListingTableUrl::parse(path)?;
+    let object_store_url = parsed.object_store();
+    let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
-        let plan = plan.clone();
-        let filename = format!("part-{i}.json");
-        let path = fs_path.join(filename);
-        let file = fs::File::create(path)?;
-        let mut writer = json::LineDelimitedWriter::new(file);
-        let stream = plan.execute(i, task_ctx.clone())?;
+        let storeref = store.clone();
+        let plan: Arc<dyn ExecutionPlan> = plan.clone();
+        let filename = format!("{}/part-{i}.json", parsed.prefix());
+        let file = object_store::path::Path::parse(filename)?;
+
+        let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
-            let result: Result<()> = stream
-                .map(|batch| writer.write(&batch?))
-                .try_collect()
+            let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
+            let mut buffer = Vec::with_capacity(1024);
+            while let Some(batch) = stream.next().await.transpose()? {
+                let mut writer = json::LineDelimitedWriter::new(buffer);
+                writer.write(&batch)?;
+                buffer = writer.into_inner();
+                multipart_writer.write_all(&buffer).await?;
+                buffer.clear();
+            }
+            multipart_writer
+                .shutdown()
                 .await
-                .map_err(DataFusionError::from);
-            result
+                .map_err(DataFusionError::from)
         });
     }
 
@@ -318,6 +323,7 @@ mod tests {
     use crate::test::partitioned_file_groups;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use rstest::*;
+    use std::path::Path;
     use tempfile::TempDir;
     use url::Url;
 
@@ -647,7 +653,6 @@ mod tests {
     #[tokio::test]
     async fn write_json_results() -> Result<()> {
         // create partitioned input file and context
-        let tmp_dir = TempDir::new()?;
         let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
@@ -657,10 +662,17 @@ mod tests {
         ctx.register_json("test", path.as_str(), NdJsonReadOptions::default())
             .await?;
 
+        // register a local file system object store for /tmp directory
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.runtime_env().register_object_store(&local_url, local);
+
         // execute a simple query and write the results to CSV
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT a, b FROM test").await?;
-        df.write_json(&out_dir).await?;
+        df.write_json(out_dir_url).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();
@@ -718,17 +730,51 @@ mod tests {
     #[tokio::test]
     async fn write_json_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
+        // register a local file system object store for /tmp directory
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.runtime_env().register_object_store(&local_url, local);
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
-        let tmp_dir = TempDir::new()?;
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let out_dir_url = "file://local/out";
         let e = df
-            .write_json(&out_dir)
+            .write_json(out_dir_url)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ndjson_schema_infer_max_records() -> Result<()> {
+        async fn read_test_data(schema_infer_max_records: usize) -> Result<SchemaRef> {
+            let ctx = SessionContext::new();
+
+            let options = NdJsonReadOptions {
+                schema_infer_max_records,
+                ..Default::default()
+            };
+
+            let batches = ctx
+                .read_json("tests/data/4.json", options)
+                .await?
+                .collect()
+                .await?;
+
+            Ok(batches[0].schema())
+        }
+
+        // Use only the first 2 rows to infer the schema, those have 2 fields.
+        let schema = read_test_data(2).await?;
+        assert_eq!(schema.fields().len(), 2);
+
+        // Use all rows to infer the schema, those have 5 fields.
+        let schema = read_test_data(10).await?;
+        assert_eq!(schema.fields().len(), 5);
+
         Ok(())
     }
 }

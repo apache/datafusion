@@ -258,7 +258,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn field(&self) -> Result<Field> {
-        let nullable = false;
+        let nullable = true;
         Ok(Field::new(
             &self.name,
             self.data_type.as_ref().clone(),
@@ -350,8 +350,7 @@ pub(crate) fn window_ordering_equivalence(
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
             builtin_window_expr
-                .get_built_in_func_expr()
-                .add_equal_orderings(&mut builder);
+                .add_equal_orderings(&mut builder, || input.equivalence_properties());
         }
     }
     builder.build()
@@ -540,7 +539,7 @@ mod tests {
 
         let my_count = create_udaf(
             "my_count",
-            DataType::Int64,
+            vec![DataType::Int64],
             Arc::new(DataType::Int64),
             Volatility::Immutable,
             Arc::new(|_| Ok(Box::new(MyCount(0)))),

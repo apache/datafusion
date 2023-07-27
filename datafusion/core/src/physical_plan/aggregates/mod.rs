@@ -18,8 +18,7 @@
 //! Aggregates functionalities
 
 use crate::physical_plan::aggregates::{
-    bounded_aggregate_stream::BoundedAggregateStream, no_grouping::AggregateStream,
-    row_hash::GroupedHashAggregateStream,
+    no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -34,7 +33,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
-    aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map, reverse_order_bys,
@@ -46,10 +44,10 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-mod bounded_aggregate_stream;
+mod group_values;
 mod no_grouping;
+mod order;
 mod row_hash;
-mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
@@ -57,6 +55,8 @@ pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::utils::{
     get_finer_ordering, ordering_satisfy_requirement_concrete,
 };
+
+use super::DisplayAs;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -75,23 +75,43 @@ pub enum AggregateMode {
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
+    /// This mode requires tha the input is a single partition (like Final)
     Single,
+    /// Applies the entire logical aggregation operation in a single operator,
+    /// as opposed to Partial / Final modes which apply the logical aggregation using
+    /// two operators.
+    /// This mode requires tha the input is partitioned by group key (like FinalPartitioned)
+    SinglePartitioned,
 }
 
 /// Group By expression modes
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartiallyOrdered` and `FullyOrdered` are used to reason about
+/// when certain group by keys will never again be seen (and thus can
+/// be emitted by the grouping operator).
+///
+/// Specifically, each distinct combination of the relevant columns
+/// are contiguous in the input, and once a new combination is seen
+/// previous combinations are guaranteed never to appear again
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupByOrderMode {
-    /// None of the expressions in the GROUP BY clause have an ordering.
+    /// The input is not (known to be) ordered by any of the
+    /// expressions in the GROUP BY clause.
     None,
-    /// Some of the expressions in the GROUP BY clause have an ordering.
-    // For example, if the input is ordered by a, b, c and we group by b, a, d;
-    // the mode will be `PartiallyOrdered` meaning a subset of group b, a, d
-    // defines a preset for the existing ordering, e.g a, b defines a preset.
+    /// The input is known to be ordered by a preset (prefix but
+    /// possibly reordered) of the expressions in the `GROUP BY` clause.
+    ///
+    /// For example, if the input is ordered by `a, b, c` and we group
+    /// by `b, a, d`, `PartiallyOrdered` means a subset of group `b,
+    /// a, d` defines a preset for the existing ordering, in this case
+    /// `a, b`.
     PartiallyOrdered,
-    /// All the expressions in the GROUP BY clause have orderings.
-    // For example, if the input is ordered by a, b, c, d and we group by b, a;
-    // the mode will be `Ordered` meaning a all of the of group b, d
-    // defines a preset for the existing ordering, e.g a, b defines a preset.
+    /// The input is known to be ordered by *all* the expressions in the
+    /// `GROUP BY` clause.
+    ///
+    /// For example, if the input is ordered by `a, b, c, d` and we group by b, a,
+    /// `Ordered` means that all of the of group by expressions appear
+    ///  as a preset for the existing ordering, in this case `a, b`.
     FullyOrdered,
 }
 
@@ -196,7 +216,6 @@ impl PartialEq for PhysicalGroupBy {
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHashAggregateStream(GroupedHashAggregateStream),
-    BoundedAggregate(BoundedAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
@@ -204,7 +223,6 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
-            StreamType::BoundedAggregate(stream) => Box::pin(stream),
         }
     }
 }
@@ -703,14 +721,6 @@ impl AggregateExec {
             Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
             )?))
-        } else if let Some(aggregation_ordering) = &self.aggregation_ordering {
-            let aggregation_ordering = aggregation_ordering.clone();
-            Ok(StreamType::BoundedAggregate(BoundedAggregateStream::new(
-                self,
-                context,
-                partition,
-                aggregation_ordering,
-            )?))
         } else {
             Ok(StreamType::GroupedHashAggregateStream(
                 GroupedHashAggregateStream::new(self, context, partition)?,
@@ -719,125 +729,7 @@ impl AggregateExec {
     }
 }
 
-impl ExecutionPlan for AggregateExec {
-    /// Return a reference to Any that can be used for down-casting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        match &self.mode {
-            AggregateMode::Partial | AggregateMode::Single => {
-                // Partial and Single Aggregation will not change the output partitioning but need to respect the Alias
-                let input_partition = self.input.output_partitioning();
-                match input_partition {
-                    Partitioning::Hash(exprs, part) => {
-                        let normalized_exprs = exprs
-                            .into_iter()
-                            .map(|expr| {
-                                normalize_out_expr_with_columns_map(
-                                    expr,
-                                    &self.columns_map,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        Partitioning::Hash(normalized_exprs, part)
-                    }
-                    _ => input_partition,
-                }
-            }
-            // Final Aggregation's output partitioning is the same as its real input
-            _ => self.input.output_partitioning(),
-        }
-    }
-
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            if self.aggregation_ordering.is_none() {
-                // Cannot run without breaking pipeline.
-                Err(DataFusionError::Plan(
-                    "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs.".to_string(),
-                ))
-            } else {
-                Ok(true)
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.aggregation_ordering
-            .as_ref()
-            .map(|item: &AggregationOrdering| item.ordering.as_slice())
-    }
-
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        match &self.mode {
-            AggregateMode::Partial | AggregateMode::Single => {
-                vec![Distribution::UnspecifiedDistribution]
-            }
-            AggregateMode::FinalPartitioned => {
-                vec![Distribution::HashPartitioned(self.output_group_expr())]
-            }
-            AggregateMode::Final => vec![Distribution::SinglePartition],
-        }
-    }
-
-    fn required_input_ordering(&self) -> Vec<Option<LexOrderingReq>> {
-        vec![self.required_input_ordering.clone()]
-    }
-
-    fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut new_properties = EquivalenceProperties::new(self.schema());
-        project_equivalence_properties(
-            self.input.equivalence_properties(),
-            &self.columns_map,
-            &mut new_properties,
-        );
-        new_properties
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(AggregateExec::try_new(
-            self.mode,
-            self.group_by.clone(),
-            self.aggr_expr.clone(),
-            self.filter_expr.clone(),
-            self.order_by_expr.clone(),
-            children[0].clone(),
-            self.input_schema.clone(),
-        )?))
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, context)
-            .map(|stream| stream.into())
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
-    }
-
+impl DisplayAs for AggregateExec {
     fn fmt_as(
         &self,
         t: DisplayFormatType,
@@ -909,6 +801,128 @@ impl ExecutionPlan for AggregateExec {
         }
         Ok(())
     }
+}
+
+impl ExecutionPlan for AggregateExec {
+    /// Return a reference to Any that can be used for down-casting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    /// Get the output partitioning of this plan
+    fn output_partitioning(&self) -> Partitioning {
+        match &self.mode {
+            AggregateMode::Partial | AggregateMode::Single => {
+                // Partial and Single Aggregation will not change the output partitioning but need to respect the Alias
+                let input_partition = self.input.output_partitioning();
+                match input_partition {
+                    Partitioning::Hash(exprs, part) => {
+                        let normalized_exprs = exprs
+                            .into_iter()
+                            .map(|expr| {
+                                normalize_out_expr_with_columns_map(
+                                    expr,
+                                    &self.columns_map,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        Partitioning::Hash(normalized_exprs, part)
+                    }
+                    _ => input_partition,
+                }
+            }
+            // Final Aggregation's output partitioning is the same as its real input
+            _ => self.input.output_partitioning(),
+        }
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] {
+            if self.aggregation_ordering.is_none() {
+                // Cannot run without breaking pipeline.
+                Err(DataFusionError::Plan(
+                    "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs.".to_string(),
+                ))
+            } else {
+                Ok(true)
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.aggregation_ordering
+            .as_ref()
+            .map(|item: &AggregationOrdering| item.ordering.as_slice())
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        match &self.mode {
+            AggregateMode::Partial => {
+                vec![Distribution::UnspecifiedDistribution]
+            }
+            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
+                vec![Distribution::HashPartitioned(self.output_group_expr())]
+            }
+            AggregateMode::Final | AggregateMode::Single => {
+                vec![Distribution::SinglePartition]
+            }
+        }
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<LexOrderingReq>> {
+        vec![self.required_input_ordering.clone()]
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let mut new_properties = EquivalenceProperties::new(self.schema());
+        project_equivalence_properties(
+            self.input.equivalence_properties(),
+            &self.columns_map,
+            &mut new_properties,
+        );
+        new_properties
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![self.input.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(AggregateExec::try_new(
+            self.mode,
+            self.group_by.clone(),
+            self.aggr_expr.clone(),
+            self.filter_expr.clone(),
+            self.order_by_expr.clone(),
+            children[0].clone(),
+            self.input_schema.clone(),
+        )?))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.execute_typed(partition, context)
+            .map(|stream| stream.into())
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
 
     fn statistics(&self) -> Statistics {
         // TODO stats: group expressions:
@@ -964,7 +978,8 @@ fn create_schema(
         }
         AggregateMode::Final
         | AggregateMode::FinalPartitioned
-        | AggregateMode::Single => {
+        | AggregateMode::Single
+        | AggregateMode::SinglePartitioned => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
                 fields.push(expr.field()?)
@@ -980,7 +995,7 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
     Arc::new(Schema::new(group_fields))
 }
 
-/// returns physical expressions to evaluate against a batch
+/// returns physical expressions for arguments to evaluate against a batch
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
 /// * Final: columns of `AggregateExpr::state_fields()`
@@ -990,7 +1005,9 @@ fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial | AggregateMode::Single => Ok(aggr_expr
+        AggregateMode::Partial
+        | AggregateMode::Single
+        | AggregateMode::SinglePartitioned => Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let pre_cast_type = if let Some(Sum {
@@ -1076,7 +1093,6 @@ fn merge_expressions(
 }
 
 pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
-pub(crate) type RowAccumulatorItem = Box<dyn RowAccumulator>;
 
 fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
@@ -1084,20 +1100,6 @@ fn create_accumulators(
     aggr_expr
         .iter()
         .map(|expr| expr.create_accumulator())
-        .collect::<Result<Vec<_>>>()
-}
-
-fn create_row_accumulators(
-    aggr_expr: &[Arc<dyn AggregateExpr>],
-) -> Result<Vec<RowAccumulatorItem>> {
-    let mut state_index = 0;
-    aggr_expr
-        .iter()
-        .map(|expr| {
-            let result = expr.create_row_accumulator(state_index);
-            state_index += expr.state_fields().unwrap().len();
-            result
-        })
         .collect::<Result<Vec<_>>>()
 }
 
@@ -1123,7 +1125,8 @@ fn finalize_aggregation(
         }
         AggregateMode::Final
         | AggregateMode::FinalPartitioned
-        | AggregateMode::Single => {
+        | AggregateMode::Single
+        | AggregateMode::SinglePartitioned => {
             // merge the state to the final value
             accumulators
                 .iter()
@@ -1245,8 +1248,8 @@ mod tests {
     };
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::{
-        ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
-        Statistics,
+        DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
+        SendableRecordBatchStream, Statistics,
     };
     use crate::prelude::SessionContext;
 
@@ -1577,6 +1580,20 @@ mod tests {
     struct TestYieldingExec {
         /// True if this exec should yield back to runtime the first time it is polled
         pub yield_first: bool,
+    }
+
+    impl DisplayAs for TestYieldingExec {
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "TestYieldingExec")
+                }
+            }
+        }
     }
 
     impl ExecutionPlan for TestYieldingExec {

@@ -94,8 +94,7 @@ SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 ----------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_phone, c_acctbal], has_header=false
 ------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------RepartitionExec: partitioning=Hash([o_custkey@0], 4), input_partitions=4
-----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl]]}, projection=[o_custkey], has_header=false
+----------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_custkey], has_header=false
 ------------------AggregateExec: mode=Final, gby=[], aggr=[AVG(customer.c_acctbal)]
 --------------------CoalescePartitionsExec
 ----------------------AggregateExec: mode=Partial, gby=[], aggr=[AVG(customer.c_acctbal)]
