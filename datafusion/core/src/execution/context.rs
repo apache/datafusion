@@ -499,7 +499,7 @@ impl SessionContext {
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
                 let table = Arc::new(
-                    // pass constrains to the mem table.
+                    // pass constraints to the mem table.
                     MemTable::try_new(schema, batches)?.with_constraints(constraints),
                 );
 

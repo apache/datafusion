@@ -17,9 +17,6 @@
 
 //! Logical plan types
 
-use crate::builder::{
-    calc_func_dependencies_for_aggregate, calc_func_dependencies_for_project,
-};
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::expr_vec_fmt;
@@ -41,8 +38,8 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue,
+    aggregate_functional_dependencies, plan_err, Column, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -1680,6 +1677,71 @@ impl Aggregate {
             schema,
         })
     }
+}
+
+/// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
+fn contains_grouping_set(group_expr: &[Expr]) -> bool {
+    group_expr
+        .iter()
+        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+}
+
+/// Calculates functional dependencies for aggregate expressions.
+fn calc_func_dependencies_for_aggregate(
+    // Expressions in the GROUP BY clause:
+    group_expr: &[Expr],
+    // Input plan of the aggregate:
+    input: &LogicalPlan,
+    // Aggregate schema
+    aggr_schema: &DFSchema,
+) -> Result<FunctionalDependencies> {
+    // We can do a case analysis on how to propagate functional dependencies based on
+    // whether the GROUP BY in question contains a grouping set expression:
+    // - If so, the functional dependencies will be empty because we cannot guarantee
+    //   that GROUP BY expression results will be unique.
+    // - Otherwise, it may be possible to propagate functional dependencies.
+    if !contains_grouping_set(group_expr) {
+        let group_by_expr_names = group_expr
+            .iter()
+            .map(|item| item.display_name())
+            .collect::<Result<Vec<_>>>()?;
+        let aggregate_func_dependencies = aggregate_functional_dependencies(
+            input.schema(),
+            &group_by_expr_names,
+            aggr_schema,
+        );
+        Ok(aggregate_func_dependencies)
+    } else {
+        Ok(FunctionalDependencies::empty())
+    }
+}
+
+/// This function projects functional dependencies of the `input` plan according
+/// to projection expressions `exprs`.
+fn calc_func_dependencies_for_project(
+    exprs: &[Expr],
+    input: &LogicalPlan,
+) -> Result<FunctionalDependencies> {
+    let input_fields = input.schema().fields();
+    // Calculate expression indices (if present) in the input schema.
+    let proj_indices = exprs
+        .iter()
+        .filter_map(|expr| {
+            let expr_name = match expr {
+                Expr::Alias(alias) => {
+                    format!("{}", alias.expr)
+                }
+                _ => format!("{}", expr),
+            };
+            input_fields
+                .iter()
+                .position(|item| item.qualified_name() == expr_name)
+        })
+        .collect::<Vec<_>>();
+    Ok(input
+        .schema()
+        .functional_dependencies()
+        .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
 /// Sorts its input according to a list of sort expressions.

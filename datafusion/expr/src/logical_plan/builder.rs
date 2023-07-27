@@ -41,9 +41,9 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    aggregate_functional_dependencies, display::ToStringifiedPlan, Column, DFField,
-    DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies, OwnedTableReference,
-    Result, ScalarValue, TableReference, ToDFSchema,
+    display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
+    ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -1230,71 +1230,6 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         inputs,
         schema: Arc::new(union_schema),
     }))
-}
-
-/// This function projects functional dependencies of the `input` plan according
-/// to projection expressions `exprs`.
-pub(crate) fn calc_func_dependencies_for_project(
-    exprs: &[Expr],
-    input: &LogicalPlan,
-) -> Result<FunctionalDependencies> {
-    let input_fields = input.schema().fields();
-    // Calculate expression indices (if present) in the input schema.
-    let proj_indices = exprs
-        .iter()
-        .filter_map(|expr| {
-            let expr_name = match expr {
-                Expr::Alias(alias) => {
-                    format!("{}", alias.expr)
-                }
-                _ => format!("{}", expr),
-            };
-            input_fields
-                .iter()
-                .position(|item| item.qualified_name() == expr_name)
-        })
-        .collect::<Vec<_>>();
-    Ok(input
-        .schema()
-        .functional_dependencies()
-        .project_functional_dependencies(&proj_indices, exprs.len()))
-}
-
-/// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
-fn contains_grouping_set(group_expr: &[Expr]) -> bool {
-    group_expr
-        .iter()
-        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
-}
-
-/// Calculates functional dependencies for aggregate expressions.
-pub(crate) fn calc_func_dependencies_for_aggregate(
-    // Expressions in the GROUP BY clause:
-    group_expr: &[Expr],
-    // Input plan of the aggregate:
-    input: &LogicalPlan,
-    // Aggregate schema
-    aggr_schema: &DFSchema,
-) -> Result<FunctionalDependencies> {
-    // We can do a case analysis on how to propagate functional dependencies based on
-    // whether the GROUP BY in question contains a grouping set expression:
-    // - If so, the functional dependencies will be empty because we cannot guarantee
-    //   that GROUP BY expression results will be unique.
-    // - Otherwise, it may be possible to propagate functional dependencies.
-    if !contains_grouping_set(group_expr) {
-        let group_by_expr_names = group_expr
-            .iter()
-            .map(|item| item.display_name())
-            .collect::<Result<Vec<_>>>()?;
-        let aggregate_func_dependencies = aggregate_functional_dependencies(
-            input.schema(),
-            &group_by_expr_names,
-            aggr_schema,
-        );
-        Ok(aggregate_func_dependencies)
-    } else {
-        Ok(FunctionalDependencies::empty())
-    }
 }
 
 /// Create Projection
