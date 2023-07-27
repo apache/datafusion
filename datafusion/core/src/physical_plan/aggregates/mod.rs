@@ -342,9 +342,9 @@ fn calc_aggregation_ordering(
                 options: input_col.options,
             })
             .collect::<Vec<_>>();
-        println!("out_ordering:{:?}", out_ordering);
-        println!("existing_ordering:{:?}", existing_ordering);
-        println!("order_indices:{:?}", order_indices);
+        // println!("out_ordering:{:?}", out_ordering);
+        // println!("existing_ordering:{:?}", existing_ordering);
+        // println!("order_indices:{:?}", order_indices);
         AggregationOrdering {
             mode,
             order_indices,
@@ -610,7 +610,12 @@ impl AggregateExec {
             .zip(order_by_expr.into_iter())
             .map(|(aggr_expr, fn_reqs)| {
                 // If aggregation function is ordering sensitive, keep ordering requirement as is; otherwise ignore requirement
-                if is_order_sensitive(aggr_expr) && !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned){
+                if is_order_sensitive(aggr_expr)
+                    && !matches!(
+                        mode,
+                        AggregateMode::Final | AggregateMode::FinalPartitioned
+                    )
+                {
                     fn_reqs
                 } else {
                     None
@@ -658,11 +663,11 @@ impl AggregateExec {
         }
 
         let mut aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
-        println!("-----------------");
-        println!("input.output_ordering(): {:?}", input.output_ordering());
-        println!("mode: {:?}", mode);
-        println!("aggregation_ordering: {:?}", aggregation_ordering);
-        println!("aggr_expr: {:?}", aggr_expr);
+        // println!("-----------------");
+        // println!("input.output_ordering(): {:?}", input.output_ordering());
+        // println!("mode: {:?}", mode);
+        // println!("aggregation_ordering: {:?}", aggregation_ordering);
+        // println!("aggr_expr: {:?}", aggr_expr);
         let required_input_ordering = calc_required_input_ordering(
             &input,
             &mut aggr_expr,
@@ -672,9 +677,9 @@ impl AggregateExec {
             &mut aggregation_ordering,
             &mode,
         )?;
-        println!("aggr_expr: {:?}", aggr_expr);
-        println!("required_input_ordering:{:?}", required_input_ordering);
-        println!("-----------------");
+        // println!("aggr_expr: {:?}", aggr_expr);
+        // println!("required_input_ordering:{:?}", required_input_ordering);
+        // println!("-----------------");
 
         Ok(AggregateExec {
             mode,

@@ -2952,13 +2952,13 @@ LOCATION 'tests/data/window_2.csv';",
         )
         .await?;
 
-  //       let sql = "SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
-  // FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
-  // LAST_VALUE(amount ORDER BY amount DESC) AS fv2
-  // FROM sales_global
-  // GROUP BY country";
+        //       let sql = "SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
+        // FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
+        // LAST_VALUE(amount ORDER BY amount DESC) AS fv2
+        // FROM sales_global
+        // GROUP BY country";
 
-        let sql ="SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
+        let sql = "SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
     LAST_VALUE(amount ORDER BY ts DESC) as lv1,
     SUM(amount ORDER BY ts DESC) as sum1
   FROM sales_global
