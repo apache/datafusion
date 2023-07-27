@@ -36,7 +36,7 @@ use crate::{BenchmarkRun, CommonOpt};
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(verbatim_doc_comment)]
 pub struct RunOpt {
-    /// Query number. If not specified, runs all queries
+    /// Query number (between 0 and 42). If not specified, runs all queries
     #[structopt(short, long)]
     query: Option<usize>,
 
@@ -68,8 +68,8 @@ pub struct RunOpt {
     output_path: Option<PathBuf>,
 }
 
-const CLICKBENCH_QUERY_START_ID: usize = 1;
-const CLICKBENCH_QUERY_END_ID: usize = 43;
+const CLICKBENCH_QUERY_START_ID: usize = 0;
+const CLICKBENCH_QUERY_END_ID: usize = 42;
 
 impl RunOpt {
     pub async fn run(self) -> Result<()> {
@@ -122,7 +122,7 @@ impl RunOpt {
 
     /// Returns the text of query `query_id`
     fn get_query(&self, query_id: usize) -> Result<String> {
-        if query_id == 0 || query_id > 43 {
+        if query_id > CLICKBENCH_QUERY_END_ID {
             return Err(DataFusionError::Execution(format!(
                 "Invalid query id {query_id}. Must be between {CLICKBENCH_QUERY_START_ID} and {CLICKBENCH_QUERY_END_ID}"
             )));
@@ -136,9 +136,6 @@ impl RunOpt {
         })?;
         let all_queries: Vec<_> = all_queries.lines().collect();
 
-        Ok(all_queries
-            .get(query_id - 1)
-            .map(|s| s.to_string())
-            .unwrap())
+        Ok(all_queries.get(query_id).map(|s| s.to_string()).unwrap())
     }
 }
