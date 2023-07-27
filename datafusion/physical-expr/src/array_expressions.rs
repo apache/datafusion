@@ -361,7 +361,7 @@ macro_rules! append {
         let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
         for (arr, el) in $ARRAY.iter().zip(element.iter()) {
             let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty",))
+                DataFusionError::Internal(format!("offsets should not be empty"))
             })?;
             match arr {
                 Some(arr) => {
@@ -451,7 +451,7 @@ macro_rules! prepend {
         let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
         for (arr, el) in $ARRAY.iter().zip(element.iter()) {
             let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
-                DataFusionError::Internal(format!("offsets should not be empty",))
+                DataFusionError::Internal(format!("offsets should not be empty"))
             })?;
             match arr {
                 Some(arr) => {
@@ -902,177 +902,351 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(res)
 }
 
-macro_rules! remove {
-    ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
-        let child_array =
-            downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
-        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE).value(0);
-        let mut builder = new_builder!($BUILDER_TYPE, child_array.len());
+macro_rules! general_remove {
+    ($ARRAY:expr, $ELEMENT:expr, $MAX:expr, $ARRAY_TYPE:ident) => {{
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
 
-        for x in child_array {
-            match x {
-                Some(x) => {
-                    if x != element {
-                        builder.append_value(x);
-                    }
+        let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
+        for ((arr, el), max) in $ARRAY.iter().zip(element.iter()).zip($MAX.iter()) {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty"))
+            })?;
+            match arr {
+                Some(arr) => {
+                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+                    let mut counter = 0;
+                    let max = if max < Some(1) { 1 } else { max.unwrap() };
+
+                    let filter_array = child_array
+                        .iter()
+                        .map(|element| {
+                            if counter != max && element == el {
+                                counter += 1;
+                                Some(false)
+                            } else {
+                                Some(true)
+                            }
+                        })
+                        .collect::<BooleanArray>();
+
+                    let filtered_array = compute::filter(&child_array, &filter_array)?;
+                    values = downcast_arg!(
+                        compute::concat(&[&values, &filtered_array,])?.clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.push(last_offset + filtered_array.len() as i32);
                 }
-                None => builder.append_null(),
+                None => offsets.push(last_offset),
             }
         }
-        let arr = builder.finish();
 
-        let mut scalars = vec![];
-        for i in 0..arr.len() {
-            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&arr, i)?));
-        }
-        scalars
+        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
     }};
 }
 
-/// Array_remove SQL function
-pub fn array_remove(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arr = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
+macro_rules! array_removement_function {
+    ($FUNC:ident, $MAX_FUNC:expr, $DOC:expr) => {
+        #[doc = $DOC]
+        pub fn $FUNC(args: &[ArrayRef]) -> Result<ArrayRef> {
+            let arr = as_list_array(&args[0])?;
+            let element = &args[1];
+            let max = $MAX_FUNC(args)?;
 
-    let element = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Array_remove function requires scalar element".to_string(),
-            ))
+            let res = match (arr.value_type(), element.data_type()) {
+                        (DataType::List(_), DataType::List(_)) => general_remove!(arr, element, max, ListArray),
+                        (DataType::Utf8, DataType::Utf8) => general_remove!(arr, element, max, StringArray),
+                        (DataType::LargeUtf8, DataType::LargeUtf8) => general_remove!(arr, element, max, LargeStringArray),
+                        (DataType::Boolean, DataType::Boolean) => general_remove!(arr, element, max, BooleanArray),
+                        (DataType::Float32, DataType::Float32) => general_remove!(arr, element, max, Float32Array),
+                        (DataType::Float64, DataType::Float64) => general_remove!(arr, element, max, Float64Array),
+                        (DataType::Int8, DataType::Int8) => general_remove!(arr, element, max, Int8Array),
+                        (DataType::Int16, DataType::Int16) => general_remove!(arr, element, max, Int16Array),
+                        (DataType::Int32, DataType::Int32) => general_remove!(arr, element, max, Int32Array),
+                        (DataType::Int64, DataType::Int64) => general_remove!(arr, element, max, Int64Array),
+                        (DataType::UInt8, DataType::UInt8) => general_remove!(arr, element, max, UInt8Array),
+                        (DataType::UInt16, DataType::UInt16) => general_remove!(arr, element, max, UInt16Array),
+                        (DataType::UInt32, DataType::UInt32) => general_remove!(arr, element, max, UInt32Array),
+                        (DataType::UInt64, DataType::UInt64) => general_remove!(arr, element, max, UInt64Array),
+                        (array_data_type, element_data_type) => {
+                            return Err(DataFusionError::NotImplemented(format!(
+                                "{} is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'.",
+                                stringify!($FUNC),
+                            )))
+                        }
+            };
+
+            Ok(res)
         }
-    };
-
-    let data_type = arr.data_type();
-    let res = match data_type {
-        DataType::List(field) => {
-            match (field.data_type(), element.data_type()) {
-                (DataType::Utf8, DataType::Utf8) => remove!(arr, element, StringArray, StringBuilder),
-                (DataType::LargeUtf8, DataType::LargeUtf8) => remove!(arr, element, LargeStringArray, LargeStringBuilder),
-                (DataType::Boolean, DataType::Boolean) => remove!(arr, element, BooleanArray, BooleanBuilder),
-                (DataType::Float32, DataType::Float32) => remove!(arr, element, Float32Array, Float32Builder),
-                (DataType::Float64, DataType::Float64) => remove!(arr, element, Float64Array, Float64Builder),
-                (DataType::Int8, DataType::Int8) => remove!(arr, element, Int8Array, Int8Builder),
-                (DataType::Int16, DataType::Int16) => remove!(arr, element, Int16Array, Int16Builder),
-                (DataType::Int32, DataType::Int32) => remove!(arr, element, Int32Array, Int32Builder),
-                (DataType::Int64, DataType::Int64) => remove!(arr, element, Int64Array, Int64Builder),
-                (DataType::UInt8, DataType::UInt8) => remove!(arr, element, UInt8Array, UInt8Builder),
-                (DataType::UInt16, DataType::UInt16) => remove!(arr, element, UInt16Array, UInt16Builder),
-                (DataType::UInt32, DataType::UInt32) => remove!(arr, element, UInt32Array, UInt32Builder),
-                (DataType::UInt64, DataType::UInt64) => remove!(arr, element, UInt64Array, UInt64Builder),
-                (array_data_type, element_data_type) => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Array_remove is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
-                    )))
-                }
-            }
-        }
-        data_type => {
-            return Err(DataFusionError::Internal(format!(
-                "Array is not type '{data_type:?}'."
-            )))
-        }
-    };
-
-    array(res.as_slice())
-}
-
-macro_rules! replace {
-    ($ARRAY:expr, $FROM:expr, $TO:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
-        let child_array =
-            downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
-        let from = downcast_arg!($FROM, $ARRAY_TYPE).value(0);
-        let to = downcast_arg!($TO, $ARRAY_TYPE).value(0);
-        let mut builder = new_builder!($BUILDER_TYPE, child_array.len());
-
-        for x in child_array {
-            match x {
-                Some(x) => {
-                    if x == from {
-                        builder.append_value(to);
-                    } else {
-                        builder.append_value(x);
-                    }
-                }
-                None => builder.append_null(),
-            }
-        }
-        let arr = builder.finish();
-
-        let mut scalars = vec![];
-        for i in 0..arr.len() {
-            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&arr, i)?));
-        }
-        scalars
-    }};
-}
-
-/// Array_replace SQL function
-pub fn array_replace(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arr = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
-
-    let from = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "array_replace function requires scalar element".to_string(),
-            ))
-        }
-    };
-
-    let to = match &args[2] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "array_replace function requires scalar element".to_string(),
-            ))
-        }
-    };
-
-    if from.data_type() != to.data_type() {
-        return Err(DataFusionError::Internal(
-            "array_replace function requires scalar element".to_string(),
-        ));
     }
+}
 
-    let data_type = arr.data_type();
-    let res = match data_type {
-        DataType::List(field) => {
-            match (field.data_type(), from.data_type()) {
-                (DataType::Utf8, DataType::Utf8) => replace!(arr, from, to, StringArray, StringBuilder),
-                (DataType::LargeUtf8, DataType::LargeUtf8) => replace!(arr, from, to, LargeStringArray, LargeStringBuilder),
-                (DataType::Boolean, DataType::Boolean) => replace!(arr, from, to, BooleanArray, BooleanBuilder),
-                (DataType::Float32, DataType::Float32) => replace!(arr, from, to, Float32Array, Float32Builder),
-                (DataType::Float64, DataType::Float64) => replace!(arr, from, to, Float64Array, Float64Builder),
-                (DataType::Int8, DataType::Int8) => replace!(arr, from, to, Int8Array, Int8Builder),
-                (DataType::Int16, DataType::Int16) => replace!(arr, from, to, Int16Array, Int16Builder),
-                (DataType::Int32, DataType::Int32) => replace!(arr, from, to, Int32Array, Int32Builder),
-                (DataType::Int64, DataType::Int64) => replace!(arr, from, to, Int64Array, Int64Builder),
-                (DataType::UInt8, DataType::UInt8) => replace!(arr, from, to, UInt8Array, UInt8Builder),
-                (DataType::UInt16, DataType::UInt16) => replace!(arr, from, to, UInt16Array, UInt16Builder),
-                (DataType::UInt32, DataType::UInt32) => replace!(arr, from, to, UInt32Array, UInt32Builder),
-                (DataType::UInt64, DataType::UInt64) => replace!(arr, from, to, UInt64Array, UInt64Builder),
-                (array_data_type, element_data_type) => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Array_replace is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
-                    )))
+fn remove_one(args: &[ArrayRef]) -> Result<Int64Array> {
+    Ok(Int64Array::from_value(1, args[0].len()))
+}
+
+fn remove_n(args: &[ArrayRef]) -> Result<Int64Array> {
+    as_int64_array(&args[2]).cloned()
+}
+
+fn remove_all(args: &[ArrayRef]) -> Result<Int64Array> {
+    Ok(Int64Array::from_value(i64::MAX, args[0].len()))
+}
+
+// array removement functions
+array_removement_function!(array_remove, remove_one, "Array_remove SQL function");
+array_removement_function!(array_remove_n, remove_n, "Array_remove_n SQL function");
+array_removement_function!(
+    array_remove_all,
+    remove_all,
+    "Array_remove_all SQL function"
+);
+
+macro_rules! general_replace {
+    ($ARRAY:expr, $FROM:expr, $TO:expr, $MAX:expr, $ARRAY_TYPE:ident) => {{
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($FROM.data_type()), $ARRAY_TYPE).clone();
+
+        let from_array = downcast_arg!($FROM, $ARRAY_TYPE);
+        let to_array = downcast_arg!($TO, $ARRAY_TYPE);
+        for (((arr, from), to), max) in $ARRAY
+            .iter()
+            .zip(from_array.iter())
+            .zip(to_array.iter())
+            .zip($MAX.iter())
+        {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty"))
+            })?;
+            match arr {
+                Some(arr) => {
+                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+                    let mut counter = 0;
+                    let max = if max < Some(1) { 1 } else { max.unwrap() };
+
+                    let replaced_array = child_array
+                        .iter()
+                        .map(|el| {
+                            if counter != max && el == from {
+                                counter += 1;
+                                to
+                            } else {
+                                el
+                            }
+                        })
+                        .collect::<$ARRAY_TYPE>();
+
+                    values = downcast_arg!(
+                        compute::concat(&[&values, &replaced_array])?.clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.push(last_offset + replaced_array.len() as i32);
+                }
+                None => {
+                    offsets.push(last_offset);
                 }
             }
         }
-        data_type => {
-            return Err(DataFusionError::Internal(format!(
-                "Array is not type '{data_type:?}'."
-            )))
+
+        let field = Arc::new(Field::new("item", $FROM.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
+    }};
+}
+
+macro_rules! general_replace_list {
+    ($ARRAY:expr, $FROM:expr, $TO:expr, $MAX:expr, $ARRAY_TYPE:ident) => {{
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($FROM.data_type()), ListArray).clone();
+
+        let from_array = downcast_arg!($FROM, ListArray);
+        let to_array = downcast_arg!($TO, ListArray);
+        for (((arr, from), to), max) in $ARRAY
+            .iter()
+            .zip(from_array.iter())
+            .zip(to_array.iter())
+            .zip($MAX.iter())
+        {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty"))
+            })?;
+            match arr {
+                Some(arr) => {
+                    let child_array = downcast_arg!(arr, ListArray);
+                    let mut counter = 0;
+                    let max = if max < Some(1) { 1 } else { max.unwrap() };
+
+                    let replaced_vec = child_array
+                        .iter()
+                        .map(|el| {
+                            if counter != max && el == from {
+                                counter += 1;
+                                to.clone().unwrap()
+                            } else {
+                                el.clone().unwrap()
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let mut i: i32 = 0;
+                    let mut replaced_offsets = vec![i];
+                    replaced_offsets.extend(
+                        replaced_vec
+                            .clone()
+                            .into_iter()
+                            .map(|a| {
+                                i += a.len() as i32;
+                                i
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+
+                    let mut replaced_values = downcast_arg!(
+                        new_empty_array(&from_array.value_type()),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    for replaced_list in replaced_vec {
+                        replaced_values = downcast_arg!(
+                            compute::concat(&[&replaced_values, &replaced_list])?,
+                            $ARRAY_TYPE
+                        )
+                        .clone();
+                    }
+
+                    let field = Arc::new(Field::new(
+                        "item",
+                        from_array.value_type().clone(),
+                        true,
+                    ));
+                    let replaced_array = ListArray::try_new(
+                        field,
+                        OffsetBuffer::new(replaced_offsets.clone().into()),
+                        Arc::new(replaced_values),
+                        None,
+                    )?;
+
+                    values = downcast_arg!(
+                        compute::concat(&[&values, &replaced_array,])?.clone(),
+                        ListArray
+                    )
+                    .clone();
+                    offsets.push(last_offset + replaced_array.len() as i32);
+                }
+                None => {
+                    offsets.push(last_offset);
+                }
+            }
+        }
+
+        let field = Arc::new(Field::new("item", $FROM.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
+    }};
+}
+
+macro_rules! array_replacement_function {
+    ($FUNC:ident, $MAX_FUNC:expr, $DOC:expr) => {
+        #[doc = $DOC]
+        pub fn $FUNC(args: &[ArrayRef]) -> Result<ArrayRef> {
+            let arr = as_list_array(&args[0])?;
+            let from = &args[1];
+            let to = &args[2];
+            let max = $MAX_FUNC(args)?;
+
+            let res = match (arr.value_type(), from.data_type(), to.data_type()) {
+                        (DataType::List(afield), DataType::List(ffield), DataType::List(tfield)) => {
+                            match (afield.data_type(), ffield.data_type(), tfield.data_type()) {
+                                (DataType::List(_), DataType::List(_), DataType::List(_)) => general_replace_list!(arr, from, to, max, ListArray),
+                                (DataType::Utf8, DataType::Utf8, DataType::Utf8) => general_replace_list!(arr, from, to, max, StringArray),
+                                (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => general_replace_list!(arr, from, to, max, LargeStringArray),
+                                (DataType::Boolean, DataType::Boolean, DataType::Boolean) => general_replace_list!(arr, from, to, max, BooleanArray),
+                                (DataType::Float32, DataType::Float32, DataType::Float32) => general_replace_list!(arr, from, to, max, Float32Array),
+                                (DataType::Float64, DataType::Float64, DataType::Float64) => general_replace_list!(arr, from, to, max, Float64Array),
+                                (DataType::Int8, DataType::Int8, DataType::Int8) => general_replace_list!(arr, from, to, max, Int8Array),
+                                (DataType::Int16, DataType::Int16, DataType::Int16) => general_replace_list!(arr, from, to, max, Int16Array),
+                                (DataType::Int32, DataType::Int32, DataType::Int32) => general_replace_list!(arr, from, to, max, Int32Array),
+                                (DataType::Int64, DataType::Int64, DataType::Int64) => general_replace_list!(arr, from, to, max, Int64Array),
+                                (DataType::UInt8, DataType::UInt8, DataType::UInt8) => general_replace_list!(arr, from, to, max, UInt8Array),
+                                (DataType::UInt16, DataType::UInt16, DataType::UInt16) => general_replace_list!(arr, from, to, max, UInt16Array),
+                                (DataType::UInt32, DataType::UInt32, DataType::UInt32) => general_replace_list!(arr, from, to, max, UInt32Array),
+                                (DataType::UInt64, DataType::UInt64, DataType::UInt64) => general_replace_list!(arr, from, to, max, UInt64Array),
+                                (array_data_type, from_data_type, to_data_type) => {
+                                    return Err(DataFusionError::NotImplemented(format!(
+                                        "{} is not implemented for types 'List({array_data_type:?})', 'List({from_data_type:?})' and 'List({to_data_type:?})'.",
+                                        stringify!($FUNC),
+                                    )))
+                                }
+                            }
+                        }
+                        (DataType::Utf8, DataType::Utf8, DataType::Utf8) => general_replace!(arr, from, to, max, StringArray),
+                        (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => general_replace!(arr, from, to, max, LargeStringArray),
+                        (DataType::Boolean, DataType::Boolean, DataType::Boolean) => general_replace!(arr, from, to, max, BooleanArray),
+                        (DataType::Float32, DataType::Float32, DataType::Float32) => general_replace!(arr, from, to, max, Float32Array),
+                        (DataType::Float64, DataType::Float64, DataType::Float64) => general_replace!(arr, from, to, max, Float64Array),
+                        (DataType::Int8, DataType::Int8, DataType::Int8) => general_replace!(arr, from, to, max, Int8Array),
+                        (DataType::Int16, DataType::Int16, DataType::Int16) => general_replace!(arr, from, to, max, Int16Array),
+                        (DataType::Int32, DataType::Int32, DataType::Int32) => general_replace!(arr, from, to, max, Int32Array),
+                        (DataType::Int64, DataType::Int64, DataType::Int64) => general_replace!(arr, from, to, max, Int64Array),
+                        (DataType::UInt8, DataType::UInt8, DataType::UInt8) => general_replace!(arr, from, to, max, UInt8Array),
+                        (DataType::UInt16, DataType::UInt16, DataType::UInt16) => general_replace!(arr, from, to, max, UInt16Array),
+                        (DataType::UInt32, DataType::UInt32, DataType::UInt32) => general_replace!(arr, from, to, max, UInt32Array),
+                        (DataType::UInt64, DataType::UInt64, DataType::UInt64) => general_replace!(arr, from, to, max, UInt64Array),
+                        (array_data_type, from_data_type, to_data_type) => {
+                            return Err(DataFusionError::NotImplemented(format!(
+                                "{} is not implemented for types '{array_data_type:?}', '{from_data_type:?}' and '{to_data_type:?}'.",
+                                stringify!($FUNC),
+                            )))
+                        }
+            };
+
+            Ok(res)
         }
     };
-
-    array(res.as_slice())
 }
+
+fn replace_one(args: &[ArrayRef]) -> Result<Int64Array> {
+    Ok(Int64Array::from_value(1, args[0].len()))
+}
+
+fn replace_n(args: &[ArrayRef]) -> Result<Int64Array> {
+    as_int64_array(&args[3]).cloned()
+}
+
+fn replace_all(args: &[ArrayRef]) -> Result<Int64Array> {
+    Ok(Int64Array::from_value(i64::MAX, args[0].len()))
+}
+
+// array replacement functions
+array_replacement_function!(array_replace, replace_one, "Array_replace SQL function");
+array_replacement_function!(array_replace_n, replace_n, "Array_replace_n SQL function");
+array_replacement_function!(
+    array_replace_all,
+    replace_all,
+    "Array_replace_all SQL function"
+);
 
 macro_rules! to_string {
     ($ARG:expr, $ARRAY:expr, $DELIMETER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
@@ -1957,20 +2131,16 @@ mod tests {
 
     #[test]
     fn test_array_remove() {
-        // array_remove([1, 2, 3, 4], 3) = [1, 2, 4]
-        let list_array = return_array();
-        let arr = array_remove(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-        ])
-        .expect("failed to initialize function array_remove")
-        .into_array(1);
+        // array_remove([3, 1, 2, 3, 2, 3], 3) = [1, 2, 3, 2, 3]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array = array_remove(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
+            .expect("failed to initialize function array_remove");
         let result =
-            as_list_array(&arr).expect("failed to initialize function array_remove");
+            as_list_array(&array).expect("failed to initialize function array_remove");
 
         assert_eq!(result.len(), 1);
         assert_eq!(
-            &[1, 2, 4],
+            &[1, 2, 3, 2, 3],
             result
                 .value(0)
                 .as_any()
@@ -1981,28 +2151,335 @@ mod tests {
     }
 
     #[test]
-    fn test_array_replace() {
-        // array_replace([1, 2, 3, 4], 3, 4) = [1, 2, 4, 4]
-        let list_array = return_array();
-        let array = array_replace(&[
-            list_array,
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
-        ])
-        .expect("failed to initialize function array_replace")
-        .into_array(1);
+    fn test_nested_array_remove() {
+        // array_remove(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        // ) = [[5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let element_array = return_array().into_array(1);
+        let array = array_remove(&[list_array, element_array])
+            .expect("failed to initialize function array_remove");
         let result =
-            as_list_array(&array).expect("failed to initialize function array_replace");
+            as_list_array(&array).expect("failed to initialize function array_remove");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(
+            expected,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .clone()
+        );
+    }
+
+    #[test]
+    fn test_array_remove_n() {
+        // array_remove_n([3, 1, 2, 3, 2, 3], 3, 2) = [1, 2, 2, 3]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array = array_remove_n(&[
+            list_array,
+            Arc::new(Int64Array::from_value(3, 1)),
+            Arc::new(Int64Array::from_value(2, 1)),
+        ])
+        .expect("failed to initialize function array_remove_n");
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_remove_n");
 
         assert_eq!(result.len(), 1);
         assert_eq!(
-            &[1, 2, 4, 4],
+            &[1, 2, 2, 3],
             result
                 .value(0)
                 .as_any()
                 .downcast_ref::<Int64Array>()
                 .unwrap()
                 .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_remove_n() {
+        // array_remove_n(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        //     3,
+        // ) = [[5, 6, 7, 8], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let element_array = return_array().into_array(1);
+        let array = array_remove_n(&[
+            list_array,
+            element_array,
+            Arc::new(Int64Array::from_value(3, 1)),
+        ])
+        .expect("failed to initialize function array_remove_n");
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_remove_n");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(
+            expected,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .clone()
+        );
+    }
+
+    #[test]
+    fn test_array_remove_all() {
+        // array_remove_all([3, 1, 2, 3, 2, 3], 3) = [1, 2, 2]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array =
+            array_remove_all(&[list_array, Arc::new(Int64Array::from_value(3, 1))])
+                .expect("failed to initialize function array_remove_all");
+        let result = as_list_array(&array)
+            .expect("failed to initialize function array_remove_all");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[1, 2, 2],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_remove_all() {
+        // array_remove_all(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        // ) = [[5, 6, 7, 8], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let element_array = return_array().into_array(1);
+        let array = array_remove_all(&[list_array, element_array])
+            .expect("failed to initialize function array_remove_all");
+        let result = as_list_array(&array)
+            .expect("failed to initialize function array_remove_all");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(
+            expected,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .clone()
+        );
+    }
+
+    #[test]
+    fn test_array_replace() {
+        // array_replace([3, 1, 2, 3, 2, 3], 3, 4) = [4, 1, 2, 3, 2, 3]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array = array_replace(&[
+            list_array,
+            Arc::new(Int64Array::from_value(3, 1)),
+            Arc::new(Int64Array::from_value(4, 1)),
+        ])
+        .expect("failed to initialize function array_replace");
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_replace");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[4, 1, 2, 3, 2, 3],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_replace() {
+        // array_replace(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        //     [11, 12, 13, 14],
+        // ) = [[11, 12, 13, 14], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let from_array = return_array().into_array(1);
+        let to_array = return_extra_array().into_array(1);
+        let array = array_replace(&[list_array, from_array, to_array])
+            .expect("failed to initialize function array_replace");
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_replace");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(
+            expected,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .clone()
+        );
+    }
+
+    #[test]
+    fn test_array_replace_n() {
+        // array_replace_n([3, 1, 2, 3, 2, 3], 3, 4, 2) = [4, 1, 2, 4, 2, 3]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array = array_replace_n(&[
+            list_array,
+            Arc::new(Int64Array::from_value(3, 1)),
+            Arc::new(Int64Array::from_value(4, 1)),
+            Arc::new(Int64Array::from_value(2, 1)),
+        ])
+        .expect("failed to initialize function array_replace_n");
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_replace_n");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[4, 1, 2, 4, 2, 3],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_replace_n() {
+        // array_replace_n(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        //     [11, 12, 13, 14],
+        //     2,
+        // ) = [[11, 12, 13, 14], [5, 6, 7, 8], [11, 12, 13, 14], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let from_array = return_array().into_array(1);
+        let to_array = return_extra_array().into_array(1);
+        let array = array_replace_n(&[
+            list_array,
+            from_array,
+            to_array,
+            Arc::new(Int64Array::from_value(2, 1)),
+        ])
+        .expect("failed to initialize function array_replace_n");
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_replace_n");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(
+            expected,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .clone()
+        );
+    }
+
+    #[test]
+    fn test_array_replace_all() {
+        // array_replace_all([3, 1, 2, 3, 2, 3], 3, 4) = [4, 1, 2, 4, 2, 4]
+        let list_array = return_array_with_repeating_elements().into_array(1);
+        let array = array_replace_all(&[
+            list_array,
+            Arc::new(Int64Array::from_value(3, 1)),
+            Arc::new(Int64Array::from_value(4, 1)),
+        ])
+        .expect("failed to initialize function array_replace_all");
+        let result = as_list_array(&array)
+            .expect("failed to initialize function array_replace_all");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[4, 1, 2, 4, 2, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_replace_all() {
+        // array_replace_all(
+        //     [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]],
+        //     [1, 2, 3, 4],
+        //     [11, 12, 13, 14],
+        // ) = [[11, 12, 13, 14], [5, 6, 7, 8], [11, 12, 13, 14], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let list_array = return_nested_array_with_repeating_elements().into_array(1);
+        let from_array = return_array().into_array(1);
+        let to_array = return_extra_array().into_array(1);
+        let array = array_replace_all(&[list_array, from_array, to_array])
+            .expect("failed to initialize function array_replace_all");
+        let result = as_list_array(&array)
+            .expect("failed to initialize function array_replace_all");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            Some(vec![Some(11), Some(12), Some(13), Some(14)]),
+            Some(vec![Some(9), Some(10), Some(11), Some(12)]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(
+            expected,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .clone()
         );
     }
 
@@ -2277,6 +2754,7 @@ mod tests {
     }
 
     fn return_array() -> ColumnarValue {
+        // Returns: [1, 2, 3, 4]
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
@@ -2289,7 +2767,22 @@ mod tests {
         ColumnarValue::Array(result.clone())
     }
 
+    fn return_extra_array() -> ColumnarValue {
+        // Returns: [11, 12, 13, 14]
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(11))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(12))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(13))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(14))),
+        ];
+        let result = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        ColumnarValue::Array(result.clone())
+    }
+
     fn return_nested_array() -> ColumnarValue {
+        // Returns: [[1, 2, 3, 4], [5, 6, 7, 8]]
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
@@ -2318,6 +2811,7 @@ mod tests {
     }
 
     fn return_array_with_nulls() -> ColumnarValue {
+        // Returns: [1, NULL, 3, NULL]
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ColumnarValue::Scalar(ScalarValue::Null),
@@ -2331,6 +2825,7 @@ mod tests {
     }
 
     fn return_nested_array_with_nulls() -> ColumnarValue {
+        // Returns: [[1, NULL, 3, NULL], [NULL, 6, 7, NULL]]
         let args = [
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
             ColumnarValue::Scalar(ScalarValue::Null),
@@ -2352,6 +2847,87 @@ mod tests {
             .into_array(1);
 
         let args = [ColumnarValue::Array(arr1), ColumnarValue::Array(arr2)];
+        let result = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        ColumnarValue::Array(result.clone())
+    }
+
+    fn return_array_with_repeating_elements() -> ColumnarValue {
+        // Returns: [3, 1, 2, 3, 2, 3]
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+        ];
+        let result = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        ColumnarValue::Array(result.clone())
+    }
+
+    fn return_nested_array_with_repeating_elements() -> ColumnarValue {
+        // Returns: [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 3, 4], [9, 10, 11, 12], [5, 6, 7, 8]]
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+        ];
+        let arr1 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(6))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
+        ];
+        let arr2 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+        ];
+        let arr3 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(9))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(10))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(11))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(12))),
+        ];
+        let arr4 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(6))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(7))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
+        ];
+        let arr5 = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+
+        let args = [
+            ColumnarValue::Array(arr1),
+            ColumnarValue::Array(arr2),
+            ColumnarValue::Array(arr3),
+            ColumnarValue::Array(arr4),
+            ColumnarValue::Array(arr5),
+        ];
         let result = array(&args)
             .expect("failed to initialize function array")
             .into_array(1);

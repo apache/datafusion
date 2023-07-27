@@ -599,13 +599,37 @@ scalar_expr!(
     ArrayRemove,
     array_remove,
     array element,
-    "removes all elements equal to the given value from the array."
+    "removes the first element from the array equal to the given value."
+);
+scalar_expr!(
+    ArrayRemoveN,
+    array_remove_n,
+    array element max,
+    "removes the first `max` elements from the array equal to the given value."
+);
+scalar_expr!(
+    ArrayRemoveAll,
+    array_remove_all,
+    array element,
+    "removes all elements from the array equal to the given value."
 );
 scalar_expr!(
     ArrayReplace,
     array_replace,
     array from to,
-    "replaces a specified element with another specified element."
+    "replaces the first occurrence of the specified element with another specified element."
+);
+scalar_expr!(
+    ArrayReplaceN,
+    array_replace_n,
+    array from to max,
+    "replaces the first `max` occurrences of the specified element with another specified element."
+);
+scalar_expr!(
+    ArrayReplaceAll,
+    array_replace_all,
+    array from to,
+    "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
     ArrayToString,
@@ -1026,7 +1050,11 @@ mod test {
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
+        test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
+        test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
+        test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
+        test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
         test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
