@@ -2839,7 +2839,7 @@ mod test_bug {
     #[tokio::test]
     #[ignore]
     async fn test_multi_partition_bug() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
+        let config = SessionConfig::new().with_target_partitions(2);
         let ctx = SessionContext::with_config(config);
 
         ctx.sql(
@@ -2877,6 +2877,44 @@ ON s.currency = e.currency_from AND
    s.ts >= e.ts
 GROUP BY s.sn
 ORDER BY s.sn;";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        println!("LOGICAL PLAN");
+        print_logical_plan(dataframe.logical_plan());
+        let physical_plan = dataframe.create_physical_plan().await?;
+        println!("PHYSICAL PLAN");
+        print_plan(&physical_plan);
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+        assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_buggy_test2() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE annotated_data_infinite2 (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION 'tests/data/window_2.csv';",
+        )
+            .await?;
+
+        let sql = "SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
+  FROM annotated_data_infinite2
+  GROUP BY a, b";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);

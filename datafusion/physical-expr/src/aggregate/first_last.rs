@@ -85,14 +85,14 @@ impl AggregateExpr for FirstValue {
             self.input_data_type.clone(),
             true,
         )];
-        fields.extend(ordering_fields(
-            &self.ordering_req,
-            &self.order_by_data_types,
-        ));
         fields.push(Field::new(
             format_state_name(&self.name, "is_set"),
             DataType::Boolean,
             true,
+        ));
+        fields.extend(ordering_fields(
+            &self.ordering_req,
+            &self.order_by_data_types,
         ));
         Ok(fields)
     }
@@ -179,8 +179,8 @@ impl FirstValueAccumulator {
 impl Accumulator for FirstValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.first.clone()];
-        result.extend(self.orderings.iter().cloned());
         result.push(ScalarValue::Boolean(Some(self.is_set)));
+        result.extend(self.orderings.iter().cloned());
         Ok(result)
     }
 
@@ -198,11 +198,11 @@ impl Accumulator for FirstValueAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // FIRST_VALUE(first1, first2, first3, ...)
-        let last_idx = states.len() - 1;
-        let is_set_flags = &states[last_idx];
+        let is_set_idx = 1;
+        let is_set_flags = &states[is_set_idx];
         let flags = is_set_flags.as_boolean();
         let mut filtered_first_vals = vec![];
-        for state in states.iter().take(last_idx - 1) {
+        for state in states.iter() {
             filtered_first_vals.push(compute::filter(state, flags)?)
         }
         self.update_batch(&filtered_first_vals)
@@ -272,14 +272,14 @@ impl AggregateExpr for LastValue {
             self.input_data_type.clone(),
             true,
         )];
-        fields.extend(ordering_fields(
-            &self.ordering_req,
-            &self.order_by_data_types,
-        ));
         fields.push(Field::new(
             format_state_name(&self.name, "is_set"),
             DataType::Boolean,
             true,
+        ));
+        fields.extend(ordering_fields(
+            &self.ordering_req,
+            &self.order_by_data_types,
         ));
         Ok(fields)
     }
@@ -365,8 +365,8 @@ impl LastValueAccumulator {
 impl Accumulator for LastValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.last.clone()];
-        result.extend(self.orderings.clone());
         result.push(ScalarValue::Boolean(Some(self.is_set)));
+        result.extend(self.orderings.clone());
         Ok(result)
     }
 
@@ -383,11 +383,11 @@ impl Accumulator for LastValueAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // LAST_VALUE(last1, last2, last3, ...)
-        let last_idx = states.len() - 1;
-        let is_set_flags = &states[last_idx];
+        let is_set_idx = 1;
+        let is_set_flags = &states[is_set_idx];
         let flags = is_set_flags.as_boolean();
         let mut filtered_first_vals = vec![];
-        for state in states.iter().take(last_idx - 1) {
+        for state in states.iter() {
             filtered_first_vals.push(compute::filter(state, flags)?)
         }
         self.update_batch(&filtered_first_vals)

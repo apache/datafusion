@@ -748,9 +748,14 @@ impl DefaultPhysicalPlanner {
                             offset += aggr_fields.len() - order_by.len();
                             // println!("offset: {:?}", offset);
                             // println!("order_by: {:?}", order_by);
-                            let res = izip!(aggr_fields[n_field -n_order_by..].iter(), order_by.iter()).enumerate().map(|(idx, (field, PhysicalSortExpr{options, ..}))|{
+                            let res = izip!(aggr_fields[n_field -n_order_by..].iter(), order_by.iter()).enumerate().map(|(idx, (field, PhysicalSortExpr{options, expr,}))|{
+                                let new_expr = if final_grouping_set.expr().iter().any(|(item, _)| item.eq(expr)){
+                                    expr.clone()
+                                } else{
+                                    Arc::new(Column::new(field.name(), offset+idx)) as _
+                                };
                                 PhysicalSortExpr{
-                                    expr: Arc::new(Column::new(field.name(), offset+idx)) as _,
+                                    expr: new_expr,
                                     options: *options,
                                 }
                             }).collect::<Vec<_>>();
@@ -760,8 +765,8 @@ impl DefaultPhysicalPlanner {
                         };
                         new_order_bys.push(new_order_by);
                     }
-                    // println!("order_bys: {:?}", order_bys);
-                    // println!("new_order_bys: {:?}", new_order_bys);
+                    println!("order_bys: {:?}", order_bys);
+                    println!("new_order_bys: {:?}", new_order_bys);
                     Ok(Arc::new(AggregateExec::try_new(
                         next_partition_mode,
                         final_grouping_set,
