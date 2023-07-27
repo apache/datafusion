@@ -90,18 +90,17 @@ parellelized streaming execution plans, file format support, etc.
 
 ## Known Users
 
-Here are some of the projects known to use DataFusion:
+Here are some active projects using DataFusion:
+
+ <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
 
 - [Ballista](https://github.com/apache/arrow-ballista) Distributed SQL Query Engine
-- [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
 - [CeresDB](https://github.com/CeresDB/ceresdb) Distributed Time-Series Database
-- [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
-- [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
+- [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
-- [Flock](https://github.com/flock-lab/flock)
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
@@ -111,9 +110,16 @@ Here are some of the projects known to use DataFusion:
 - [ROAPI](https://github.com/roapi/roapi)
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
-- [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [ZincObserve](https://github.com/zinclabs/zincobserve) Distributed cloud native observability platform
+
+Here are some less active projects that used DataFusion:
+
+- [Blaze](https://github.com/blaze-init/blaze) Spark accelerator with DataFusion at its core
+- [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
+- [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
+- [Flock](https://github.com/flock-lab/flock)
+- [Tensorbase](https://github.com/tensorbase/tensorbase)
 
 [ballista]: https://github.com/apache/arrow-ballista
 [blaze]: https://github.com/blaze-init/blaze
