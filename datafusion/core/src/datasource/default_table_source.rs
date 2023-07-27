@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::datasource::TableProvider;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraint, DataFusionError};
+use datafusion_common::{Constraints, DataFusionError};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 
 /// DataFusion default table source, wrapping TableProvider
@@ -55,7 +55,7 @@ impl TableSource for DefaultTableSource {
     }
 
     /// Get a reference to applicable constraints, if any exists.
-    fn constraints(&self) -> Option<&[Constraint]> {
+    fn constraints(&self) -> Option<&Constraints> {
         self.table_provider.constraints()
     }
 

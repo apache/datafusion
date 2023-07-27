@@ -20,7 +20,7 @@
 use crate::{Expr, LogicalPlan};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraint, Result};
+use datafusion_common::{Constraints, Result};
 
 use std::any::Any;
 
@@ -67,7 +67,7 @@ pub trait TableSource: Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Get primary key indices, if one exists.
-    fn constraints(&self) -> Option<&[Constraint]> {
+    fn constraints(&self) -> Option<&Constraints> {
         None
     }
 

@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::{Constraint, DataFusionError, Statistics};
+use datafusion_common::{Constraints, DataFusionError, Statistics};
 use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
@@ -42,7 +42,7 @@ pub trait TableProvider: Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Get a reference to the constraints of the table.
-    fn constraints(&self) -> Option<&[Constraint]> {
+    fn constraints(&self) -> Option<&Constraints> {
         None
     }
 

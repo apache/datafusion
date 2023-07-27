@@ -26,7 +26,7 @@ use crate::{Expr, LogicalPlan};
 
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Constraint, DFSchemaRef, OwnedSchemaReference, OwnedTableReference,
+    Constraints, DFSchemaRef, OwnedSchemaReference, OwnedTableReference,
 };
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
@@ -121,13 +121,7 @@ impl DdlStatement {
                         constraints,
                         ..
                     }) => {
-                        let pk: Vec<String> =
-                            constraints.iter().map(|c| format!("{:?}", c)).collect();
-                        let mut pk = pk.join(", ");
-                        if !pk.is_empty() {
-                            pk = format!(" constraints=[{pk}]");
-                        }
-                        write!(f, "CreateMemoryTable: {name:?}{pk}")
+                        write!(f, "CreateMemoryTable: {name:?}{constraints:?}")
                     }
                     DdlStatement::CreateView(CreateView { name, .. }) => {
                         write!(f, "CreateView: {name:?}")
@@ -224,7 +218,7 @@ pub struct CreateMemoryTable {
     /// The table name
     pub name: OwnedTableReference,
     /// The list of constraints in the schema, such as primary key, unique, etc.
-    pub constraints: Vec<Constraint>,
+    pub constraints: Constraints,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists

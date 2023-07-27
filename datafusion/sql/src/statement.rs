@@ -27,7 +27,7 @@ use crate::utils::normalize_ident;
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    unqualified_field_not_found, Column, Constraint, DFField, DFSchema, DFSchemaRef,
+    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
     DataFusionError, ExprSchema, OwnedTableReference, Result, SchemaReference,
     TableReference, ToDFSchema,
 };
@@ -48,8 +48,8 @@ use datafusion_expr::{
 use sqlparser::ast;
 use sqlparser::ast::{
     Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
-    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint,
-    TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableFactor,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -163,8 +163,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         plan
                     };
 
-                    let constraints =
-                        Self::constraints_from_source(&constraints, plan.schema())?;
+                    let constraints = Constraints::new_from_table_constraints(
+                        &constraints,
+                        plan.schema(),
+                    )?;
 
                     Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                         CreateMemoryTable {
@@ -184,8 +186,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         schema,
                     };
                     let plan = LogicalPlan::EmptyRelation(plan);
-                    let constraints =
-                        Self::constraints_from_source(&constraints, plan.schema())?;
+                    let constraints = Constraints::new_from_table_constraints(
+                        &constraints,
+                        plan.schema(),
+                    )?;
                     Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                         CreateMemoryTable {
                             name: self.object_name_to_table_reference(name)?,
@@ -1161,58 +1165,5 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         self.schema_provider
             .get_table_provider(tables_reference)
             .is_ok()
-    }
-
-    /// Convert each `TableConstraint` to corresponding `Constraint`
-    fn constraints_from_source(
-        constraints: &[TableConstraint],
-        df_schema: &DFSchemaRef,
-    ) -> Result<Vec<Constraint>> {
-        constraints
-            .iter()
-            .map(|c: &TableConstraint| match c {
-                TableConstraint::Unique {
-                    columns,
-                    is_primary,
-                    ..
-                } => {
-                    // Get primary key and/or unique indices in the schema:
-                    let indices = columns
-                        .iter()
-                        .map(|pk| {
-                            let idx = df_schema
-                                .fields()
-                                .iter()
-                                .position(|item| {
-                                    item.qualified_name() == pk.value.clone()
-                                })
-                                .ok_or_else(|| {
-                                    DataFusionError::Execution(
-                                        "Primary key doesn't exist".to_string(),
-                                    )
-                                })?;
-                            Ok(idx)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(if *is_primary {
-                        Constraint::PrimaryKey(indices)
-                    } else {
-                        Constraint::Unique(indices)
-                    })
-                }
-                TableConstraint::ForeignKey { .. } => Err(DataFusionError::Plan(
-                    "Foreign key constraints are not currently supported".to_string(),
-                )),
-                TableConstraint::Check { .. } => Err(DataFusionError::Plan(
-                    "Check constraints are not currently supported".to_string(),
-                )),
-                TableConstraint::Index { .. } => Err(DataFusionError::Plan(
-                    "Indexes are not currently supported".to_string(),
-                )),
-                TableConstraint::FulltextOrSpatial { .. } => Err(DataFusionError::Plan(
-                    "Indexes are not currently supported".to_string(),
-                )),
-            })
-            .collect::<Result<Vec<_>>>()
     }
 }

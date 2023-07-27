@@ -43,7 +43,7 @@ pub use error::{
     SharedResult,
 };
 pub use functional_dependencies::{
-    aggregate_functional_dependencies, get_target_functional_dependencies, Constraint,
+    aggregate_functional_dependencies, get_target_functional_dependencies, Constraints,
     Dependency, FunctionalDependence, FunctionalDependencies,
 };
 pub use join_type::{JoinConstraint, JoinType};

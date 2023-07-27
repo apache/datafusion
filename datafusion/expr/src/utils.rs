@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -923,7 +923,7 @@ pub fn from_plan(
         })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
             CreateMemoryTable {
                 input: Arc::new(inputs[0].clone()),
-                constraints: vec![],
+                constraints: Constraints::empty(),
                 name: name.clone(),
                 if_not_exists: *if_not_exists,
                 or_replace: *or_replace,

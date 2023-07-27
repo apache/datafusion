@@ -18,17 +18,110 @@
 //! FunctionalDependencies keeps track of functional dependencies
 //! inside DFSchema.
 
-use crate::{DFSchema, JoinType};
+use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
+use sqlparser::ast::TableConstraint;
 use std::collections::HashSet;
+use std::fmt::{Display, Formatter};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Constraint {
+enum Constraint {
     /// Columns with the given indices form a composite primary key (they are
     /// jointly unique and not nullable):
     PrimaryKey(Vec<usize>),
     /// Columns with the given indices form a composite unique key:
     Unique(Vec<usize>),
+}
+
+/// This object encapsulates a list of functional constraints:
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Constraints {
+    inner: Vec<Constraint>,
+}
+
+impl Constraints {
+    /// Create empty constraints
+    pub fn empty() -> Self {
+        Constraints::new(vec![])
+    }
+
+    // This method is private.
+    // Outside callers can either create empty constraint using `Constraints::empty` API.
+    // or create constraint from table constraints using `Constraints::new_from_table_constraints` API.
+    fn new(constraints: Vec<Constraint>) -> Self {
+        Self { inner: constraints }
+    }
+
+    /// Convert each `TableConstraint` to corresponding `Constraint`
+    pub fn new_from_table_constraints(
+        constraints: &[TableConstraint],
+        df_schema: &DFSchemaRef,
+    ) -> Result<Self> {
+        let constraints = constraints
+            .iter()
+            .map(|c: &TableConstraint| match c {
+                TableConstraint::Unique {
+                    columns,
+                    is_primary,
+                    ..
+                } => {
+                    // Get primary key and/or unique indices in the schema:
+                    let indices = columns
+                        .iter()
+                        .map(|pk| {
+                            let idx = df_schema
+                                .fields()
+                                .iter()
+                                .position(|item| {
+                                    item.qualified_name() == pk.value.clone()
+                                })
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution(
+                                        "Primary key doesn't exist".to_string(),
+                                    )
+                                })?;
+                            Ok(idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(if *is_primary {
+                        Constraint::PrimaryKey(indices)
+                    } else {
+                        Constraint::Unique(indices)
+                    })
+                }
+                TableConstraint::ForeignKey { .. } => Err(DataFusionError::Plan(
+                    "Foreign key constraints are not currently supported".to_string(),
+                )),
+                TableConstraint::Check { .. } => Err(DataFusionError::Plan(
+                    "Check constraints are not currently supported".to_string(),
+                )),
+                TableConstraint::Index { .. } => Err(DataFusionError::Plan(
+                    "Indexes are not currently supported".to_string(),
+                )),
+                TableConstraint::FulltextOrSpatial { .. } => Err(DataFusionError::Plan(
+                    "Indexes are not currently supported".to_string(),
+                )),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Constraints::new(constraints))
+    }
+
+    /// Check whether constraints is empty
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+}
+
+impl Display for Constraints {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let pk: Vec<String> = self.inner.iter().map(|c| format!("{:?}", c)).collect();
+        let pk = pk.join(", ");
+        if !pk.is_empty() {
+            write!(f, " constraints=[{pk}]")
+        } else {
+            write!(f, "")
+        }
+    }
 }
 
 /// This object defines a functional dependence in the schema. A functional
@@ -110,10 +203,10 @@ impl FunctionalDependencies {
 
     /// Creates a new `FunctionalDependencies` object from the given constraints.
     pub fn new_from_constraints(
-        constraints: Option<&[Constraint]>,
+        constraints: Option<&Constraints>,
         n_field: usize,
     ) -> Self {
-        if let Some(constraints) = constraints {
+        if let Some(Constraints { inner: constraints }) = constraints {
             // Construct dependency objects based on each individual constraint:
             let dependencies = constraints
                 .iter()
