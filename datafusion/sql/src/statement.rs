@@ -164,7 +164,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     };
 
                     let constraints =
-                        Self::primary_key_from_constraints(&constraints, plan.schema())?;
+                        Self::constraints_from_source(&constraints, plan.schema())?;
 
                     Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                         CreateMemoryTable {
@@ -185,7 +185,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     };
                     let plan = LogicalPlan::EmptyRelation(plan);
                     let constraints =
-                        Self::primary_key_from_constraints(&constraints, plan.schema())?;
+                        Self::constraints_from_source(&constraints, plan.schema())?;
                     Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                         CreateMemoryTable {
                             name: self.object_name_to_table_reference(name)?,
@@ -1163,7 +1163,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .is_ok()
     }
 
-    fn primary_key_from_constraints(
+    /// Convert each `TableConstraint` to corresponding `Constraint`
+    fn constraints_from_source(
         constraints: &[TableConstraint],
         df_schema: &DFSchemaRef,
     ) -> Result<Vec<Constraint>> {
@@ -1175,7 +1176,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     is_primary,
                     ..
                 } => {
-                    // Get primary key indices in the schema:
+                    // Get primary key and/or unique indices in the schema:
                     let indices = columns
                         .iter()
                         .map(|pk| {

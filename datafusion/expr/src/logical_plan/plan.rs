@@ -18,7 +18,7 @@
 //! Logical plan types
 
 use crate::builder::{
-    aggregate_functional_dependencies, project_functional_dependencies,
+    calc_func_dependencies_for_aggregate, calc_func_dependencies_for_project,
 };
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
@@ -1306,7 +1306,7 @@ impl Projection {
         }
         // Update functional dependencies of `input` according to projection
         // expressions:
-        let id_key_groups = project_functional_dependencies(&expr, &input)?;
+        let id_key_groups = calc_func_dependencies_for_project(&expr, &input)?;
         let schema = schema.as_ref().clone();
         let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
         Ok(Self {
@@ -1668,7 +1668,7 @@ impl Aggregate {
         }
 
         let aggregate_func_dependencies =
-            aggregate_functional_dependencies(&group_expr, &input, &schema)?;
+            calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
         let new_schema = schema.as_ref().clone();
         let schema = Arc::new(
             new_schema.with_functional_dependencies(aggregate_func_dependencies),

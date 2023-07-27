@@ -24,7 +24,7 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs,
 };
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{get_target_functional_dependencies, DataFusionError, Result};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
@@ -441,7 +441,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<_>>>()?;
         // Get targets that can be used in a select, even if they do not occur in aggregation:
         if let Some(target_indices) =
-            schema.get_target_functional_dependencies(&group_by_expr_names)
+            get_target_functional_dependencies(schema, &group_by_expr_names)
         {
             // Calculate dependent fields names with determinant GROUP BY expression:
             let associated_field_names = target_indices

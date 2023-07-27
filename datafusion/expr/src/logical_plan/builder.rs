@@ -41,9 +41,9 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
-    ToDFSchema,
+    aggregate_functional_dependencies, display::ToStringifiedPlan, Column, DFField,
+    DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies, OwnedTableReference,
+    Result, ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -1234,7 +1234,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
 
 /// This function projects functional dependencies of the `input` plan according
 /// to projection expressions `exprs`.
-pub(crate) fn project_functional_dependencies(
+pub(crate) fn calc_func_dependencies_for_project(
     exprs: &[Expr],
     input: &LogicalPlan,
 ) -> Result<FunctionalDependencies> {
@@ -1268,7 +1268,7 @@ fn contains_grouping_set(group_expr: &[Expr]) -> bool {
 }
 
 /// Calculates functional dependencies for aggregate expressions.
-pub(crate) fn aggregate_functional_dependencies(
+pub(crate) fn calc_func_dependencies_for_aggregate(
     // Expressions in the GROUP BY clause:
     group_expr: &[Expr],
     // Input plan of the aggregate:
@@ -1286,9 +1286,11 @@ pub(crate) fn aggregate_functional_dependencies(
             .iter()
             .map(|item| item.display_name())
             .collect::<Result<Vec<_>>>()?;
-        let aggregate_func_dependencies = input
-            .schema()
-            .aggregate_functional_dependencies(&group_by_expr_names, aggr_schema);
+        let aggregate_func_dependencies = aggregate_functional_dependencies(
+            input.schema(),
+            &group_by_expr_names,
+            aggr_schema,
+        );
         Ok(aggregate_func_dependencies)
     } else {
         Ok(FunctionalDependencies::empty())
