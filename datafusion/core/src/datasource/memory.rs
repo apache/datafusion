@@ -65,9 +65,7 @@ impl MemTable {
                     "mem table schema does not contain batches schema. \
                         Target_schema: {schema:?}. Batches Schema: {batches_schema:?}"
                 );
-                return Err(DataFusionError::Plan(
-                    "Mismatch between schema and batches".to_string(),
-                ));
+                return plan_err!("Mismatch between schema and batches");
             }
         }
 
@@ -210,9 +208,9 @@ impl TableProvider for MemTable {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
         if !self.schema().equivalent_names_and_types(&input.schema()) {
-            return Err(DataFusionError::Plan(
-                "Inserting query must have the same schema with the table.".to_string(),
-            ));
+            return plan_err!(
+                "Inserting query must have the same schema with the table."
+            );
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
         Ok(Arc::new(InsertExec::new(input, sink, self.schema.clone())))

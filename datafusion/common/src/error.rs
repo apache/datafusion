@@ -99,18 +99,6 @@ macro_rules! context {
     };
 }
 
-#[macro_export]
-macro_rules! plan_err {
-    ($desc:expr) => {
-        Err(datafusion_common::DataFusionError::Plan(format!(
-            "{} at {}:{}",
-            $desc,
-            file!(),
-            line!()
-        )))
-    };
-}
-
 /// Schema-related errors
 #[derive(Debug)]
 pub enum SchemaError {
@@ -533,3 +521,28 @@ macro_rules! unwrap_or_internal_err {
         })?
     };
 }
+
+#[macro_export]
+macro_rules! with_dollar_sign {
+    ($($body:tt)*) => {
+        macro_rules! __with_dollar_sign { $($body)* }
+        __with_dollar_sign!($);
+    }
+}
+
+macro_rules! make_error {
+    ($NAME:ident, $ERR:ident) => {
+        with_dollar_sign! {
+            ($d:tt) => {
+                #[macro_export]
+                macro_rules! $NAME {
+                    ($d($d args:expr),*) => {
+                        Err(DataFusionError::$ERR(format!($d($d args),*).into()))
+                    }
+                }
+            }
+        }
+    };
+}
+
+make_error!(plan_err, Plan);

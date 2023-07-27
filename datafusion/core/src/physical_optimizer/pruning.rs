@@ -44,8 +44,11 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_common::{
+    plan_err,
+    tree_node::{Transformed, TreeNode},
+};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use log::trace;
@@ -453,10 +456,9 @@ impl<'a> PruningExpressionBuilder<'a> {
                 (0, 1) => (right, left, right_columns, reverse_operator(op)?),
                 _ => {
                     // if more than one column used in expression - not supported
-                    return Err(DataFusionError::Plan(
+                    return plan_err!(
                         "Multi-column expressions are not currently supported"
-                            .to_string(),
-                    ));
+                    );
                 }
             };
 
@@ -471,9 +473,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         let field = match schema.column_with_name(column.name()) {
             Some((_, f)) => f,
             _ => {
-                return Err(DataFusionError::Plan(
-                    "Field not found in schema".to_string(),
-                ));
+                return plan_err!("Field not found in schema");
             }
         };
 
@@ -525,9 +525,7 @@ fn rewrite_expr_to_prunable(
     schema: DFSchema,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
     if !is_compare_op(op) {
-        return Err(DataFusionError::Plan(
-            "rewrite_expr_to_prunable only support compare expression".to_string(),
-        ));
+        return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
 
     let column_expr_any = column_expr.as_any();
@@ -574,9 +572,7 @@ fn rewrite_expr_to_prunable(
     } else if let Some(not) = column_expr_any.downcast_ref::<phys_expr::NotExpr>() {
         // `!col = true` --> `col = !true`
         if op != Operator::Eq && op != Operator::NotEq {
-            return Err(DataFusionError::Plan(
-                "Not with operator other than Eq / NotEq is not supported".to_string(),
-            ));
+            return plan_err!("Not with operator other than Eq / NotEq is not supported");
         }
         if not
             .arg()
@@ -588,14 +584,10 @@ fn rewrite_expr_to_prunable(
             let right = Arc::new(phys_expr::NotExpr::new(scalar_expr.clone()));
             Ok((left, reverse_operator(op)?, right))
         } else {
-            Err(DataFusionError::Plan(format!(
-                "Not with complex expression {column_expr:?} is not supported"
-            )))
+            plan_err!("Not with complex expression {column_expr:?} is not supported")
         }
     } else {
-        Err(DataFusionError::Plan(format!(
-            "column expression {column_expr:?} is not supported"
-        )))
+        plan_err!("column expression {column_expr:?} is not supported")
     }
 }
 
@@ -630,9 +622,9 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
     ) {
         Ok(())
     } else {
-        Err(DataFusionError::Plan(format!(
+        plan_err!(
             "Try Cast/Cast with from type {from_type} to type {to_type} is not supported"
-        )))
+        )
     }
 }
 
@@ -841,85 +833,85 @@ fn build_predicate_expression(
 fn build_statistics_expr(
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let statistics_expr: Arc<dyn PhysicalExpr> =
-        match expr_builder.op() {
-            Operator::NotEq => {
-                // column != literal => (min, max) = literal =>
-                // !(min != literal && max != literal) ==>
-                // min != literal || literal != max
-                let min_column_expr = expr_builder.min_column_expr()?;
-                let max_column_expr = expr_builder.max_column_expr()?;
+    let statistics_expr: Arc<dyn PhysicalExpr> = match expr_builder.op() {
+        Operator::NotEq => {
+            // column != literal => (min, max) = literal =>
+            // !(min != literal && max != literal) ==>
+            // min != literal || literal != max
+            let min_column_expr = expr_builder.min_column_expr()?;
+            let max_column_expr = expr_builder.max_column_expr()?;
+            Arc::new(phys_expr::BinaryExpr::new(
                 Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        min_column_expr,
-                        Operator::NotEq,
-                        expr_builder.scalar_expr().clone(),
-                    )),
-                    Operator::Or,
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        expr_builder.scalar_expr().clone(),
-                        Operator::NotEq,
-                        max_column_expr,
-                    )),
-                ))
-            }
-            Operator::Eq => {
-                // column = literal => (min, max) = literal => min <= literal && literal <= max
-                // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
-                let min_column_expr = expr_builder.min_column_expr()?;
-                let max_column_expr = expr_builder.max_column_expr()?;
-                Arc::new(phys_expr::BinaryExpr::new(
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        min_column_expr,
-                        Operator::LtEq,
-                        expr_builder.scalar_expr().clone(),
-                    )),
-                    Operator::And,
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        expr_builder.scalar_expr().clone(),
-                        Operator::LtEq,
-                        max_column_expr,
-                    )),
-                ))
-            }
-            Operator::Gt => {
-                // column > literal => (min, max) > literal => max > literal
-                Arc::new(phys_expr::BinaryExpr::new(
-                    expr_builder.max_column_expr()?,
-                    Operator::Gt,
+                    min_column_expr,
+                    Operator::NotEq,
                     expr_builder.scalar_expr().clone(),
-                ))
-            }
-            Operator::GtEq => {
-                // column >= literal => (min, max) >= literal => max >= literal
+                )),
+                Operator::Or,
                 Arc::new(phys_expr::BinaryExpr::new(
-                    expr_builder.max_column_expr()?,
-                    Operator::GtEq,
                     expr_builder.scalar_expr().clone(),
-                ))
-            }
-            Operator::Lt => {
-                // column < literal => (min, max) < literal => min < literal
+                    Operator::NotEq,
+                    max_column_expr,
+                )),
+            ))
+        }
+        Operator::Eq => {
+            // column = literal => (min, max) = literal => min <= literal && literal <= max
+            // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
+            let min_column_expr = expr_builder.min_column_expr()?;
+            let max_column_expr = expr_builder.max_column_expr()?;
+            Arc::new(phys_expr::BinaryExpr::new(
                 Arc::new(phys_expr::BinaryExpr::new(
-                    expr_builder.min_column_expr()?,
-                    Operator::Lt,
-                    expr_builder.scalar_expr().clone(),
-                ))
-            }
-            Operator::LtEq => {
-                // column <= literal => (min, max) <= literal => min <= literal
-                Arc::new(phys_expr::BinaryExpr::new(
-                    expr_builder.min_column_expr()?,
+                    min_column_expr,
                     Operator::LtEq,
                     expr_builder.scalar_expr().clone(),
-                ))
-            }
-            // other expressions are not supported
-            _ => return Err(DataFusionError::Plan(
+                )),
+                Operator::And,
+                Arc::new(phys_expr::BinaryExpr::new(
+                    expr_builder.scalar_expr().clone(),
+                    Operator::LtEq,
+                    max_column_expr,
+                )),
+            ))
+        }
+        Operator::Gt => {
+            // column > literal => (min, max) > literal => max > literal
+            Arc::new(phys_expr::BinaryExpr::new(
+                expr_builder.max_column_expr()?,
+                Operator::Gt,
+                expr_builder.scalar_expr().clone(),
+            ))
+        }
+        Operator::GtEq => {
+            // column >= literal => (min, max) >= literal => max >= literal
+            Arc::new(phys_expr::BinaryExpr::new(
+                expr_builder.max_column_expr()?,
+                Operator::GtEq,
+                expr_builder.scalar_expr().clone(),
+            ))
+        }
+        Operator::Lt => {
+            // column < literal => (min, max) < literal => min < literal
+            Arc::new(phys_expr::BinaryExpr::new(
+                expr_builder.min_column_expr()?,
+                Operator::Lt,
+                expr_builder.scalar_expr().clone(),
+            ))
+        }
+        Operator::LtEq => {
+            // column <= literal => (min, max) <= literal => min <= literal
+            Arc::new(phys_expr::BinaryExpr::new(
+                expr_builder.min_column_expr()?,
+                Operator::LtEq,
+                expr_builder.scalar_expr().clone(),
+            ))
+        }
+        // other expressions are not supported
+        _ => {
+            return plan_err!(
                 "expressions other than (neq, eq, gt, gteq, lt, lteq) are not supported"
-                    .to_string(),
-            )),
-        };
+            )
+        }
+    };
     Ok(statistics_expr)
 }
 
