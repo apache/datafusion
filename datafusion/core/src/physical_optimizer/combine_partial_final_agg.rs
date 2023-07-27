@@ -77,6 +77,12 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                      input_schema,
                                      ..
                                  }| {
+                                    println!("final_group_by: {:?}", final_group_by);
+                                    println!("input_group_by: {:?}", input_group_by);
+                                    println!("final_aggr_expr: {:?}", final_aggr_expr);
+                                    println!("input_aggr_expr: {:?}", input_aggr_expr);
+                                    println!("final_filter_expr: {:?}", final_filter_expr);
+                                    println!("input_filter_expr: {:?}", input_filter_expr);
                                     if matches!(input_mode, AggregateMode::Partial)
                                         && can_combine(
                                             (
