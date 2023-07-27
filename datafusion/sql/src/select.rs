@@ -562,7 +562,28 @@ fn match_window_definitions(
     Ok(())
 }
 
-/// Update group by exprs, according to functioanl dependencies
+/// Update group by exprs, according to functional dependencies
+/// The query below
+///
+/// SELECT sn, amount
+/// FROM sales_global
+/// GROUP BY sn
+///
+/// cannot be calculated, because it has a column(`amount`) which is not
+/// part of group by expression.
+/// However, if we know that, `sn` is determinant of `amount`. We can
+/// safely, determine value of `amount` for each distinct `sn`. For these cases
+/// we rewrite the query above as
+///
+/// SELECT sn, amount
+/// FROM sales_global
+/// GROUP BY sn, amount
+///
+/// Both queries, are functionally same. \[Because, (`sn`, `amount`) and (`sn`)
+/// defines the identical groups. \]
+/// This function updates group by expressions such that select expressions that are
+/// not in group by expression, are added to the group by expressions if they are dependent
+/// of the sub-set of group by expressions.
 fn get_updated_group_by_exprs(
     group_by_exprs: &[Expr],
     select_exprs: &[Expr],
