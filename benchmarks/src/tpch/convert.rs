@@ -58,7 +58,7 @@ pub struct ConvertOpt {
 }
 
 impl ConvertOpt {
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let compression = self.compression()?;
 
         let input_path = self.input_path.to_str().unwrap();
