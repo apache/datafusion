@@ -182,6 +182,7 @@ main() {
             # navigate to the appropriate directory
             pushd "${DATAFUSION_DIR}/benchmarks" > /dev/null
             mkdir -p "${RESULTS_DIR}"
+            mkdir -p "${DATA_DIR}"
             case "$BENCHMARK" in
                 all)
                     run_tpch "1"
