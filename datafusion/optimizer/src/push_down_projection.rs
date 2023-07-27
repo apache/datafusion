@@ -151,31 +151,21 @@ impl OptimizerRule for PushDownProjection {
                 // like: TableScan: t1 projection=[bool_col, int_col], full_filters=[t1.id = Int32(1)]
                 // projection=[bool_col, int_col] don't contain `ti.id`.
                 exprlist_to_columns(&scan.filters, &mut used_columns)?;
-                if projection_is_empty {
-                    used_columns
-                        .insert(scan.projected_schema.fields()[0].qualified_column());
-                    push_down_scan(&used_columns, scan, true)?
-                } else {
-                    for expr in projection.expr.iter() {
-                        expr_to_columns(expr, &mut used_columns)?;
-                    }
-                    let new_scan = push_down_scan(&used_columns, scan, true)?;
-
-                    plan.with_new_inputs(&[new_scan])?
+                for expr in projection.expr.iter() {
+                    expr_to_columns(expr, &mut used_columns)?;
                 }
-            }
-            LogicalPlan::Values(values) if projection_is_empty => {
-                let first_col =
-                    Expr::Column(values.schema.fields()[0].qualified_column());
-                LogicalPlan::Projection(Projection::try_new(
-                    vec![first_col],
-                    Arc::new(child_plan.clone()),
-                )?)
+                let new_scan = push_down_scan(&used_columns, scan, true)?;
+
+                plan.with_new_inputs(&[new_scan])?
             }
             LogicalPlan::Union(union) => {
                 let mut required_columns = HashSet::new();
                 exprlist_to_columns(&projection.expr, &mut required_columns)?;
-                // we don't push down projection expr, we just prune columns, so we just push column
+                // When there is no projection, we need to add the first column to the projection
+                // Because if push empty down, children may output different columns.
+                if required_columns.is_empty() {
+                    required_columns.insert(union.schema.fields()[0].qualified_column());
+                }                // we don't push down projection expr, we just prune columns, so we just push column
                 // because push expr may cause more cost.
                 let projection_column_exprs = get_expr(&required_columns, &union.schema)?;
                 let mut inputs = Vec::with_capacity(union.inputs.len());
@@ -913,7 +903,7 @@ mod tests {
             .project(vec![lit(1_i64), lit(2_i64)])?
             .build()?;
         let expected = "Projection: Int64(1), Int64(2)\
-                      \n  TableScan: test projection=[]";
+                      \n  TableScan: test projection=[a]";
         assert_optimized_plan_eq(&plan, expected)
     }
 
