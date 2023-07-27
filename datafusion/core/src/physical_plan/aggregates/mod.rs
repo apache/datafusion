@@ -495,7 +495,7 @@ fn calc_required_input_ordering(
             let mut requirement =
                 PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
             for req in aggregator_requirement {
-                if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
+                if !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned) && requirement.iter().all(|item| req.expr.ne(&item.expr)) {
                     requirement.push(req.clone());
                 }
                 // In partial mode, append required ordering of the aggregator to the output ordering.

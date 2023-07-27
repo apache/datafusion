@@ -738,41 +738,43 @@ impl DefaultPhysicalPlanner {
                             .map(|(i, expr)| (expr.clone(), groups.expr()[i].1.clone()))
                             .collect()
                     );
-                    let mut offset = groups.expr().len();
-                    let mut new_order_bys = vec![];
-                    for (aggr, order_by) in izip!(aggregates.iter(), order_bys.iter()){
-                        let new_order_by = if let Some(order_by) = order_by{
-                            let aggr_fields = aggr.state_fields()?;
-                            let n_field = aggr_fields.len();
-                            let n_order_by = order_by.len();
-                            offset += aggr_fields.len() - order_by.len();
-                            // println!("offset: {:?}", offset);
-                            // println!("order_by: {:?}", order_by);
-                            let res = izip!(aggr_fields[n_field -n_order_by..].iter(), order_by.iter()).enumerate().map(|(idx, (field, PhysicalSortExpr{options, expr,}))|{
-                                let new_expr = if final_grouping_set.expr().iter().any(|(item, _)| item.eq(expr)){
-                                    expr.clone()
-                                } else{
-                                    Arc::new(Column::new(field.name(), offset+idx)) as _
-                                };
-                                PhysicalSortExpr{
-                                    expr: new_expr,
-                                    options: *options,
-                                }
-                            }).collect::<Vec<_>>();
-                            Some(res)
-                        } else{
-                            None
-                        };
-                        new_order_bys.push(new_order_by);
-                    }
-                    println!("order_bys: {:?}", order_bys);
-                    println!("new_order_bys: {:?}", new_order_bys);
+
+                    // let mut offset = groups.expr().len();
+                    // let mut new_order_bys = vec![];
+                    // for (aggr, order_by) in izip!(aggregates.iter(), order_bys.iter()){
+                    //     let new_order_by = if let Some(order_by) = order_by{
+                    //         let aggr_fields = aggr.state_fields()?;
+                    //         let n_field = aggr_fields.len();
+                    //         let n_order_by = order_by.len();
+                    //         offset += aggr_fields.len() - order_by.len();
+                    //         // println!("offset: {:?}", offset);
+                    //         // println!("order_by: {:?}", order_by);
+                    //         let res = izip!(aggr_fields[n_field -n_order_by..].iter(), order_by.iter()).enumerate().map(|(idx, (field, PhysicalSortExpr{options, expr,}))|{
+                    //             let new_expr = if final_grouping_set.expr().iter().any(|(item, _)| item.eq(expr)){
+                    //                 expr.clone()
+                    //             } else{
+                    //                 Arc::new(Column::new(field.name(), offset+idx)) as _
+                    //             };
+                    //             PhysicalSortExpr{
+                    //                 expr: new_expr,
+                    //                 options: *options,
+                    //             }
+                    //         }).collect::<Vec<_>>();
+                    //         Some(res)
+                    //     } else{
+                    //         None
+                    //     };
+                    //     new_order_bys.push(new_order_by);
+                    // }
+                    // println!("order_bys: {:?}", order_bys);
+                    // println!("new_order_bys: {:?}", new_order_bys);
+
                     Ok(Arc::new(AggregateExec::try_new(
                         next_partition_mode,
                         final_grouping_set,
                         aggregates,
                         filters,
-                        new_order_bys,
+                        order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))

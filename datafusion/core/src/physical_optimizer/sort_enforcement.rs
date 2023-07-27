@@ -2933,7 +2933,7 @@ LOCATION 'tests/data/window_2.csv';",
     #[tokio::test]
     #[ignore]
     async fn test_buggy_test3() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
+        let config = SessionConfig::new().with_target_partitions(2);
         let ctx = SessionContext::with_config(config);
 
         ctx.sql(
