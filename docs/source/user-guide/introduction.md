@@ -99,7 +99,7 @@ Here are some active projects using DataFusion:
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
-- [Exon](https://github.com/wheretrue/exon/tree/main) Analysis toolkit for life-science applications
+- [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
