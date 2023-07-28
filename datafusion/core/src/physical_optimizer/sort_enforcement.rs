@@ -2958,13 +2958,13 @@ LOCATION 'tests/data/window_2.csv';",
         // FROM sales_global
         // GROUP BY country";
 
-  //       let sql = "SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
-  //   LAST_VALUE(amount ORDER BY ts DESC) as lv1,
-  //   SUM(amount ORDER BY ts DESC) as sum1
-  // FROM sales_global
-  // GROUP BY country";
+        //       let sql = "SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
+        //   LAST_VALUE(amount ORDER BY ts DESC) as lv1,
+        //   SUM(amount ORDER BY ts DESC) as sum1
+        // FROM sales_global
+        // GROUP BY country";
 
-        let sql ="SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
+        let sql = "SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
   FROM sales_global";
 
         let msg = format!("Creating logical plan for '{sql}'");

@@ -195,7 +195,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        for (idx, state) in states.iter().enumerate(){
+        for (idx, state) in states.iter().enumerate() {
             println!("idx:{:?}, state: {:?}", idx, state);
         }
         // First entry in the state is the aggregation result.
@@ -234,7 +234,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                 .iter()
                 .map(|sort_expr| sort_expr.options)
                 .collect::<Vec<_>>();
-            let(new_values, new_orderings) = merge_ordered_arrays(
+            let (new_values, new_orderings) = merge_ordered_arrays(
                 &partition_values,
                 &partition_ordering_values,
                 &sort_options,
