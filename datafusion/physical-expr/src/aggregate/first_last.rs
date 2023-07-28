@@ -202,7 +202,7 @@ impl Accumulator for FirstValueAccumulator {
         let is_set_flags = &states[last_idx];
         let flags = is_set_flags.as_boolean();
         let mut filtered_first_vals = vec![];
-        for state in states.iter().take(last_idx - 1) {
+        for state in states.iter().take(last_idx) {
             filtered_first_vals.push(compute::filter(state, flags)?)
         }
         self.update_batch(&filtered_first_vals)
@@ -387,7 +387,7 @@ impl Accumulator for LastValueAccumulator {
         let is_set_flags = &states[last_idx];
         let flags = is_set_flags.as_boolean();
         let mut filtered_first_vals = vec![];
-        for state in states.iter().take(last_idx - 1) {
+        for state in states.iter().take(last_idx) {
             filtered_first_vals.push(compute::filter(state, flags)?)
         }
         self.update_batch(&filtered_first_vals)
