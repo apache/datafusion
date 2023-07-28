@@ -323,12 +323,7 @@ pub fn parse_physical_expr(
                     "key",
                     input_schema,
                 )?,
-                Some(parse_required_physical_expr(
-                    get_indexed_field_expr.extra_key.as_deref(),
-                    registry,
-                    "extra_key",
-                    input_schema,
-                )?),
+                None,
             ))
         }
     };

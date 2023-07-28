@@ -388,31 +388,16 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<GetIndexedFieldExpr>() {
-            if let Some(extra_key) = expr.extra_key().to_owned() {
-                Ok(protobuf::PhysicalExprNode {
-                    expr_type: Some(
-                        protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
-                            Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
-                                arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                                key: Some(Box::new(expr.key().to_owned().try_into()?)),
-                                extra_key: Some(Box::new(extra_key.try_into()?)),
-                            }),
-                        ),
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(
+                    protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
+                        Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
+                            arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
+                            key: Some(Box::new(expr.key().to_owned().try_into()?)),
+                        }),
                     ),
-                })
-            } else {
-                Ok(protobuf::PhysicalExprNode {
-                    expr_type: Some(
-                        protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
-                            Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
-                                arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                                key: Some(Box::new(expr.key().to_owned().try_into()?)),
-                                extra_key: None,
-                            }),
-                        ),
-                    ),
-                })
-            }
+                ),
+            })
         } else {
             Err(DataFusionError::Internal(format!(
                 "physical_plan::to_proto() unsupported expression {value:?}"

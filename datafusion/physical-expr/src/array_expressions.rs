@@ -1643,13 +1643,6 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(StringArray::from(res)))
 }
 
-pub fn trim_array(_args: &[ArrayRef]) -> Result<ArrayRef> {
-    Err(DataFusionError::Internal(
-        "`trim_array` function is now deprecated. Please use `array_slice` instead"
-            .to_string(),
-    ))
-}
-
 /// Cardinality SQL function
 pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?.clone();

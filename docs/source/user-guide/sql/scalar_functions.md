@@ -396,7 +396,6 @@ radians(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-  =======
 
 ### `random`
 
@@ -1857,6 +1856,10 @@ array_remove(array, element)
 +----------------------------------------------+
 ```
 
+#### Aliases
+
+- list_remove
+
 ### `array_remove_n`
 
 Removes the first `max` elements from the array equal to the given value.
@@ -1883,6 +1886,10 @@ array_remove_n(array, element, max)
 +---------------------------------------------------------+
 ```
 
+#### Aliases
+
+- list_remove_n
+
 ### `array_remove_all`
 
 Removes all elements from the array equal to the given value.
@@ -1907,6 +1914,10 @@ array_remove_all(array, element)
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
 ```
+
+#### Aliases
+
+- list_remove_all
 
 ### `array_replace`
 
@@ -1933,6 +1944,10 @@ array_replace(array, from, to)
 | [1, 5, 2, 3, 2, 1, 4]                                  |
 +--------------------------------------------------------+
 ```
+
+#### Aliases
+
+- list_replace
 
 ### `array_replace_n`
 
@@ -1961,6 +1976,10 @@ array_replace_n(array, from, to, max)
 +-------------------------------------------------------------------+
 ```
 
+#### Aliases
+
+- list_replace_n
+
 ### `array_replace_all`
 
 Replaces all occurrences of the specified element with another specified element.
@@ -1986,6 +2005,10 @@ array_replace_all(array, from, to)
 | [1, 5, 5, 3, 5, 1, 4]                                      |
 +------------------------------------------------------------+
 ```
+
+#### Aliases
+
+- list_replace_all
 
 ### `array_slice`
 
@@ -2193,6 +2216,8 @@ _Alias of [make_array](#make_array)._
 ### `trim_array`
 
 Removes the last n elements from the array.
+
+DEPRECATED: use `array_slice` instead!
 
 ```
 trim_array(array, n)

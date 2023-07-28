@@ -161,8 +161,6 @@ pub enum BuiltinScalarFunction {
     Cardinality,
     /// construct an array from columns
     MakeArray,
-    /// trim_array
-    TrimArray,
 
     // struct functions
     /// struct
@@ -369,7 +367,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
-            BuiltinScalarFunction::TrimArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
@@ -572,16 +569,6 @@ impl BuiltinScalarFunction {
 
                     Ok(List(Arc::new(Field::new("item", expr_type, true))))
                 }
-            },
-            BuiltinScalarFunction::TrimArray => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
             },
             BuiltinScalarFunction::Ascii => Ok(Int32),
             BuiltinScalarFunction::BitLength => {
@@ -855,7 +842,6 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::MakeArray => {
                 Signature::variadic_any(self.volatility())
             }
-            BuiltinScalarFunction::TrimArray => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Struct => Signature::variadic(
                 struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
                 self.volatility(),
@@ -1337,10 +1323,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ArrayReplaceAll => {
             &["array_replace_all", "list_replace_all"]
         }
-        BuiltinScalarFunction::ArraySlice => &[
-            "array_slice",
-            "list_slice",
-        ],
+        BuiltinScalarFunction::ArraySlice => &["array_slice", "list_slice"],
         BuiltinScalarFunction::ArrayToString => &[
             "array_to_string",
             "list_to_string",
@@ -1349,7 +1332,6 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         ],
         BuiltinScalarFunction::Cardinality => &["cardinality"],
         BuiltinScalarFunction::MakeArray => &["make_array", "make_list"],
-        BuiltinScalarFunction::TrimArray => &["trim_array"],
 
         // struct functions
         BuiltinScalarFunction::Struct => &["struct"],

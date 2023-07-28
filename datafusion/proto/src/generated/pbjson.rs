@@ -7273,7 +7273,7 @@ impl serde::Serialize for GetIndexedField {
         if self.key.is_some() {
             len += 1;
         }
-        if self.optional_extra_key.is_some() {
+        if self.extra_key.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.GetIndexedField", len)?;
@@ -7283,12 +7283,8 @@ impl serde::Serialize for GetIndexedField {
         if let Some(v) = self.key.as_ref() {
             struct_ser.serialize_field("key", v)?;
         }
-        if let Some(v) = self.optional_extra_key.as_ref() {
-            match v {
-                get_indexed_field::OptionalExtraKey::ExtraKey(v) => {
-                    struct_ser.serialize_field("extraKey", v)?;
-                }
-            }
+        if let Some(v) = self.extra_key.as_ref() {
+            struct_ser.serialize_field("extraKey", v)?;
         }
         struct_ser.end()
     }
@@ -7356,7 +7352,7 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
             {
                 let mut expr__ = None;
                 let mut key__ = None;
-                let mut optional_extra_key__ = None;
+                let mut extra_key__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -7372,18 +7368,17 @@ impl<'de> serde::Deserialize<'de> for GetIndexedField {
                             key__ = map.next_value()?;
                         }
                         GeneratedField::ExtraKey => {
-                            if optional_extra_key__.is_some() {
+                            if extra_key__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("extraKey"));
                             }
-                            optional_extra_key__ = map.next_value::<::std::option::Option<_>>()?.map(get_indexed_field::OptionalExtraKey::ExtraKey)
-;
+                            extra_key__ = map.next_value()?;
                         }
                     }
                 }
                 Ok(GetIndexedField {
                     expr: expr__,
                     key: key__,
-                    optional_extra_key: optional_extra_key__,
+                    extra_key: extra_key__,
                 })
             }
         }
@@ -14801,22 +14796,12 @@ impl serde::Serialize for PhysicalGetIndexedFieldExprNode {
         if self.key.is_some() {
             len += 1;
         }
-        if self.optional_extra_key.is_some() {
-            len += 1;
-        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalGetIndexedFieldExprNode", len)?;
         if let Some(v) = self.arg.as_ref() {
             struct_ser.serialize_field("arg", v)?;
         }
         if let Some(v) = self.key.as_ref() {
             struct_ser.serialize_field("key", v)?;
-        }
-        if let Some(v) = self.optional_extra_key.as_ref() {
-            match v {
-                physical_get_indexed_field_expr_node::OptionalExtraKey::ExtraKey(v) => {
-                    struct_ser.serialize_field("extraKey", v)?;
-                }
-            }
         }
         struct_ser.end()
     }
@@ -14830,15 +14815,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
         const FIELDS: &[&str] = &[
             "arg",
             "key",
-            "extra_key",
-            "extraKey",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Arg,
             Key,
-            ExtraKey,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14862,7 +14844,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
                         match value {
                             "arg" => Ok(GeneratedField::Arg),
                             "key" => Ok(GeneratedField::Key),
-                            "extraKey" | "extra_key" => Ok(GeneratedField::ExtraKey),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14884,7 +14865,6 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
             {
                 let mut arg__ = None;
                 let mut key__ = None;
-                let mut optional_extra_key__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Arg => {
@@ -14899,19 +14879,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalGetIndexedFieldExprNode {
                             }
                             key__ = map.next_value()?;
                         }
-                        GeneratedField::ExtraKey => {
-                            if optional_extra_key__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("extraKey"));
-                            }
-                            optional_extra_key__ = map.next_value::<::std::option::Option<_>>()?.map(physical_get_indexed_field_expr_node::OptionalExtraKey::ExtraKey)
-;
-                        }
                     }
                 }
                 Ok(PhysicalGetIndexedFieldExprNode {
                     arg: arg__,
                     key: key__,
-                    optional_extra_key: optional_extra_key__,
                 })
             }
         }
@@ -18316,10 +18288,18 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayReplace => "ArrayReplace",
             Self::ArrayToString => "ArrayToString",
             Self::Cardinality => "Cardinality",
-            Self::TrimArray => "TrimArray",
+            Self::ArrayElement => "ArrayElement",
+            Self::ArraySlice => "ArraySlice",
             Self::Encode => "Encode",
             Self::Decode => "Decode",
             Self::Cot => "Cot",
+            Self::ArrayHas => "ArrayHas",
+            Self::ArrayHasAny => "ArrayHasAny",
+            Self::ArrayHasAll => "ArrayHasAll",
+            Self::ArrayRemoveN => "ArrayRemoveN",
+            Self::ArrayReplaceN => "ArrayReplaceN",
+            Self::ArrayRemoveAll => "ArrayRemoveAll",
+            Self::ArrayReplaceAll => "ArrayReplaceAll",
         };
         serializer.serialize_str(variant)
     }
@@ -18430,10 +18410,18 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayReplace",
             "ArrayToString",
             "Cardinality",
-            "TrimArray",
+            "ArrayElement",
+            "ArraySlice",
             "Encode",
             "Decode",
             "Cot",
+            "ArrayHas",
+            "ArrayHasAny",
+            "ArrayHasAll",
+            "ArrayRemoveN",
+            "ArrayReplaceN",
+            "ArrayRemoveAll",
+            "ArrayReplaceAll",
         ];
 
         struct GeneratedVisitor;
@@ -18575,10 +18563,18 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayReplace" => Ok(ScalarFunction::ArrayReplace),
                     "ArrayToString" => Ok(ScalarFunction::ArrayToString),
                     "Cardinality" => Ok(ScalarFunction::Cardinality),
-                    "TrimArray" => Ok(ScalarFunction::TrimArray),
+                    "ArrayElement" => Ok(ScalarFunction::ArrayElement),
+                    "ArraySlice" => Ok(ScalarFunction::ArraySlice),
                     "Encode" => Ok(ScalarFunction::Encode),
                     "Decode" => Ok(ScalarFunction::Decode),
                     "Cot" => Ok(ScalarFunction::Cot),
+                    "ArrayHas" => Ok(ScalarFunction::ArrayHas),
+                    "ArrayHasAny" => Ok(ScalarFunction::ArrayHasAny),
+                    "ArrayHasAll" => Ok(ScalarFunction::ArrayHasAll),
+                    "ArrayRemoveN" => Ok(ScalarFunction::ArrayRemoveN),
+                    "ArrayReplaceN" => Ok(ScalarFunction::ArrayReplaceN),
+                    "ArrayRemoveAll" => Ok(ScalarFunction::ArrayRemoveAll),
+                    "ArrayReplaceAll" => Ok(ScalarFunction::ArrayReplaceAll),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

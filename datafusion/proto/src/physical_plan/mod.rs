@@ -1924,7 +1924,6 @@ mod roundtrip_tests {
             Field::new("id", DataType::Int64, true),
             Field::new_list("a", Field::new("item", DataType::Float64, true), true),
             Field::new("b", DataType::Int64, true),
-            Field::new("c", DataType::Int64, true),
         ];
 
         let schema = Schema::new(fields);
@@ -1932,9 +1931,8 @@ mod roundtrip_tests {
 
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
-        let col_c = col("c", &schema)?;
         let get_indexed_field_expr =
-            Arc::new(GetIndexedFieldExpr::new(col_a, col_b, Some(col_c)));
+            Arc::new(GetIndexedFieldExpr::new(col_a, col_b, None));
 
         let plan = Arc::new(ProjectionExec::try_new(
             vec![(get_indexed_field_expr, "result".to_string())],

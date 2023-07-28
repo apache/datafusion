@@ -475,9 +475,6 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function(array_expressions::cardinality)(args))
         }
         BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::make_array),
-        BuiltinScalarFunction::TrimArray => {
-            Arc::new(|args| make_scalar_function(array_expressions::trim_array)(args))
-        }
 
         // struct functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
