@@ -270,6 +270,18 @@ pub struct AggregateExec {
     required_input_ordering: Option<LexOrderingReq>,
 }
 
+/// Check whether aggregations is in first stage.
+/// It means that, aggregation input is not another aggregation
+/// `merge_batch` method will not be called for these modes.
+fn is_aggregation_first_stage(mode: &AggregateMode) -> bool {
+    match mode {
+        AggregateMode::Partial
+        | AggregateMode::Single
+        | AggregateMode::SinglePartitioned => true,
+        AggregateMode::Final | AggregateMode::FinalPartitioned => false,
+    }
+}
+
 /// Calculates the working mode for `GROUP BY` queries.
 /// - If no GROUP BY expression has an ordering, returns `None`.
 /// - If some GROUP BY expressions have an ordering, returns `Some(GroupByOrderMode::PartiallyOrdered)`.
@@ -497,29 +509,15 @@ fn calc_required_input_ordering(
             for req in aggregator_requirement {
                 // Final and FinalPartitioned modes doesn't enforce requirement from aggregators.
                 // Ordering sensitive aggregators handles this case during merge.
-                if !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned)
+                if is_aggregation_first_stage(mode)
                     && requirement.iter().all(|item| req.expr.ne(&item.expr))
                 {
                     requirement.push(req.clone());
                 }
             }
             required_input_ordering = requirement;
-        } else {
-            // If there was no pre-existing output ordering, the output ordering is simply the required
-            // ordering of the aggregator in partial mode.
-            // TODO: This may be unnecessary. Try to remove this.
-            if matches!(mode, AggregateMode::Partial)
-                && !aggregator_requirement.is_empty()
-            {
-                *aggregation_ordering = Some(AggregationOrdering {
-                    mode: GroupByOrderMode::None,
-                    order_indices: vec![],
-                    ordering: vec![],
-                });
-            }
-            if !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned) {
-                required_input_ordering = aggregator_requirement;
-            }
+        } else if is_aggregation_first_stage(mode) {
+            required_input_ordering = aggregator_requirement;
         }
         // Keep track of the direction from which required_input_ordering is constructed:
         reverse_req = is_reverse;
@@ -594,13 +592,14 @@ impl AggregateExec {
             .iter()
             .zip(order_by_expr.into_iter())
             .map(|(aggr_expr, fn_reqs)| {
-                // If aggregation function is ordering sensitive, keep ordering requirement as is; otherwise ignore requirement
-                if is_order_sensitive(aggr_expr)
-                    && !matches!(
-                        mode,
-                        AggregateMode::Final | AggregateMode::FinalPartitioned
-                    )
-                {
+                // If aggregation function is ordering sensitive and aggregate mode is not Final
+                // keep ordering requirement as is; otherwise ignore requirement.
+                // In final mode, accumulators accumulate (using merge_batch) data from
+                // different partitions (result of partial results). During merge they consider
+                // ordering of each partial result. Hence we do not need to use ordering
+                // requirement in final modes as long as in partial mode mode accumulation is done
+                // with correct ordering.
+                if is_order_sensitive(aggr_expr) && is_aggregation_first_stage(&mode) {
                     fn_reqs
                 } else {
                     None
