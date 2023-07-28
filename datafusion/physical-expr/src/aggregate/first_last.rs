@@ -23,13 +23,14 @@ use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::Array;
+use arrow_array::{Array, BooleanArray};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use arrow::compute;
 use arrow::compute::{lexsort_to_indices, SortColumn};
 use arrow_array::cast::AsArray;
+use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use std::any::Any;
 use std::sync::Arc;
@@ -184,6 +185,13 @@ impl FirstValueAccumulator {
             ordering_req,
         })
     }
+
+    // Updates state with the values in the given row.
+    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
+        self.first = row[0].clone();
+        self.orderings = row[1..].to_vec();
+        self.is_set = true;
+    }
 }
 
 impl Accumulator for FirstValueAccumulator {
@@ -198,18 +206,18 @@ impl Accumulator for FirstValueAccumulator {
         // If we have seen first value, we shouldn't update it
         if !values[0].is_empty() && !self.is_set {
             let row = get_row_at_idx(values, 0)?;
-            // Update with last value in the array.
-            self.first = row[0].clone();
-            self.orderings = row[1..].to_vec();
-            self.is_set = true;
+            // Update with first value in the array.
+            self.update_with_new_row(&row);
         }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // FIRST_VALUE(first1, first2, first3, ...)
+        // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
-        let filtered_states = filter_states_according_to_is_set(states)?;
+        let flags = states[is_set_idx].as_boolean();
+        let filtered_states = filter_states_according_to_is_set(states, flags)?;
         // 1..is_set_idx range corresponds to ordering section
         let sort_cols =
             convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
@@ -218,19 +226,13 @@ impl Accumulator for FirstValueAccumulator {
         let ordered_states = get_arrayref_at_indices(&filtered_states, &indices)?;
         if !ordered_states[0].is_empty() {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
-            let first_val = first_row[0].clone();
-            let first_ordering = first_row[1..].to_vec();
-            let sort_options = self
-                .ordering_req
-                .iter()
-                .map(|sort_expr| sort_expr.options)
-                .collect::<Vec<_>>();
+            let first_ordering = &first_row[1..];
+            let sort_options = get_sort_options(&self.ordering_req);
+            // Either there is no existing value or there is an earlier version in new data.
             if !self.is_set
-                || compare_rows(&first_ordering, &self.orderings, &sort_options)?.is_lt()
+                || compare_rows(first_ordering, &self.orderings, &sort_options)?.is_lt()
             {
-                self.first = first_val;
-                self.orderings = first_ordering;
-                self.is_set = true;
+                self.update_with_new_row(&first_row);
             }
         }
         Ok(())
@@ -397,6 +399,13 @@ impl LastValueAccumulator {
             ordering_req,
         })
     }
+
+    // Updates state with the values in the given row.
+    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
+        self.last = row[0].clone();
+        self.orderings = row[1..].to_vec();
+        self.is_set = true;
+    }
 }
 
 impl Accumulator for LastValueAccumulator {
@@ -411,17 +420,17 @@ impl Accumulator for LastValueAccumulator {
         if !values[0].is_empty() {
             let row = get_row_at_idx(values, values[0].len() - 1)?;
             // Update with last value in the array.
-            self.last = row[0].clone();
-            self.orderings = row[1..].to_vec();
-            self.is_set = true;
+            self.update_with_new_row(&row);
         }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // LAST_VALUE(last1, last2, last3, ...)
+        // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
-        let filtered_states = filter_states_according_to_is_set(states)?;
+        let flags = states[is_set_idx].as_boolean();
+        let filtered_states = filter_states_according_to_is_set(states, flags)?;
         // 1..is_set_idx range corresponds to ordering section
         let sort_cols =
             convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
@@ -432,19 +441,13 @@ impl Accumulator for LastValueAccumulator {
         if !ordered_states[0].is_empty() {
             let last_idx = ordered_states[0].len() - 1;
             let last_row = get_row_at_idx(&ordered_states, last_idx)?;
-            let last_val = last_row[0].clone();
-            let last_ordering = last_row[1..].to_vec();
-            let sort_options = self
-                .ordering_req
-                .iter()
-                .map(|item| item.options)
-                .collect::<Vec<_>>();
+            let last_ordering = &last_row[1..];
+            let sort_options = get_sort_options(&self.ordering_req);
+            // Either there is no existing value or there is a newer (latest) version in new data.
             if !self.is_set
-                || compare_rows(&last_ordering, &self.orderings, &sort_options)?.is_gt()
+                || compare_rows(last_ordering, &self.orderings, &sort_options)?.is_gt()
             {
-                self.last = last_val;
-                self.orderings = last_ordering;
-                self.is_set = true;
+                self.update_with_new_row(&last_row);
             }
         }
         Ok(())
@@ -464,12 +467,10 @@ impl Accumulator for LastValueAccumulator {
 
 // Filters states according to is_set flag at the last column. Then return
 // resulting states.
-fn filter_states_according_to_is_set(states: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
-    // last index contains is_set flag.
-    let is_set_idx = states.len() - 1;
-    let is_set_flags = &states[is_set_idx];
-    let flags = is_set_flags.as_boolean();
-
+fn filter_states_according_to_is_set(
+    states: &[ArrayRef],
+    flags: &BooleanArray,
+) -> Result<Vec<ArrayRef>> {
     states
         .iter()
         .map(|state| compute::filter(state, flags).map_err(DataFusionError::ArrowError))
@@ -487,6 +488,13 @@ fn convert_to_sort_cols(
             values: item.clone(),
             options: Some(sort_expr.options),
         })
+        .collect::<Vec<_>>()
+}
+
+fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
+    ordering_req
+        .iter()
+        .map(|item| item.options)
         .collect::<Vec<_>>()
 }
 
