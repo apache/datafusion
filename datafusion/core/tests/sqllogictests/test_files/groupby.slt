@@ -3348,3 +3348,53 @@ ORDER BY l.sn
 2 75 3
 3 200 4
 4 100 5
+
+# create a table
+statement ok
+CREATE TABLE FOO (x int) AS VALUES (1), (2);
+
+# make sure that query runs in multi partitions
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query I
+SELECT LAST_VALUE(x)
+FROM FOO;
+----
+2
+
+# plan of the query above should contain partial
+# and final aggregation stages
+query TT
+EXPLAIN SELECT LAST_VALUE(x)
+  FROM FOO;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[LAST_VALUE(foo.x)]]
+--TableScan: foo projection=[x]
+physical_plan
+AggregateExec: mode=Final, gby=[], aggr=[LAST_VALUE(foo.x)]
+--CoalescePartitionsExec
+----AggregateExec: mode=Partial, gby=[], aggr=[LAST_VALUE(foo.x)]
+------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+
+query I
+SELECT FIRST_VALUE(x)
+FROM FOO;
+----
+1
+
+# similarly plan of the above query should
+# contain partial and final aggregation stages.
+query TT
+EXPLAIN SELECT FIRST_VALUE(x)
+  FROM FOO;
+----
+logical_plan
+Aggregate: groupBy=[[]], aggr=[[FIRST_VALUE(foo.x)]]
+--TableScan: foo projection=[x]
+physical_plan
+AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(foo.x)]
+--CoalescePartitionsExec
+----AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(foo.x)]
+------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
