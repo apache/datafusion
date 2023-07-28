@@ -30,8 +30,7 @@ use datafusion_expr::Accumulator;
 use arrow::compute;
 use arrow::compute::{lexsort_to_indices, SortColumn};
 use arrow_array::cast::AsArray;
-use arrow_schema::SortOptions;
-use datafusion_common::utils::{compare_rows, get_row_at_idx};
+use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -210,45 +209,15 @@ impl Accumulator for FirstValueAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // FIRST_VALUE(first1, first2, first3, ...)
         let is_set_idx = states.len() - 1;
-        let is_set_flags = &states[is_set_idx];
-        let flags = is_set_flags.as_boolean();
-        let mut filtered_first_vals = vec![];
-        for state in states.iter() {
-            filtered_first_vals.push(compute::filter(state, flags)?)
-        }
-        let filtered_first_vals = compute::filter(&states[0], flags)?;
-        // This range corresponds to ordering values
-        let filtered_orderings = states[1..is_set_idx]
-            .iter()
-            .map(|state| {
-                compute::filter(state, flags).map_err(|e| DataFusionError::ArrowError(e))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let filtered_states = filter_states_according_to_is_set(states)?;
+        // 1..is_set_idx range corresponds to ordering section
+        let sort_cols =
+            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
-        let sort_cols = filtered_orderings
-            .iter()
-            .zip(self.ordering_req.iter())
-            .map(|(item, sort_expr)| SortColumn {
-                values: item.clone(),
-                options: Some(sort_expr.options),
-            })
-            .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_cols, None)?;
-
-        let ordered_first_vals = compute::take(&filtered_first_vals, &indices, None)?;
-        let orderings = filtered_orderings
-            .iter()
-            .map(|item| {
-                compute::take(&filtered_first_vals, &indices, None)
-                    .map_err(|e| DataFusionError::ArrowError(e))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let mut args = vec![];
-        args.push(ordered_first_vals);
-        args.extend(orderings);
-        if !args[0].is_empty() {
-            let first_row = get_row_at_idx(&args, 0)?;
+        let ordered_states = get_arrayref_at_indices(&filtered_states, &indices)?;
+        if !ordered_states[0].is_empty() {
+            let first_row = get_row_at_idx(&ordered_states, 0)?;
             let first_val = first_row[0].clone();
             let first_ordering = first_row[1..].to_vec();
             let sort_options = self
@@ -452,41 +421,17 @@ impl Accumulator for LastValueAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // LAST_VALUE(last1, last2, last3, ...)
         let is_set_idx = states.len() - 1;
-        let is_set_flags = &states[is_set_idx];
-        let flags = is_set_flags.as_boolean();
-        let mut filtered_first_vals = vec![];
-        for state in states.iter() {
-            filtered_first_vals.push(compute::filter(state, flags)?)
-        }
-        let filtered_first_vals = compute::filter(&states[0], flags)?;
-        // Corresponds to ordering section
-        let filtered_orderings = states[1..is_set_idx]
-            .iter()
-            .map(|state| compute::filter(state, flags).unwrap())
-            .collect::<Vec<_>>();
+        let filtered_states = filter_states_according_to_is_set(states)?;
+        // 1..is_set_idx range corresponds to ordering section
+        let sort_cols =
+            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
-        let sort_cols = filtered_orderings
-            .iter()
-            .zip(self.ordering_req.iter())
-            .map(|(item, sort_expr)| SortColumn {
-                values: item.clone(),
-                options: Some(sort_expr.options),
-            })
-            .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_cols, None)?;
+        let ordered_states = get_arrayref_at_indices(&filtered_states, &indices)?;
 
-        let ordered_first_vals = compute::take(&filtered_first_vals, &indices, None)?;
-        let orderings = filtered_orderings
-            .iter()
-            .map(|item| compute::take(&filtered_first_vals, &indices, None).unwrap())
-            .collect::<Vec<_>>();
-
-        let mut args = vec![];
-        args.push(ordered_first_vals);
-        args.extend(orderings);
-        if !args[0].is_empty() {
-            let last_idx = args[0].len() - 1;
-            let last_row = get_row_at_idx(&args, last_idx)?;
+        if !ordered_states[0].is_empty() {
+            let last_idx = ordered_states[0].len() - 1;
+            let last_row = get_row_at_idx(&ordered_states, last_idx)?;
             let last_val = last_row[0].clone();
             let last_ordering = last_row[1..].to_vec();
             let sort_options = self
@@ -517,6 +462,34 @@ impl Accumulator for LastValueAccumulator {
     }
 }
 
+// Filters states according to is_set flag at the last column. Then return
+// resulting states.
+fn filter_states_according_to_is_set(states: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
+    // last index contains is_set flag.
+    let is_set_idx = states.len() - 1;
+    let is_set_flags = &states[is_set_idx];
+    let flags = is_set_flags.as_boolean();
+
+    states
+        .iter()
+        .map(|state| compute::filter(state, flags).map_err(DataFusionError::ArrowError))
+        .collect::<Result<Vec<_>>>()
+}
+
+// Combines array refs and their corresponding ordering to construct SortColumn.
+fn convert_to_sort_cols(
+    arrs: &[ArrayRef],
+    sort_exprs: &[PhysicalSortExpr],
+) -> Vec<SortColumn> {
+    arrs.iter()
+        .zip(sort_exprs.iter())
+        .map(|(item, sort_expr)| SortColumn {
+            values: item.clone(),
+            options: Some(sort_expr.options),
+        })
+        .collect::<Vec<_>>()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::aggregate::first_last::{FirstValueAccumulator, LastValueAccumulator};
@@ -529,8 +502,9 @@ mod tests {
     #[test]
     fn test_first_last_value_value() -> Result<()> {
         let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[])?;
-        let mut last_accumulator = LastValueAccumulator::try_new(&DataType::Int64, &[])?;
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+        let mut last_accumulator =
+            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
         // first value in the tuple is start of the range (inclusive),
         // second value in the tuple is end of the range (exclusive)
         let ranges: Vec<(i64, i64)> = vec![(0, 10), (1, 11), (2, 13)];

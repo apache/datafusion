@@ -475,13 +475,13 @@ fn calc_required_input_ordering(
         };
     for (is_reverse, aggregator_requirement) in aggregator_requirements.into_iter() {
         if let Some(AggregationOrdering {
-            ordering,
             // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
             // running with bounded memory, without breaking the pipeline),
             // then we append the aggregator ordering requirement to the existing
             // ordering. This way, we can still run with bounded memory.
             mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
             order_indices,
+            ..
         }) = aggregation_ordering
         {
             // Get the section of the input ordering that enables us to run in
@@ -2001,10 +2001,9 @@ mod tests {
                 vec![DataType::Float64],
             ))]
         };
-        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
 
         let memory_exec = Arc::new(MemoryExec::try_new(
-            &vec![
+            &[
                 vec![partition1],
                 vec![partition2],
                 vec![partition3],
@@ -2013,7 +2012,6 @@ mod tests {
             schema.clone(),
             None,
         )?);
-        let refs = blocking_exec.refs();
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
