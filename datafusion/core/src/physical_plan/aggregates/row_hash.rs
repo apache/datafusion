@@ -38,6 +38,7 @@ use crate::physical_plan::{aggregates, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::util::pretty::print_batches;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -374,6 +375,7 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        print_batches(&vec![batch.clone()])?;
         // Evaluate the grouping expressions
         let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
 

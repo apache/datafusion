@@ -2894,7 +2894,7 @@ ORDER BY s.sn;";
     #[tokio::test]
     #[ignore]
     async fn test_buggy_test2() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
+        let config = SessionConfig::new().with_target_partitions(8);
         let ctx = SessionContext::with_config(config);
 
         ctx.sql(
@@ -2912,9 +2912,14 @@ LOCATION 'tests/data/window_2.csv';",
         )
         .await?;
 
-        let sql = "SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
+  //       let sql = "SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
+  // FROM annotated_data_infinite2
+  // GROUP BY a, b";
+
+        let sql = "SELECT FIRST_VALUE(c ORDER BY a,b,c ASC) as first_c
   FROM annotated_data_infinite2
-  GROUP BY a, b";
+  group by d
+  ORDER BY first_c";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -2964,8 +2969,16 @@ LOCATION 'tests/data/window_2.csv';",
         // FROM sales_global
         // GROUP BY country";
 
-        let sql = "SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
-  FROM sales_global";
+  //       let sql = "SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
+  // FROM sales_global";
+
+        // let sql = "SELECT FIRST_VALUE(amount ORDER BY ts ASC) FROM sales_global";
+
+        let sql= "SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+  LAST_VALUE(amount ORDER BY ts ASC) AS fv2
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);

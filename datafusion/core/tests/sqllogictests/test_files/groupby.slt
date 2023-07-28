@@ -2878,3 +2878,17 @@ ORDER BY s.sn;
 [0.10]
 [1.10, 1.12]
 [1.10, 0.10, 1.12, 0.11, 1.12]
+
+query TT
+EXPLAIN SELECT FIRST_VALUE(C order by c ASC) as first_c
+  FROM multiple_ordered_table
+  GROUP BY d
+  ORDER BY first_c
+----
+
+query I
+SELECT FIRST_VALUE(C order by c ASC) as first_c
+FROM multiple_ordered_table
+GROUP BY d
+ORDER BY first_c
+----
