@@ -1960,21 +1960,20 @@ SortPreservingMergeExec: [col0@0 ASC NULLS LAST]
 --SortExec: expr=[col0@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[col0@0 as col0, LAST_VALUE(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]
 ------AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]
---------SortExec: expr=[col0@3 ASC NULLS LAST]
-----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
---------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered
-----------------SortExec: expr=[col0@3 ASC NULLS LAST]
-------------------CoalesceBatchesExec: target_batch_size=8192
---------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
-----------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=4
---------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------MemoryExec: partitions=1, partition_sizes=[3]
-----------------------CoalesceBatchesExec: target_batch_size=8192
-------------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=4
---------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------MemoryExec: partitions=1, partition_sizes=[3]
+--------CoalesceBatchesExec: target_batch_size=8192
+----------RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 4), input_partitions=4
+------------AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered
+--------------SortExec: expr=[col0@3 ASC NULLS LAST]
+----------------CoalesceBatchesExec: target_batch_size=8192
+------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=4
+------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------------------------MemoryExec: partitions=1, partition_sizes=[3]
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([col0@0], 4), input_partitions=4
+------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------------------------MemoryExec: partitions=1, partition_sizes=[3]
 
 # Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
@@ -2957,10 +2956,9 @@ FRA [200.0, 50.0] 50 50
 GRC [80.0, 30.0] 30 30
 TUR [100.0, 75.0] 75 75
 
-<<<<<<< HEAD
 # make sure that query below runs in multi partitions
 statement ok
-set datafusion.execution.target_partitions = 2;
+set datafusion.execution.target_partitions = 8;
 
 query ?
 SELECT ARRAY_AGG(e.rate ORDER BY e.sn)
@@ -2990,7 +2988,7 @@ ORDER BY first_c
 4
 9
 15
-=======
+
 query ITIPTR
 SELECT s.zip_code, s.country, s.sn, s.ts, s.currency, LAST_VALUE(e.amount ORDER BY e.sn) AS last_rate
 FROM sales_global AS s
@@ -3393,4 +3391,3 @@ ORDER BY l.sn
 2 75 3
 3 200 4
 4 100 5
->>>>>>> apache_main
