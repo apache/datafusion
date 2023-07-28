@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -446,7 +446,9 @@ pub fn expand_qualified_wildcard(
         )));
     }
     let qualified_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
+            // We can use the functional dependencies as is, since it only stores indices:
+            .with_functional_dependencies(schema.functional_dependencies().clone());
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,
@@ -921,7 +923,7 @@ pub fn from_plan(
         })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
             CreateMemoryTable {
                 input: Arc::new(inputs[0].clone()),
-                primary_key: vec![],
+                constraints: Constraints::empty(),
                 name: name.clone(),
                 if_not_exists: *if_not_exists,
                 or_replace: *or_replace,
@@ -1016,10 +1018,13 @@ pub fn from_plan(
                 })
                 .collect::<Vec<_>>();
 
-            let schema = Arc::new(DFSchema::new_with_metadata(
-                fields,
-                input.schema().metadata().clone(),
-            )?);
+            let schema = Arc::new(
+                DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?
+                    // We can use the existing functional dependencies as is:
+                    .with_functional_dependencies(
+                        input.schema().functional_dependencies().clone(),
+                    ),
+            );
 
             Ok(LogicalPlan::Unnest(Unnest {
                 input,

@@ -262,8 +262,10 @@ fn rewrite_schema(schema: &DFSchema) -> DFSchemaRef {
             )
         })
         .collect::<Vec<DFField>>();
-    DFSchemaRef::new(
-        DFSchema::new_with_metadata(new_fields, schema.metadata().clone()).unwrap(),
+    Arc::new(
+        DFSchema::new_with_metadata(new_fields, schema.metadata().clone())
+            .unwrap()
+            .with_functional_dependencies(schema.functional_dependencies().clone()),
     )
 }
 

@@ -2192,7 +2192,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {} }, \
+        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
@@ -2416,6 +2416,7 @@ mod tests {
             );
         }
     }
+
     struct ErrorExtensionPlanner {}
 
     #[async_trait]

@@ -19,26 +19,28 @@
 
 # DataFusion
 
-[![Coverage Status](https://codecov.io/gh/apache/arrow-datafusion/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-datafusion?branch=master)
-
 <img src="https://arrow.apache.org/datafusion/_images/DataFusion-Logo-Background-White.png" width="256" alt="logo"/>
 
 DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
-in-memory format. [Python Bindings](https://github.com/apache/arrow-datafusion-python) are also available.
+in-memory format. [Python Bindings](https://github.com/apache/arrow-datafusion-python) are also available. DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
 
-DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
+Here are links to some important information
 
-https://arrow.apache.org/datafusion/ contains the project's documentation.
+- [Project Site](https://arrow.apache.org/datafusion)
+- [Rust Getting Started](https://arrow.apache.org/datafusion/user-guide/example-usage.html)
+- [Rust DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
+- [Rust API docs](https://docs.rs/datafusion/latest/datafusion)
+- [Rust Examples](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples)
+- [Python DataFrame API](https://arrow.apache.org/datafusion-python/)
+- [Architecture](https://docs.rs/datafusion/latest/datafusion/index.html#architecture)
 
-## Using DataFusion
+## Building your project with DataFusion
 
-The [example usage] section in the user guide and the [datafusion-examples] code in the crate contain information on using DataFusion.
+DataFusion is great for building projects and products like SQL interfaces, time series platforms, and domain specific query engines. [Click Here](https://arrow.apache.org/datafusion/user-guide/introduction.html#known-users) to see a list known users.
 
 ## Contributing to DataFusion
 
 The [developer’s guide] contains information on how to contribute.
 
-[example usage]: https://arrow.apache.org/datafusion/user-guide/example-usage.html
-[datafusion-examples]: https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples
 [developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide

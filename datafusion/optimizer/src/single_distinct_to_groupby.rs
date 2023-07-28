@@ -167,12 +167,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         Vec::new(),
                     )?);
 
+                    let outer_fields = outer_group_exprs
+                        .iter()
+                        .chain(new_aggr_exprs.iter())
+                        .map(|expr| expr.to_field(&inner_schema))
+                        .collect::<Result<Vec<_>>>()?;
                     let outer_aggr_schema = Arc::new(DFSchema::new_with_metadata(
-                        outer_group_exprs
-                            .iter()
-                            .chain(new_aggr_exprs.iter())
-                            .map(|expr| expr.to_field(&inner_schema))
-                            .collect::<Result<Vec<_>>>()?,
+                        outer_fields,
                         input.schema().metadata().clone(),
                     )?);
 

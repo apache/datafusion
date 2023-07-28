@@ -470,19 +470,12 @@ impl SessionContext {
             input,
             if_not_exists,
             or_replace,
-            primary_key,
+            constraints,
         } = cmd;
-
-        if !primary_key.is_empty() {
-            Err(DataFusionError::Execution(
-                "Primary keys on MemoryTables are not currently supported!".to_string(),
-            ))?;
-        }
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
         let input = self.state().optimize(&input)?;
         let table = self.table(&name).await;
-
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
@@ -500,11 +493,15 @@ impl SessionContext {
                 "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
             )),
             (_, _, Err(_)) => {
-                let schema = Arc::new(input.schema().as_ref().into());
+                let df_schema = input.schema();
+                let schema = Arc::new(df_schema.as_ref().into());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(schema, batches)?);
+                let table = Arc::new(
+                    // pass constraints to the mem table.
+                    MemTable::try_new(schema, batches)?.with_constraints(constraints),
+                );
 
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
@@ -2248,7 +2245,7 @@ mod tests {
         // Note capitalization
         let my_avg = create_udaf(
             "MY_AVG",
-            DataType::Float64,
+            vec![DataType::Float64],
             Arc::new(DataType::Float64),
             Volatility::Immutable,
             Arc::new(|_| {

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -57,7 +58,7 @@ pub struct ConvertOpt {
 }
 
 impl ConvertOpt {
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let compression = self.compression()?;
 
         let input_path = self.input_path.to_str().unwrap();
@@ -102,7 +103,7 @@ impl ConvertOpt {
 
             let output_path = output_root_path.join(table);
             let output_path = output_path.to_str().unwrap().to_owned();
-
+            fs::create_dir_all(&output_path)?;
             println!(
                 "Converting '{}' to {} files in directory '{}'",
                 &input_path, self.file_format, &output_path

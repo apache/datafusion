@@ -1943,6 +1943,9 @@ e 20
 e 21
 
 # test_window_agg_global_sort_parallelize_sort_disabled
+# even if, parallelize sort is disabled, we should use SortPreservingMergeExec
+# instead of CoalescePartitionsExec + SortExec stack. Because at the end
+# we already have the desired ordering.
 statement ok
 set datafusion.optimizer.repartition_sorts = false;
 
@@ -1955,15 +1958,14 @@ Sort: aggregate_test_100.c1 ASC NULLS LAST
 ----WindowAggr: windowExpr=[[ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 ------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
-SortExec: expr=[c1@0 ASC NULLS LAST]
---CoalescePartitionsExec
-----ProjectionExec: expr=[c1@0 as c1, ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]
-------BoundedWindowAggExec: wdw=[ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
---------SortExec: expr=[c1@0 ASC NULLS LAST]
-----------CoalesceBatchesExec: target_batch_size=4096
-------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
---------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
+--ProjectionExec: expr=[c1@0 as c1, ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]
+----BoundedWindowAggExec: wdw=[ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "ROW_NUMBER() PARTITION BY [aggregate_test_100.c1] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
+------SortExec: expr=[c1@0 ASC NULLS LAST]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
 statement ok
 set datafusion.optimizer.repartition_sorts = true;

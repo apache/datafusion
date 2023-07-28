@@ -15,14 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::TimeUnit;
+use async_trait::async_trait;
+use datafusion::execution::context::SessionState;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{
     arrow::{
-        array::Float64Array,
-        datatypes::{DataType, Field, Schema},
+        array::{
+            BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
+            StringArray, TimestampNanosecondArray,
+        },
+        datatypes::{DataType, Field, Schema, SchemaRef},
         record_batch::RecordBatch,
     },
+    catalog::{schema::MemorySchemaProvider, CatalogProvider, MemoryCatalogProvider},
+    datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_common::DataFusionError;
+use datafusion_expr::Expr;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -115,4 +126,85 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
         )
         .await
         .unwrap();
+}
+
+// registers a LOCAL TEMPORARY table.
+pub async fn register_temp_table(ctx: &SessionContext) {
+    struct TestTable(TableType);
+
+    #[async_trait]
+    impl TableProvider for TestTable {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn table_type(&self) -> TableType {
+            self.0
+        }
+
+        fn schema(&self) -> SchemaRef {
+            unimplemented!()
+        }
+
+        async fn scan(
+            &self,
+            _state: &SessionState,
+            _: Option<&Vec<usize>>,
+            _: &[Expr],
+            _: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+            unimplemented!()
+        }
+    }
+
+    ctx.register_table(
+        "datafusion.public.temp",
+        Arc::new(TestTable(TableType::Temporary)),
+    )
+    .unwrap();
+}
+
+pub async fn register_table_with_many_types(ctx: &SessionContext) {
+    let catalog = MemoryCatalogProvider::new();
+    let schema = MemorySchemaProvider::new();
+
+    catalog
+        .register_schema("my_schema", Arc::new(schema))
+        .unwrap();
+    ctx.register_catalog("my_catalog", Arc::new(catalog));
+
+    ctx.register_table("my_catalog.my_schema.t2", table_with_many_types())
+        .unwrap();
+}
+
+fn table_with_many_types() -> Arc<dyn TableProvider> {
+    let schema = Schema::new(vec![
+        Field::new("int32_col", DataType::Int32, false),
+        Field::new("float64_col", DataType::Float64, true),
+        Field::new("utf8_col", DataType::Utf8, true),
+        Field::new("large_utf8_col", DataType::LargeUtf8, false),
+        Field::new("binary_col", DataType::Binary, false),
+        Field::new("large_binary_col", DataType::LargeBinary, false),
+        Field::new(
+            "timestamp_nanos",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Float64Array::from(vec![1.0])),
+            Arc::new(StringArray::from(vec![Some("foo")])),
+            Arc::new(LargeStringArray::from(vec![Some("bar")])),
+            Arc::new(BinaryArray::from(vec![b"foo" as &[u8]])),
+            Arc::new(LargeBinaryArray::from(vec![b"foo" as &[u8]])),
+            Arc::new(TimestampNanosecondArray::from(vec![Some(123)])),
+        ],
+    )
+    .unwrap();
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
+    Arc::new(provider)
 }

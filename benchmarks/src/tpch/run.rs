@@ -16,7 +16,7 @@
 // under the License.
 
 use super::get_query_sql;
-use crate::BenchmarkRun;
+use crate::{BenchmarkRun, CommonOpt};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
 use datafusion::datasource::file_format::csv::{CsvFormat, DEFAULT_CSV_EXTENSION};
@@ -42,8 +42,17 @@ use structopt::StructOpt;
 
 use super::{get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES};
 
-/// Run the tpch benchmark
+/// Run the tpch benchmark.
+///
+/// This benchmarks is derived from the [TPC-H][1] version
+/// [2.17.1]. The data and answers are generated using `tpch-gen` from
+/// [2].
+///
+/// [1]: http://www.tpc.org/tpch/
+/// [2]: https://github.com/databricks/tpch-dbgen.git,
+/// [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
 #[derive(Debug, StructOpt, Clone)]
+#[structopt(verbatim_doc_comment)]
 pub struct RunOpt {
     /// Query number. If not specified, runs all queries
     #[structopt(short, long)]
@@ -53,17 +62,9 @@ pub struct RunOpt {
     #[structopt(short, long)]
     debug: bool,
 
-    /// Number of iterations of each test run
-    #[structopt(short = "i", long = "iterations", default_value = "3")]
-    iterations: usize,
-
-    /// Number of partitions to process in parallel
-    #[structopt(short = "n", long = "partitions", default_value = "2")]
-    partitions: usize,
-
-    /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
-    batch_size: usize,
+    /// Common options
+    #[structopt(flatten)]
+    common: CommonOpt,
 
     /// Path to data files
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
@@ -90,7 +91,7 @@ const TPCH_QUERY_START_ID: usize = 1;
 const TPCH_QUERY_END_ID: usize = 22;
 
 impl RunOpt {
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         println!("Running benchmarks with the following options: {self:?}");
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
@@ -110,9 +111,9 @@ impl RunOpt {
     }
 
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
-        let config = SessionConfig::new()
-            .with_target_partitions(self.partitions)
-            .with_batch_size(self.batch_size)
+        let config = self
+            .common
+            .config()
             .with_collect_statistics(!self.disable_statistics);
         let ctx = SessionContext::with_config(config);
 
@@ -122,7 +123,7 @@ impl RunOpt {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
-        for i in 0..self.iterations {
+        for i in 0..self.iterations() {
             let start = Instant::now();
 
             let sql = &get_query_sql(query_id)?;
@@ -169,7 +170,7 @@ impl RunOpt {
                 println!("Loading table '{table}' into memory");
                 let start = Instant::now();
                 let memtable =
-                    MemTable::load(table_provider, Some(self.partitions), &ctx.state())
+                    MemTable::load(table_provider, Some(self.partitions()), &ctx.state())
                         .await?;
                 println!(
                     "Loaded table '{}' into memory in {} ms",
@@ -231,7 +232,7 @@ impl RunOpt {
     ) -> Result<Arc<dyn TableProvider>> {
         let path = self.path.to_str().unwrap();
         let table_format = self.file_format.as_str();
-        let target_partitions = self.partitions;
+        let target_partitions = self.partitions();
 
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
@@ -283,6 +284,14 @@ impl RunOpt {
 
         Ok(Arc::new(ListingTable::try_new(config)?))
     }
+
+    fn iterations(&self) -> usize {
+        self.common.iterations()
+    }
+
+    fn partitions(&self) -> usize {
+        self.common.partitions()
+    }
 }
 
 struct QueryResult {
@@ -318,12 +327,15 @@ mod tests {
     async fn round_trip_logical_plan(query: usize) -> Result<()> {
         let ctx = SessionContext::default();
         let path = get_tpch_data_path()?;
-        let opt = RunOpt {
-            query: Some(query),
-            debug: false,
+        let common = CommonOpt {
             iterations: 1,
             partitions: 2,
             batch_size: 8192,
+        };
+        let opt = RunOpt {
+            query: Some(query),
+            debug: false,
+            common,
             path: PathBuf::from(path.to_string()),
             file_format: "tbl".to_string(),
             mem_table: false,
@@ -347,12 +359,15 @@ mod tests {
     async fn round_trip_physical_plan(query: usize) -> Result<()> {
         let ctx = SessionContext::default();
         let path = get_tpch_data_path()?;
-        let opt = RunOpt {
-            query: Some(query),
-            debug: false,
+        let common = CommonOpt {
             iterations: 1,
             partitions: 2,
             batch_size: 8192,
+        };
+        let opt = RunOpt {
+            query: Some(query),
+            debug: false,
+            common,
             path: PathBuf::from(path.to_string()),
             file_format: "tbl".to_string(),
             mem_table: false,

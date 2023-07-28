@@ -271,6 +271,14 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
             info!("Registering scalar tables");
             setup::register_scalar_tables(test_ctx.session_ctx()).await;
         }
+        "information_schema_table_types.slt" => {
+            info!("Registering local temporary table");
+            setup::register_temp_table(test_ctx.session_ctx()).await;
+        }
+        "information_schema_columns.slt" => {
+            info!("Registering table with many types");
+            setup::register_table_with_many_types(test_ctx.session_ctx()).await;
+        }
         "avro.slt" => {
             #[cfg(feature = "avro")]
             {

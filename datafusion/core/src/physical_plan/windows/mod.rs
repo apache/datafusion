@@ -539,7 +539,7 @@ mod tests {
 
         let my_count = create_udaf(
             "my_count",
-            DataType::Int64,
+            vec![DataType::Int64],
             Arc::new(DataType::Int64),
             Volatility::Immutable,
             Arc::new(|_| Ok(Box::new(MyCount(0)))),

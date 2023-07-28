@@ -232,7 +232,7 @@ fn cast_to_invalid_decimal_type_precision_lt_scale() {
 fn plan_create_table_with_pk() {
     let sql = "create table person (id int, name string, primary key(id))";
     let plan = r#"
-CreateMemoryTable: Bare { table: "person" } primary_key=[id]
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
   EmptyRelation
     "#
     .trim();
@@ -251,10 +251,9 @@ CreateMemoryTable: Bare { table: "person" }
 }
 
 #[test]
-#[should_panic(expected = "Non-primary unique constraints are not supported")]
 fn plan_create_table_check_constraint() {
     let sql = "create table person (id int, name string, unique(id))";
-    let plan = "";
+    let plan = "CreateMemoryTable: Bare { table: \"person\" } constraints=[Unique([0])]\n  EmptyRelation";
     quick_test(sql, plan);
 }
 
