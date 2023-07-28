@@ -24,7 +24,7 @@ use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::Array;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use arrow::compute;
@@ -78,6 +78,7 @@ impl AggregateExpr for FirstValue {
         Ok(Box::new(FirstValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
+            self.ordering_req.clone(),
         )?))
     }
 
@@ -134,6 +135,7 @@ impl AggregateExpr for FirstValue {
         Ok(Box::new(FirstValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
+            self.ordering_req.clone(),
         )?))
     }
 }
@@ -161,11 +163,17 @@ struct FirstValueAccumulator {
     // Stores ordering values, of the aggregator requirement corresponding to first value
     // of the aggregator. These values are used during merging of multiple partitions.
     orderings: Vec<ScalarValue>,
+    // Stores ordering requirement of the Accumulator
+    ordering_req: LexOrdering,
 }
 
 impl FirstValueAccumulator {
     /// Creates a new `FirstValueAccumulator` for the given `data_type`.
-    pub fn try_new(data_type: &DataType, ordering_dtypes: &[DataType]) -> Result<Self> {
+    pub fn try_new(
+        data_type: &DataType,
+        ordering_dtypes: &[DataType],
+        ordering_req: LexOrdering,
+    ) -> Result<Self> {
         let orderings = ordering_dtypes
             .iter()
             .map(ScalarValue::try_from)
@@ -174,6 +182,7 @@ impl FirstValueAccumulator {
             first: value,
             is_set: false,
             orderings,
+            ordering_req,
         })
     }
 }
@@ -211,18 +220,17 @@ impl Accumulator for FirstValueAccumulator {
         // This range corresponds to ordering values
         let filtered_orderings = states[1..is_set_idx]
             .iter()
-            .map(|state| compute::filter(state, flags).unwrap())
-            .collect::<Vec<_>>();
-        let sort_options = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
+            .map(|state| {
+                compute::filter(state, flags).map_err(|e| DataFusionError::ArrowError(e))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let sort_cols = filtered_orderings
             .iter()
-            .map(|item| SortColumn {
+            .zip(self.ordering_req.iter())
+            .map(|(item, sort_expr)| SortColumn {
                 values: item.clone(),
-                options: Some(sort_options.clone()),
+                options: Some(sort_expr.options),
             })
             .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_cols, None)?;
@@ -230,8 +238,11 @@ impl Accumulator for FirstValueAccumulator {
         let ordered_first_vals = compute::take(&filtered_first_vals, &indices, None)?;
         let orderings = filtered_orderings
             .iter()
-            .map(|item| compute::take(&filtered_first_vals, &indices, None).unwrap())
-            .collect::<Vec<_>>();
+            .map(|item| {
+                compute::take(&filtered_first_vals, &indices, None)
+                    .map_err(|e| DataFusionError::ArrowError(e))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let mut args = vec![];
         args.push(ordered_first_vals);
@@ -240,9 +251,13 @@ impl Accumulator for FirstValueAccumulator {
             let first_row = get_row_at_idx(&args, 0)?;
             let first_val = first_row[0].clone();
             let first_ordering = first_row[1..].to_vec();
+            let sort_options = self
+                .ordering_req
+                .iter()
+                .map(|sort_expr| sort_expr.options)
+                .collect::<Vec<_>>();
             if !self.is_set
-                || compare_rows(&first_ordering, &self.orderings, &[sort_options])?
-                    .is_lt()
+                || compare_rows(&first_ordering, &self.orderings, &sort_options)?.is_lt()
             {
                 self.first = first_val;
                 self.orderings = first_ordering;
@@ -307,6 +322,7 @@ impl AggregateExpr for LastValue {
         Ok(Box::new(LastValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
+            self.ordering_req.clone(),
         )?))
     }
 
@@ -363,6 +379,7 @@ impl AggregateExpr for LastValue {
         Ok(Box::new(LastValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
+            self.ordering_req.clone(),
         )?))
     }
 }
@@ -389,11 +406,17 @@ struct LastValueAccumulator {
     // occur due to empty partitions.
     is_set: bool,
     orderings: Vec<ScalarValue>,
+    // Stores ordering requirement of the Accumulator
+    ordering_req: LexOrdering,
 }
 
 impl LastValueAccumulator {
     /// Creates a new `LastValueAccumulator` for the given `data_type`.
-    pub fn try_new(data_type: &DataType, ordering_dtypes: &[DataType]) -> Result<Self> {
+    pub fn try_new(
+        data_type: &DataType,
+        ordering_dtypes: &[DataType],
+        ordering_req: LexOrdering,
+    ) -> Result<Self> {
         let orderings = ordering_dtypes
             .iter()
             .map(ScalarValue::try_from)
@@ -402,6 +425,7 @@ impl LastValueAccumulator {
             last: ScalarValue::try_from(data_type)?,
             is_set: false,
             orderings,
+            ordering_req,
         })
     }
 }
@@ -440,16 +464,13 @@ impl Accumulator for LastValueAccumulator {
             .iter()
             .map(|state| compute::filter(state, flags).unwrap())
             .collect::<Vec<_>>();
-        let sort_options = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
 
         let sort_cols = filtered_orderings
             .iter()
-            .map(|item| SortColumn {
+            .zip(self.ordering_req.iter())
+            .map(|(item, sort_expr)| SortColumn {
                 values: item.clone(),
-                options: Some(sort_options.clone()),
+                options: Some(sort_expr.options),
             })
             .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_cols, None)?;
@@ -468,8 +489,13 @@ impl Accumulator for LastValueAccumulator {
             let last_row = get_row_at_idx(&args, last_idx)?;
             let last_val = last_row[0].clone();
             let last_ordering = last_row[1..].to_vec();
+            let sort_options = self
+                .ordering_req
+                .iter()
+                .map(|item| item.options)
+                .collect::<Vec<_>>();
             if !self.is_set
-                || compare_rows(&last_ordering, &self.orderings, &[sort_options])?.is_gt()
+                || compare_rows(&last_ordering, &self.orderings, &sort_options)?.is_gt()
             {
                 self.last = last_val;
                 self.orderings = last_ordering;

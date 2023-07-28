@@ -1230,7 +1230,6 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use arrow::util::pretty::print_batches;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
@@ -1938,13 +1937,6 @@ mod tests {
         Ok(())
     }
 
-    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
-        let formatted = crate::physical_plan::displayable(plan.as_ref())
-            .indent(true)
-            .to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        println!("{:#?}", actual);
-    }
     #[tokio::test]
     async fn run_first_last_multi_partitions() -> Result<()> {
         for use_coalesce_batches in [false, true] {
@@ -2047,7 +2039,7 @@ mod tests {
             coalesce,
             schema,
         )?) as Arc<dyn ExecutionPlan>;
-        print_plan(&aggregate_final);
+
         let result = crate::physical_plan::collect(aggregate_final, task_ctx).await?;
         if is_first_acc {
             let expected = vec![
