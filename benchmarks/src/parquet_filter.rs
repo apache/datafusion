@@ -47,7 +47,6 @@ use structopt::StructOpt;
 ///
 /// Example output:
 ///
-/// ```
 /// Running benchmarks with the following options: Opt { debug: false, iterations: 3, partitions: 2, path: "./data", batch_size: 8192, scale_factor: 1.0 }
 /// Generated test dataset with 10699521 rows
 /// Executing with filter 'request_method = Utf8("GET")'
@@ -64,7 +63,6 @@ use structopt::StructOpt;
 /// Iteration 1 returned 1781686 rows in 1986 ms
 /// Iteration 2 returned 1781686 rows in 1947 ms
 /// ...
-/// ```
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(verbatim_doc_comment)]
 pub struct RunOpt {
