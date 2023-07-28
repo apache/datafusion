@@ -327,10 +327,10 @@ mod tests {
             iterations: 1,
             partitions: 2,
             batch_size: 8192,
+            debug: false,
         };
         let opt = RunOpt {
             query: Some(query),
-            debug: false,
             common,
             path: PathBuf::from(path.to_string()),
             file_format: "tbl".to_string(),
@@ -359,10 +359,10 @@ mod tests {
             iterations: 1,
             partitions: 2,
             batch_size: 8192,
+            debug: false,
         };
         let opt = RunOpt {
             query: Some(query),
-            debug: false,
             common,
             path: PathBuf::from(path.to_string()),
             file_format: "tbl".to_string(),
