@@ -552,14 +552,23 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         let expected =
             Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
+        let expected_ts = vec![
+            Arc::new(Int64Array::from(vec![0, 0, 0, 0, 1, 1, 1, 1, 2, 2])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef,
+        ];
 
-        let merged_vals = merge_ordered_arrays(
+        let (merged_vals, merged_ts) = merge_ordered_arrays(
             &[lhs_vals, rhs_vals],
             &[lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        let merged_ts = (0..merged_ts[0].len()).map(|col_idx| {
+            ScalarValue::iter_to_array((0..merged_ts.len()).map(|row_idx| merged_ts[row_idx][col_idx].clone()))
+        }).collect::<Result<Vec<_>>>()?;
+
         assert_eq!(&merged_vals, &expected);
+        assert_eq!(&merged_ts, &expected_ts);
 
         Ok(())
     }
@@ -606,15 +615,22 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         let expected =
             Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 1, 1, 2, 2])) as ArrayRef;
-
-        let merged_vals = merge_ordered_arrays(
+        let expected_ts = vec![
+            Arc::new(Int64Array::from(vec![2, 2, 1, 1, 1, 1, 0, 0, 0, 0])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![4, 4, 3, 3, 2, 2, 1, 1, 0, 0])) as ArrayRef,
+        ];
+        let (merged_vals, merged_ts) = merge_ordered_arrays(
             &[lhs_vals, rhs_vals],
             &[lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        let merged_ts = (0..merged_ts[0].len()).map(|col_idx| {
+            ScalarValue::iter_to_array((0..merged_ts.len()).map(|row_idx| merged_ts[row_idx][col_idx].clone()))
+        }).collect::<Result<Vec<_>>>()?;
 
         assert_eq!(&merged_vals, &expected);
+        assert_eq!(&merged_ts, &expected_ts);
         Ok(())
     }
 }
