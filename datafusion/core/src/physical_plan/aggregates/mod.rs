@@ -495,32 +495,25 @@ fn calc_required_input_ordering(
             let mut requirement =
                 PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
             for req in aggregator_requirement {
+                // Final and FinalPartitioned modes doesn't enforce requirement from aggregators.
+                // Ordering sensitive aggregators handles this case during merge.
                 if !matches!(mode, AggregateMode::Final | AggregateMode::FinalPartitioned)
                     && requirement.iter().all(|item| req.expr.ne(&item.expr))
                 {
                     requirement.push(req.clone());
                 }
-                // // In partial mode, append required ordering of the aggregator to the output ordering.
-                // // In case of multiple partitions, this enables us to reduce partitions correctly.
-                // if matches!(mode, AggregateMode::Partial)
-                //     && ordering.iter().all(|item| req.expr.ne(&item.expr))
-                // {
-                //     ordering.push(req.into());
-                // }
             }
             required_input_ordering = requirement;
         } else {
             // If there was no pre-existing output ordering, the output ordering is simply the required
             // ordering of the aggregator in partial mode.
+            // TODO: This may be unnecessary. Try to remove this.
             if matches!(mode, AggregateMode::Partial)
                 && !aggregator_requirement.is_empty()
             {
                 *aggregation_ordering = Some(AggregationOrdering {
                     mode: GroupByOrderMode::None,
                     order_indices: vec![],
-                    // ordering: PhysicalSortRequirement::to_sort_exprs(
-                    //     aggregator_requirement.clone(),
-                    // ),
                     ordering: vec![],
                 });
             }
@@ -1950,89 +1943,34 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         println!("{:#?}", actual);
     }
-
     #[tokio::test]
-    async fn first_last_multi_partitions() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let (schema, data) = some_data_v2();
-        let partition1 = data[0].clone();
-        let partition2 = data[1].clone();
-        let partition3 = data[2].clone();
-        let partition4 = data[3].clone();
-
-        let groups =
-            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
-
-        let ordering_req = vec![PhysicalSortExpr{expr:col("b", &schema)?, options: SortOptions::default()}];
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
-            // Arc::new(FirstValue::new(
-            //     col("b", &schema)?,
-            //     "FIRST_VALUE(b)".to_string(),
-            //     DataType::Float64,
-            //     ordering_req.clone(),
-            //     vec![DataType::Float64]
-            // )),
-            Arc::new(LastValue::new(
-            col("b", &schema)?,
-            "LAST_VALUE(b)".to_string(),
-            DataType::Float64,
-            ordering_req.clone(),
-            vec![DataType::Float64]
-        )),
-        ];
-        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
-
-        let memory_exec = Arc::new(MemoryExec::try_new(&vec![vec![partition1], vec![partition2], vec![partition3], vec![partition4]], schema.clone(), None)?);
-        let refs = blocking_exec.refs();
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            groups.clone(),
-            aggregates.clone(),
-            vec![None],
-            vec![Some(ordering_req.clone())],
-            memory_exec,
-            schema.clone(),
-        )?);
-
-        let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
-        let coalesce = Arc::new(CoalesceBatchesExec::new(coalesce, 1024));
-        let aggregate_final = Arc::new(AggregateExec::try_new(
-            AggregateMode::Final,
-            groups,
-            aggregates.clone(),
-            vec![None],
-            vec![Some(ordering_req)],
-            coalesce,
-            schema,
-        )?) as Arc<dyn ExecutionPlan>;
-        print_plan(&aggregate_final);
-        let result = crate::physical_plan::collect(aggregate_final, task_ctx).await?;
-        // let expected = vec![
-        //     "+---+----------------+",
-        //     "| a | FIRST_VALUE(b) |",
-        //     "+---+----------------+",
-        //     "| 2 | 0.0            |",
-        //     "| 3 | 1.0            |",
-        //     "| 4 | 3.0            |",
-        //     "+---+----------------+",
-        // ];
-        let expected = vec![
-            "+---+---------------+",
-            "| a | LAST_VALUE(b) |",
-            "+---+---------------+",
-            "| 2 | 3.0           |",
-            "| 3 | 5.0           |",
-            "| 4 | 6.0           |",
-            "+---+---------------+",
-        ];
-        assert_batches_eq!(expected, &result);
+    async fn run_first_last_multi_partitions() -> Result<()> {
+        for use_coalesce_batches in [false, true]{
+            for is_first_acc in [false, true]{
+                first_last_multi_partitions(use_coalesce_batches, is_first_acc).await?
+            }
+        }
         Ok(())
     }
 
-    #[tokio::test]
-    async fn first_last_multi_partitions2() -> Result<()> {
+    // This function construct either physical plan below,
+    //
+    // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
+    // "  CoalesceBatchesExec: target_batch_size=1024",
+    // "    CoalescePartitionsExec",
+    // "      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
+    // "        MemoryExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
+    //
+    // or
+    //
+    // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
+    // "  CoalescePartitionsExec",
+    // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
+    // "      MemoryExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
+    //
+    // and checks whether merge_batch for FIRST_VALUE AND LAST_VALUE
+    // works correctly.
+    async fn first_last_multi_partitions(use_coalesce_batches: bool, is_first_acc: bool) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
@@ -2046,22 +1984,27 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
         let ordering_req = vec![PhysicalSortExpr{expr:col("b", &schema)?, options: SortOptions::default()}];
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
-        //     Arc::new(FirstValue::new(
-        //     col("b", &schema)?,
-        //     "FIRST_VALUE(b)".to_string(),
-        //     DataType::Float64,
-        //     ordering_req.clone(),
-        //     vec![DataType::Float64]
-        // )),
-        Arc::new(LastValue::new(
-            col("b", &schema)?,
-            "LAST_VALUE(b)".to_string(),
-            DataType::Float64,
-            ordering_req.clone(),
-            vec![DataType::Float64]
-        )),
-        ];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = if is_first_acc{
+            vec![
+                Arc::new(FirstValue::new(
+                    col("b", &schema)?,
+                    "FIRST_VALUE(b)".to_string(),
+                    DataType::Float64,
+                    ordering_req.clone(),
+                    vec![DataType::Float64]
+                )),
+            ]
+        } else {
+            vec![
+                Arc::new(LastValue::new(
+                    col("b", &schema)?,
+                    "LAST_VALUE(b)".to_string(),
+                    DataType::Float64,
+                    ordering_req.clone(),
+                    vec![DataType::Float64]
+                )),
+            ]
+        };
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
 
         let memory_exec = Arc::new(MemoryExec::try_new(&vec![vec![partition1], vec![partition2], vec![partition3], vec![partition4]], schema.clone(), None)?);
@@ -2075,8 +2018,12 @@ mod tests {
             memory_exec,
             schema.clone(),
         )?);
-
-        let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
+        let coalesce = if use_coalesce_batches{
+            let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
+            Arc::new(CoalesceBatchesExec::new(coalesce, 1024)) as Arc<dyn ExecutionPlan>
+        } else{
+            Arc::new(CoalescePartitionsExec::new(aggregate_exec)) as Arc<dyn ExecutionPlan>
+        };
         let aggregate_final = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             groups,
@@ -2088,25 +2035,29 @@ mod tests {
         )?) as Arc<dyn ExecutionPlan>;
         print_plan(&aggregate_final);
         let result = crate::physical_plan::collect(aggregate_final, task_ctx).await?;
-        // let expected = vec![
-        //     "+---+----------------+",
-        //     "| a | FIRST_VALUE(b) |",
-        //     "+---+----------------+",
-        //     "| 2 | 0.0            |",
-        //     "| 3 | 1.0            |",
-        //     "| 4 | 3.0            |",
-        //     "+---+----------------+",
-        // ];
-        let expected = vec![
-            "+---+---------------+",
-            "| a | LAST_VALUE(b) |",
-            "+---+---------------+",
-            "| 2 | 3.0           |",
-            "| 3 | 5.0           |",
-            "| 4 | 6.0           |",
-            "+---+---------------+",
-        ];
-        assert_batches_eq!(expected, &result);
+        if is_first_acc {
+            let expected = vec![
+            "+---+----------------+",
+            "| a | FIRST_VALUE(b) |",
+            "+---+----------------+",
+            "| 2 | 0.0            |",
+            "| 3 | 1.0            |",
+            "| 4 | 3.0            |",
+            "+---+----------------+",
+            ];
+            assert_batches_eq!(expected, &result);
+        } else {
+            let expected = vec![
+                "+---+---------------+",
+                "| a | LAST_VALUE(b) |",
+                "+---+---------------+",
+                "| 2 | 3.0           |",
+                "| 3 | 5.0           |",
+                "| 4 | 6.0           |",
+                "+---+---------------+",
+            ];
+            assert_batches_eq!(expected, &result);
+        };
         Ok(())
     }
 
