@@ -222,8 +222,13 @@ impl Accumulator for FirstValueAccumulator {
         let sort_cols =
             convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
-        let indices = lexsort_to_indices(&sort_cols, None)?;
-        let ordered_states = get_arrayref_at_indices(&filtered_states, &indices)?;
+        let ordered_states = if sort_cols.is_empty() {
+            // When nno ordering is given, use existing state as is
+            filtered_states
+        } else {
+            let indices = lexsort_to_indices(&sort_cols, None)?;
+            get_arrayref_at_indices(&filtered_states, &indices)?
+        };
         if !ordered_states[0].is_empty() {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
             let first_ordering = &first_row[1..];
@@ -435,8 +440,13 @@ impl Accumulator for LastValueAccumulator {
         let sort_cols =
             convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
-        let indices = lexsort_to_indices(&sort_cols, None)?;
-        let ordered_states = get_arrayref_at_indices(&filtered_states, &indices)?;
+        let ordered_states = if sort_cols.is_empty() {
+            // When nno ordering is given, use existing state as is
+            filtered_states
+        } else {
+            let indices = lexsort_to_indices(&sort_cols, None)?;
+            get_arrayref_at_indices(&filtered_states, &indices)?
+        };
 
         if !ordered_states[0].is_empty() {
             let last_idx = ordered_states[0].len() - 1;
