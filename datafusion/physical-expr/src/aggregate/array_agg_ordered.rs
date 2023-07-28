@@ -195,9 +195,6 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        for (idx, state) in states.iter().enumerate() {
-            println!("idx:{:?}, state: {:?}", idx, state);
-        }
         // First entry in the state is the aggregation result.
         let array_agg_values = &states[0];
         // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.

@@ -28,12 +28,12 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use arrow::compute;
+use arrow::compute::{lexsort_to_indices, SortColumn};
 use arrow_array::cast::AsArray;
+use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use std::any::Any;
 use std::sync::Arc;
-use arrow::compute::{lexsort_to_indices, SortColumn};
-use arrow_schema::SortOptions;
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug)]
@@ -208,14 +208,29 @@ impl Accumulator for FirstValueAccumulator {
             filtered_first_vals.push(compute::filter(state, flags)?)
         }
         let filtered_first_vals = compute::filter(&states[0], flags)?;
-        let filtered_orderings = states[2..].iter().map(|state| compute::filter(state, flags).unwrap()).collect::<Vec<_>>();
-        let sort_options = SortOptions{descending: false, nulls_first: false};
+        let filtered_orderings = states[2..]
+            .iter()
+            .map(|state| compute::filter(state, flags).unwrap())
+            .collect::<Vec<_>>();
+        let sort_options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
 
-        let sort_cols = filtered_orderings.iter().map(|item| SortColumn{values: item.clone(), options: Some(sort_options.clone())}).collect::<Vec<_>>();
+        let sort_cols = filtered_orderings
+            .iter()
+            .map(|item| SortColumn {
+                values: item.clone(),
+                options: Some(sort_options.clone()),
+            })
+            .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_cols, None)?;
 
         let ordered_first_vals = compute::take(&filtered_first_vals, &indices, None)?;
-        let orderings = filtered_orderings.iter().map(|item| compute::take(&filtered_first_vals, &indices, None).unwrap()).collect::<Vec<_>>();
+        let orderings = filtered_orderings
+            .iter()
+            .map(|item| compute::take(&filtered_first_vals, &indices, None).unwrap())
+            .collect::<Vec<_>>();
 
         let mut args = vec![];
         args.push(ordered_first_vals);
@@ -224,7 +239,10 @@ impl Accumulator for FirstValueAccumulator {
             let first_row = get_row_at_idx(&args, 0)?;
             let first_val = first_row[0].clone();
             let first_ordering = first_row[1..].to_vec();
-            if !self.is_set || compare_rows(&first_ordering, &self.orderings, &[sort_options])?.is_lt() {
+            if !self.is_set
+                || compare_rows(&first_ordering, &self.orderings, &[sort_options])?
+                    .is_lt()
+            {
                 self.first = first_val;
                 self.orderings = first_ordering;
                 self.is_set = true;
@@ -426,14 +444,29 @@ impl Accumulator for LastValueAccumulator {
             filtered_first_vals.push(compute::filter(state, flags)?)
         }
         let filtered_first_vals = compute::filter(&states[0], flags)?;
-        let filtered_orderings = states[2..].iter().map(|state| compute::filter(state, flags).unwrap()).collect::<Vec<_>>();
-        let sort_options = SortOptions{descending: false, nulls_first: false};
+        let filtered_orderings = states[2..]
+            .iter()
+            .map(|state| compute::filter(state, flags).unwrap())
+            .collect::<Vec<_>>();
+        let sort_options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
 
-        let sort_cols = filtered_orderings.iter().map(|item| SortColumn{values: item.clone(), options: Some(sort_options.clone())}).collect::<Vec<_>>();
+        let sort_cols = filtered_orderings
+            .iter()
+            .map(|item| SortColumn {
+                values: item.clone(),
+                options: Some(sort_options.clone()),
+            })
+            .collect::<Vec<_>>();
         let indices = lexsort_to_indices(&sort_cols, None)?;
 
         let ordered_first_vals = compute::take(&filtered_first_vals, &indices, None)?;
-        let orderings = filtered_orderings.iter().map(|item| compute::take(&filtered_first_vals, &indices, None).unwrap()).collect::<Vec<_>>();
+        let orderings = filtered_orderings
+            .iter()
+            .map(|item| compute::take(&filtered_first_vals, &indices, None).unwrap())
+            .collect::<Vec<_>>();
 
         let mut args = vec![];
         args.push(ordered_first_vals);
@@ -443,14 +476,15 @@ impl Accumulator for LastValueAccumulator {
             let last_row = get_row_at_idx(&args, last_idx)?;
             let last_val = last_row[0].clone();
             let last_ordering = last_row[1..].to_vec();
-            if !self.is_set || compare_rows(&last_ordering, &self.orderings, &[sort_options])?.is_gt() {
+            if !self.is_set
+                || compare_rows(&last_ordering, &self.orderings, &[sort_options])?.is_gt()
+            {
                 self.last = last_val;
                 self.orderings = last_ordering;
                 self.is_set = true;
             }
         }
         Ok(())
-
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -502,5 +536,4 @@ mod tests {
         assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(12)));
         Ok(())
     }
-
 }
