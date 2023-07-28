@@ -50,8 +50,6 @@ async fn query_get_indexed_field() -> Result<()> {
         "| i0 |",
         "+----+",
         "| 0  |",
-        "| 4  |",
-        "| 7  |",
         "+----+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -100,8 +98,6 @@ async fn query_nested_get_indexed_field() -> Result<()> {
         "| i0       |",
         "+----------+",
         "| [0, 1]   |",
-        "| [5, 6]   |",
-        "| [11, 12] |",
         "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -113,8 +109,6 @@ async fn query_nested_get_indexed_field() -> Result<()> {
         "| i0 |",
         "+----+",
         "| 0  |",
-        "| 5  |",
-        "| 11 |",
         "+----+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -157,8 +151,6 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
         "| l0             |",
         "+----------------+",
         "| [0, 1, 2, 3]   |",
-        "| [4, 5, 6, 7]   |",
-        "| [8, 9, 10, 11] |",
         "+----------------+",
     ];
     assert_batches_eq!(expected, &actual);

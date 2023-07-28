@@ -508,29 +508,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let (key, extra_key) = match expr.clone() {
             SQLExpr::JsonAccess {
                 left,
-                operator,
+                operator: JsonOperator::Colon,
                 right,
-            } => match operator {
-                JsonOperator::Colon => {
-                    let left = self.sql_expr_to_logical_expr(
-                        *left.clone(),
-                        schema,
-                        planner_context,
-                    )?;
-                    let right = self.sql_expr_to_logical_expr(
-                        *right.clone(),
-                        schema,
-                        planner_context,
-                    )?;
-                    (left, Some(Box::new(right)))
-                }
-                _ => (
-                    self.sql_expr_to_logical_expr(expr.clone(), schema, planner_context)?,
-                    None,
-                ),
-            },
+            } => {
+                let left =
+                    self.sql_expr_to_logical_expr(*left, schema, planner_context)?;
+                let right =
+                    self.sql_expr_to_logical_expr(*right, schema, planner_context)?;
+                (left, Some(Box::new(right)))
+            }
             _ => (
-                self.sql_expr_to_logical_expr(expr.clone(), schema, planner_context)?,
+                self.sql_expr_to_logical_expr(expr, schema, planner_context)?,
                 None,
             ),
         };
