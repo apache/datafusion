@@ -330,7 +330,6 @@ impl futures::Stream for ObservedStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let poll = self.inner.poll_next_unpin(cx);
-        println!("poll:{:?}", poll);
         self.baseline_metrics.record_poll(poll)
     }
 }

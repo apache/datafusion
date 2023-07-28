@@ -563,9 +563,14 @@ mod tests {
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
-        let merged_ts = (0..merged_ts[0].len()).map(|col_idx| {
-            ScalarValue::iter_to_array((0..merged_ts.len()).map(|row_idx| merged_ts[row_idx][col_idx].clone()))
-        }).collect::<Result<Vec<_>>>()?;
+        let merged_ts = (0..merged_ts[0].len())
+            .map(|col_idx| {
+                ScalarValue::iter_to_array(
+                    (0..merged_ts.len())
+                        .map(|row_idx| merged_ts[row_idx][col_idx].clone()),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         assert_eq!(&merged_vals, &expected);
         assert_eq!(&merged_ts, &expected_ts);
@@ -625,9 +630,14 @@ mod tests {
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
-        let merged_ts = (0..merged_ts[0].len()).map(|col_idx| {
-            ScalarValue::iter_to_array((0..merged_ts.len()).map(|row_idx| merged_ts[row_idx][col_idx].clone()))
-        }).collect::<Result<Vec<_>>>()?;
+        let merged_ts = (0..merged_ts[0].len())
+            .map(|col_idx| {
+                ScalarValue::iter_to_array(
+                    (0..merged_ts.len())
+                        .map(|row_idx| merged_ts[row_idx][col_idx].clone()),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         assert_eq!(&merged_vals, &expected);
         assert_eq!(&merged_ts, &expected_ts);

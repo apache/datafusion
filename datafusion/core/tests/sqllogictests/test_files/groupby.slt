@@ -2161,6 +2161,21 @@ CREATE TABLE sales_global (zip_code INT,
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
           (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)
 
+# create a new table named exchange rates
+statement ok
+CREATE TABLE exchange_rates (
+    sn INTEGER,
+    ts TIMESTAMP,
+    currency_from VARCHAR(3),
+    currency_to VARCHAR(3),
+    rate DECIMAL(10,2)
+) as VALUES
+    (0, '2022-01-01 06:00:00'::timestamp, 'EUR', 'USD', 1.10),
+    (1, '2022-01-01 08:00:00'::timestamp, 'TRY', 'USD', 0.10),
+    (2, '2022-01-01 11:30:00'::timestamp, 'EUR', 'USD', 1.12),
+    (3, '2022-01-02 12:00:00'::timestamp, 'TRY', 'USD', 0.11),
+    (4, '2022-01-03 10:00:00'::timestamp, 'EUR', 'USD', 1.12)
+
 # test_ordering_sensitive_aggregation
 # ordering sensitive requirement should add a SortExec in the final plan. To satisfy amount ASC
 # in the aggregation
@@ -2843,3 +2858,23 @@ SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
 FRA [200.0, 50.0] 50 50
 GRC [80.0, 30.0] 30 30
 TUR [100.0, 75.0] 75 75
+
+# make sure that query below runs in multi partitions
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+query ?
+SELECT ARRAY_AGG(e.rate ORDER BY e.sn)
+FROM sales_global AS s
+JOIN exchange_rates AS e
+ON s.currency = e.currency_from AND
+   e.currency_to = 'USD' AND
+   s.ts >= e.ts
+GROUP BY s.sn
+ORDER BY s.sn;
+----
+[1.10]
+[1.10]
+[0.10]
+[1.10, 1.12]
+[1.10, 0.10, 1.12, 0.11, 1.12]

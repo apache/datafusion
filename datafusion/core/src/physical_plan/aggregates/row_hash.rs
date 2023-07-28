@@ -305,7 +305,6 @@ impl Stream for GroupedHashAggregateStream {
             let exec_state = self.exec_state.clone();
             match exec_state {
                 ExecutionState::ReadingInput => {
-                    // println!("self.mode:{:?}, reading input", self.mode);
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
                         Some(Ok(batch)) => {
@@ -324,8 +323,6 @@ impl Stream for GroupedHashAggregateStream {
                             timer.done();
                         }
                         Some(Err(e)) => {
-                            // println!("inner had an error");
-                            // println!("self.mode:{:?}, reading input", self.mode);
                             // inner had error, return to caller
                             return Poll::Ready(Some(Err(e)));
                         }
@@ -342,7 +339,6 @@ impl Stream for GroupedHashAggregateStream {
                 }
 
                 ExecutionState::ProducingOutput(batch) => {
-                    // println!("self.mode:{:?}, ProducingOutput", self.mode);
                     // slice off a part of the batch, if needed
                     let output_batch = if batch.num_rows() <= self.batch_size {
                         if self.input_done {
@@ -378,7 +374,6 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
     fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        // println!("self.mode: {:?}", self.mode);
         // Evaluate the grouping expressions
         let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
 

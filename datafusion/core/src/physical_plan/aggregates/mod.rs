@@ -342,9 +342,6 @@ fn calc_aggregation_ordering(
                 options: input_col.options,
             })
             .collect::<Vec<_>>();
-        // println!("out_ordering:{:?}", out_ordering);
-        // println!("existing_ordering:{:?}", existing_ordering);
-        // println!("order_indices:{:?}", order_indices);
         AggregationOrdering {
             mode,
             order_indices,
@@ -590,8 +587,6 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        // println!("order_by_expr:{:?}", order_by_expr);
-        // println!("mode: {:?}", mode);
         let schema = create_schema(
             &input.schema(),
             &group_by.expr,
@@ -599,9 +594,6 @@ impl AggregateExec {
             group_by.contains_null(),
             mode,
         )?;
-        // println!("group_expr: {:?}", group_expr);
-        // println!("input_schema fields names: {:?}", input.schema().fields().iter().map(|item| item.name()).collect::<Vec<_>>());
-        // println!("schema.fields names:():{:?}", schema.fields().iter().map(|item| item.name()).collect::<Vec<_>>());
 
         let schema = Arc::new(schema);
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
@@ -663,11 +655,6 @@ impl AggregateExec {
         }
 
         let mut aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
-        // println!("-----------------");
-        // println!("input.output_ordering(): {:?}", input.output_ordering());
-        // println!("mode: {:?}", mode);
-        // println!("aggregation_ordering: {:?}", aggregation_ordering);
-        // println!("aggr_expr: {:?}", aggr_expr);
         let required_input_ordering = calc_required_input_ordering(
             &input,
             &mut aggr_expr,
@@ -677,9 +664,6 @@ impl AggregateExec {
             &mut aggregation_ordering,
             &mode,
         )?;
-        // println!("aggr_expr: {:?}", aggr_expr);
-        // println!("required_input_ordering:{:?}", required_input_ordering);
-        // println!("-----------------");
 
         Ok(AggregateExec {
             mode,
@@ -742,7 +726,6 @@ impl AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
-        // println!("self.mode: {:?}", self.mode);
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
