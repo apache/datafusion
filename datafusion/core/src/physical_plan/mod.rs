@@ -32,7 +32,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
-pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use futures::stream::{Stream, TryStreamExt};
@@ -55,7 +54,7 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
     fn schema(&self) -> SchemaRef;
 }
 
-/// Trait for a stream of record batches.
+/// Trait for a [`Stream`] of [`RecordBatch`]es
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream

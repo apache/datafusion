@@ -502,7 +502,11 @@ scalar_expr!(
 scalar_expr!(Degrees, degrees, num, "converts radians to degrees");
 scalar_expr!(Radians, radians, num, "converts degrees to radians");
 nary_scalar_expr!(Round, round, "round to nearest integer");
-scalar_expr!(Trunc, trunc, num, "truncate toward zero");
+nary_scalar_expr!(
+    Trunc,
+    trunc,
+    "truncate toward zero, with optional precision"
+);
 scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
@@ -532,10 +536,22 @@ scalar_expr!(
 );
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
-    ArrayContains,
-    array_contains,
+    ArrayHas,
+    array_has,
     first_array second_array,
-    "returns true, if each element of the second array appearing in the first array, otherwise false."
+"Returns true, if the element appears in the first array, otherwise false."
+);
+scalar_expr!(
+    ArrayHasAll,
+    array_has_all,
+    first_array second_array,
+"Returns true if each element of the second array appears in the first array; otherwise, it returns false."
+);
+scalar_expr!(
+    ArrayHasAny,
+    array_has_any,
+    first_array second_array,
+"Returns true if at least one element of the second array appears in the first array; otherwise, it returns false."
 );
 scalar_expr!(
     ArrayDims,
@@ -589,13 +605,37 @@ scalar_expr!(
     ArrayRemove,
     array_remove,
     array element,
-    "removes all elements equal to the given value from the array."
+    "removes the first element from the array equal to the given value."
+);
+scalar_expr!(
+    ArrayRemoveN,
+    array_remove_n,
+    array element max,
+    "removes the first `max` elements from the array equal to the given value."
+);
+scalar_expr!(
+    ArrayRemoveAll,
+    array_remove_all,
+    array element,
+    "removes all elements from the array equal to the given value."
 );
 scalar_expr!(
     ArrayReplace,
     array_replace,
     array from to,
-    "replaces a specified element with another specified element."
+    "replaces the first occurrence of the specified element with another specified element."
+);
+scalar_expr!(
+    ArrayReplaceN,
+    array_replace_n,
+    array from to max,
+    "replaces the first `max` occurrences of the specified element with another specified element."
+);
+scalar_expr!(
+    ArrayReplaceAll,
+    array_replace_all,
+    array from to,
+    "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
     ArraySlice,
@@ -797,7 +837,7 @@ pub fn create_udf(
 /// The signature and state type must match the `Accumulator's implementation`.
 pub fn create_udaf(
     name: &str,
-    input_type: DataType,
+    input_type: Vec<DataType>,
     return_type: Arc<DataType>,
     volatility: Volatility,
     accumulator: AccumulatorFactoryFunction,
@@ -807,7 +847,7 @@ pub fn create_udaf(
     let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
     AggregateUDF::new(
         name,
-        &Signature::exact(vec![input_type], volatility),
+        &Signature::exact(input_type, volatility),
         &return_type,
         &accumulator,
         &state_type,
@@ -941,7 +981,8 @@ mod test {
         test_unary_scalar_expr!(Radians, radians);
         test_nary_scalar_expr!(Round, round, input);
         test_nary_scalar_expr!(Round, round, input, decimal_places);
-        test_unary_scalar_expr!(Trunc, trunc);
+        test_nary_scalar_expr!(Trunc, trunc, num);
+        test_nary_scalar_expr!(Trunc, trunc, num, precision);
         test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);
         test_unary_scalar_expr!(Exp, exp);
@@ -1021,7 +1062,11 @@ mod test {
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
+        test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
+        test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
         test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
+        test_scalar_expr!(ArrayReplaceN, array_replace_n, array, from, to, max);
+        test_scalar_expr!(ArrayReplaceAll, array_replace_all, array, from, to);
         test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);

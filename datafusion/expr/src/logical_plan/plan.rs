@@ -30,24 +30,25 @@ use crate::utils::{
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
 };
+
+use super::DdlStatement;
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    OwnedTableReference, Result, ScalarValue,
+    aggregate_functional_dependencies, plan_err, Column, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
 };
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
-use super::DdlStatement;
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -82,7 +83,7 @@ pub enum LogicalPlan {
     Join(Join),
     /// Apply Cross Join to two logical plans
     CrossJoin(CrossJoin),
-    /// Repartition the plan based on a partitioning scheme.
+    /// Repartition the plan based on a partitioning scheme
     Repartition(Repartition),
     /// Union multiple inputs
     Union(Union),
@@ -482,7 +483,38 @@ impl LogicalPlan {
     }
 
     pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
-        from_plan(self, &self.expressions(), inputs)
+        // with_new_inputs use original expression,
+        // so we don't need to recompute Schema.
+        match &self {
+            LogicalPlan::Projection(projection) => {
+                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                    projection.expr.to_vec(),
+                    Arc::new(inputs[0].clone()),
+                    projection.schema.clone(),
+                )?))
+            }
+            LogicalPlan::Window(Window {
+                window_expr,
+                schema,
+                ..
+            }) => Ok(LogicalPlan::Window(Window {
+                input: Arc::new(inputs[0].clone()),
+                window_expr: window_expr.to_vec(),
+                schema: schema.clone(),
+            })),
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                aggr_expr,
+                schema,
+                ..
+            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                Arc::new(inputs[0].clone()),
+                group_expr.to_vec(),
+                aggr_expr.to_vec(),
+                schema.clone(),
+            )?)),
+            _ => from_plan(self, &self.expressions(), inputs),
+        }
     }
 
     /// Convert a prepared [`LogicalPlan`] into its inner logical plan
@@ -1269,6 +1301,11 @@ impl Projection {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
+        // Update functional dependencies of `input` according to projection
+        // expressions:
+        let id_key_groups = calc_func_dependencies_for_project(&expr, &input)?;
+        let schema = schema.as_ref().clone();
+        let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
         Ok(Self {
             expr,
             input,
@@ -1288,13 +1325,6 @@ impl Projection {
             expr,
             input,
             schema,
-        }
-    }
-
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Projection> {
-        match plan {
-            LogicalPlan::Projection(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Projection!"),
         }
     }
 }
@@ -1319,8 +1349,13 @@ impl SubqueryAlias {
     ) -> Result<Self> {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
-        let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
+        // Since schema is the same, other than qualifier, we can use existing
+        // functional dependencies:
+        let func_dependencies = plan.schema().functional_dependencies().clone();
+        let schema = DFSchemaRef::new(
+            DFSchema::try_from_qualified_schema(&alias, &schema)?
+                .with_functional_dependencies(func_dependencies),
+        );
         Ok(SubqueryAlias {
             input: Arc::new(plan),
             alias,
@@ -1375,13 +1410,6 @@ impl Filter {
 
         Ok(Self { predicate, input })
     }
-
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Filter> {
-        match plan {
-            LogicalPlan::Filter(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Filter!"),
-        }
-    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
@@ -1403,10 +1431,18 @@ impl Window {
             .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
         let metadata = input.schema().metadata().clone();
 
+        // Update functional dependencies for window:
+        let mut window_func_dependencies =
+            input.schema().functional_dependencies().clone();
+        window_func_dependencies.extend_target_indices(window_fields.len());
+
         Ok(Window {
             input,
             window_expr,
-            schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata)?),
+            schema: Arc::new(
+                DFSchema::new_with_metadata(window_fields, metadata)?
+                    .with_functional_dependencies(window_func_dependencies),
+            ),
         })
     }
 }
@@ -1593,10 +1629,12 @@ impl Aggregate {
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
+
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
         )?;
+
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 
@@ -1625,6 +1663,13 @@ impl Aggregate {
                 schema.fields().len()
             )));
         }
+
+        let aggregate_func_dependencies =
+            calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
+        let new_schema = schema.as_ref().clone();
+        let schema = Arc::new(
+            new_schema.with_functional_dependencies(aggregate_func_dependencies),
+        );
         Ok(Self {
             input,
             group_expr,
@@ -1632,13 +1677,71 @@ impl Aggregate {
             schema,
         })
     }
+}
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Aggregate> {
-        match plan {
-            LogicalPlan::Aggregate(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Aggregate!"),
-        }
+/// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
+fn contains_grouping_set(group_expr: &[Expr]) -> bool {
+    group_expr
+        .iter()
+        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+}
+
+/// Calculates functional dependencies for aggregate expressions.
+fn calc_func_dependencies_for_aggregate(
+    // Expressions in the GROUP BY clause:
+    group_expr: &[Expr],
+    // Input plan of the aggregate:
+    input: &LogicalPlan,
+    // Aggregate schema
+    aggr_schema: &DFSchema,
+) -> Result<FunctionalDependencies> {
+    // We can do a case analysis on how to propagate functional dependencies based on
+    // whether the GROUP BY in question contains a grouping set expression:
+    // - If so, the functional dependencies will be empty because we cannot guarantee
+    //   that GROUP BY expression results will be unique.
+    // - Otherwise, it may be possible to propagate functional dependencies.
+    if !contains_grouping_set(group_expr) {
+        let group_by_expr_names = group_expr
+            .iter()
+            .map(|item| item.display_name())
+            .collect::<Result<Vec<_>>>()?;
+        let aggregate_func_dependencies = aggregate_functional_dependencies(
+            input.schema(),
+            &group_by_expr_names,
+            aggr_schema,
+        );
+        Ok(aggregate_func_dependencies)
+    } else {
+        Ok(FunctionalDependencies::empty())
     }
+}
+
+/// This function projects functional dependencies of the `input` plan according
+/// to projection expressions `exprs`.
+fn calc_func_dependencies_for_project(
+    exprs: &[Expr],
+    input: &LogicalPlan,
+) -> Result<FunctionalDependencies> {
+    let input_fields = input.schema().fields();
+    // Calculate expression indices (if present) in the input schema.
+    let proj_indices = exprs
+        .iter()
+        .filter_map(|expr| {
+            let expr_name = match expr {
+                Expr::Alias(alias) => {
+                    format!("{}", alias.expr)
+                }
+                _ => format!("{}", expr),
+            };
+            input_fields
+                .iter()
+                .position(|item| item.qualified_name() == expr_name)
+        })
+        .collect::<Vec<_>>();
+    Ok(input
+        .schema()
+        .functional_dependencies()
+        .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
 /// Sorts its input according to a list of sort expressions.

@@ -292,7 +292,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Negative(_)
             | Expr::Between { .. }
             | Expr::Like { .. }
-            | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
             | Expr::Case(_)
             | Expr::Cast { .. }
@@ -1166,21 +1165,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 pattern,
                 negated,
                 escape_char: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
-                ) =>
-            {
-                lit(!negated)
-            }
-
-            // Rules for ILike
-            Expr::ILike(Like {
-                expr,
-                pattern,
-                negated,
-                escape_char: _,
+                case_insensitive: _,
             }) if !is_null(&expr)
                 && matches!(
                     pattern.as_ref(),
@@ -2612,6 +2597,7 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: false,
         })
     }
 
@@ -2621,24 +2607,27 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: false,
         })
     }
 
     fn ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::ILike(Like {
+        Expr::Like(Like {
             negated: false,
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: true,
         })
     }
 
     fn not_ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::ILike(Like {
+        Expr::Like(Like {
             negated: true,
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: true,
         })
     }
 

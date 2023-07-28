@@ -430,15 +430,11 @@ select '1 month'::interval + '1980-01-01T12:00:00'::timestamp;
 ----
 1980-02-01T12:00:00
 
-query D
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
 select '1 month'::interval - '1980-01-01'::date;
-----
-1979-12-01
 
-query P
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
 select '1 month'::interval - '1980-01-01T12:00:00'::timestamp;
-----
-1979-12-01T12:00:00
 
 # interval (array) + date / timestamp (array)
 query D
@@ -456,19 +452,11 @@ select i + ts from t;
 2000-02-01T00:01:00
 
 # expected error interval (array) - date / timestamp (array)
-query D
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
 select i - d from t;
-----
-1979-12-01
-1990-09-30
-1980-01-02
 
-query P
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
 select i - ts from t;
-----
-1999-12-01T00:00:00
-1999-12-31T12:11:10
-2000-01-31T23:59:00
 
 
 # interval (scalar) + date / timestamp (array)
@@ -487,19 +475,11 @@ select '1 month'::interval + ts from t;
 2000-03-01T00:00:00
 
 # expected error interval (scalar) - date / timestamp (array)
-query D
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
 select '1 month'::interval - d from t;
-----
-1979-12-01
-1990-09-01
-1979-12-02
 
-query P
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
 select '1 month'::interval - ts from t;
-----
-1999-12-01T00:00:00
-1999-12-01T12:11:10
-2000-01-01T00:00:00
 
 # interval + date
 query D

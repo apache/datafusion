@@ -61,6 +61,8 @@ pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
 pub struct CsvFormat {
     has_header: bool,
     delimiter: u8,
+    quote: u8,
+    escape: Option<u8>,
     schema_infer_max_rec: Option<usize>,
     file_compression_type: FileCompressionType,
 }
@@ -71,6 +73,8 @@ impl Default for CsvFormat {
             schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
             has_header: true,
             delimiter: b',',
+            quote: b'"',
+            escape: None,
             file_compression_type: FileCompressionType::UNCOMPRESSED,
         }
     }
@@ -159,6 +163,20 @@ impl CsvFormat {
         self
     }
 
+    /// The quote character in a row.
+    /// - default to '"'
+    pub fn with_quote(mut self, quote: u8) -> Self {
+        self.quote = quote;
+        self
+    }
+
+    /// The escape character in a row.
+    /// - default is None
+    pub fn with_escape(mut self, escape: Option<u8>) -> Self {
+        self.escape = escape;
+        self
+    }
+
     /// Set a `FileCompressionType` of CSV
     /// - defaults to `FileCompressionType::UNCOMPRESSED`
     pub fn with_file_compression_type(
@@ -172,6 +190,16 @@ impl CsvFormat {
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
+    }
+
+    /// The quote character.
+    pub fn quote(&self) -> u8 {
+        self.quote
+    }
+
+    /// The escape character.
+    pub fn escape(&self) -> Option<u8> {
+        self.escape
     }
 }
 
@@ -227,6 +255,8 @@ impl FileFormat for CsvFormat {
             conf,
             self.has_header,
             self.delimiter,
+            self.quote,
+            self.escape,
             self.file_compression_type.to_owned(),
         );
         Ok(Arc::new(exec))
