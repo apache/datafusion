@@ -95,9 +95,6 @@ pub enum AggregateMode {
 /// previous combinations are guaranteed never to appear again
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupByOrderMode {
-    /// The input is not (known to be) ordered by any of the
-    /// expressions in the GROUP BY clause.
-    None,
     /// The input is known to be ordered by a preset (prefix but
     /// possibly reordered) of the expressions in the `GROUP BY` clause.
     ///

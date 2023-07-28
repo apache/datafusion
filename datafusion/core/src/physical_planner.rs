@@ -719,6 +719,9 @@ impl DefaultPhysicalPlanner {
                         && session_state.config().target_partitions() > 1
                         && session_state.config().repartition_aggregations();
 
+                    // Some aggregators may be modified, during initialization for optimization
+                    // such as FIRST_VALUE may be turn into LAST_VALUE with reverse ordering requirement.
+                    // To reflect this change to subsequent stages, use updated aggr_expr and order by expr.
                     let updated_aggregates = initial_aggr.aggr_expr.clone();
                     let updated_order_bys = initial_aggr.order_by_expr.clone();
 
