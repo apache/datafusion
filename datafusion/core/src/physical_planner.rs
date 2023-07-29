@@ -69,7 +69,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -296,37 +296,20 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             expr,
             pattern,
             escape_char,
+            case_insensitive,
         }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
+            let op_name = if *case_insensitive { "ILIKE" } else { "LIKE" };
             let escape = if let Some(char) = escape_char {
                 format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{expr} NOT LIKE {pattern}{escape}"))
+                Ok(format!("{expr} NOT {op_name} {pattern}{escape}"))
             } else {
-                Ok(format!("{expr} LIKE {pattern}{escape}"))
-            }
-        }
-        Expr::ILike(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        }) => {
-            let expr = create_physical_name(expr, false)?;
-            let pattern = create_physical_name(pattern, false)?;
-            let escape = if let Some(char) = escape_char {
-                format!("CHAR '{char}'")
-            } else {
-                "".to_string()
-            };
-            if *negated {
-                Ok(format!("{expr} NOT ILIKE {pattern}{escape}"))
-            } else {
-                Ok(format!("{expr} ILIKE {pattern}{escape}"))
+                Ok(format!("{expr} {op_name} {pattern}{escape}"))
             }
         }
         Expr::SimilarTo(Like {
@@ -334,6 +317,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             expr,
             pattern,
             escape_char,
+            case_insensitive: _,
         }) => {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
@@ -958,10 +942,9 @@ impl DefaultPhysicalPlanner {
                                 })
                                 .collect::<Vec<_>>();
                             let projection =
-                                logical_plan::Projection::try_new_with_schema(
+                                Projection::try_new(
                                     final_join_result,
                                     Arc::new(join_plan),
-                                    join_schema.clone(),
                                 )?;
                             LogicalPlan::Projection(projection)
                         } else {
@@ -2203,7 +2186,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: {} } }\
-        ], metadata: {} }, \
+        ], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
@@ -2427,6 +2410,7 @@ mod tests {
             );
         }
     }
+
     struct ErrorExtensionPlanner {}
 
     #[async_trait]

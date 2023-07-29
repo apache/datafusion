@@ -39,14 +39,10 @@ use datafusion_expr::Accumulator;
 use std::collections::HashSet;
 
 use crate::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::compute::{bit_and, bit_or, bit_xor};
-use datafusion_row::accessor::RowAccessor;
 
 /// Creates a [`PrimitiveGroupsAccumulator`] with the specified
 /// [`ArrowPrimitiveType`] that initailizes each accumulator to $START
@@ -123,82 +119,6 @@ fn bit_xor_batch(values: &ArrayRef) -> Result<ScalarValue> {
     bit_and_or_xor_batch!(values, bit_xor)
 }
 
-// bit_and/bit_or/bit_xor of two scalar values.
-macro_rules! typed_bit_and_or_xor_v2 {
-    ($INDEX:ident, $ACC:ident, $SCALAR:expr, $TYPE:ident, $OP:ident) => {{
-        paste::item! {
-            match $SCALAR {
-                None => {}
-                Some(v) => $ACC.[<$OP _ $TYPE>]($INDEX, *v as $TYPE)
-            }
-        }
-    }};
-}
-
-macro_rules! bit_and_or_xor_v2 {
-    ($INDEX:ident, $ACC:ident, $SCALAR:expr, $OP:ident) => {{
-        Ok(match $SCALAR {
-            ScalarValue::UInt64(rhs) => {
-                typed_bit_and_or_xor_v2!($INDEX, $ACC, rhs, u64, $OP)
-            }
-            ScalarValue::UInt32(rhs) => {
-                typed_bit_and_or_xor_v2!($INDEX, $ACC, rhs, u32, $OP)
-            }
-            ScalarValue::UInt16(rhs) => {
-                typed_bit_and_or_xor_v2!($INDEX, $ACC, rhs, u16, $OP)
-            }
-            ScalarValue::UInt8(rhs) => {
-                typed_bit_and_or_xor_v2!($INDEX, $ACC, rhs, u8, $OP)
-            }
-            ScalarValue::Int64(rhs) => {
-                typed_bit_and_or_xor_v2!($INDEX, $ACC, rhs, i64, $OP)
-            }
-            ScalarValue::Int32(rhs) => {
-                typed_bit_and_or_xor_v2!($INDEX, $ACC, rhs, i32, $OP)
-            }
-            ScalarValue::Int16(rhs) => {
-                typed_bit_and_or_xor_v2!($INDEX, $ACC, rhs, i16, $OP)
-            }
-            ScalarValue::Int8(rhs) => {
-                typed_bit_and_or_xor_v2!($INDEX, $ACC, rhs, i8, $OP)
-            }
-            ScalarValue::Null => {
-                // do nothing
-            }
-            e => {
-                return Err(DataFusionError::Internal(format!(
-                    "BIT AND/BIT OR/BIT XOR is not expected to receive scalars of incompatible types {:?}",
-                    e
-                )))
-            }
-        })
-    }};
-}
-
-pub fn bit_and_row(
-    index: usize,
-    accessor: &mut RowAccessor,
-    s: &ScalarValue,
-) -> Result<()> {
-    bit_and_or_xor_v2!(index, accessor, s, bitand)
-}
-
-pub fn bit_or_row(
-    index: usize,
-    accessor: &mut RowAccessor,
-    s: &ScalarValue,
-) -> Result<()> {
-    bit_and_or_xor_v2!(index, accessor, s, bitor)
-}
-
-pub fn bit_xor_row(
-    index: usize,
-    accessor: &mut RowAccessor,
-    s: &ScalarValue,
-) -> Result<()> {
-    bit_and_or_xor_v2!(index, accessor, s, bitxor)
-}
-
 /// BIT_AND aggregate expression
 #[derive(Debug, Clone)]
 pub struct BitAnd {
@@ -256,20 +176,6 @@ impl AggregateExpr for BitAnd {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn row_accumulator_supported(&self) -> bool {
-        is_row_accumulator_support_dtype(&self.data_type)
-    }
-
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BitAndRowAccumulator::new(
-            start_index,
-            self.data_type.clone(),
-        )))
     }
 
     fn groups_accumulator_supported(&self) -> bool {
@@ -378,64 +284,6 @@ impl Accumulator for BitAndAccumulator {
     }
 }
 
-#[derive(Debug)]
-struct BitAndRowAccumulator {
-    index: usize,
-    datatype: DataType,
-}
-
-impl BitAndRowAccumulator {
-    pub fn new(index: usize, datatype: DataType) -> Self {
-        Self { index, datatype }
-    }
-}
-
-impl RowAccumulator for BitAndRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let values = &values[0];
-        let delta = &bit_and_batch(values)?;
-        bit_and_row(self.index, accessor, delta)
-    }
-
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let value = &values[0];
-        bit_and_row(self.index, accessor, value)
-    }
-
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bit_and_row(self.index, accessor, value)
-    }
-
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        self.update_batch(states, accessor)
-    }
-
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&self.datatype, self.index))
-    }
-
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.index
-    }
-}
-
 /// BIT_OR aggregate expression
 #[derive(Debug, Clone)]
 pub struct BitOr {
@@ -493,20 +341,6 @@ impl AggregateExpr for BitOr {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn row_accumulator_supported(&self) -> bool {
-        is_row_accumulator_support_dtype(&self.data_type)
-    }
-
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BitOrRowAccumulator::new(
-            start_index,
-            self.data_type.clone(),
-        )))
     }
 
     fn groups_accumulator_supported(&self) -> bool {
@@ -608,65 +442,6 @@ impl Accumulator for BitOrAccumulator {
     }
 }
 
-#[derive(Debug)]
-struct BitOrRowAccumulator {
-    index: usize,
-    datatype: DataType,
-}
-
-impl BitOrRowAccumulator {
-    pub fn new(index: usize, datatype: DataType) -> Self {
-        Self { index, datatype }
-    }
-}
-
-impl RowAccumulator for BitOrRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let values = &values[0];
-        let delta = &bit_or_batch(values)?;
-        bit_or_row(self.index, accessor, delta)?;
-        Ok(())
-    }
-
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let value = &values[0];
-        bit_or_row(self.index, accessor, value)
-    }
-
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bit_or_row(self.index, accessor, value)
-    }
-
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        self.update_batch(states, accessor)
-    }
-
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&self.datatype, self.index))
-    }
-
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.index
-    }
-}
-
 /// BIT_XOR aggregate expression
 #[derive(Debug, Clone)]
 pub struct BitXor {
@@ -724,20 +499,6 @@ impl AggregateExpr for BitXor {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn row_accumulator_supported(&self) -> bool {
-        is_row_accumulator_support_dtype(&self.data_type)
-    }
-
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BitXorRowAccumulator::new(
-            start_index,
-            self.data_type.clone(),
-        )))
     }
 
     fn groups_accumulator_supported(&self) -> bool {
@@ -836,65 +597,6 @@ impl Accumulator for BitXorAccumulator {
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.bit_xor)
             + self.bit_xor.size()
-    }
-}
-
-#[derive(Debug)]
-struct BitXorRowAccumulator {
-    index: usize,
-    datatype: DataType,
-}
-
-impl BitXorRowAccumulator {
-    pub fn new(index: usize, datatype: DataType) -> Self {
-        Self { index, datatype }
-    }
-}
-
-impl RowAccumulator for BitXorRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let values = &values[0];
-        let delta = &bit_xor_batch(values)?;
-        bit_xor_row(self.index, accessor, delta)?;
-        Ok(())
-    }
-
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let value = &values[0];
-        bit_xor_row(self.index, accessor, value)
-    }
-
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bit_xor_row(self.index, accessor, value)
-    }
-
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        self.update_batch(states, accessor)
-    }
-
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&self.datatype, self.index))
-    }
-
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.index
     }
 }
 

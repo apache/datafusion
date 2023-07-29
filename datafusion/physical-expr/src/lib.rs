@@ -46,8 +46,9 @@ pub mod utils;
 pub mod var_provider;
 pub mod window;
 
-// reexport this to maintain compatibility with anything that used from_slice previously
-pub use aggregate::groups_accumulator::{GroupsAccumulator, GroupsAccumulatorAdapter};
+pub use aggregate::groups_accumulator::{
+    EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
+};
 pub use aggregate::AggregateExpr;
 
 pub use equivalence::{
@@ -55,7 +56,9 @@ pub use equivalence::{
     EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
-pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
+pub use physical_expr::{
+    analyze, AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef,
+};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{

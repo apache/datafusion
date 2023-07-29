@@ -17,6 +17,7 @@
 
 use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::{DataFusionError, Result};
 use std::ops::Deref;
@@ -360,6 +361,12 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
             let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal128(new_precision, *scale))
         }
+        DataType::Decimal256(precision, scale) => {
+            // in the spark, the result type is DECIMAL(min(38,precision+10), s)
+            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
+            let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
+            Ok(DataType::Decimal256(new_precision, *scale))
+        }
         DataType::Dictionary(_, dict_value_type) => {
             sum_return_type(dict_value_type.as_ref())
         }
@@ -423,6 +430,13 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
             let new_scale = DECIMAL128_MAX_SCALE.min(*scale + 4);
             Ok(DataType::Decimal128(new_precision, new_scale))
         }
+        DataType::Decimal256(precision, scale) => {
+            // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
+            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
+            let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 4);
+            let new_scale = DECIMAL256_MAX_SCALE.min(*scale + 4);
+            Ok(DataType::Decimal256(new_precision, new_scale))
+        }
         arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
         DataType::Dictionary(_, dict_value_type) => {
             avg_return_type(dict_value_type.as_ref())
@@ -440,6 +454,11 @@ pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
             // in the spark, the sum type of avg is DECIMAL(min(38,precision+10), s)
             let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal128(new_precision, *scale))
+        }
+        DataType::Decimal256(precision, scale) => {
+            // in Spark the sum type of avg is DECIMAL(min(38,precision+10), s)
+            let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
+            Ok(DataType::Decimal256(new_precision, *scale))
         }
         arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
         DataType::Dictionary(_, dict_value_type) => {
@@ -467,7 +486,7 @@ pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
         _ => matches!(
             arg_type,
             arg_type if NUMERICS.contains(arg_type)
-            || matches!(arg_type, DataType::Decimal128(_, _))
+            || matches!(arg_type, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
         ),
     }
 }
@@ -480,7 +499,7 @@ pub fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
         _ => matches!(
             arg_type,
             arg_type if NUMERICS.contains(arg_type)
-                || matches!(arg_type, DataType::Decimal128(_, _))
+                || matches!(arg_type, DataType::Decimal128(_, _)| DataType::Decimal256(_, _))
         ),
     }
 }
@@ -579,6 +598,7 @@ mod tests {
         let input_types = vec![
             vec![DataType::Int32],
             vec![DataType::Decimal128(10, 2)],
+            vec![DataType::Decimal256(1, 1)],
             vec![DataType::Utf8],
         ];
         for fun in funs {
@@ -594,6 +614,7 @@ mod tests {
             vec![DataType::Int32],
             vec![DataType::Float32],
             vec![DataType::Decimal128(20, 3)],
+            vec![DataType::Decimal256(20, 3)],
         ];
         for fun in funs {
             for input_type in &input_types {

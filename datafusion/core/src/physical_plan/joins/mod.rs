@@ -31,6 +31,9 @@ mod sort_merge_join;
 mod symmetric_hash_join;
 pub mod utils;
 
+#[cfg(test)]
+pub mod test_utils;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Partitioning mode to use for hash join
 pub enum PartitionMode {

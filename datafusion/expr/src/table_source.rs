@@ -18,8 +18,10 @@
 //! Table source
 
 use crate::{Expr, LogicalPlan};
+
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Result;
+use datafusion_common::{Constraints, Result};
+
 use std::any::Any;
 
 /// Indicates whether and how a filter expression can be handled by a
@@ -63,6 +65,11 @@ pub trait TableSource: Sync + Send {
 
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
+
+    /// Get primary key indices, if one exists.
+    fn constraints(&self) -> Option<&Constraints> {
+        None
+    }
 
     /// Get the type of this table for metadata/catalog purposes.
     fn table_type(&self) -> TableType {

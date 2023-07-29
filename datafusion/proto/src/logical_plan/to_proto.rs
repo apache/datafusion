@@ -526,31 +526,34 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive,
             }) => {
-                let pb = Box::new(protobuf::LikeNode {
-                    negated: *negated,
-                    expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
-                });
-                Self {
-                    expr_type: Some(ExprType::Like(pb)),
-                }
-            }
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => {
-                let pb = Box::new(protobuf::ILikeNode {
-                    negated: *negated,
-                    expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
-                });
-                Self {
-                    expr_type: Some(ExprType::Ilike(pb)),
+                if *case_insensitive {
+                    let pb = Box::new(protobuf::ILikeNode {
+                        negated: *negated,
+                        expr: Some(Box::new(expr.as_ref().try_into()?)),
+                        pattern: Some(Box::new(pattern.as_ref().try_into()?)),
+                        escape_char: escape_char
+                            .map(|ch| ch.to_string())
+                            .unwrap_or_default(),
+                    });
+
+                    Self {
+                        expr_type: Some(ExprType::Ilike(pb)),
+                    }
+                } else {
+                    let pb = Box::new(protobuf::LikeNode {
+                        negated: *negated,
+                        expr: Some(Box::new(expr.as_ref().try_into()?)),
+                        pattern: Some(Box::new(pattern.as_ref().try_into()?)),
+                        escape_char: escape_char
+                            .map(|ch| ch.to_string())
+                            .unwrap_or_default(),
+                    });
+
+                    Self {
+                        expr_type: Some(ExprType::Like(pb)),
+                    }
                 }
             }
             Expr::SimilarTo(Like {
@@ -558,6 +561,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 expr,
                 pattern,
                 escape_char,
+                case_insensitive: _,
             }) => {
                 let pb = Box::new(protobuf::SimilarToNode {
                     negated: *negated,
@@ -1144,6 +1148,24 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     )),
                 }),
             },
+            ScalarValue::Decimal256(val, p, s) => match *val {
+                Some(v) => {
+                    let array = v.to_be_bytes();
+                    let vec_val: Vec<u8> = array.to_vec();
+                    Ok(protobuf::ScalarValue {
+                        value: Some(Value::Decimal256Value(protobuf::Decimal256 {
+                            value: vec_val,
+                            p: *p as i64,
+                            s: *s as i64,
+                        })),
+                    })
+                }
+                None => Ok(protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::NullValue(
+                        (&data_type).try_into()?,
+                    )),
+                }),
+            },
             ScalarValue::Date64(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::Date64Value(*s))
             }
@@ -1378,7 +1400,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
-            BuiltinScalarFunction::ArrayContains => Self::ArrayContains,
+            BuiltinScalarFunction::ArrayHasAll => Self::ArrayHasAll,
+            BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
+            BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
             BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
             BuiltinScalarFunction::ArrayFill => Self::ArrayFill,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
@@ -1387,7 +1411,11 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
             BuiltinScalarFunction::ArrayPrepend => Self::ArrayPrepend,
             BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
+            BuiltinScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
+            BuiltinScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
             BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
+            BuiltinScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
+            BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
             BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
