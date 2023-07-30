@@ -558,3 +558,28 @@ jobs:
           # If you encounter an error, run './dev/update_config_docs.sh' and commit
           ./dev/update_config_docs.sh
           git diff --exit-code
+
+  # Verify MSRV for the crates which are directly used by other projects.
+  msrv:
+    name: Verify MSRV
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Install cargo-msrv
+        run: cargo install cargo-msrv
+      - name: Check datafusion
+        working-directory: datafusion/core
+        run: cargo msrv verify
+      - name: Check datafusion-substrait
+        working-directory: datafusion/substrait
+        run: cargo msrv verify
+      - name: Check datafusion-proto
+        working-directory: datafusion/proto
+        run: cargo msrv verify
+      - name: Check datafusion-cli
+        working-directory: datafusion-cli
+        run: cargo msrv verify
