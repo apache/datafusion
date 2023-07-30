@@ -26,6 +26,7 @@ use crate::{
     },
     print_options::PrintOptions,
 };
+use datafusion::sql::parser::DFParser;
 use datafusion::{
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
@@ -192,17 +193,20 @@ async fn exec_and_print(
     let now = Instant::now();
 
     let sql = unescape_input(&sql)?;
-    let plan = ctx.state().create_logical_plan(&sql).await?;
-    let df = match &plan {
-        LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-            create_external_table(ctx, cmd).await?;
-            ctx.execute_logical_plan(plan).await?
-        }
-        _ => ctx.execute_logical_plan(plan).await?,
-    };
+    let statements = DFParser::parse_sql(&sql)?;
+    for statement in statements {
+        let plan = ctx.state().statement_to_plan(statement).await?;
+        let df = match &plan {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
+                create_external_table(ctx, cmd).await?;
+                ctx.execute_logical_plan(plan).await?
+            }
+            _ => ctx.execute_logical_plan(plan).await?,
+        };
 
-    let results = df.collect().await?;
-    print_options.print_batches(&results, now)?;
+        let results = df.collect().await?;
+        print_options.print_batches(&results, now)?;
+    }
 
     Ok(())
 }
