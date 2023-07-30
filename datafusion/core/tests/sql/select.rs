@@ -179,8 +179,6 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
         "| i0 |",
         "+----+",
         "| 0  |",
-        "| 4  |",
-        "| 8  |",
         "+----+",
     ];
     assert_batches_eq!(expected, &actual);

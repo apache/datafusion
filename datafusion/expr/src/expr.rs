@@ -116,6 +116,7 @@ pub enum Expr {
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
     /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
+    ///
     GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
     Between(Between),
@@ -358,7 +359,8 @@ impl ScalarUDF {
     }
 }
 
-/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
+/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by `key`.
+/// If `extra_key` is not `None`, returns the slice of a [`arrow::array::ListArray`] in the range from `key` to `extra_key`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct GetIndexedField {
     /// the expression to take the field from

@@ -20,7 +20,7 @@
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result};
 
-/// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
+/// Returns the field access indexed by `key` and/or `extra_key` from a [`DataType::List`] or [`DataType::Struct`]
 /// # Error
 /// Errors if
 /// * the `data_type` is not a Struct or a List,
