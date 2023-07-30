@@ -714,21 +714,21 @@ query TT
 explain SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
 ----
 logical_plan
-Projection: t1.t1_id, __scalar_sq_1.COUNT(*) AS COUNT(*)
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(*) END AS COUNT(*)
 --Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
 ----SubqueryAlias: __scalar_sq_1
-------Projection: COUNT(*), t2.t2_int
---------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+------Projection: COUNT(*), t2.t2_int, __always_true
+--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
 ----
 11 1
-22 NULL
+22 0
 33 3
-44 NULL
+44 0
 
 
 #correlated_scalar_subquery_count_agg2
@@ -736,63 +736,63 @@ query TT
 explain SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
 ----
 logical_plan
-Projection: t1.t1_id, __scalar_sq_1.COUNT(*) AS cnt
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(*) END AS cnt
 --Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
 ----SubqueryAlias: __scalar_sq_1
-------Projection: COUNT(*), t2.t2_int
---------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+------Projection: COUNT(*), t2.t2_int, __always_true
+--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
 ----
 11 1
-22 NULL
+22 0
 33 3
-44 NULL
+44 0
 
 #correlated_scalar_subquery_count_agg_with_alias
 query TT
 explain SELECT t1_id, (SELECT count(*) as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
 ----
 logical_plan
-Projection: t1.t1_id, __scalar_sq_1._cnt AS cnt
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) AS _cnt ELSE __scalar_sq_1._cnt END AS cnt
 --Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
 ----SubqueryAlias: __scalar_sq_1
-------Projection: COUNT(*) AS _cnt, t2.t2_int
---------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+------Projection: COUNT(*) AS _cnt, t2.t2_int, __always_true
+--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
 ----
 11 1
-22 NULL
+22 0
 33 3
-44 NULL
+44 0
 
 #correlated_scalar_subquery_count_agg_complex_expr
 query TT
 explain SELECT t1_id, (SELECT count(*) + 2 as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
 ----
 logical_plan
-Projection: t1.t1_id, __scalar_sq_1._cnt AS _cnt
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) AS _cnt ELSE __scalar_sq_1._cnt END AS _cnt
 --Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
 ----SubqueryAlias: __scalar_sq_1
-------Projection: COUNT(*) + Int64(2) AS _cnt, t2.t2_int
---------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+------Projection: COUNT(*) + Int64(2) AS _cnt, t2.t2_int, __always_true
+--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) + 2 as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
 ----
 11 3
-22 NULL
+22 2
 33 5
-44 NULL
+44 2
 
 #correlated_scalar_subquery_count_agg_where_clause
 query TT
@@ -800,17 +800,20 @@ explain select t1.t1_int from t1 where (select count(*) from t2 where t1.t1_id =
 ----
 logical_plan
 Projection: t1.t1_int
---Inner Join: t1.t1_id = __scalar_sq_1.t2_id Filter: __scalar_sq_1.COUNT(*) < CAST(t1.t1_int AS Int64)
-----TableScan: t1 projection=[t1_id, t1_int]
-----SubqueryAlias: __scalar_sq_1
-------Projection: COUNT(*), t2.t2_id
---------Aggregate: groupBy=[[t2.t2_id]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-----------TableScan: t2 projection=[t2_id]
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(*) END < CAST(t1.t1_int AS Int64)
+----Projection: t1.t1_int, __scalar_sq_1.COUNT(*), __scalar_sq_1.__always_true
+------Left Join: t1.t1_id = __scalar_sq_1.t2_id
+--------TableScan: t1 projection=[t1_id, t1_int]
+--------SubqueryAlias: __scalar_sq_1
+----------Projection: COUNT(*), t2.t2_id, __always_true
+------------Aggregate: groupBy=[[t2.t2_id, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--------------TableScan: t2 projection=[t2_id]
 
 query I rowsort
 select t1.t1_int from t1 where (select count(*) from t2 where t1.t1_id = t2.t2_id) < t1.t1_int
 ----
 2
+3
 4
 
 #correlated_scalar_subquery_count_agg_with_having
@@ -825,8 +828,9 @@ Projection: t1.t1_id, __scalar_sq_1.cnt_plus_2 AS cnt_plus_2
 ----SubqueryAlias: __scalar_sq_1
 ------Projection: COUNT(*) + Int64(2) AS cnt_plus_2, t2.t2_int
 --------Filter: COUNT(*) > Int64(1)
-----------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-------------TableScan: t2 projection=[t2_int]
+----------Projection: t2.t2_int, COUNT(*)
+------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--------------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) >1) from t1
@@ -842,22 +846,21 @@ query TT
 explain SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
 ----
 logical_plan
-Projection: t1.t1_id, __scalar_sq_1.cnt_plus_2 AS cnt_plus_2
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) AS cnt_plus_2 WHEN __scalar_sq_1.COUNT(*) != Int64(0) THEN NULL ELSE __scalar_sq_1.cnt_plus_2 END AS cnt_plus_2
 --Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
 ----SubqueryAlias: __scalar_sq_1
-------Projection: COUNT(*) + Int64(2) AS cnt_plus_2, t2.t2_int
---------Filter: COUNT(*) = Int64(0)
-----------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-------------TableScan: t2 projection=[t2_int]
+------Projection: COUNT(*) + Int64(2) AS cnt_plus_2, t2.t2_int, COUNT(*), __always_true
+--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+----------TableScan: t2 projection=[t2_int]
 
 query II rowsort
 SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
 ----
 11 NULL
-22 NULL
+22 2
 33 NULL
-44 NULL
+44 2
 
 #correlated_scalar_subquery_count_agg_in_having
 query TT
@@ -865,18 +868,21 @@ explain select t1.t1_int from t1 group by t1.t1_int having (select count(*) from
 ----
 logical_plan
 Projection: t1.t1_int
---Inner Join: t1.t1_int = __scalar_sq_1.t2_int
-----Aggregate: groupBy=[[t1.t1_int]], aggr=[[]]
-------TableScan: t1 projection=[t1_int]
-----SubqueryAlias: __scalar_sq_1
-------Projection: t2.t2_int
---------Filter: COUNT(*) = Int64(0)
-----------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-------------TableScan: t2 projection=[t2_int]
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(*) END = Int64(0)
+----Projection: t1.t1_int, __scalar_sq_1.COUNT(*), __scalar_sq_1.__always_true
+------Left Join: t1.t1_int = __scalar_sq_1.t2_int
+--------Aggregate: groupBy=[[t1.t1_int]], aggr=[[]]
+----------TableScan: t1 projection=[t1_int]
+--------SubqueryAlias: __scalar_sq_1
+----------Projection: COUNT(*), t2.t2_int, __always_true
+------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--------------TableScan: t2 projection=[t2_int]
 
 query I rowsort
 select t1.t1_int from t1 group by t1.t1_int having (select count(*) from t2 where t1.t1_int = t2.t2_int) = 0
 ----
+2
+4
 
 #correlated_scalar_subquery_count_agg_in_nested_projection
 query TT
@@ -884,18 +890,21 @@ explain select t1.t1_int from t1 where (select cnt from (select count(*) as cnt,
 ----
 logical_plan
 Projection: t1.t1_int
---Inner Join: t1.t1_int = __scalar_sq_1.t2_int
-----TableScan: t1 projection=[t1_int]
-----SubqueryAlias: __scalar_sq_1
-------Projection: t2.t2_int
---------Filter: COUNT(*) = Int64(0)
-----------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-------------TableScan: t2 projection=[t2_int]
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.cnt END = Int64(0)
+----Projection: t1.t1_int, __scalar_sq_1.cnt, __scalar_sq_1.__always_true
+------Left Join: t1.t1_int = __scalar_sq_1.t2_int
+--------TableScan: t1 projection=[t1_int]
+--------SubqueryAlias: __scalar_sq_1
+----------Projection: COUNT(*) AS cnt, t2.t2_int, __always_true
+------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--------------TableScan: t2 projection=[t2_int]
 
 
 query I rowsort
 select t1.t1_int from t1 where (select cnt from (select count(*) as cnt, sum(t2_int) from t2 where t1.t1_int = t2.t2_int)) = 0
 ----
+2
+4
 
 #correlated_scalar_subquery_count_agg_in_nested_subquery
 #pull up the deeply nested having condition
@@ -911,13 +920,14 @@ select t1.t1_int from t1 where (
 ----
 logical_plan
 Projection: t1.t1_int
---Inner Join: t1.t1_int = __scalar_sq_1.t2_int
-----TableScan: t1 projection=[t1_int]
-----SubqueryAlias: __scalar_sq_1
-------Projection: t2.t2_int
---------Filter: COUNT(*) + Int64(1) + Int64(1) = Int64(2) AND COUNT(*) = Int64(0)
-----------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-------------TableScan: t2 projection=[t2_int]
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.COUNT(*) != Int64(0) THEN NULL ELSE __scalar_sq_1.cnt_plus_two END = Int64(2)
+----Projection: t1.t1_int, __scalar_sq_1.cnt_plus_two, __scalar_sq_1.COUNT(*), __scalar_sq_1.__always_true
+------Left Join: t1.t1_int = __scalar_sq_1.t2_int
+--------TableScan: t1 projection=[t1_int]
+--------SubqueryAlias: __scalar_sq_1
+----------Projection: COUNT(*) + Int64(1) + Int64(1) AS cnt_plus_two, t2.t2_int, COUNT(*), __always_true
+------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--------------TableScan: t2 projection=[t2_int]
 
 query I rowsort
 select t1.t1_int from t1 where (
@@ -928,6 +938,8 @@ select t1.t1_int from t1 where (
     )
 ) = 2
 ----
+2
+4
 
 #correlated_scalar_subquery_count_agg_in_case_when
 query TT
@@ -937,19 +949,22 @@ select t1.t1_int from t1 where
 ----
 logical_plan
 Projection: t1.t1_int
---Inner Join: t1.t1_int = __scalar_sq_1.t2_int
-----TableScan: t1 projection=[t1_int]
-----SubqueryAlias: __scalar_sq_1
-------Projection: t2.t2_int
---------Filter: CASE WHEN COUNT(*) = Int64(1) THEN Int64(NULL) ELSE COUNT(*) END = Int64(0)
-----------Aggregate: groupBy=[[t2.t2_int]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
-------------TableScan: t2 projection=[t2_int]
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.cnt END = Int64(0)
+----Projection: t1.t1_int, __scalar_sq_1.cnt, __scalar_sq_1.__always_true
+------Left Join: t1.t1_int = __scalar_sq_1.t2_int
+--------TableScan: t1 projection=[t1_int]
+--------SubqueryAlias: __scalar_sq_1
+----------Projection: CASE WHEN COUNT(*) = Int64(1) THEN Int64(NULL) ELSE COUNT(*) END AS cnt, t2.t2_int, __always_true
+------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
+--------------TableScan: t2 projection=[t2_int]
 
 
 query I rowsort
 select t1.t1_int from t1 where
        (select case when count(*) = 1 then null else count(*) end as cnt from t2 where t2.t2_int = t1.t1_int) = 0
 ----
+2
+4
 
 query B rowsort
 select t1_int > (select avg(t1_int) from t1) from t1
