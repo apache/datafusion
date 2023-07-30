@@ -260,9 +260,6 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
         ));
     }
 
-    println!("args: {:?}", args);
-    println!("data_type: {:?}", data_type);
-
     let res = match data_type {
         DataType::List(..) => {
             let arrays =
@@ -271,61 +268,30 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
             // Assume number of rows is the same for all arrays
             let row_count = arrays[0].len();
 
-            if row_count == 1 {
-                let len = arrays.iter().map(|arr| arr.len() as i32).sum();
-                let capacity = Capacities::Array(
-                    arrays.iter().map(|a| a.get_array_memory_size()).sum(),
-                );
-                let array_data: Vec<_> =
-                    arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-                let array_data = array_data.iter().collect();
-                let mut mutable =
-                    MutableArrayData::with_capacities(array_data, false, capacity);
+            let capacity = Capacities::Array(arrays.iter().map(|a| a.len()).sum());
+            let array_data = arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+            let array_data = array_data.iter().collect();
+            let mut mutable =
+                MutableArrayData::with_capacities(array_data, true, capacity);
 
-                // Copy over all the child data
-                for (i, a) in arrays.iter().enumerate() {
-                    mutable.extend(i, 0, a.len())
+            for i in 0..row_count {
+                for (j, _) in arrays.iter().enumerate() {
+                    mutable.extend(j, i, i + 1);
                 }
-
-                let list_data_type =
-                    DataType::List(Arc::new(Field::new("item", data_type, true)));
-
-                let list_data = ArrayData::builder(list_data_type)
-                    .len(1)
-                    .add_buffer(Buffer::from_slice_ref([0, len]))
-                    .add_child_data(mutable.freeze())
-                    .build()
-                    .unwrap();
-                Arc::new(ListArray::from(list_data))
-            } else {
-                println!("row_count: {:?}", row_count);
-
-                println!("arrays: {:?}", arrays);
-
-                let capacity = Capacities::Array(arrays.iter().map(|a| a.len()).sum());
-                let array_data = arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-                let array_data = array_data.iter().collect();
-                let mut mutable =
-                    MutableArrayData::with_capacities(array_data, true, capacity);
-                let mut array_lens = vec![0; row_count];
-
-                for (i, array_len) in array_lens.iter_mut().enumerate().take(row_count) {
-                    for (j, a) in arrays.iter().enumerate() {
-                        println!("i: {:?}, j: {:?}", i, j);
-                        mutable.extend(j, i, i + 1);
-                    }
-                }
-                let list_data_type =
-                    DataType::List(Arc::new(Field::new("item", data_type, true)));
-                let offsets: Vec<i32> = (0..row_count as i32 + 1).collect();
-                
-                let list_data = ArrayData::builder(list_data_type)
-                    .len(row_count)
-                    .buffers(vec![Buffer::from_vec(offsets)])
-                    .add_child_data(mutable.freeze())
-                    .build()?;
-                Arc::new(ListArray::from(list_data))
             }
+            let list_data_type =
+                DataType::List(Arc::new(Field::new("item", data_type, true)));
+
+            let offsets: Vec<i32> = (0..row_count as i32 + 1)
+                .map(|i| i * arrays.len() as i32)
+                .collect();
+
+            let list_data = ArrayData::builder(list_data_type)
+                .len(row_count)
+                .buffers(vec![Buffer::from_vec(offsets)])
+                .add_child_data(mutable.freeze())
+                .build()?;
+            Arc::new(ListArray::from(list_data))
         }
         DataType::Utf8 => array!(args, StringArray, StringBuilder),
         DataType::LargeUtf8 => array!(args, LargeStringArray, LargeStringBuilder),
@@ -385,8 +351,16 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 /// `make_array` SQL function
-pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    array(values)
+pub fn make_array(arrays: &[ArrayRef]) -> Result<ArrayRef> {
+    let values: Vec<ColumnarValue> = arrays
+        .iter()
+        .map(|x| ColumnarValue::Array(x.clone()))
+        .collect();
+
+    match array(values.as_slice())? {
+        ColumnarValue::Array(array) => Ok(array),
+        ColumnarValue::Scalar(scalar) => Ok(scalar.to_array().clone()),
+    }
 }
 
 macro_rules! append {
