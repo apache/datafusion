@@ -338,16 +338,16 @@ SELECT count(*) FROM (
 ) GROUP BY name
 ----
 logical_plan
-Projection: COUNT(UInt8(1))
---Aggregate: groupBy=[[t1.name]], aggr=[[COUNT(UInt8(1))]]
+Projection: COUNT(*)
+--Aggregate: groupBy=[[t1.name]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----Union
 ------Aggregate: groupBy=[[t1.name]], aggr=[[]]
 --------TableScan: t1 projection=[name]
 ------Aggregate: groupBy=[[t2.name]], aggr=[[]]
 --------TableScan: t2 projection=[name]
 physical_plan
-ProjectionExec: expr=[COUNT(UInt8(1))@1 as COUNT(UInt8(1))]
---AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[COUNT(UInt8(1))]
+ProjectionExec: expr=[COUNT(*)@1 as COUNT(*)]
+--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[COUNT(*)]
 ----InterleaveExec
 ------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 --------CoalesceBatchesExec: target_batch_size=8192
@@ -482,8 +482,8 @@ select x, y from (select 1 as x , max(10) as y) b
 ----
 logical_plan
 Union
---Projection: COUNT(UInt8(1)) AS count, a.n
-----Aggregate: groupBy=[[a.n]], aggr=[[COUNT(UInt8(1))]]
+--Projection: COUNT(*) AS count, a.n
+----Aggregate: groupBy=[[a.n]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ------SubqueryAlias: a
 --------Projection: Int64(5) AS n
 ----------EmptyRelation
@@ -494,12 +494,12 @@ Union
 ----------EmptyRelation
 physical_plan
 UnionExec
---ProjectionExec: expr=[COUNT(UInt8(1))@1 as count, n@0 as n]
-----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(UInt8(1))]
+--ProjectionExec: expr=[COUNT(*)@1 as count, n@0 as n]
+----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(*)]
 ------CoalesceBatchesExec: target_batch_size=8192
 --------RepartitionExec: partitioning=Hash([n@0], 4), input_partitions=4
 ----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(UInt8(1))]
+------------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(*)]
 --------------ProjectionExec: expr=[5 as n]
 ----------------EmptyExec: produce_one_row=true
 --ProjectionExec: expr=[x@0 as count, y@1 as n]

@@ -42,8 +42,8 @@ limit 10;
 logical_plan
 Limit: skip=0, fetch=10
 --Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
-----Projection: c_orders.c_count, COUNT(UInt8(1)) AS custdist
-------Aggregate: groupBy=[[c_orders.c_count]], aggr=[[COUNT(UInt8(1))]]
+----Projection: c_orders.c_count, COUNT(*) AS custdist
+------Aggregate: groupBy=[[c_orders.c_count]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 --------SubqueryAlias: c_orders
 ----------Projection: COUNT(orders.o_orderkey) AS c_count
 ------------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[COUNT(orders.o_orderkey)]]
@@ -57,11 +57,11 @@ physical_plan
 GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [custdist@1 DESC,c_count@0 DESC], fetch=10
 ----SortExec: fetch=10, expr=[custdist@1 DESC,c_count@0 DESC]
-------ProjectionExec: expr=[c_count@0 as c_count, COUNT(UInt8(1))@1 as custdist]
---------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[COUNT(UInt8(1))]
+------ProjectionExec: expr=[c_count@0 as c_count, COUNT(*)@1 as custdist]
+--------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[COUNT(*)]
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------RepartitionExec: partitioning=Hash([c_count@0], 4), input_partitions=4
---------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[COUNT(UInt8(1))]
+--------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[COUNT(*)]
 ----------------ProjectionExec: expr=[COUNT(orders.o_orderkey)@1 as c_count]
 ------------------AggregateExec: mode=SinglePartitioned, gby=[c_custkey@0 as c_custkey], aggr=[COUNT(orders.o_orderkey)]
 --------------------ProjectionExec: expr=[c_custkey@0 as c_custkey, o_orderkey@1 as o_orderkey]
