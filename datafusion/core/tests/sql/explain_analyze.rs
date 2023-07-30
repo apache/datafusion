@@ -179,7 +179,6 @@ async fn csv_explain_plans() {
 
     //
     println!("SQL: {sql}");
-    //
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
@@ -193,7 +192,6 @@ async fn csv_explain_plans() {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-    //
     // Verify the text format of the plan
     let expected = vec![
         "Explain",
@@ -207,7 +205,6 @@ async fn csv_explain_plans() {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-    //
     // verify the grahviz format of the plan
     let expected = vec![
         "// Begin DataFusion GraphViz Plan,",
@@ -253,7 +250,6 @@ async fn csv_explain_plans() {
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
     assert_eq!(logical_schema, optimized_logical_schema.as_ref());
-    //
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
@@ -267,7 +263,6 @@ async fn csv_explain_plans() {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-    //
     // Verify the text format of the plan
     let expected = vec![
         "Explain",
@@ -281,7 +276,6 @@ async fn csv_explain_plans() {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-    //
     // verify the grahviz format of the plan
     let expected = vec![
         "// Begin DataFusion GraphViz Plan,",
@@ -324,7 +318,6 @@ async fn csv_explain_plans() {
     // Create plan
     let msg = format!("Creating physical plan for '{sql}': {plan:?}");
     let plan = state.create_physical_plan(&plan).await.expect(&msg);
-    //
     // Execute plan
     let msg = format!("Executing physical plan for '{sql}': {plan:?}");
     let results = collect(plan, state.task_ctx()).await.expect(&msg);
@@ -400,7 +393,6 @@ async fn csv_explain_verbose_plans() {
     //
     println!("SQL: {sql}");
 
-    //
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
@@ -414,7 +406,6 @@ async fn csv_explain_verbose_plans() {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-    //
     // Verify the text format of the plan
     let expected = vec![
         "Explain",
@@ -428,7 +419,6 @@ async fn csv_explain_verbose_plans() {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-    //
     // verify the grahviz format of the plan
     let expected = vec![
         "// Begin DataFusion GraphViz Plan,",
@@ -474,7 +464,6 @@ async fn csv_explain_verbose_plans() {
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
     assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
-    //
     // Verify schema
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
@@ -488,7 +477,6 @@ async fn csv_explain_verbose_plans() {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-    //
     // Verify the text format of the plan
     let expected = vec![
         "Explain",
@@ -502,7 +490,6 @@ async fn csv_explain_verbose_plans() {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-    //
     // verify the grahviz format of the plan
     let expected = vec![
         "// Begin DataFusion GraphViz Plan,",
@@ -545,7 +532,6 @@ async fn csv_explain_verbose_plans() {
     // Create plan
     let msg = format!("Creating physical plan for '{sql}': {plan:?}");
     let plan = state.create_physical_plan(&plan).await.expect(&msg);
-    //
     // Execute plan
     let msg = format!("Executing physical plan for '{sql}': {plan:?}");
     let task_ctx = ctx.task_ctx();

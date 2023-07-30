@@ -387,7 +387,6 @@ where
 /// c1: 1, null, 2, 3, 4, null, 5, 6
 /// c2: 'a', 'b', 'c', 'c', 'c', null, 'd', 'd'
 /// ```
-///
 fn batch_from_indices<T>(
     batch: &RecordBatch,
     schema: &SchemaRef,

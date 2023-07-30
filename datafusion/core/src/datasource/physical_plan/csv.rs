@@ -605,7 +605,7 @@ pub async fn plan_to_csv(
         join_set.spawn(async move {
             let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
             let mut buffer = Vec::with_capacity(1024);
-            //only write headers on first iteration
+            // only write headers on first iteration
             let mut write_headers = true;
             while let Some(batch) = stream.next().await.transpose()? {
                 let mut writer = csv::WriterBuilder::new()
@@ -615,7 +615,7 @@ pub async fn plan_to_csv(
                 buffer = writer.into_inner();
                 multipart_writer.write_all(&buffer).await?;
                 buffer.clear();
-                //prevent writing headers more than once
+                // prevent writing headers more than once
                 write_headers = false;
             }
             multipart_writer

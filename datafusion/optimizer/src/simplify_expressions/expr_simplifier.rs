@@ -137,7 +137,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// See the [type coercion module](datafusion_expr::type_coercion)
     /// documentation for more details on type coercion
-    ///
     // Would be nice if this API could use the SimplifyInfo
     // rather than creating an DFSchemaRef coerces rather than doing
     // it manually.
@@ -362,7 +361,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
         let info = self.info;
         let new_expr = match expr {
-            //
             // Rules for Eq
             //
 
@@ -468,7 +466,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     )
                 }
             }
-            //
             // Rules for NotEq
             //
 
@@ -501,7 +498,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 }
             }
 
-            //
             // Rules for OR
             //
 
@@ -570,7 +566,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right,
             }) if !info.nullable(&left)? && is_op_with(And, &left, &right) => *right,
 
-            //
             // Rules for AND
             //
 
@@ -639,7 +634,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right,
             }) if !info.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
 
-            //
             // Rules for Multiply
             //
 
@@ -681,7 +675,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right,
             }) if !info.nullable(&right)? && is_zero(&left) => *left,
 
-            //
             // Rules for Divide
             //
 
@@ -720,7 +713,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
-            //
             // Rules for Modulo
             //
 
@@ -751,7 +743,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
-            //
             // Rules for BitwiseAnd
             //
 
@@ -833,7 +824,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 *right
             }
 
-            //
             // Rules for BitwiseOr
             //
 
@@ -915,7 +905,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 *right
             }
 
-            //
             // Rules for BitwiseXor
             //
 
@@ -993,7 +982,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 }
             }
 
-            //
             // Rules for BitwiseShiftRight
             //
 
@@ -1018,7 +1006,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right,
             }) if is_zero(&right) => *left,
 
-            //
             // Rules for BitwiseShiftRight
             //
 
@@ -1043,17 +1030,12 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right,
             }) if is_zero(&right) => *left,
 
-            //
             // Rules for Not
-            //
             Expr::Not(inner) => negate_clause(*inner),
 
-            //
             // Rules for Negative
-            //
             Expr::Negative(inner) => distribute_negation(*inner),
 
-            //
             // Rules for Case
             //
 
@@ -1131,7 +1113,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 )),
             },
 
-            //
             // Rules for Between
             //
 
@@ -1150,9 +1131,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 }
             }
 
-            //
             // Rules for regexes
-            //
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),

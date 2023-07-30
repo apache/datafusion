@@ -337,7 +337,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                //todo fill partition keys and sort keys
+                // todo fill partition keys and sort keys
                 Ok(Arc::new(WindowAggExec::try_new(
                     physical_window_expr,
                     input,

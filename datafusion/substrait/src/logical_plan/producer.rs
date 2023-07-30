@@ -237,7 +237,7 @@ pub fn to_substrait_rel(
                     input: Some(input),
                     groupings: vec![Grouping {
                         grouping_expressions: grouping,
-                    }], //groupings,
+                    }], // groupings,
                     measures,
                     advanced_extension: None,
                 }))),

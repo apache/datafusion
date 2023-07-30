@@ -2141,7 +2141,7 @@ mod tests {
     async fn join_date64() -> Result<()> {
         let left = build_date64_table(
             ("a1", &vec![1, 2, 3]),
-            ("b1", &vec![1650703441000, 1650903441000, 1650903441000]), // this has a repetition
+            ("b1", &vec![1650703441000, 1650903441000, 1650903441000]), /* this has a repetition */
             ("c1", &vec![7, 8, 9]),
         );
         let right = build_date64_table(

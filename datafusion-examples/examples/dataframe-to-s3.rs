@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    //enter region and bucket to which your credentials have GET and PUT access
+    // enter region and bucket to which your credentials have GET and PUT access
     let region = "<bucket-region-here>";
     let bucket_name = "<bucket-name-here>";
 
@@ -63,11 +63,11 @@ async fn main() -> Result<()> {
     let out_path = format!("s3://{bucket_name}/test_write/");
     df.clone().write_parquet(&out_path, None).await?;
 
-    //write as JSON to s3
+    // write as JSON to s3
     let json_out = format!("s3://{bucket_name}/json_out");
     df.clone().write_json(&json_out).await?;
 
-    //write as csv to s3
+    // write as csv to s3
     let csv_out = format!("s3://{bucket_name}/csv_out");
     df.write_csv(&csv_out).await?;
 

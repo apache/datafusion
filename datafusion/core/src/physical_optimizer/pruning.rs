@@ -358,7 +358,7 @@ impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredStatColum
 /// ```text
 /// ("s1", Min, Field:s1_min)
 /// ("s2", Max, field:s2_max)
-///```
+/// ```
 ///
 /// And the input statistics had
 /// ```text

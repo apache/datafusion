@@ -495,8 +495,8 @@ impl DataGenerator {
         vec.sort_unstable();
 
         // 6287 distinct / 10000 total
-        //let num_distinct = vec.iter().collect::<HashSet<_>>().len();
-        //println!("{} distinct / {} total", num_distinct, vec.len());
+        // let num_distinct = vec.iter().collect::<HashSet<_>>().len();
+        // println!("{} distinct / {} total", num_distinct, vec.len());
         vec
     }
 

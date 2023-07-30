@@ -26,7 +26,6 @@ use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use std::sync::Arc;
 
 #[derive(Default)]
-///
 /// Attempt to replace outer joins with inner joins.
 ///
 /// Outer joins are typically more expensive to compute at runtime

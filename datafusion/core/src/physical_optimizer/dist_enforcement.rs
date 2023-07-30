@@ -140,7 +140,6 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 /// 3) If the current plan is RepartitionExec, CoalescePartitionsExec or WindowAggExec, clear all the requirements, return the unchanged plan
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
-///
 fn adjust_input_keys_ordering(
     requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
@@ -2067,7 +2066,7 @@ mod tests {
                 ("b".to_string(), "b1".to_string()),
             ],
         );
-        //Projection(a1 as a3, b1 as b3)
+        // Projection(a1 as a3, b1 as b3)
         let alias_pairs: Vec<(String, String)> = vec![
             ("a1".to_string(), "a3".to_string()),
             ("b1".to_string(), "b3".to_string()),
@@ -2083,7 +2082,7 @@ mod tests {
             ],
         );
 
-        //Projection(a as a2, b as b2)
+        // Projection(a as a2, b as b2)
         let alias_pairs: Vec<(String, String)> = vec![
             ("a".to_string(), "a2".to_string()),
             ("b".to_string(), "b2".to_string()),

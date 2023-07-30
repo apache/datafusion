@@ -44,9 +44,9 @@
 ///               │    │
 ///               └────┘
 ///
-///"Stream"s each with           Stream N has M
+/// "Stream"s each with           Stream N has M
 ///   a potentially              RecordBatches
-///different number of
+/// different number of
 ///   RecordBatches
 /// ```
 #[derive(Debug, Clone)]

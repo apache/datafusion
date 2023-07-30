@@ -74,7 +74,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         "alltypes_plain.parquet",
     )
     .await;
-    //Test that only selecting partition columns is possible
+    // Test that only selecting partition columns is possible
     let result = ctx
         .sql("SELECT distinct year,month,day FROM t")
         .await?
@@ -91,7 +91,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         "+------+-------+-----+",
     ];
     assert_batches_sorted_eq!(expected, &result);
-    //Test that the number of rows returned by partition column scan and actually reading the parquet file are the same
+    // Test that the number of rows returned by partition column scan and actually reading the parquet file are the same
     let actual_row_count: usize = ctx
         .sql("SELECT id from t")
         .await?
@@ -111,11 +111,11 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         .sum();
     assert_eq!(actual_row_count, partition_row_count);
 
-    //Test limit logic. 3 test cases
-    //1. limit is contained within a single partition with leftover rows
-    //2. limit is contained within a single partition without leftover rows
-    //3. limit is not contained within a single partition
-    //The id column is included to ensure that the parquet file is actually scanned.
+    // Test limit logic. 3 test cases
+    // 1. limit is contained within a single partition with leftover rows
+    // 2. limit is contained within a single partition without leftover rows
+    // 3. limit is not contained within a single partition
+    // The id column is included to ensure that the parquet file is actually scanned.
     let results  = ctx
         .sql("SELECT COUNT(*) as num_rows_per_month, month, MAX(id) from t group by month order by num_rows_per_month desc")
         .await?

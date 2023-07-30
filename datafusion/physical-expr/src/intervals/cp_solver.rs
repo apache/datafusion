@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -327,7 +327,7 @@ impl ExprIntervalGraph {
     // to the plan itself.
     //
     // ```text
-    //
+    // 
     //                                  +-----+                                          +-----+
     //                                  | GT  |                                          | GT  |
     //                         +--------|     |-------+                         +--------|     |-------+
@@ -349,7 +349,6 @@ impl ExprIntervalGraph {
     //                | a   |     |  b  |    |  c  |     |  2  |                              |  c  |     |  2  |
     //                |     |     |     |    |     |     |     |                              |     |     |     |
     //                +-----+     +-----+    +-----+     +-----+                              +-----+     +-----+
-    //
     // ```
 
     /// This function associates stable node indices with [PhysicalExpr]s so
@@ -462,7 +461,6 @@ impl ExprIntervalGraph {
     ///     graph.evaluate_bounds().unwrap(),
     ///     &Interval::make(Some(20), Some(30), (true, true)),
     ///  )
-    ///
     /// ```
     pub fn evaluate_bounds(&mut self) -> Result<&Interval> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);

@@ -1507,7 +1507,7 @@ where
     intermediate.add(Duration::milliseconds(ms as i64))
 }
 
-//Float wrapper over f32/f64. Just because we cannot build std::hash::Hash for floats directly we have to do it through type wrapper
+// Float wrapper over f32/f64. Just because we cannot build std::hash::Hash for floats directly we have to do it through type wrapper
 struct Fl<T>(T);
 
 macro_rules! hash_float_value {

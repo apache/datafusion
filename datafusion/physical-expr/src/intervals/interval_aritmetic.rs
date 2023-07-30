@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -1295,13 +1295,13 @@ mod tests {
     #[test]
     fn test_add_intervals_lower_affected_f32() {
         // Lower is affected
-        let lower = f32::from_bits(1073741887); //1000000000000000000000000111111
-        let upper = f32::from_bits(1098907651); //1000001100000000000000000000011
+        let lower = f32::from_bits(1073741887); // 1000000000000000000000000111111
+        let upper = f32::from_bits(1098907651); // 1000001100000000000000000000011
         capture_mode_change_f32((lower, upper), true, false);
 
         // Upper is affected
-        let lower = f32::from_bits(1072693248); //111111111100000000000000000000
-        let upper = f32::from_bits(715827883); //101010101010101010101010101011
+        let lower = f32::from_bits(1072693248); // 111111111100000000000000000000
+        let upper = f32::from_bits(715827883); // 101010101010101010101010101011
         capture_mode_change_f32((lower, upper), false, true);
 
         // Lower is affected

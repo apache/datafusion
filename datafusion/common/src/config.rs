@@ -41,7 +41,7 @@ use std::fmt::Display;
 ///        /// Field 3 doc
 ///        field3: Option<usize>, default = None
 ///    }
-///}
+/// }
 /// ```
 ///
 /// Will generate
@@ -97,7 +97,6 @@ use std::fmt::Display;
 /// ```
 ///
 /// NB: Misplaced commas may result in nonsensical errors
-///
 macro_rules! config_namespace {
     (
      $(#[doc = $struct_d:tt])*

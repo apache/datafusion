@@ -320,7 +320,6 @@ pub fn with_new_children_if_necessary(
 ///   assert_eq!("CoalesceBatchesExec: target_batch_size=8192", one_line.trim());
 /// }
 /// ```
-///
 pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
     DisplayableExecutionPlan::new(plan)
 }

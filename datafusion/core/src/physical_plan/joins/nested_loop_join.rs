@@ -73,7 +73,6 @@ type JoinLeftData = (RecordBatch, MemoryReservation);
 /// |--------------------------------|--------------------------------------------|-------------|
 /// | Inner/Left/LeftSemi/LeftAnti   | (UnspecifiedDistribution, SinglePartition) | right       |
 /// | Right/RightSemi/RightAnti/Full | (SinglePartition, UnspecifiedDistribution) | left        |
-///
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side

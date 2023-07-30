@@ -721,7 +721,7 @@ scalar_expr!(
     "removes all characters, space by default from the string"
 );
 scalar_expr!(Upper, upper, string, "converts the string to upper case");
-//use vec as parameter
+// use vec as parameter
 nary_scalar_expr!(
     Lpad,
     lpad,
@@ -748,7 +748,7 @@ nary_scalar_expr!(
     "removes all characters, spaces by default, from both sides of a string"
 );
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
-//there is a func concat_ws before, so use concat_ws_expr as name.c
+// there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(
     ConcatWithSeparator,
     concat_ws_expr,

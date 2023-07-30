@@ -18,7 +18,5 @@
 edition = "2021"
 max_width = 90
 
-# ignore generated files
-# ignore = [
-#    "arrow/src/ipc/gen",
-#]
+normalize_comments = true
+normalize_doc_attributes = true

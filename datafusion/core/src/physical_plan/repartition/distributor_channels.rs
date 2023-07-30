@@ -360,7 +360,6 @@ struct Gate {
 
 impl Gate {
     //// Wake all senders.
-    ///
     /// This is helpful to signal that there are some channels empty now and hence the gate was opened.
     fn wake_all_senders(&mut self) {
         for (waker, _id) in self.send_wakers.drain(..) {

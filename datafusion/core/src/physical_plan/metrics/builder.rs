@@ -41,7 +41,6 @@ use super::{
 ///  let num_bytes = MetricBuilder::new(&metrics)
 ///    .with_new_label("filename", "my_awesome_file.parquet")
 ///    .counter("num_bytes", partition);
-///
 /// ```
 pub struct MetricBuilder<'a> {
     /// Location that the metric created by this builder will be added do

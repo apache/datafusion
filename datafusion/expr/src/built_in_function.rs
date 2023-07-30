@@ -241,9 +241,9 @@ pub enum BuiltinScalarFunction {
     ToTimestampSeconds,
     /// from_unixtime
     FromUnixtime,
-    ///now
+    /// now
     Now,
-    ///current_date
+    /// current_date
     CurrentDate,
     /// current_time
     CurrentTime,

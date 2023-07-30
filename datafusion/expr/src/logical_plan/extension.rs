@@ -84,7 +84,6 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// of self.inputs and self.exprs.
     ///
     /// So, `self.from_template(exprs, ..).expressions() == exprs
-    //
     // TODO(clippy): This should probably be renamed to use a `with_*` prefix. Something
     // like `with_template`, or `with_exprs_and_inputs`.
     //
@@ -234,7 +233,6 @@ pub trait UserDefinedLogicalNodeCore:
     /// of self.inputs and self.exprs.
     ///
     /// So, `self.from_template(exprs, ..).expressions() == exprs
-    //
     // TODO(clippy): This should probably be renamed to use a `with_*` prefix. Something
     // like `with_template`, or `with_exprs_and_inputs`.
     //

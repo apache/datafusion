@@ -117,9 +117,9 @@ fn schema_to_field_with_props(
                     if let Some(doc) = &field.doc {
                         props.insert("avro::doc".to_string(), doc.clone());
                     }
-                    /*if let Some(aliases) = fields.aliases {
-                        props.insert("aliases", aliases);
-                    }*/
+                    // if let Some(aliases) = fields.aliases {
+                    // props.insert("aliases", aliases);
+                    // }
                     schema_to_field_with_props(
                         &field.schema,
                         Some(&format!("{}.{}", name.fullname(None), field.name)),

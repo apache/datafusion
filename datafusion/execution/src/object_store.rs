@@ -176,7 +176,6 @@ impl DefaultObjectStoreRegistry {
     }
 }
 
-///
 /// Stores are registered based on the scheme, host and port of the provided URL
 /// with a [`LocalFileSystem::new`] automatically registered for `file://`
 ///

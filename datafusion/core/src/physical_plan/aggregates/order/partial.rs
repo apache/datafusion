@@ -57,7 +57,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 ///  group indices
 /// (in group value  group_values               current tracks the most
 ///      order)                                    recent group index
-///```
+/// ```
 #[derive(Debug)]
 pub(crate) struct GroupOrderingPartial {
     /// State machine

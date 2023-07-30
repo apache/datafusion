@@ -1086,7 +1086,6 @@ mod tests {
         ]);
         assert!(res.is_ok());
 
-        //
         // Fallible test cases
         //
 

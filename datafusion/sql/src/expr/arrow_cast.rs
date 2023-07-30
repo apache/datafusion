@@ -563,7 +563,6 @@ impl<'a> Iterator for Tokenizer<'a> {
 }
 
 /// Grammar is
-///
 #[derive(Debug, PartialEq)]
 enum Token {
     // Null, or Int32

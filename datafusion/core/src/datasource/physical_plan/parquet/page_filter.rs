@@ -89,7 +89,6 @@ use super::metrics::ParquetFileMetrics;
 ///  ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━┛
 ///
 ///   Total rows: 300
-///
 /// ```
 ///
 /// Given the predicate `A > 35 AND B = 'F'`:
@@ -246,7 +245,6 @@ impl PagePruningPredicate {
 /// If the predicate contains more than one column reference (assumes
 /// that `extract_page_index_push_down_predicates` only return
 /// predicate with one col)
-///
 fn find_column_index(
     predicate: &PruningPredicate,
     row_group_metadata: &RowGroupMetaData,
@@ -487,7 +485,7 @@ macro_rules! get_min_max_values_for_page_index {
                 }
             },
             Index::INT96(_) => {
-                //Todo support these type
+                // Todo support these type
                 None
             }
             Index::FIXED_LEN_BYTE_ARRAY(index) => match $self.target_type {

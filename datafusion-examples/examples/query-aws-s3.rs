@@ -28,7 +28,6 @@ use url::Url;
 ///
 /// - AWS_ACCESS_KEY_ID
 /// - AWS_SECRET_ACCESS_KEY
-///
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();

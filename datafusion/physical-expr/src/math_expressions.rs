@@ -496,7 +496,7 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-///cot SQL function
+/// cot SQL function
 pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Float64 => Ok(Arc::new(make_function_scalar_inputs!(
@@ -538,8 +538,8 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
         )));
     }
 
-    //if only one arg then invoke toolchain trunc(num) and precision = 0 by default
-    //or then invoke the compute_truncate method to process precision
+    // if only one arg then invoke toolchain trunc(num) and precision = 0 by default
+    // or then invoke the compute_truncate method to process precision
     let num = &args[0];
     let precision = if args.len() == 1 {
         ColumnarValue::Scalar(Int64(Some(0)))
@@ -730,7 +730,7 @@ mod tests {
     fn test_round_f32() {
         let args: Vec<ArrayRef> = vec![
             Arc::new(Float32Array::from(vec![125.2345; 10])), // input
-            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
+            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), /* decimal_places */
         ];
 
         let result = round(&args).expect("failed to initialize function round");
@@ -748,7 +748,7 @@ mod tests {
     fn test_round_f64() {
         let args: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from(vec![125.2345; 10])), // input
-            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), // decimal_places
+            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, -1, -2, -3, -4])), /* decimal_places */
         ];
 
         let result = round(&args).expect("failed to initialize function round");

@@ -133,7 +133,6 @@ impl GroupsAccumulatorAdapter {
     /// └─────────┘   └─────────┘   └ ─ ─ ─ ─ ┘                       └─────────┘   └ ─ ─ ─ ─ ┘
     ///
     /// logical group   values      opt_filter           logical group  values       opt_filter
-    ///
     /// ```
     fn invoke_per_accumulator<F>(
         &mut self,

@@ -286,7 +286,7 @@ mod tests {
         let err = r3.try_grow(70).unwrap_err().to_string();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for s2 with 0 bytes already allocated - maximum available is 40");
 
-        //Shrinking a2 to zero doesn't allow a3 to allocate more than 45
+        // Shrinking a2 to zero doesn't allow a3 to allocate more than 45
         r2.free();
         let err = r3.try_grow(70).unwrap_err().to_string();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for s2 with 0 bytes already allocated - maximum available is 40");

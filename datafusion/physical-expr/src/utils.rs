@@ -106,7 +106,6 @@ fn split_conjunction_impl<'a>(
 ///
 /// If there is a mapping in Columns Map, replace the Column in the output expressions with the 1st Column in the Columns Map.
 /// Otherwise, replace the Column with a place holder of [UnKnownColumn]
-///
 pub fn normalize_out_expr_with_columns_map(
     expr: Arc<dyn PhysicalExpr>,
     columns_map: &HashMap<Column, Vec<Column>>,

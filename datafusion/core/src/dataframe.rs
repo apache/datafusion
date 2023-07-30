@@ -332,13 +332,13 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn describe(self) -> Result<Self> {
-        //the functions now supported
+        // the functions now supported
         let supported_describe_functions =
             vec!["count", "null_count", "mean", "std", "min", "max", "median"];
 
         let original_schema_fields = self.schema().fields().iter();
 
-        //define describe column
+        // define describe column
         let mut describe_schemas = vec![Field::new("describe", DataType::Utf8, false)];
         describe_schemas.extend(original_schema_fields.clone().map(|field| {
             if field.data_type().is_numeric() {
@@ -348,7 +348,7 @@ impl DataFrame {
             }
         }));
 
-        //collect recordBatch
+        // collect recordBatch
         let describe_record_batch = vec![
             // count aggregation
             self.clone().aggregate(
@@ -445,7 +445,7 @@ impl DataFrame {
                             _ => Arc::new(StringArray::from(vec!["null"])),
                         }
                     }
-                    //Handling error when only boolean/binary column, and in other cases
+                    // Handling error when only boolean/binary column, and in other cases
                     Err(err)
                         if err.to_string().contains(
                             "Error during planning: \

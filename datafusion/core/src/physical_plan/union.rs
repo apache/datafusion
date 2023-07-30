@@ -65,7 +65,7 @@ use tokio::macros::support::thread_rng_n;
 ///                       │       │           │         │
 ///     Output            │  ...  │           │         │
 ///   Partitions          │0      │N-1        │ N       │N+M-1
-///(passes through   ┌────┴───────┴───────────┴─────────┴───┐
+/// (passes through  ┌────┴───────┴───────────┴─────────┴───┐
 /// the N+M input    │              UnionExec               │
 ///  partitions)     │                                      │
 ///                  └──────────────────────────────────────┘

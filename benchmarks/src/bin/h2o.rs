@@ -35,7 +35,7 @@ use tokio::time::Instant;
 #[derive(Debug, StructOpt)]
 #[structopt(name = "datafusion-h2o", about = "DataFusion h2o benchmarks")]
 enum Opt {
-    GroupBy(GroupBy), //TODO add Join queries
+    GroupBy(GroupBy), // TODO add Join queries
 }
 
 #[derive(Debug, StructOpt)]

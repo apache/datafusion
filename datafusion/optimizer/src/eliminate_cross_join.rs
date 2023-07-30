@@ -47,7 +47,6 @@ impl EliminateCrossJoin {
 /// For above queries, the join predicate is available in filters and they are moved to
 /// join nodes appropriately
 /// This fix helps to improve the performance of TPCH Q19. issue#78
-///
 impl OptimizerRule for EliminateCrossJoin {
     fn try_optimize(
         &self,

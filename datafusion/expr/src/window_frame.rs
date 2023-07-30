@@ -176,7 +176,6 @@ pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFram
 /// 3. CURRENT ROW
 /// 4. `<expr>` FOLLOWING
 /// 5. UNBOUNDED FOLLOWING
-///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WindowFrameBound {
     /// 1. UNBOUNDED PRECEDING

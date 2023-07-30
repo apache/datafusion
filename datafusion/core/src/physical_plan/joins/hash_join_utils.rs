@@ -126,7 +126,6 @@ impl SymmetricJoinHashMap {
     /// The value of scale_factor is set to 4, which means the capacity will be reduced by 25%
     /// when necessary. You can adjust the scale_factor value to achieve the desired
     /// balance between memory usage and performance.
-    //
     // If you increase the scale_factor, the capacity will shrink less aggressively,
     // leading to potentially higher memory usage but fewer resizes.
     // Conversely, if you decrease the scale_factor, the capacity will shrink more aggressively,
@@ -463,7 +462,7 @@ impl SortedFilterExpr {
 ///
 /// ### Note
 /// ```text
-///
+/// 
 /// Interval arithmetic is used to calculate viable join ranges for build-side
 /// pruning. This is done by first creating an interval for join filter values in
 /// the build side of the join, which spans [-∞, FV] or [FV, ∞] depending on the
@@ -658,7 +657,6 @@ pub fn combine_two_batches(
 /// * `visited` - A hash set to store the visited indices.
 /// * `offset` - An offset to the indices in the `PrimitiveArray`.
 /// * `indices` - The input `PrimitiveArray` of type `T` which stores the indices to be recorded.
-///
 pub fn record_visited_indices<T: ArrowPrimitiveType>(
     visited: &mut HashSet<usize>,
     offset: usize,

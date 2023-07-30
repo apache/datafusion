@@ -827,7 +827,7 @@ mod tests {
         let store = Arc::new(integration) as Arc<dyn ObjectStore>;
         let original_stream = store.get(&path).await?;
 
-        //convert original_stream to compressed_stream for next step
+        // convert original_stream to compressed_stream for next step
         let compressed_stream =
             file_compression_type.to_owned().convert_to_compress_stream(
                 original_stream
@@ -836,7 +836,7 @@ mod tests {
                     .boxed(),
             );
 
-        //prepare expected schema for assert_eq
+        // prepare expected schema for assert_eq
         let expected = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
             Field::new("c2", DataType::Int64, true),
@@ -856,7 +856,7 @@ mod tests {
         let compressed_csv =
             csv.with_file_compression_type(file_compression_type.clone());
 
-        //convert compressed_stream to decoded_stream
+        // convert compressed_stream to decoded_stream
         let decoded_stream = compressed_csv
             .read_to_delimited_chunks_from_stream(compressed_stream.unwrap())
             .await;

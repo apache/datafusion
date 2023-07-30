@@ -683,7 +683,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a plan for EXPLAIN ... that will print out a plan
-    ///
     fn explain_statement_to_plan(
         &self,
         verbose: bool,

@@ -20,7 +20,7 @@
 
 use arrow::datatypes::DataType;
 
-///A function's volatility, which defines the functions eligibility for certain optimizations
+/// A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
     /// Immutable - An immutable function will always return the same output when given the same

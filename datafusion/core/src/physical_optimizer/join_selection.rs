@@ -491,7 +491,6 @@ fn hash_join_convert_symmetric_subrule(
 ///           | Data Source  |--------------| Repartition  |
 ///           |              |              |              |
 ///           +--------------+              +--------------+
-///
 /// ```
 fn hash_join_swap_subrule(
     mut input: PipelineStatePropagator,

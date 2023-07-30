@@ -66,7 +66,7 @@ impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
 /// // Get a table reference to 'myschema.mytable' (note the capitalization)
 /// let table_reference = TableReference::from("MySchema.MyTable");
 /// assert_eq!(table_reference, TableReference::partial("myschema", "mytable"));
-///```
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TableReference<'a> {
     /// An unqualified table reference, e.g. "table"

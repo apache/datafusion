@@ -72,7 +72,6 @@ use std::sync::Arc;
 /// ```text
 /// Filter: c1 > INT32(10)
 /// ```
-///
 #[derive(Default)]
 pub struct UnwrapCastInComparison {}
 

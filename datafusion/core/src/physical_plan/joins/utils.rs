@@ -439,7 +439,6 @@ impl JoinFilter {
 
 /// Returns the output field given the input field. Outer joins may
 /// insert nulls even if the input was not null
-///
 fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> Field {
     let force_nullable = match join_type {
         JoinType::Inner => false,
@@ -1447,7 +1446,6 @@ mod tests {
                 (10, Some(1), Some(1), None),
                 Some(100),
             ),
-            //
             // Edge cases
             // ==========
             //

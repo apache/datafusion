@@ -113,7 +113,6 @@ use datafusion_expr::{Expr, LogicalPlan, Operator};
 ///     )
 /// )
 /// ```
-///
 #[derive(Default)]
 pub struct RewriteDisjunctivePredicate;
 

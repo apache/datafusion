@@ -966,7 +966,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
 
     assert_batches_eq!(expected, &results);
 
-    //test cast path timestamp date using literals
+    // test cast path timestamp date using literals
     let sql = "select '2000-01-01'::timestamp >= '2000-01-01'::date";
     let df = ctx.sql(sql).await.unwrap();
 
@@ -981,7 +981,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     }
     assert_eq!(res, Some("Projection: CAST(Utf8(\"2000-01-01\") AS Timestamp(Nanosecond, None)) >= CAST(Utf8(\"2000-01-01\") AS Date32)\n  EmptyRelation".to_string()));
 
-    //test cast path timestamp date using function
+    // test cast path timestamp date using function
     let sql = "select now() >= '2000-01-01'::date";
     let df = ctx.sql(sql).await.unwrap();
 

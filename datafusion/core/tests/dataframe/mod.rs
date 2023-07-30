@@ -67,7 +67,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
         .explain(false, false)?
         .collect()
         .await?;
-    //make sure sql plan same with df plan
+    // make sure sql plan same with df plan
     assert_eq!(
         pretty_format_batches(&sql_results)?.to_string(),
         pretty_format_batches(&df_results)?.to_string()
@@ -146,7 +146,7 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
         .collect()
         .await?;
 
-    //make sure sql plan same with df plan
+    // make sure sql plan same with df plan
     assert_eq!(
         pretty_format_batches(&sql_results)?.to_string(),
         pretty_format_batches(&df_results)?.to_string()
@@ -183,7 +183,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .collect()
         .await?;
 
-    //make sure sql plan same with df plan
+    // make sure sql plan same with df plan
     assert_eq!(
         pretty_format_batches(&df_results)?.to_string(),
         pretty_format_batches(&sql_results)?.to_string()
@@ -215,7 +215,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
         .collect()
         .await?;
 
-    //make sure sql plan same with df plan
+    // make sure sql plan same with df plan
     assert_eq!(
         pretty_format_batches(&sql_results)?.to_string(),
         pretty_format_batches(&df_results)?.to_string()
@@ -257,7 +257,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
         .collect()
         .await?;
 
-    //make sure sql plan same with df plan
+    // make sure sql plan same with df plan
     assert_eq!(
         pretty_format_batches(&sql_results)?.to_string(),
         pretty_format_batches(&df_results)?.to_string()
@@ -301,7 +301,7 @@ async fn describe() -> Result<()> {
     ];
     assert_batches_eq!(expected, &describe_record_batch);
 
-    //add test case for only boolean boolean/binary column
+    // add test case for only boolean boolean/binary column
     let result = ctx
         .sql("select 'a' as a,true as b")
         .await?

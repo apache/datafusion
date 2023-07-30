@@ -324,7 +324,7 @@ impl ListingOptions {
     /// the rows read from
     /// `/mnt/nyctaxi/year=2022/month=01/tripdata.parquet`
     ///
-    ///# Notes
+    /// # Notes
     ///
     /// - If only one level (e.g. `year` in the example above) is
     /// specified, the other levels are ignored but the files are
@@ -573,7 +573,6 @@ impl ListingTable {
     /// If the schema is provided then it must be resolved before creating the table
     /// and should contain the fields of the file without the table
     /// partitioning columns.
-    ///
     pub fn try_new(config: ListingTableConfig) -> Result<Self> {
         let file_schema = config
             .file_schema

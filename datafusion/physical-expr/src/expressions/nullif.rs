@@ -26,7 +26,6 @@ use super::binary::array_eq_scalar;
 /// Implements NULLIF(expr1, expr2)
 /// Args: 0 - left expr is any array
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
-///
 pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return Err(DataFusionError::Internal(format!(

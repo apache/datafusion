@@ -234,10 +234,10 @@ pub fn join_expr_tests_fixture_temporal(
             Operator::Minus,
             Operator::Minus,
             Operator::Minus,
-            ScalarValue::TimestampMillisecond(Some(1672574403000), None), // 2023-01-01:12.00.03
-            ScalarValue::TimestampMillisecond(Some(1672574401000), None), // 2023-01-01:12.00.01
-            ScalarValue::TimestampMillisecond(Some(1672574400000), None), // 2023-01-01:12.00.00
-            ScalarValue::TimestampMillisecond(Some(1672574402000), None), // 2023-01-01:12.00.02
+            ScalarValue::TimestampMillisecond(Some(1672574403000), None), /* 2023-01-01:12.00.03 */
+            ScalarValue::TimestampMillisecond(Some(1672574401000), None), /* 2023-01-01:12.00.01 */
+            ScalarValue::TimestampMillisecond(Some(1672574400000), None), /* 2023-01-01:12.00.00 */
+            ScalarValue::TimestampMillisecond(Some(1672574402000), None), /* 2023-01-01:12.00.02 */
             schema,
         ),
         _ => unreachable!(),

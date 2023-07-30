@@ -266,7 +266,6 @@ fn clone_error(e: &DataFusionError) -> DataFusionError {
 
 /// A Mock ExecutionPlan that does not start producing input until a
 /// barrier is called
-///
 #[derive(Debug)]
 pub struct BarrierExec {
     /// partitions to send back

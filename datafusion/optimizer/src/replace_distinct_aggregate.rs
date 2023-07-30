@@ -58,7 +58,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     input.clone(),
                     group_expr,
                     vec![],
-                    input.schema().clone(), // input schema and aggregate schema are the same in this case
+                    input.schema().clone(), /* input schema and aggregate schema are the same in this case */
                 )?);
                 Ok(Some(aggregate))
             }
