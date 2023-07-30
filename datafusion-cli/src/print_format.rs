@@ -18,9 +18,10 @@
 //! Print format variants
 use arrow::csv::writer::WriterBuilder;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
+use arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::physical_expr::format::DEFAULT_FORMAT_OPTIONS;
 use std::str::FromStr;
 
 /// Allow records to be printed in different formats
@@ -75,7 +76,12 @@ impl PrintFormat {
         match self {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
-            Self::Table => pretty::print_batches(batches)?,
+            Self::Table => {
+                println!(
+                    "{}",
+                    pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?
+                )
+            }
             Self::Json => println!("{}", batches_to_json!(ArrayWriter, batches)),
             Self::NdJson => {
                 println!("{}", batches_to_json!(LineDelimitedWriter, batches))

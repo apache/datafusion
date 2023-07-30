@@ -94,16 +94,16 @@ where d3_date > now() + '5 days';
 query ?
 SELECT DATE '2023-04-09' - DATE '2023-04-02';
 ----
-P7D
+7 days 0 hours 0 mins 0 secs
 
 # DATE minus Timestamp
 query ?
 SELECT DATE '2023-04-09' - '2000-01-01T00:00:00'::timestamp;
 ----
-P8499D
+8499 days 0 hours 0 mins 0.000000000 secs
 
 # Timestamp minus DATE
 query ?
 SELECT '2023-01-01T00:00:00'::timestamp - DATE '2021-01-01';
 ----
-P730D
+730 days 0 hours 0 mins 0.000000000 secs

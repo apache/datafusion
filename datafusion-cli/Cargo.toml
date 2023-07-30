@@ -51,8 +51,8 @@ predicates = "3.0"
 rstest = "0.17"
 
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "fb926a4ff9f84fcfb5c853b6f3cb5d2d11bdf916"}
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "fb926a4ff9f84fcfb5c853b6f3cb5d2d11bdf916"}
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "fb926a4ff9f84fcfb5c853b6f3cb5d2d11bdf916"}
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "fb926a4ff9f84fcfb5c853b6f3cb5d2d11bdf916"}
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "fb926a4ff9f84fcfb5c853b6f3cb5d2d11bdf916"}
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}

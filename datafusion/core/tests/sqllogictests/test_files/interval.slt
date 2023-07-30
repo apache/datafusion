@@ -279,8 +279,8 @@ insert into t values ('6 days 7 nanoseconds'::interval)
 query ?
 select -i from t;
 ----
-0 years 0 mons -5 days 0 hours 0 mins -0.000000003 secs
 0 years 0 mons -6 days 0 hours 0 mins -0.000000007 secs
+0 years 0 mons -5 days 0 hours 0 mins -0.000000003 secs
 
 query ?T rowsort
 select

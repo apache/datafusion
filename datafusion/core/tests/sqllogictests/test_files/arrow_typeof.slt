@@ -313,7 +313,7 @@ query ?
 ---
 select arrow_cast(interval '30 minutes', 'Duration(Second)');
 ----
-PT1800S
+0 days 0 hours 30 mins 0 secs
 
 query error DataFusion error: Error during planning: Cannot automatically convert Utf8 to Duration\(Second\)
 select arrow_cast('30 minutes', 'Duration(Second)');
