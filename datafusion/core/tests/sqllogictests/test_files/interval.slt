@@ -276,11 +276,11 @@ create table t (i interval) as values ('5 days 3 nanoseconds'::interval);
 statement ok
 insert into t values ('6 days 7 nanoseconds'::interval)
 
-query ?
-select -i from t;
+query ? rowsort
+select -i from t order by 1;
 ----
-0 years 0 mons -6 days 0 hours 0 mins -0.000000007 secs
 0 years 0 mons -5 days 0 hours 0 mins -0.000000003 secs
+0 years 0 mons -6 days 0 hours 0 mins -0.000000007 secs
 
 query ?T rowsort
 select
