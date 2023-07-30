@@ -1494,7 +1494,7 @@ impl SessionState {
             .expect("Failed to register default schema");
     }
 
-    fn resolve_table_ref<'a>(
+    pub(crate) fn resolve_table_ref<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> ResolvedTableReference<'a> {

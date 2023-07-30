@@ -27,6 +27,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use arrow_array::RecordBatch;
+use chrono::{DateTime, Utc, NaiveDate};
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -53,6 +54,7 @@ use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use rand::distributions::{Alphanumeric, DistString};
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
@@ -560,10 +562,10 @@ impl CsvSink {
 impl DataSink for CsvSink {
     async fn write_all(
         &self,
-        mut data: SendableRecordBatchStream,
+        mut data: Vec<SendableRecordBatchStream>,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let num_partitions = self.config.file_groups.len();
+        let num_partitions = data.len();
 
         let object_store = context
             .runtime_env()
@@ -572,44 +574,73 @@ impl DataSink for CsvSink {
         // Construct serializer and writer for each file group
         let mut serializers = vec![];
         let mut writers = vec![];
-        for file_group in &self.config.file_groups {
-            // In append mode, consider has_header flag only when file is empty (at the start).
-            // For other modes, use has_header flag as is.
-            let header = self.has_header
-                && (!matches!(&self.config.writer_mode, FileWriterMode::Append)
-                    || file_group.object_meta.size == 0);
-            let builder = WriterBuilder::new().with_delimiter(self.delimiter);
-            let serializer = CsvSerializer::new()
-                .with_builder(builder)
-                .with_header(header);
-            serializers.push(serializer);
-
-            let file = file_group.clone();
-            let writer = self
-                .create_writer(file.object_meta.clone().into(), object_store.clone())
-                .await?;
-            writers.push(writer);
+        match self.config.writer_mode {
+            FileWriterMode::Append => {
+                for file_group in &self.config.file_groups {
+                    // In append mode, consider has_header flag only when file is empty (at the start).
+                    // For other modes, use has_header flag as is.
+                    let header = self.has_header
+                        && (!matches!(&self.config.writer_mode, FileWriterMode::Append)
+                            || file_group.object_meta.size == 0);
+                    let builder = WriterBuilder::new().with_delimiter(self.delimiter);
+                    let serializer = CsvSerializer::new()
+                        .with_builder(builder)
+                        .with_header(header);
+                    serializers.push(serializer);
+        
+                    let file = file_group.clone();
+                    let writer = self
+                        .create_writer(file.object_meta.clone().into(), object_store.clone())
+                        .await?;
+                    writers.push(writer);
+                }
+            }
+            FileWriterMode::Put => return Err(DataFusionError::NotImplemented("Put Mode is not implemented for CSV Sink yet".into())),
+            FileWriterMode::PutMultipart =>{
+                let base_path = &self.config.table_paths[0];
+                //uniquely identify this batch of files with a random string, to prevent collisions overwriting files
+                let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                for part_idx in 0..num_partitions{
+                    let header = true;
+                    let builder = WriterBuilder::new().with_delimiter(self.delimiter);
+                    let serializer = CsvSerializer::new()
+                        .with_builder(builder)
+                        .with_header(header);
+                    serializers.push(serializer);
+                    let file_path = base_path.prefix().child(format!("/{}_{}.csv", write_id, part_idx));
+                    let object_meta = ObjectMeta{
+                        location: file_path,
+                        last_modified: chrono::offset::Utc::now(),
+                        size: 0,
+                        e_tag: None,
+                    };
+                    let writer = self.create_writer(
+                        object_meta.into(), object_store.clone())
+                        .await?;
+                    writers.push(writer);
+                }
+            }
         }
 
-        let mut idx = 0;
         let mut row_count = 0;
         // Map errors to DatafusionError.
         let err_converter =
             |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
-        while let Some(maybe_batch) = data.next().await {
-            // Write data to files in a round robin fashion:
-            idx = (idx + 1) % num_partitions;
-            let serializer = &mut serializers[idx];
-            let batch = check_for_errors(maybe_batch, &mut writers).await?;
-            row_count += batch.num_rows();
-            let bytes =
-                check_for_errors(serializer.serialize(batch).await, &mut writers).await?;
-            let writer = &mut writers[idx];
-            check_for_errors(
-                writer.write_all(&bytes).await.map_err(err_converter),
-                &mut writers,
-            )
-            .await?;
+        for idx in 0..num_partitions{
+            while let Some(maybe_batch) = data[idx].next().await {
+                // Write data to files in a round robin fashion:
+                let serializer = &mut serializers[idx];
+                let batch = check_for_errors(maybe_batch, &mut writers).await?;
+                row_count += batch.num_rows();
+                let bytes =
+                    check_for_errors(serializer.serialize(batch).await, &mut writers).await?;
+                let writer = &mut writers[idx];
+                check_for_errors(
+                    writer.write_all(&bytes).await.map_err(err_converter),
+                    &mut writers,
+                )
+                .await?;
+            }
         }
         // Perform cleanup:
         let n_writers = writers.len();

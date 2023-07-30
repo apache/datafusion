@@ -25,6 +25,7 @@ use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
 use datafusion_common::{DataFusionError, SchemaError};
+use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -923,6 +924,21 @@ impl DataFrame {
             self.session_state,
             LogicalPlanBuilder::except(left_plan, right_plan, true)?,
         ))
+    }
+
+    /// Write this DataFrame to the referenced table
+    /// This method uses on the same underlying implementation
+    /// as the SQL Insert Into statement. 
+    /// Unlike most other DataFrame methods, this method executes
+    /// eagerly, writing data, and returning the count of rows written.
+    pub async fn write_table(self, table_name: &str) -> Result<Vec<RecordBatch>, DataFusionError>{
+        let arrow_schema = Schema::from(self.schema());
+        let plan = LogicalPlanBuilder::insert_into(self.plan, table_name.to_owned(), &arrow_schema)?.build()?;
+        DataFrame::new(
+            self.session_state,
+            plan)
+            .collect()
+            .await
     }
 
     /// Write a `DataFrame` to a CSV file.

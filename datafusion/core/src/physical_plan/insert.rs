@@ -57,7 +57,7 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     /// or rollback required.
     async fn write_all(
         &self,
-        data: SendableRecordBatchStream,
+        data: Vec<SendableRecordBatchStream>,
         context: &Arc<TaskContext>,
     ) -> Result<u64>;
 }
@@ -136,6 +136,17 @@ impl InsertExec {
             )))
         }
     }
+
+    fn make_all_input_streams(&self, context: Arc<TaskContext>) -> Result<Vec<SendableRecordBatchStream>>{
+        let n_input_parts = self.input.output_partitioning().partition_count();
+        let mut streams = Vec::with_capacity(n_input_parts);
+        for part in 0..n_input_parts{
+            streams.push(
+                self.make_input_stream(part, context.clone())?
+            );
+        }
+        Ok(streams)
+    }
 }
 
 impl DisplayAs for InsertExec {
@@ -169,11 +180,15 @@ impl ExecutionPlan for InsertExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        self.input.output_ordering()
     }
 
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+    fn benefits_from_input_partitioning(&self) -> bool {
+        // Incoming number of partitions is taken to be the
+        // number of files the query is required to write out.
+        // The optimizer should not change this number. 
+        // Parrallelism is handled within the appropriate DataSink
+        false
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
@@ -216,22 +231,7 @@ impl ExecutionPlan for InsertExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return Err(DataFusionError::Internal(
-                format!("Invalid requested partition {partition}. InsertExec requires a single input partition."
-                )));
-        }
-
-        // Execute each of our own input's partitions and pass them to the sink
-        let input_partition_count = self.input.output_partitioning().partition_count();
-        if input_partition_count != 1 {
-            return Err(DataFusionError::Internal(format!(
-                "Invalid input partition count {input_partition_count}. \
-                         InsertExec needs only a single partition."
-            )));
-        }
-
-        let data = self.make_input_stream(0, context.clone())?;
+        let data = self.make_all_input_streams(context.clone())?;
 
         let count_schema = self.count_schema.clone();
         let sink = self.sink.clone();

@@ -781,7 +781,7 @@ impl TableProvider for ListingTable {
 
         if self.table_paths().len() > 1 {
             return plan_err!(
-                "Writing to a table backed by multiple files is not supported yet"
+                "Writing to a table backed by multiple partitions is not supported yet"
             );
         }
 
@@ -799,20 +799,26 @@ impl TableProvider for ListingTable {
         .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
-
-        if file_groups.len() > 1 {
-            return plan_err!(
-                "Datafusion currently supports tables from single partition and/or file."
-            );
+        let writer_mode;
+        //if we are writing a single output_partition to a table backed by a single file
+        //we can append to that file. Otherwise, we can write new files into the directory
+        //adding new files to the listing table in order to insert to the table.
+        let input_partitions = input.output_partitioning().partition_count();
+        if file_groups.len() == 1 && input_partitions==1{
+            writer_mode = crate::datasource::file_format::FileWriterMode::Append;          
+        } else{
+            writer_mode = crate::datasource::file_format::FileWriterMode::PutMultipart;
         }
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
             object_store_url: self.table_paths()[0].object_store(),
+            input_partitions,
+            table_paths: self.table_paths().clone(),
             file_groups,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
-            writer_mode: crate::datasource::file_format::FileWriterMode::Append,
+            writer_mode,
         };
 
         self.options()

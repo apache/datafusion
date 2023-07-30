@@ -82,7 +82,7 @@ use std::{
     vec,
 };
 
-use super::{ColumnStatistics, Statistics};
+use super::{ColumnStatistics, Statistics, listing::ListingTableUrl};
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
@@ -323,6 +323,10 @@ pub struct FileSinkConfig {
     pub object_store_url: ObjectStoreUrl,
     /// A vector of [`PartitionedFile`] structs, each representing a file partition
     pub file_groups: Vec<PartitionedFile>,
+    /// number of partitions in the input_plan
+    pub input_partitions: usize,
+    /// Vector of partition paths
+    pub table_paths: Vec<ListingTableUrl>,
     /// The schema of the output file
     pub output_schema: SchemaRef,
     /// A vector of column names and their corresponding data types,
