@@ -323,8 +323,6 @@ pub struct FileSinkConfig {
     pub object_store_url: ObjectStoreUrl,
     /// A vector of [`PartitionedFile`] structs, each representing a file partition
     pub file_groups: Vec<PartitionedFile>,
-    /// number of partitions in the input_plan
-    pub input_partitions: usize,
     /// Vector of partition paths
     pub table_paths: Vec<ListingTableUrl>,
     /// The schema of the output file

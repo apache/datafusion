@@ -180,7 +180,7 @@ impl ExecutionPlan for InsertExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
+        None
     }
 
     fn benefits_from_input_partitioning(&self) -> bool {

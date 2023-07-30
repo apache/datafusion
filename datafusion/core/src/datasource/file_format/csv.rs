@@ -597,6 +597,7 @@ impl DataSink for CsvSink {
             }
             FileWriterMode::Put => return Err(DataFusionError::NotImplemented("Put Mode is not implemented for CSV Sink yet".into())),
             FileWriterMode::PutMultipart =>{
+                //currently assuming only 1 partition path (i.e. not hive style partitioning on a column)
                 let base_path = &self.config.table_paths[0];
                 //uniquely identify this batch of files with a random string, to prevent collisions overwriting files
                 let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
