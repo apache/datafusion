@@ -143,10 +143,10 @@ AS VALUES
 statement ok
 CREATE TABLE arrays_values_without_nulls
 AS VALUES
-  (make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ','),
-  (make_array(11, 12, 13, 14, 15, 16, 17, 18, 19, 20), 12, 2, '.'),
-  (make_array(21, 22, 23, 24, 25, 26, 27, 28, 29, 30), 23, 3, '-'),
-  (make_array(31, 32, 33, 34, 35, 26, 37, 38, 39, 40), 34, 4, 'ok')
+  (make_array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 1, 1, ',', [2,3]),
+  (make_array(11, 12, 13, 14, 15, 16, 17, 18, 19, 20), 12, 2, '.', [4,5]),
+  (make_array(21, 22, 23, 24, 25, 26, 27, 28, 29, 30), 23, 3, '-', [6,7]),
+  (make_array(31, 32, 33, 34, 35, 26, 37, 38, 39, 40), 34, 4, 'ok', [8,9])
 ;
 
 statement ok
@@ -224,13 +224,13 @@ NULL [7, , 8] 13 [[, , 60]]
 NULL NULL NULL NULL
 
 # arrays_values_without_nulls table
-query ?II
-select column1, column2, column3 from arrays_values_without_nulls;
+query ?IIT
+select column1, column2, column3, column4 from arrays_values_without_nulls;
 ----
-[1, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1
-[11, 12, 13, 14, 15, 16, 17, 18, 19, 20] 12 2
-[21, 22, 23, 24, 25, 26, 27, 28, 29, 30] 23 3
-[31, 32, 33, 34, 35, 26, 37, 38, 39, 40] 34 4
+[1, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1 ,
+[11, 12, 13, 14, 15, 16, 17, 18, 19, 20] 12 2 .
+[21, 22, 23, 24, 25, 26, 27, 28, 29, 30] 23 3 -
+[31, 32, 33, 34, 35, 26, 37, 38, 39, 40] 34 4 ok
 
 # arrays_with_repeating_elements table
 query ?III
@@ -380,7 +380,27 @@ from values;
 [7] false [adipiscing, F] false false
 [8] false [, ] true false
 
+# make_array with column of list
+query ??
+select column1, column5 from arrays_values_without_nulls;
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9, 10] [2, 3]
+[11, 12, 13, 14, 15, 16, 17, 18, 19, 20] [4, 5]
+[21, 22, 23, 24, 25, 26, 27, 28, 29, 30] [6, 7]
+[31, 32, 33, 34, 35, 26, 37, 38, 39, 40] [8, 9]
 
+query ??
+select make_array(column1),
+       make_array(column1, column5)
+from arrays_values_without_nulls;
+----
+[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]] [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [2, 3]]
+[[11, 12, 13, 14, 15, 16, 17, 18, 19, 20]] [[11, 12, 13, 14, 15, 16, 17, 18, 19, 20], [4, 5]]
+[[21, 22, 23, 24, 25, 26, 27, 28, 29, 30]] [[21, 22, 23, 24, 25, 26, 27, 28, 29, 30], [6, 7]]
+[[31, 32, 33, 34, 35, 26, 37, 38, 39, 40]] [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [8, 9]]
+
+# query
+# select make_array(column1, make_array(50,51,52)) from arrays_values_without_nulls;
 
 ## array_append (aliases: `list_append`, `array_push_back`, `list_push_back`)
 
@@ -1753,9 +1773,7 @@ select make_array(1.0, '2', null)
 ----
 [1.0, 2, ]
 
-
 ### FixedSizeListArray
-
 
 statement ok
 CREATE EXTERNAL TABLE fixed_size_list_array STORED AS PARQUET LOCATION 'tests/data/fixed_size_list_array.parquet';
@@ -1787,16 +1805,16 @@ select arrow_cast(f0, 'List(Int64)') from fixed_size_list_array;
 query ?
 select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
 ----
-[[1, 2], [3, 4]]
+[[1, 2]]
+[[3, 4]]
 
 query ?
 select make_array(f0) from fixed_size_list_array
 ----
-[[1, 2], [3, 4]]
-
+[[1, 2]]
+[[3, 4]]
 
 ### Delete tables
-
 
 statement ok
 drop table values;
