@@ -262,11 +262,14 @@ impl DataSink for MemSink {
         let mut new_batches = vec![vec![]; num_partitions];
         let mut i = 0;
         let mut row_count = 0;
-        while let Some(batch) = data[0].next().await.transpose()? {
-            row_count += batch.num_rows();
-            new_batches[i].push(batch);
-            i = (i + 1) % num_partitions;
+        for stream in data{
+            while let Some(batch) = stream.next().await.transpose()? {
+                row_count += batch.num_rows();
+                new_batches[i].push(batch);
+                i = (i + 1) % num_partitions;
+            }
         }
+        
 
         // write the outputs into the batches
         for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
