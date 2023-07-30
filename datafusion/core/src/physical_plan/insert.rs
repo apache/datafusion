@@ -137,13 +137,14 @@ impl InsertExec {
         }
     }
 
-    fn make_all_input_streams(&self, context: Arc<TaskContext>) -> Result<Vec<SendableRecordBatchStream>>{
+    fn make_all_input_streams(
+        &self,
+        context: Arc<TaskContext>,
+    ) -> Result<Vec<SendableRecordBatchStream>> {
         let n_input_parts = self.input.output_partitioning().partition_count();
         let mut streams = Vec::with_capacity(n_input_parts);
-        for part in 0..n_input_parts{
-            streams.push(
-                self.make_input_stream(part, context.clone())?
-            );
+        for part in 0..n_input_parts {
+            streams.push(self.make_input_stream(part, context.clone())?);
         }
         Ok(streams)
     }
@@ -186,7 +187,7 @@ impl ExecutionPlan for InsertExec {
     fn benefits_from_input_partitioning(&self) -> bool {
         // Incoming number of partitions is taken to be the
         // number of files the query is required to write out.
-        // The optimizer should not change this number. 
+        // The optimizer should not change this number.
         // Parrallelism is handled within the appropriate DataSink
         false
     }

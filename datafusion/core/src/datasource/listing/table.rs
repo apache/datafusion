@@ -804,9 +804,9 @@ impl TableProvider for ListingTable {
         //we can append to that file. Otherwise, we can write new files into the directory
         //adding new files to the listing table in order to insert to the table.
         let input_partitions = input.output_partitioning().partition_count();
-        if file_groups.len() == 1 && input_partitions==1{
-            writer_mode = crate::datasource::file_format::FileWriterMode::Append;          
-        } else{
+        if file_groups.len() == 1 && input_partitions == 1 {
+            writer_mode = crate::datasource::file_format::FileWriterMode::Append;
+        } else {
             writer_mode = crate::datasource::file_format::FileWriterMode::PutMultipart;
         }
 

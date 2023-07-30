@@ -277,7 +277,7 @@ pub async fn plan_to_json(
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
             let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
-            
+
             let mut buffer = Vec::with_capacity(1024);
             while let Some(batch) = stream.next().await.transpose()? {
                 let mut writer = json::LineDelimitedWriter::new(buffer);

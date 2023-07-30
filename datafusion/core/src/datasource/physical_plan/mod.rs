@@ -82,7 +82,7 @@ use std::{
     vec,
 };
 
-use super::{ColumnStatistics, Statistics, listing::ListingTableUrl};
+use super::{listing::ListingTableUrl, ColumnStatistics, Statistics};
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
