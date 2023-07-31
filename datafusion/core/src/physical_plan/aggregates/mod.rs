@@ -84,6 +84,20 @@ pub enum AggregateMode {
     SinglePartitioned,
 }
 
+impl AggregateMode {
+    /// Check whether aggregations is in first stage.
+    /// It means that, aggregation input is not another aggregation
+    /// `merge_batch` method will not be called for these modes.
+    fn is_first_stage(&self) -> bool {
+        match self {
+            AggregateMode::Partial
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => true,
+            AggregateMode::Final | AggregateMode::FinalPartitioned => false,
+        }
+    }
+}
+
 /// Group By expression modes
 ///
 /// `PartiallyOrdered` and `FullyOrdered` are used to reason about
@@ -265,18 +279,6 @@ pub struct AggregateExec {
     /// Stores mode and output ordering information for the `AggregateExec`.
     aggregation_ordering: Option<AggregationOrdering>,
     required_input_ordering: Option<LexOrderingReq>,
-}
-
-/// Check whether aggregations is in first stage.
-/// It means that, aggregation input is not another aggregation
-/// `merge_batch` method will not be called for these modes.
-fn is_aggregation_first_stage(mode: &AggregateMode) -> bool {
-    match mode {
-        AggregateMode::Partial
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => true,
-        AggregateMode::Final | AggregateMode::FinalPartitioned => false,
-    }
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -506,14 +508,14 @@ fn calc_required_input_ordering(
             for req in aggregator_requirement {
                 // Final and FinalPartitioned modes doesn't enforce requirement from aggregators.
                 // Ordering sensitive aggregators handles this case during merge.
-                if is_aggregation_first_stage(mode)
+                if mode.is_first_stage()
                     && requirement.iter().all(|item| req.expr.ne(&item.expr))
                 {
                     requirement.push(req.clone());
                 }
             }
             required_input_ordering = requirement;
-        } else if is_aggregation_first_stage(mode) {
+        } else if mode.is_first_stage() {
             required_input_ordering = aggregator_requirement;
         }
         // Keep track of the direction from which required_input_ordering is constructed:
@@ -596,7 +598,7 @@ impl AggregateExec {
                 // ordering of each partial result. Hence we do not need to use ordering
                 // requirement in final modes as long as in partial mode mode accumulation is done
                 // with correct ordering.
-                if is_order_sensitive(aggr_expr) && is_aggregation_first_stage(&mode) {
+                if is_order_sensitive(aggr_expr) && mode.is_first_stage() {
                     fn_reqs
                 } else {
                     None
