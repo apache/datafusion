@@ -636,6 +636,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             order_exprs,
             unbounded,
             options,
+            constraints,
         } = statement;
 
         // semantic checks
@@ -662,6 +663,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
+        let plan = EmptyRelation {
+            produce_one_row: false,
+            schema: df_schema.clone(),
+        };
+        let plan = LogicalPlan::EmptyRelation(plan);
+        let constraints =
+            Constraints::new_from_table_constraints(&constraints, plan.schema())?;
 
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             PlanCreateExternalTable {
@@ -678,6 +686,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 order_exprs: ordered_exprs,
                 unbounded,
                 options,
+                constraints,
             },
         )))
     }

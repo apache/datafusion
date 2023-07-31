@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{
@@ -191,6 +192,8 @@ pub struct CreateExternalTable {
     pub unbounded: bool,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
+    /// The list of constraints in the schema, such as primary key, unique, etc.
+    pub constraints: Constraints,
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
