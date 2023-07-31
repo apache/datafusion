@@ -86,7 +86,7 @@ impl ExecutionPlan for AnalyzeExec {
 
     /// AnalyzeExec is handled specially so this value is ignored
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     /// Specifies whether this plan generates an infinite stream of records.

@@ -145,13 +145,12 @@ pub fn check_finiteness_requirements(
             return Err(DataFusionError::Plan(MSG.to_owned()));
         }
     }
-    input
+    let unbounded = input
         .plan
         .unbounded_output(&input.children_unbounded)
-        .map(|value| {
-            input.unbounded = value;
-            Transformed::Yes(input)
-        })
+        .unwrap_or(true);
+    input.unbounded = unbounded;
+    Ok(Transformed::Yes(input))
 }
 
 /// This function returns whether a given symmetric hash join is amenable to
