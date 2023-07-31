@@ -314,12 +314,12 @@ mod tests {
             counter = counter + 1;
             
             // building col `a`
-            let mut values_vector: Vec<i32> = Vec::new();
+            let mut values_vector: Vec<String> = Vec::new();
             for _i in 1..=8192 {
-                values_vector.push(rand::thread_rng().gen_range(1..=1000));
-                // values_vector.push(String::from(Uuid::new_v4().to_string()));
+                // values_vector.push(rand::thread_rng().gen_range(1..=1000));
+                values_vector.push(String::from(Uuid::new_v4().to_string()));
             }
-            let values = Int32Array::from(values_vector);
+            let values = StringArray::from(values_vector);
 
             let mut keys_vector: Vec<i32> = Vec::new();
             for _i in 1..=8192 {
@@ -370,7 +370,7 @@ mod tests {
         let task_ctx: Arc<TaskContext> = session_ctx.task_ctx();
 
         let schema = SchemaRef::new(Schema::new(vec![
-            Field::new("a", DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32)), false),
+            Field::new("a", DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)), false),
             Field::new("b", DataType::UInt32, false),
         ]));
 
