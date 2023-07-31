@@ -376,6 +376,7 @@ impl PhysicalOptimizerRule for EnforceSorting {
                     plan_with_pipeline_fixer,
                     false,
                     true,
+                    config,
                 )
             })?;
 
