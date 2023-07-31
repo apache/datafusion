@@ -20,6 +20,7 @@ mod binary_op;
 mod function;
 mod grouping_set;
 mod identifier;
+mod json_access;
 mod order_by;
 mod subquery;
 mod substring;
@@ -66,6 +67,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             // Note the order that we push the entries to the stack
                             // is important. We want to visit the left node first.
                             let op = self.parse_sql_binary_op(op)?;
+                            stack.push(StackEntry::Operator(op));
+                            stack.push(StackEntry::SQLExpr(right));
+                            stack.push(StackEntry::SQLExpr(left));
+                        }
+                        SQLExpr::JsonAccess {
+                            left,
+                            operator,
+                            right,
+                        } => {
+                            let op = self.parse_sql_json_access(operator)?;
                             stack.push(StackEntry::Operator(op));
                             stack.push(StackEntry::SQLExpr(right));
                             stack.push(StackEntry::SQLExpr(left));

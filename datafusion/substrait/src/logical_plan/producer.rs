@@ -467,6 +467,8 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::BitwiseAnd => "bitwise_and",
         Operator::BitwiseOr => "bitwise_or",
         Operator::StringConcat => "str_concat",
+        Operator::AtArrow => "at_arrow",
+        Operator::ArrowAt => "arrow_at",
         Operator::BitwiseXor => "bitwise_xor",
         Operator::BitwiseShiftRight => "bitwise_shift_right",
         Operator::BitwiseShiftLeft => "bitwise_shift_left",

@@ -77,6 +77,10 @@ pub enum Operator {
     BitwiseShiftLeft,
     /// String concat
     StringConcat,
+    /// At arrow, like `@>`
+    AtArrow,
+    /// Arrow at, like `<@`
+    ArrowAt,
 }
 
 impl Operator {
@@ -108,7 +112,9 @@ impl Operator {
             | Operator::BitwiseXor
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
-            | Operator::StringConcat => None,
+            | Operator::StringConcat
+            | Operator::AtArrow
+            | Operator::ArrowAt => None,
         }
     }
 
@@ -167,6 +173,8 @@ impl Operator {
             Operator::LtEq => Some(Operator::GtEq),
             Operator::Gt => Some(Operator::Lt),
             Operator::GtEq => Some(Operator::LtEq),
+            Operator::AtArrow => Some(Operator::ArrowAt),
+            Operator::ArrowAt => Some(Operator::AtArrow),
             Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
             | Operator::Plus
@@ -214,7 +222,9 @@ impl Operator {
             | Operator::BitwiseShiftLeft
             | Operator::BitwiseShiftRight
             | Operator::BitwiseXor
-            | Operator::StringConcat => 0,
+            | Operator::StringConcat
+            | Operator::AtArrow
+            | Operator::ArrowAt => 0,
         }
     }
 }
@@ -247,6 +257,8 @@ impl fmt::Display for Operator {
             Operator::BitwiseShiftRight => ">>",
             Operator::BitwiseShiftLeft => "<<",
             Operator::StringConcat => "||",
+            Operator::AtArrow => "@>",
+            Operator::ArrowAt => "<@",
         };
         write!(f, "{display}")
     }
