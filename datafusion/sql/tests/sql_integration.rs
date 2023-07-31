@@ -237,6 +237,14 @@ CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
     "#
     .trim();
     quick_test(sql, plan);
+
+    let sql = "create table person (id int primary key, name string)";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
 }
 
 #[test]
