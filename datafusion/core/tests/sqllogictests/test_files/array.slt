@@ -611,7 +611,7 @@ select array_slice(make_array(1, 2, 3, 4, 5), 2, 6), array_slice(make_array('h',
 ----
 [2, 3, 4, 5] [l, l, o]
 
-# array_slice scalar function #6 (with negative indexes; nested array)
+# array_slice scalar function #6 (with positive indexes; nested array)
 query ?
 select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), 1, 1);
 ----
