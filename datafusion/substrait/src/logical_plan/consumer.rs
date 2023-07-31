@@ -474,15 +474,20 @@ pub async fn from_substrait_rel(
         Some(RelType::Set(set)) => match set_rel::SetOp::from_i32(set.op) {
             Some(set_op) => match set_op {
                 set_rel::SetOp::UnionAll => {
-                    assert!(!set.inputs.is_empty());
-                    let mut union_builder = Ok(LogicalPlanBuilder::from(
-                        from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
-                    ));
-                    for input in &set.inputs[1..] {
-                        union_builder = union_builder?
-                            .union(from_substrait_rel(ctx, input, extensions).await?);
+                    if !set.inputs.is_empty() {
+                        let mut union_builder = Ok(LogicalPlanBuilder::from(
+                            from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
+                        ));
+                        for input in &set.inputs[1..] {
+                            union_builder = union_builder?
+                                .union(from_substrait_rel(ctx, input, extensions).await?);
+                        }
+                        union_builder?.build()
+                    } else {
+                        Err(DataFusionError::NotImplemented(
+                            "Union relation requires at least one input".to_string(),
+                        ))
                     }
-                    union_builder?.build()
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
                     "Unsupported set operator: {set_op:?}"
