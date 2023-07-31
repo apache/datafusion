@@ -159,6 +159,21 @@ impl SortMergeJoinExec {
         })
     }
 
+    /// Get probe side information for sort merge join.
+    /// Current algorithm uses left side as probe side.
+    pub fn probe_side(&self) -> JoinSide {
+        match self.join_type {
+            JoinType::Inner
+            | JoinType::Left
+            | JoinType::Full
+            | JoinType::LeftAnti
+            | JoinType::LeftSemi => JoinSide::Left,
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                JoinSide::Right
+            }
+        }
+    }
+
     /// Set of common columns used to join on
     pub fn on(&self) -> &[(Column, Column)] {
         &self.on
@@ -314,24 +329,22 @@ impl ExecutionPlan for SortMergeJoinExec {
             )));
         }
 
-        let (streamed, buffered, on_streamed, on_buffered) = match self.join_type {
-            JoinType::Inner
-            | JoinType::Left
-            | JoinType::Full
-            | JoinType::LeftAnti
-            | JoinType::LeftSemi => (
-                self.left.clone(),
-                self.right.clone(),
-                self.on.iter().map(|on| on.0.clone()).collect(),
-                self.on.iter().map(|on| on.1.clone()).collect(),
-            ),
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (
-                self.right.clone(),
-                self.left.clone(),
-                self.on.iter().map(|on| on.1.clone()).collect(),
-                self.on.iter().map(|on| on.0.clone()).collect(),
-            ),
-        };
+        let (streamed, buffered, on_streamed, on_buffered) =
+            if self.probe_side() == JoinSide::Left {
+                (
+                    self.left.clone(),
+                    self.right.clone(),
+                    self.on.iter().map(|on| on.0.clone()).collect(),
+                    self.on.iter().map(|on| on.1.clone()).collect(),
+                )
+            } else {
+                (
+                    self.right.clone(),
+                    self.left.clone(),
+                    self.on.iter().map(|on| on.1.clone()).collect(),
+                    self.on.iter().map(|on| on.0.clone()).collect(),
+                )
+            };
 
         // execute children plans
         let streamed = streamed.execute(partition, context.clone())?;

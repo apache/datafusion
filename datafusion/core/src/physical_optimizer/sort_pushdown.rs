@@ -316,26 +316,19 @@ fn try_pushdown_requirements_to_join(
 ) -> Result<Option<Vec<Option<Vec<PhysicalSortRequirement>>>>> {
     let left_ordering = smj.left.output_ordering().unwrap_or(&[]);
     let right_ordering = smj.right.output_ordering().unwrap_or(&[]);
-    let new_output_ordering = match push_side {
-        JoinSide::Left => calculate_join_output_ordering(
-            &sort_expr,
-            right_ordering,
-            smj.join_type,
-            &smj.on,
-            smj.left.schema().fields.len(),
-            &smj.maintains_input_order(),
-            Some(JoinSide::Left),
-        )?,
-        JoinSide::Right => calculate_join_output_ordering(
-            left_ordering,
-            &sort_expr,
-            smj.join_type,
-            &smj.on,
-            smj.left.schema().fields.len(),
-            &smj.maintains_input_order(),
-            Some(JoinSide::Left),
-        )?,
+    let (new_left_ordering, new_right_ordering) = match push_side {
+        JoinSide::Left => (sort_expr.as_slice(), right_ordering),
+        JoinSide::Right => (left_ordering, sort_expr.as_slice()),
     };
+    let new_output_ordering = calculate_join_output_ordering(
+        new_left_ordering,
+        new_right_ordering,
+        smj.join_type,
+        &smj.on,
+        smj.left.schema().fields.len(),
+        &smj.maintains_input_order(),
+        Some(smj.probe_side()),
+    )?;
     if ordering_satisfy_requirement(
         new_output_ordering.as_deref(),
         parent_required,
