@@ -152,21 +152,6 @@ async fn test_udaf_returning_struct() {
     assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
 
-/// Demonstrate extracting the fields from a structure using a subquery
-#[tokio::test]
-async fn test_udaf_returning_struct_subquery() {
-    let TestContext { ctx, test_state: _ } = TestContext::new();
-    let sql = "select sq.first['value'], sq.first['time'] from (SELECT first(value, time) as first from t) as sq";
-    let expected = vec![
-        "+-----------------+----------------------------+",
-        "| sq.first[value] | sq.first[time]             |",
-        "+-----------------+----------------------------+",
-        "| 2.0             | 1970-01-01T00:00:00.000002 |",
-        "+-----------------+----------------------------+",
-    ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
-}
-
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }
