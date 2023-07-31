@@ -70,11 +70,11 @@ SELECT t1.a, t2.a as a2, t2.b
  ON t1.d = t2.d ORDER BY a2, t2.b
  LIMIT 5
 ----
-1 0 0
-1 0 0
-1 0 0
-1 0 0
-1 0 0
+0 0 0
+0 0 0
+0 0 0
+0 0 0
+0 0 0
 
 query TT
 EXPLAIN SELECT t2.a as a2, t2.b

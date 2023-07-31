@@ -757,7 +757,7 @@ pub fn build_equal_condition_join_indices(
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
     // Visit all of the probe rows
-    for (row, hash_value) in hash_values.iter().enumerate() {
+    for (row, hash_value) in hash_values.iter().enumerate().rev() {
         // Get the hash and find it in the build index
 
         // For every item on the build and probe we check if it matches
@@ -781,6 +781,8 @@ pub fn build_equal_condition_join_indices(
             }
         }
     }
+    build_indices.as_slice_mut().reverse();
+    probe_indices.as_slice_mut().reverse();
 
     let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
     let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
