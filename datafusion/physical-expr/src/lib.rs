@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod aggregate;
+pub mod analysis;
 pub mod array_expressions;
 pub mod conditional_expressions;
 #[cfg(feature = "crypto_expressions")]
@@ -50,15 +51,14 @@ pub use aggregate::groups_accumulator::{
     EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
 };
 pub use aggregate::AggregateExpr;
+pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
 
 pub use equivalence::{
     project_equivalence_properties, project_ordering_equivalence_properties,
     EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
-pub use physical_expr::{
-    analyze, AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef,
-};
+pub use physical_expr::{PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{

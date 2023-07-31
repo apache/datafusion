@@ -1329,15 +1329,15 @@ from (select * from join_t1 inner join join_t2 on join_t1.t1_id = join_t2.t2_id)
 group by t1_id
 ----
 logical_plan
-Projection: COUNT(UInt8(1))
---Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[COUNT(UInt8(1))]]
+Projection: COUNT(*)
+--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]]
 ----Projection: join_t1.t1_id
 ------Inner Join: join_t1.t1_id = join_t2.t2_id
 --------TableScan: join_t1 projection=[t1_id]
 --------TableScan: join_t2 projection=[t2_id]
 physical_plan
-ProjectionExec: expr=[COUNT(UInt8(1))@1 as COUNT(UInt8(1))]
---AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as t1_id], aggr=[COUNT(UInt8(1))]
+ProjectionExec: expr=[COUNT(*)@1 as COUNT(*)]
+--AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as t1_id], aggr=[COUNT(*)]
 ----ProjectionExec: expr=[t1_id@0 as t1_id]
 ------CoalesceBatchesExec: target_batch_size=4096
 --------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)]
