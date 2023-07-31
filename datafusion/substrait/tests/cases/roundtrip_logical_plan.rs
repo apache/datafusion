@@ -421,6 +421,24 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_union() -> Result<()> {
+    roundtrip("SELECT a, e FROM data UNION SELECT a, e FROM data").await
+}
+
+#[tokio::test]
+async fn roundtrip_union2() -> Result<()> {
+    roundtrip(
+        "SELECT a, b FROM data UNION SELECT a, b FROM data UNION SELECT a, b FROM data",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_union_all() -> Result<()> {
+    roundtrip("SELECT a, e FROM data UNION ALL SELECT a, e FROM data").await
+}
+
+#[tokio::test]
 async fn simple_intersect() -> Result<()> {
     assert_expected_plan(
         "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
