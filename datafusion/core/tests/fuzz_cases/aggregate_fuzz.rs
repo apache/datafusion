@@ -108,9 +108,6 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
         .collect::<Vec<_>>();
     let group_by = PhysicalGroupBy::new_single(expr);
 
-    println!("aggregate_expr: {aggregate_expr:?}");
-    println!("group_by: {group_by:?}");
-
     let aggregate_exec_running = Arc::new(
         AggregateExec::try_new(
             AggregateMode::Partial,
@@ -170,6 +167,8 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             (i, usual_line),
             (i, running_line),
             "Inconsistent result\n\n\
+             Aggregate_expr: {aggregate_expr:?}\n\
+             group_by: {group_by:?}\n\
              Left Plan:\n{}\n\
              Right Plan:\n{}\n\
              schema:\n{schema}\n\

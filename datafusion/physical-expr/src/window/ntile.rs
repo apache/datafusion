@@ -18,13 +18,16 @@
 //! Defines physical expression for `ntile` that can evaluated
 //! at runtime during query execution
 
+use crate::expressions::Column;
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::PhysicalExpr;
+use crate::{PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::Field;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, SchemaRef, SortOptions};
 use datafusion_common::Result;
 use datafusion_expr::PartitionEvaluator;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -61,6 +64,18 @@ impl BuiltInWindowFunctionExpr for Ntile {
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(NtileEvaluator { n: self.n }))
+    }
+
+    fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+        // The built-in NTILE window function introduces a new ordering:
+        schema.column_with_name(self.name()).map(|(idx, field)| {
+            let expr = Arc::new(Column::new(field.name(), idx));
+            let options = SortOptions {
+                descending: false,
+                nulls_first: false,
+            }; // ASC, NULLS LAST
+            PhysicalSortExpr { expr, options }
+        })
     }
 }
 

@@ -45,6 +45,23 @@ FF01 ff01 Utf8 Binary
 ABC 0abc Utf8 Binary
 000 0000 Utf8 Binary
 
+# comparisons
+query ?BBBB
+SELECT
+  column2,
+  -- binary compare with string
+  column2 = 'ABC',
+  column2 <> 'ABC',
+  -- binary compared with binary
+  column2 = X'ABC',
+  column2 <> X'ABC'
+FROM t;
+----
+ff01 false true false true
+0abc false true true false
+0000 false true false true
+
+
 # predicates
 query T?
 SELECT column1, column2
@@ -127,3 +144,9 @@ SELECT column1, column1 = arrow_cast(X'0102', 'FixedSizeBinary(2)') FROM t
 # Comparison to different sized Binary
 query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation FixedSizeBinary\(3\) = Binary
 SELECT column1, column1 = X'0102' FROM t
+
+statement ok
+drop table t_source
+
+statement ok
+drop table t

@@ -80,10 +80,10 @@ pub mod aggregates;
 pub mod arrow_files;
 #[cfg(feature = "avro")]
 pub mod create_drop;
+pub mod csv_files;
 pub mod explain_analyze;
 pub mod expr;
 pub mod group_by;
-pub mod information_schema;
 pub mod joins;
 pub mod limit;
 pub mod order;
