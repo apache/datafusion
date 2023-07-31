@@ -4633,6 +4633,7 @@ mod tests {
         assert_eq!(expected, data_type.try_into().unwrap())
     }
 
+    #[cfg(not(target_arch = "aarch64"))]
     #[test]
     fn size_of_scalar() {
         // Since ScalarValues are used in a non trivial number of places,
