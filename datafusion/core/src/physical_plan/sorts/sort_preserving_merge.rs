@@ -390,23 +390,7 @@ mod tests {
                 options: Default::default(),
             },
             PhysicalSortExpr {
-                expr: col("b", &schema).unwrap(),
-                options: Default::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("b", &schema).unwrap(),
-                options: Default::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("b", &schema).unwrap(),
-                options: Default::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("b", &schema).unwrap(),
-                options: Default::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("b", &schema).unwrap(),
+                expr: col("a", &schema).unwrap(),
                 options: Default::default(),
             },
         ];
