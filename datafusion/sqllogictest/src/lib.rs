@@ -17,4 +17,7 @@
 
 mod engines;
 
-pub use engines::DataFusionTestRunner;
+pub use engines::DataFusionTestEngine;
+
+#[cfg(feature = "postgres")]
+pub use engines::PostgresTestEngine;

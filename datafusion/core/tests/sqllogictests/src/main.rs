@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
 
+use datafusion_sqllogictest::{DataFusionTestEngine, PostgresTestEngine};
 use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
@@ -28,10 +29,6 @@ use tempfile::TempDir;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{DataFusionError, Result};
 
-use crate::engines::datafusion::DataFusion;
-use crate::engines::postgres::Postgres;
-
-mod engines;
 mod setup;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";
@@ -129,7 +126,7 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         return Ok(());
     };
     let mut runner = sqllogictest::Runner::new(|| async {
-        Ok(DataFusion::new(
+        Ok(DataFusionTestEngine::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
         ))
@@ -148,7 +145,7 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
     } = test_file;
     info!("Running with Postgres runner: {}", path.display());
     let mut runner =
-        sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
+        sqllogictest::Runner::new(|| PostgresTestEngine::connect(relative_path.clone()));
     runner.with_column_validator(strict_column_validator);
     runner
         .run_file_async(path)
@@ -171,7 +168,7 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
         return Ok(());
     };
     let mut runner = sqllogictest::Runner::new(|| async {
-        Ok(DataFusion::new(
+        Ok(DataFusionTestEngine::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
         ))

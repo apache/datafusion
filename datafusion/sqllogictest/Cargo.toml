@@ -41,7 +41,17 @@ itertools = "0.11"
 lazy_static = {version = "^1.4.0"}
 object_store = "0.6.1"
 rust_decimal = {version = "1.27.0"}
+log = "^0.4"
 sqllogictest = "0.15.0"
 sqlparser.workspace = true
 thiserror = "1.0.44"
 tokio = {version = "1.0"}
+bytes = {version = "1.4.0", optional = true}
+futures = {version = "0.3.28", optional = true}
+chrono = {version = "0.4.26", optional = true}
+tokio-postgres = {version = "0.7.7", optional = true}
+postgres-types = {version = "0.2.4", optional = true}
+postgres-protocol = {version = "0.6.4", optional = true}
+
+[features]
+postgres = ["bytes", "futures", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
