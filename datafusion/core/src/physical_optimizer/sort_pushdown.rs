@@ -222,7 +222,7 @@ fn pushdown_requirement_to_children(
         let expr_source_side =
             expr_source_sides(&parent_required_expr, smj.join_type, left_columns_len);
         match expr_source_side {
-            Some(JoinSide::Left) => try_pushdown_requirements_to_join_v2(
+            Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required,
                 parent_required_expr,
@@ -236,7 +236,7 @@ fn pushdown_requirement_to_children(
                 let new_right_required_expr = PhysicalSortRequirement::to_sort_exprs(
                     new_right_required.iter().cloned(),
                 );
-                try_pushdown_requirements_to_join_v2(
+                try_pushdown_requirements_to_join(
                     smj,
                     parent_required,
                     new_right_required_expr,
@@ -308,7 +308,7 @@ fn determine_children_requirement(
         RequirementsCompatibility::NonCompatible
     }
 }
-fn try_pushdown_requirements_to_join_v2(
+fn try_pushdown_requirements_to_join(
     smj: &SortMergeJoinExec,
     parent_required: Option<&[PhysicalSortRequirement]>,
     sort_expr: Vec<PhysicalSortExpr>,
