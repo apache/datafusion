@@ -228,15 +228,8 @@ impl GroupedHashAggregateStream {
         let name = format!("GroupedHashAggregateStream[{partition}]");
         let reservation = MemoryConsumer::new(name).register(context.memory_pool());
 
-        let group_ordering = agg
-            .aggregation_ordering
-            .as_ref()
-            .map(|aggregation_ordering| {
-                GroupOrdering::try_new(&group_schema, aggregation_ordering)
-            })
-            // return error if any
-            .transpose()?
-            .unwrap_or(GroupOrdering::None);
+        let group_ordering =
+            GroupOrdering::try_new(&group_schema, &agg.aggregation_ordering)?;
 
         let group_values = new_group_values(group_schema)?;
         timer.done();

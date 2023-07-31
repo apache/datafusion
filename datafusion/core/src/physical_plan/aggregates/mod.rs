@@ -239,6 +239,37 @@ pub(crate) struct AggregationOrdering {
     ordering: LexOrdering,
 }
 
+impl AggregationOrdering {
+    /// returns an AggregateOrdering that represents a group by with
+    /// no information about the ordering of its input
+    pub(crate) fn new_none() -> Self {
+        Self {
+            mode: GroupByOrderMode::None,
+            order_indices: vec![],
+            ordering: vec![],
+        }
+    }
+
+    /// return true if this is GroupByOrderMode::None
+    pub(crate) fn is_none(&self) -> bool {
+        return matches!(&self.mode, GroupByOrderMode::None);
+    }
+
+    /// return true if there is some aggregation ordering
+    pub(crate) fn is_some(&self) -> bool {
+        return !self.is_none();
+    }
+
+    /// What order is the output?
+    pub(crate) fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        if !self.ordering.is_empty() {
+            Some(self.ordering.as_slice())
+        } else {
+            None
+        }
+    }
+}
+
 /// Hash aggregate execution plan
 #[derive(Debug)]
 pub struct AggregateExec {
@@ -266,7 +297,8 @@ pub struct AggregateExec {
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
     /// Stores mode and output ordering information for the `AggregateExec`.
-    aggregation_ordering: Option<AggregationOrdering>,
+    aggregation_ordering: AggregationOrdering,
+    /// input order required for this aggregate exec
     required_input_ordering: Option<LexOrderingReq>,
 }
 
@@ -277,11 +309,11 @@ pub struct AggregateExec {
 fn get_working_mode(
     input: &Arc<dyn ExecutionPlan>,
     group_by: &PhysicalGroupBy,
-) -> Option<(GroupByOrderMode, Vec<usize>)> {
+) -> (GroupByOrderMode, Vec<usize>) {
     if group_by.groups.len() > 1 {
         // We do not currently support streaming execution if we have more
         // than one group (e.g. we have grouping sets).
-        return None;
+        return (GroupByOrderMode::None, vec![]);
     };
 
     let output_ordering = input.output_ordering().unwrap_or(&[]);
@@ -307,7 +339,7 @@ fn get_working_mode(
     let first_n = longest_consecutive_prefix(ordered_indices);
     if first_n == 0 {
         // No GROUP by columns are ordered, we can not do streaming execution.
-        return None;
+        return (GroupByOrderMode::None, vec![]);
     }
     let ordered_exprs = ordering_exprs[0..first_n].to_vec();
     // Find indices for the GROUP BY expressions such that when we iterate with
@@ -318,36 +350,40 @@ fn get_working_mode(
         get_indices_of_matching_exprs(&ordered_exprs, &groupby_exprs, || {
             input.equivalence_properties()
         });
-    Some(if first_n == group_by.expr.len() {
+    if first_n == group_by.expr.len() {
         (GroupByOrderMode::FullyOrdered, ordered_group_by_indices)
     } else {
         (GroupByOrderMode::PartiallyOrdered, ordered_group_by_indices)
-    })
+    }
 }
 
 /// This function gathers the ordering information for the GROUP BY columns.
 fn calc_aggregation_ordering(
     input: &Arc<dyn ExecutionPlan>,
     group_by: &PhysicalGroupBy,
-) -> Option<AggregationOrdering> {
-    get_working_mode(input, group_by).map(|(mode, order_indices)| {
-        let existing_ordering = input.output_ordering().unwrap_or(&[]);
-        let out_group_expr = output_group_expr_helper(group_by);
-        // Calculate output ordering information for the operator:
-        let out_ordering = order_indices
-            .iter()
-            .zip(existing_ordering)
-            .map(|(idx, input_col)| PhysicalSortExpr {
-                expr: out_group_expr[*idx].clone(),
-                options: input_col.options,
-            })
-            .collect::<Vec<_>>();
-        AggregationOrdering {
-            mode,
-            order_indices,
-            ordering: out_ordering,
+) -> AggregationOrdering {
+    let (mode, order_indices) = get_working_mode(input, group_by);
+    match mode {
+        GroupByOrderMode::None => AggregationOrdering::new_none(),
+        GroupByOrderMode::PartiallyOrdered | GroupByOrderMode::FullyOrdered => {
+            let existing_ordering = input.output_ordering().unwrap_or(&[]);
+            let out_group_expr = output_group_expr_helper(group_by);
+            // Calculate output ordering information for the operator:
+            let out_ordering = order_indices
+                .iter()
+                .zip(existing_ordering)
+                .map(|(idx, input_col)| PhysicalSortExpr {
+                    expr: out_group_expr[*idx].clone(),
+                    options: input_col.options,
+                })
+                .collect::<Vec<_>>();
+            AggregationOrdering {
+                mode,
+                order_indices,
+                ordering: out_ordering,
+            }
         }
-    })
+    }
 }
 
 /// This function returns grouping expressions as they occur in the output schema.
@@ -453,7 +489,7 @@ fn calc_required_input_ordering(
     order_by_exprs: &mut [Option<LexOrdering>],
     aggregator_reqs: LexOrderingReq,
     aggregator_reverse_reqs: Option<LexOrderingReq>,
-    aggregation_ordering: &mut Option<AggregationOrdering>,
+    aggregation_ordering: &mut AggregationOrdering,
     mode: &AggregateMode,
 ) -> Result<Option<LexOrderingReq>> {
     let mut required_input_ordering = vec![];
@@ -474,16 +510,17 @@ fn calc_required_input_ordering(
             vec![(false, aggregator_reqs)]
         };
     for (is_reverse, aggregator_requirement) in aggregator_requirements.into_iter() {
-        if let Some(AggregationOrdering {
-            ordering,
-            // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
-            // running with bounded memory, without breaking the pipeline),
-            // then we append the aggregator ordering requirement to the existing
-            // ordering. This way, we can still run with bounded memory.
-            mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
-            order_indices,
-        }) = aggregation_ordering
-        {
+        // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
+        // running with bounded memory, without breaking the pipeline),
+        // then we append the aggregator ordering requirement to the existing
+        // ordering. This way, we can still run with bounded memory.
+        if aggregation_ordering.is_some() {
+            let AggregationOrdering {
+                ordering,
+                mode: _,
+                order_indices,
+            } = aggregation_ordering;
+
             // Get the section of the input ordering that enables us to run in
             // FullyOrdered or PartiallyOrdered modes:
             let requirement_prefix =
@@ -513,13 +550,13 @@ fn calc_required_input_ordering(
             if matches!(mode, AggregateMode::Partial)
                 && !aggregator_requirement.is_empty()
             {
-                *aggregation_ordering = Some(AggregationOrdering {
+                *aggregation_ordering = AggregationOrdering {
                     mode: GroupByOrderMode::None,
                     order_indices: vec![],
                     ordering: PhysicalSortRequirement::to_sort_exprs(
                         aggregator_requirement.clone(),
                     ),
-                });
+                };
             }
             required_input_ordering = aggregator_requirement;
         }
@@ -794,8 +831,8 @@ impl DisplayAs for AggregateExec {
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
 
-                if let Some(aggregation_ordering) = &self.aggregation_ordering {
-                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
+                if !self.aggregation_ordering.is_none() {
+                    write!(f, ", ordering_mode={:?}", self.aggregation_ordering.mode)?;
                 }
             }
         }
@@ -859,9 +896,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.aggregation_ordering
-            .as_ref()
-            .map(|item: &AggregationOrdering| item.ordering.as_slice())
+        self.aggregation_ordering.output_ordering()
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -1303,23 +1338,20 @@ mod tests {
         // Some(GroupByOrderMode) represents, we can run algorithm with existing ordering; and algorithm should work in
         // GroupByOrderMode.
         let test_cases = vec![
-            (vec!["a"], Some((FullyOrdered, vec![0]))),
-            (vec!["b"], None),
-            (vec!["c"], None),
-            (vec!["b", "a"], Some((FullyOrdered, vec![1, 0]))),
-            (vec!["c", "b"], None),
-            (vec!["c", "a"], Some((PartiallyOrdered, vec![1]))),
-            (vec!["c", "b", "a"], Some((FullyOrdered, vec![2, 1, 0]))),
-            (vec!["d", "a"], Some((PartiallyOrdered, vec![1]))),
-            (vec!["d", "b"], None),
-            (vec!["d", "c"], None),
-            (vec!["d", "b", "a"], Some((PartiallyOrdered, vec![2, 1]))),
-            (vec!["d", "c", "b"], None),
-            (vec!["d", "c", "a"], Some((PartiallyOrdered, vec![2]))),
-            (
-                vec!["d", "c", "b", "a"],
-                Some((PartiallyOrdered, vec![3, 2, 1])),
-            ),
+            (vec!["a"], (FullyOrdered, vec![0])),
+            (vec!["b"], (GroupByOrderMode::None, vec![])),
+            (vec!["c"], (GroupByOrderMode::None, vec![])),
+            (vec!["b", "a"], (FullyOrdered, vec![1, 0])),
+            (vec!["c", "b"], (GroupByOrderMode::None, vec![])),
+            (vec!["c", "a"], (PartiallyOrdered, vec![1])),
+            (vec!["c", "b", "a"], (FullyOrdered, vec![2, 1, 0])),
+            (vec!["d", "a"], (PartiallyOrdered, vec![1])),
+            (vec!["d", "b"], (GroupByOrderMode::None, vec![])),
+            (vec!["d", "c"], (GroupByOrderMode::None, vec![])),
+            (vec!["d", "b", "a"], (PartiallyOrdered, vec![2, 1])),
+            (vec!["d", "c", "b"], (GroupByOrderMode::None, vec![])),
+            (vec!["d", "c", "a"], (PartiallyOrdered, vec![2])),
+            (vec!["d", "c", "b", "a"], (PartiallyOrdered, vec![3, 2, 1])),
         ];
         for (case_idx, test_case) in test_cases.iter().enumerate() {
             let (group_by_columns, expected) = &test_case;
