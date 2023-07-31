@@ -267,10 +267,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
 #[cfg(test)]
 mod tests {
-    use std::char::from_u32;
     use std::iter::FromIterator;
+    use arrow_array::UInt32Array;
     use rand::Rng;
-    use std::pin::Pin;
 
     use arrow::array::ArrayRef;
     use arrow::compute::SortOptions;
@@ -298,47 +297,54 @@ mod tests {
 
     use super::*;
     
-    fn make_infinite_sorted_stream() -> BoxStream<'static, RecordBatch> {
-        futures::stream::unfold(0, |state| async move {
-            // stop the stream at 1 batch now. 
+    fn make_infinite_sorted_stream(col_b_init: &u32) -> BoxStream<'static, RecordBatch> {
+        let col_b_init_clone = col_b_init.clone();
+        futures::stream::unfold((0, col_b_init_clone), move |(mut counter, mut col_b_ascii)| async move {
+            // stop the stream at 20 batch now. 
             // Need to figure out how all the columns in the batches are sorted.
-            if state >= 1 {
+            if counter >= 12000 {
                 return None;
             }
 
-            let next_state = state + 1;
+            if counter % 5 == 0 {
+                col_b_ascii = col_b_ascii + 2;
+            }
+
+            counter = counter + 1;
             
             // building col `a`
-            let values = 
-                StringArray::from_iter_values([
-                    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 
-                    "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", 
-                    "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
-                ]);
+            let mut values_vector: Vec<i32> = Vec::new();
+            for _i in 1..=8192 {
+                values_vector.push(rand::thread_rng().gen_range(1..=1000));
+            }
+            let values = Int32Array::from(values_vector);
+
             let mut keys_vector: Vec<i32> = Vec::new();
             for _i in 1..=8192 {
-                keys_vector.push(rand::thread_rng().gen_range(0..=2));
+                keys_vector.push(rand::thread_rng().gen_range(0..8192));
             }
             let keys = Int32Array::from(keys_vector);
             let col_a: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap());        
 
             // building col `b`
-            let mut values: Vec<String> = Vec::new();
+            let mut values: Vec<u32> = Vec::new();
             for _i in 1..=8192 {
-                let ascii_value = rand::thread_rng().gen_range(97..=110);
-                values.push(String::from(from_u32(ascii_value).unwrap()));
-                values.sort();
+                // let ascii_value = rand::thread_rng().gen_range(97..=110);
+                // values.push(String::from(from_u32(col_b_ascii).unwrap()));
+                values.push(col_b_ascii);
+                // values.sort();
             }
-            let col_b: ArrayRef = Arc::new(StringArray::from(values));
+            let col_b: ArrayRef = Arc::new(UInt32Array::from(values));
 
             // build a record batch out of col `a` and col `b`
             let batch: RecordBatch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
-            Some((batch, next_state))
+            Some((batch, (counter, col_b_ascii)))
         }).boxed()
     }
     
     struct InfiniteStream {
         schema: SchemaRef,
+        col_b_init: u32
     }
 
     impl PartitionStream for InfiniteStream {
@@ -351,7 +357,7 @@ mod tests {
             // converting the iterator into a futures::stream::Stream
             Box::pin(RecordBatchStreamAdapter::new(
                 self.schema.clone(),
-                make_infinite_sorted_stream().map(Ok)
+                make_infinite_sorted_stream(&self.col_b_init).map(Ok)
             ))
         }
     }
@@ -362,16 +368,16 @@ mod tests {
         let task_ctx: Arc<TaskContext> = session_ctx.task_ctx();
 
         let schema = SchemaRef::new(Schema::new(vec![
-            Field::new("a", DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)), false),
-            Field::new("b", DataType::Utf8, false),
+            Field::new("a", DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32)), false),
+            Field::new("b", DataType::UInt32, false),
         ]));
 
         let stream_1 = Arc::new(InfiniteStream {
-            schema: schema.clone(),
+            schema: schema.clone(), col_b_init: 1
         });
 
         let stream_2 = Arc::new(InfiniteStream {
-            schema: schema.clone(),
+            schema: schema.clone(), col_b_init: 2
         });
 
         println!("SortPreservingMergeExec result: ");
