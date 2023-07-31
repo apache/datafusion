@@ -270,6 +270,7 @@ mod tests {
     use std::iter::FromIterator;
     use arrow_array::UInt32Array;
     use rand::Rng;
+    use uuid::Uuid;
 
     use arrow::array::ArrayRef;
     use arrow::compute::SortOptions;
@@ -316,6 +317,7 @@ mod tests {
             let mut values_vector: Vec<i32> = Vec::new();
             for _i in 1..=8192 {
                 values_vector.push(rand::thread_rng().gen_range(1..=1000));
+                // values_vector.push(String::from(Uuid::new_v4().to_string()));
             }
             let values = Int32Array::from(values_vector);
 
@@ -386,7 +388,27 @@ mod tests {
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
                 options: Default::default(),
-            }
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
         ];
         
         let provider = StreamingTable::try_new(schema, vec![stream_1, stream_2]).unwrap();
