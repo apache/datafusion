@@ -116,7 +116,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         }
         Operator::AtArrow
         | Operator::ArrowAt => {
-            arrow_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            array_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
                 ))
@@ -750,7 +750,7 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
     })
 }
 
-fn arrow_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     // TODO: cast between array elements (#6558)
     if lhs_type.equals_datatype(rhs_type) {
         Some(lhs_type.to_owned())

@@ -76,8 +76,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             operator,
                             right,
                         } => {
-                            // Note the order that we push the entries to the stack
-                            // is important. We want to visit the left node first.
                             let op = self.parse_sql_json_access(operator)?;
                             stack.push(StackEntry::Operator(op));
                             stack.push(StackEntry::SQLExpr(right));
