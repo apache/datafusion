@@ -99,6 +99,8 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
         "bitwise_and" => Ok(Operator::BitwiseAnd),
         "bitwise_or" => Ok(Operator::BitwiseOr),
         "str_concat" => Ok(Operator::StringConcat),
+        "at_arrow" => Ok(Operator::AtArrow),
+        "arrow_at" => Ok(Operator::ArrowAt),
         "bitwise_xor" => Ok(Operator::BitwiseXor),
         "bitwise_shift_right" => Ok(Operator::BitwiseShiftRight),
         "bitwise_shift_left" => Ok(Operator::BitwiseShiftLeft),

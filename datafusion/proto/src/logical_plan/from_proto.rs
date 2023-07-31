@@ -1634,6 +1634,8 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
         "RegexNotMatch" => Ok(Operator::RegexNotMatch),
         "StringConcat" => Ok(Operator::StringConcat),
+        "AtArrow" => Ok(Operator::AtArrow),
+        "ArrowAt" => Ok(Operator::ArrowAt),
         other => Err(proto_error(format!(
             "Unsupported binary operator '{other:?}'"
         ))),
