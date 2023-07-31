@@ -206,6 +206,7 @@ async fn exec_and_print(
 
         let results = df.collect().await?;
         print_options.print_batches(&results, now)?;
+        println!();
     }
 
     Ok(())
