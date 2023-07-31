@@ -252,12 +252,12 @@ impl AggregationOrdering {
 
     /// return true if this is GroupByOrderMode::None
     pub(crate) fn is_none(&self) -> bool {
-        return matches!(&self.mode, GroupByOrderMode::None);
+        matches!(&self.mode, GroupByOrderMode::None);
     }
 
     /// return true if there is some aggregation ordering
     pub(crate) fn is_some(&self) -> bool {
-        return !self.is_none();
+        !self.is_none();
     }
 
     /// What order is the output?
