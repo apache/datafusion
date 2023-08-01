@@ -17,23 +17,23 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
+use std::any::Any;
+use std::sync::Arc;
+
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
-use arrow_array::{Array, BooleanArray};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::Accumulator;
-
 use arrow::compute;
 use arrow::compute::{lexsort_to_indices, SortColumn};
+use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
+use arrow_array::{Array, BooleanArray};
 use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
-use std::any::Any;
-use std::sync::Arc;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::Accumulator;
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug)]
@@ -163,7 +163,7 @@ struct FirstValueAccumulator {
     // Stores ordering values, of the aggregator requirement corresponding to first value
     // of the aggregator. These values are used during merging of multiple partitions.
     orderings: Vec<ScalarValue>,
-    // Stores ordering requirement of the Accumulator
+    // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
 }
 
@@ -223,7 +223,7 @@ impl Accumulator for FirstValueAccumulator {
             convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
         let ordered_states = if sort_cols.is_empty() {
-            // When nno ordering is given, use existing state as is
+            // When no ordering is given, use the existing state as is:
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
@@ -233,7 +233,7 @@ impl Accumulator for FirstValueAccumulator {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
             let first_ordering = &first_row[1..];
             let sort_options = get_sort_options(&self.ordering_req);
-            // Either there is no existing value or there is an earlier version in new data.
+            // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
                 || compare_rows(first_ordering, &self.orderings, &sort_options)?.is_lt()
             {
@@ -382,7 +382,7 @@ struct LastValueAccumulator {
     // occur due to empty partitions.
     is_set: bool,
     orderings: Vec<ScalarValue>,
-    // Stores ordering requirement of the Accumulator
+    // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
 }
 
@@ -441,7 +441,7 @@ impl Accumulator for LastValueAccumulator {
             convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
         let ordered_states = if sort_cols.is_empty() {
-            // When nno ordering is given, use existing state as is
+            // When no ordering is given, use existing state as is:
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
@@ -453,7 +453,8 @@ impl Accumulator for LastValueAccumulator {
             let last_row = get_row_at_idx(&ordered_states, last_idx)?;
             let last_ordering = &last_row[1..];
             let sort_options = get_sort_options(&self.ordering_req);
-            // Either there is no existing value or there is a newer (latest) version in new data.
+            // Either there is no existing value, or there is a newer (latest)
+            // version in the new data:
             if !self.is_set
                 || compare_rows(last_ordering, &self.orderings, &sort_options)?.is_gt()
             {
@@ -475,8 +476,8 @@ impl Accumulator for LastValueAccumulator {
     }
 }
 
-// Filters states according to is_set flag at the last column. Then return
-// resulting states.
+/// Filters states according to the `is_set` flag at the last column and returns
+/// the resulting states.
 fn filter_states_according_to_is_set(
     states: &[ArrayRef],
     flags: &BooleanArray,
@@ -487,7 +488,7 @@ fn filter_states_according_to_is_set(
         .collect::<Result<Vec<_>>>()
 }
 
-// Combines array refs and their corresponding ordering to construct SortColumn.
+/// Combines array refs and their corresponding orderings to construct `SortColumn`s.
 fn convert_to_sort_cols(
     arrs: &[ArrayRef],
     sort_exprs: &[PhysicalSortExpr],
@@ -501,6 +502,7 @@ fn convert_to_sort_cols(
         .collect::<Vec<_>>()
 }
 
+/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
 fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
     ordering_req
         .iter()
@@ -511,10 +513,12 @@ fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
 #[cfg(test)]
 mod tests {
     use crate::aggregate::first_last::{FirstValueAccumulator, LastValueAccumulator};
+
     use arrow_array::{ArrayRef, Int64Array};
     use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
+
     use std::sync::Arc;
 
     #[test]

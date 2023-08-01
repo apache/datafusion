@@ -707,7 +707,7 @@ impl DefaultPhysicalPlanner {
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
-                        order_bys.clone(),
+                        order_bys,
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -719,9 +719,11 @@ impl DefaultPhysicalPlanner {
                         && session_state.config().target_partitions() > 1
                         && session_state.config().repartition_aggregations();
 
-                    // Some aggregators may be modified, during initialization for optimization
-                    // such as FIRST_VALUE may be turn into LAST_VALUE with reverse ordering requirement.
-                    // To reflect this change to subsequent stages, use updated aggr_expr and order by expr.
+                    // Some aggregators may be modified during initialization for
+                    // optimization purposes. For example, a FIRST_VALUE may turn
+                    // into a LAST_VALUE with the reverse ordering requirement.
+                    // To reflect such changes to subsequent stages, use the updated
+                    // `AggregateExpr`/`PhysicalSortExpr` objects.
                     let updated_aggregates = initial_aggr.aggr_expr.clone();
                     let updated_order_bys = initial_aggr.order_by_expr.clone();
 

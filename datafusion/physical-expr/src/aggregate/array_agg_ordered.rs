@@ -18,9 +18,16 @@
 //! Defines physical expressions which specify ordering requirement
 //! that can evaluated at runtime during query execution
 
+use std::any::Any;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::{Array, ListArray};
@@ -28,12 +35,8 @@ use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
+
 use itertools::izip;
-use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 /// Expression for a ARRAY_AGG(ORDER BY) aggregation.
 /// When aggregation works in multiple partitions
@@ -100,11 +103,7 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
         let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
             format_state_name(&self.name, "array_agg_orderings"),
-            Field::new(
-                "item",
-                DataType::Struct(Fields::from(orderings.clone())),
-                true,
-            ),
+            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
             false,
         ));
         Ok(fields)

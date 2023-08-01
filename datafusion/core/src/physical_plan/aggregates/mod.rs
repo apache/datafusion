@@ -25,6 +25,7 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -40,6 +41,7 @@ use datafusion_physical_expr::{
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -85,8 +87,8 @@ pub enum AggregateMode {
 }
 
 impl AggregateMode {
-    /// Check whether aggregations is in first stage.
-    /// It means that, aggregation input is not another aggregation
+    /// Checks whether this aggregation step describes a "first stage" calculation.
+    /// In other words, its input is not another aggregation result and the
     /// `merge_batch` method will not be called for these modes.
     fn is_first_stage(&self) -> bool {
         match self {
@@ -506,12 +508,13 @@ fn calc_required_input_ordering(
             let mut requirement =
                 PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
             for req in aggregator_requirement {
-                // Final and FinalPartitioned modes doesn't enforce requirement from aggregators.
-                // Ordering sensitive aggregators handles this case during merge.
+                // Final and FinalPartitioned modes don't enforce ordering
+                // requirements since order-sensitive aggregators handle such
+                // requirements during merging.
                 if mode.is_first_stage()
                     && requirement.iter().all(|item| req.expr.ne(&item.expr))
                 {
-                    requirement.push(req.clone());
+                    requirement.push(req);
                 }
             }
             required_input_ordering = requirement;
@@ -591,18 +594,16 @@ impl AggregateExec {
             .iter()
             .zip(order_by_expr.into_iter())
             .map(|(aggr_expr, fn_reqs)| {
-                // If aggregation function is ordering sensitive and aggregate mode is not Final
-                // keep ordering requirement as is; otherwise ignore requirement.
-                // In final mode, accumulators accumulate (using merge_batch) data from
-                // different partitions (result of partial results). During merge they consider
-                // ordering of each partial result. Hence we do not need to use ordering
-                // requirement in final modes as long as in partial mode mode accumulation is done
-                // with correct ordering.
-                if is_order_sensitive(aggr_expr) && mode.is_first_stage() {
-                    fn_reqs
-                } else {
-                    None
-                }
+                // If the aggregation function is order-sensitive and we are
+                // performing a "first stage" calculation, keep the ordering
+                // requirement as is; otherwise ignore the ordering requirement.
+                // In non-first stage modes, we accumulate data (using `merge_batch`)
+                // from different partitions (i.e. merge partial results). During
+                // this merge, we consider the ordering of each partial result.
+                // Hence, we do not need to use the ordering requirement in such
+                // modes as long as partial results are generated with the
+                // correct ordering.
+                fn_reqs.filter(|_| is_order_sensitive(aggr_expr) && mode.is_first_stage())
             })
             .collect::<Vec<_>>();
         let mut aggregator_reverse_reqs = None;
@@ -1216,14 +1217,26 @@ fn evaluate_group_by(
 mod tests {
     use super::*;
     use crate::execution::context::SessionConfig;
+    use crate::physical_plan::aggregates::GroupByOrderMode::{
+        FullyOrdered, PartiallyOrdered,
+    };
     use crate::physical_plan::aggregates::{
         get_finest_requirement, get_working_mode, AggregateExec, AggregateMode,
         PhysicalGroupBy,
     };
+    use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
+    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::{col, Avg};
+    use crate::physical_plan::memory::MemoryExec;
+    use crate::physical_plan::{
+        DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
+        SendableRecordBatchStream, Statistics,
+    };
+    use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{assert_is_pending, csv_exec_sorted};
     use crate::{assert_batches_eq, assert_batches_sorted_eq, physical_plan::common};
+
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1237,23 +1250,12 @@ mod tests {
         AggregateExpr, EquivalenceProperties, OrderingEquivalenceProperties,
         PhysicalExpr, PhysicalSortExpr,
     };
-    use futures::{FutureExt, Stream};
+
     use std::any::Any;
     use std::sync::Arc;
     use std::task::{Context, Poll};
 
-    use super::StreamType;
-    use crate::physical_plan::aggregates::GroupByOrderMode::{
-        FullyOrdered, PartiallyOrdered,
-    };
-    use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
-    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::{
-        DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
-        SendableRecordBatchStream, Statistics,
-    };
-    use crate::prelude::SessionContext;
+    use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -1372,15 +1374,18 @@ mod tests {
         )
     }
 
-    /// some mock data to aggregates
+    /// Generates some mock data for aggregate tests.
     fn some_data_v2() -> (Arc<Schema>, Vec<RecordBatch>) {
-        // define a schema.
+        // Define a schema:
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Float64, false),
         ]));
 
-        // define data.
+        // Generate data so that first and last value results are at 2nd and
+        // 3rd partitions.  With this construction, we guarantee we don't receive
+        // the expected result by accident, but merging actually works properly;
+        // i.e. it doesn't depend on the data insertion order.
         (
             schema.clone(),
             vec![
@@ -1945,7 +1950,7 @@ mod tests {
         Ok(())
     }
 
-    // This function construct either physical plan below,
+    // This function either constructs the physical plan below,
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
     // "  CoalesceBatchesExec: target_batch_size=1024",
@@ -1960,8 +1965,8 @@ mod tests {
     // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
     // "      MemoryExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
     //
-    // and checks whether merge_batch for FIRST_VALUE AND LAST_VALUE
-    // works correctly.
+    // and checks whether the function `merge_batch` works correctly for
+    // FIRST_VALUE and LAST_VALUE functions.
     async fn first_last_multi_partitions(
         use_coalesce_batches: bool,
         is_first_acc: bool,
