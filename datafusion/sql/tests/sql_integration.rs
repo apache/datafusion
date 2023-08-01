@@ -248,6 +248,17 @@ CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
 }
 
 #[test]
+fn plan_create_table_with_multi_pk() {
+    let sql = "create table person (id int, name string primary key, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), PrimaryKey([1])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_create_table_no_pk() {
     let sql = "create table person (id int, name string)";
     let plan = r#"
