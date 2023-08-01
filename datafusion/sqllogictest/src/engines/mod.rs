@@ -13,6 +13,10 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
+// under the License.
+
+/// Implementation of sqllogictest for datafusion. Optionally uses postgres for
+/// comparison, if the `postgres` feature is enabled.
 
 mod conversion;
 mod datafusion_engine;
