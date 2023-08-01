@@ -32,11 +32,8 @@ pub struct DataFusion {
 }
 
 impl DataFusion {
-    pub fn new(context: SessionContext, relative_path: PathBuf) -> Self {
-        Self {
-            ctx: context,
-            relative_path,
-        }
+    pub fn new(ctx: SessionContext, relative_path: PathBuf) -> Self {
+        Self { ctx, relative_path }
     }
 }
 
