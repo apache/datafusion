@@ -19,7 +19,7 @@
 name = "datafusion-benchmarks"
 description = "DataFusion Benchmarks"
 version = "28.0.0"
-edition = "2021"
+edition = { workspace = true }
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
