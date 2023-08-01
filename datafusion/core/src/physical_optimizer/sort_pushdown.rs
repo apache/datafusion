@@ -14,6 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+use std::sync::Arc;
+
 use crate::physical_optimizer::utils::{add_sort_above, is_limit, is_union, is_window};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::{calculate_join_output_ordering, JoinSide};
@@ -22,6 +25,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::JoinType;
@@ -30,8 +34,8 @@ use datafusion_physical_expr::utils::{
     ordering_satisfy_requirement, requirements_compatible,
 };
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
+
 use itertools::izip;
-use std::sync::Arc;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
@@ -329,26 +333,24 @@ fn try_pushdown_requirements_to_join(
         &smj.maintains_input_order(),
         Some(SortMergeJoinExec::probe_side(&smj.join_type)),
     )?;
-    if ordering_satisfy_requirement(
+    Ok(ordering_satisfy_requirement(
         new_output_ordering.as_deref(),
         parent_required,
         || smj.equivalence_properties(),
         || smj.ordering_equivalence_properties(),
-    ) {
+    )
+    .then(|| {
         let required_input_ordering = smj.required_input_ordering();
         let new_req = Some(PhysicalSortRequirement::from_sort_exprs(&sort_expr));
-        let new_adjusted = match push_side {
+        match push_side {
             JoinSide::Left => {
                 vec![new_req, required_input_ordering[1].clone()]
             }
             JoinSide::Right => {
                 vec![required_input_ordering[0].clone(), new_req]
             }
-        };
-        Ok(Some(new_adjusted))
-    } else {
-        Ok(None)
-    }
+        }
+    }))
 }
 
 fn expr_source_sides(

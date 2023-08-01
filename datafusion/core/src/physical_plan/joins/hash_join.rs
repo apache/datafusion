@@ -212,7 +212,7 @@ impl HashJoinExec {
         self.null_equals_null
     }
 
-    /// Calculate maintains input order flags for HashJoinEXec
+    /// Calculate order preservation flags for this hash join.
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         vec![
             false,
@@ -223,17 +223,17 @@ impl HashJoinExec {
         ]
     }
 
-    /// Get probe side information for hash join
+    /// Get probe side information for this hash join.
     pub fn probe_side(join_type: &JoinType) -> JoinSide {
-        // When output schema contains only left side, probe side is left.
-        // Otherwise it is right.
+        // When output schema contains only the left side, probe side is left.
+        // Otherwise probe side is the right side.
         match join_type {
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => JoinSide::Left,
             JoinType::Inner
             | JoinType::Right
             | JoinType::Full
             | JoinType::RightAnti
             | JoinType::RightSemi => JoinSide::Right,
-            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => JoinSide::Left,
         }
     }
 }

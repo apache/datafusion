@@ -159,23 +159,23 @@ impl SortMergeJoinExec {
         })
     }
 
-    /// Get probe side information for sort merge join.
+    /// Get probe side information for this sort merge  join.
     pub fn probe_side(join_type: &JoinType) -> JoinSide {
-        // When output schema contains only right side, probe side is right.
-        // Otherwise it is left.
+        // When output schema contains only the right side, probe side is right.
+        // Otherwise probe side is the left side.
         match join_type {
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                JoinSide::Right
+            }
             JoinType::Inner
             | JoinType::Left
             | JoinType::Full
             | JoinType::LeftAnti
             | JoinType::LeftSemi => JoinSide::Left,
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-                JoinSide::Right
-            }
         }
     }
 
-    /// Calculate maintains flags for SortMergeJoin.
+    /// Calculate order preservation flags for this sort merge join.
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         match join_type {
             JoinType::Inner => vec![true, false],

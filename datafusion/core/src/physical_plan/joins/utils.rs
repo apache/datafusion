@@ -48,6 +48,7 @@ use datafusion_physical_expr::{
 };
 
 use datafusion_physical_expr::utils::normalize_sort_exprs;
+
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use itertools::Itertools;
@@ -169,7 +170,7 @@ fn replace_on_columns_of_right_ordering(
     }
 }
 
-/// Calculate output ordering of join node.
+/// Calculate the output ordering of a given join operation.
 pub fn calculate_join_output_ordering(
     left_ordering: LexOrderingRef,
     right_ordering: LexOrderingRef,
@@ -179,13 +180,13 @@ pub fn calculate_join_output_ordering(
     maintains_input_order: &[bool],
     probe_side: Option<JoinSide>,
 ) -> Result<Option<LexOrdering>> {
-    // All joins have 2 children
+    // All joins have 2 children:
     assert_eq!(maintains_input_order.len(), 2);
     let left_maintains = maintains_input_order[0];
     let right_maintains = maintains_input_order[1];
     let (mut right_ordering, on_columns) = match join_type {
-        // In these cases right ordering should be added with left side length,
-        // since right table appended to the left table
+        // In the case below, right ordering should be offseted with the left
+        // side length, since we append the right table to the left table.
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             let updated_on_columns = on_columns
                 .iter()
@@ -235,7 +236,7 @@ pub fn calculate_join_output_ordering(
     Ok((!output_ordering.is_empty()).then_some(output_ordering))
 }
 
-/// Combine the Equivalence Properties for Join Node
+/// Combine equivalence properties of the given join inputs.
 pub fn combine_join_equivalence_properties(
     join_type: JoinType,
     left_properties: EquivalenceProperties,
@@ -287,7 +288,7 @@ pub fn combine_join_equivalence_properties(
     new_properties
 }
 
-/// Calculate the Equivalence Properties for CrossJoin Node
+/// Calculate equivalence properties for the given cross join operation.
 pub fn cross_join_equivalence_properties(
     left_properties: EquivalenceProperties,
     right_properties: EquivalenceProperties,
@@ -320,7 +321,8 @@ fn get_updated_right_ordering_equivalence_properties(
     left_columns_len: usize,
 ) -> Result<Vec<OrderingEquivalentClass>> {
     match join_type {
-        // In these modes, indices of right schema changes with offset of left table size.
+        // In these modes, indices of the right schema should be offseted by
+        // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
             add_offset_to_ordering_equivalence_classes(
                 right_oeq_classes,
@@ -343,7 +345,7 @@ fn merge_vectors(
         .collect()
 }
 
-/// Prefix with existing ordering
+/// Prefix with existing ordering.
 fn prefix_ordering_equivalence_with_existing_ordering(
     existing_ordering: &[PhysicalSortExpr],
     oeq_classes: &[OrderingEquivalentClass],
@@ -365,10 +367,10 @@ fn prefix_ordering_equivalence_with_existing_ordering(
                 .collect();
             OrderingEquivalentClass::new(updated_head, updated_others)
         })
-        .collect::<Vec<_>>()
+        .collect()
 }
 
-/// Calculate ordering equivalence Properties for Join Node.
+/// Calculate ordering equivalence properties for the given join operation.
 pub fn combine_join_ordering_equivalence_properties(
     join_type: &JoinType,
     left: &Arc<dyn ExecutionPlan>,
@@ -388,7 +390,7 @@ pub fn combine_join_ordering_equivalence_properties(
     let right_maintains = maintains_input_order[1];
     match (left_maintains, right_maintains) {
         (true, true) => {
-            return Err(DataFusionError::Execution(
+            return Err(DataFusionError::Plan(
                 "Cannot maintain ordering of both sides".to_string(),
             ))
         }
@@ -408,12 +410,12 @@ pub fn combine_join_ordering_equivalence_properties(
                 let left_output_ordering = left.output_ordering().unwrap_or(&[]);
                 // Right side ordering equivalence properties should be prepended with
                 // those of the left side while constructing output ordering equivalence
-                // properties, since stream side is LEFT;
+                // properties since stream side is the left side.
                 //
                 // If the right table ordering equivalences contain `b ASC`, and the output
                 // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
                 // for the right table should be converted to `a ASC, b ASC` before it is added
-                // to the ordering equivalences of Join.
+                // to the ordering equivalences of the join.
                 let updated_right_oeq_classes =
                     prefix_ordering_equivalence_with_existing_ordering(
                         left_output_ordering,
@@ -439,12 +441,12 @@ pub fn combine_join_ordering_equivalence_properties(
                 let right_output_ordering = right.output_ordering().unwrap_or(&[]);
                 // Left side ordering equivalence properties should be prepended with
                 // those of the right side while constructing output ordering equivalence
-                // properties, since stream side is RIGHt;
+                // properties since stream side is the right side.
                 //
                 // If the right table ordering equivalences contain `b ASC`, and the output
                 // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
                 // for the right table should be converted to `a ASC, b ASC` before it is added
-                // to the ordering equivalences of Join.
+                // to the ordering equivalences of the join.
                 let updated_left_oeq_classes =
                     prefix_ordering_equivalence_with_existing_ordering(
                         right_output_ordering,
