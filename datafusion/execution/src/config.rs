@@ -25,7 +25,7 @@ use std::{
 use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 
 /// Configuration options for Execution context
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SessionConfig {
     /// Configuration options
     options: ConfigOptions,
