@@ -16,6 +16,8 @@
 // under the License.
 
 use super::*;
+use arrow::util::pretty::pretty_format_batches;
+use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion_common::ScalarValue;
 use tempfile::TempDir;
 
@@ -570,6 +572,79 @@ async fn parallel_query_with_filter() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn parallel_query_with_limit() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+
+    let dataframe = ctx
+        .sql("SELECT c3, max(c2) as max FROM test group by c3 order by max desc limit 2")
+        .await?;
+
+    let actual_logical_plan = format!("{:?}", dataframe.logical_plan());
+    let expected_logical_plan = r#"
+Limit: skip=0, fetch=2
+  Sort: max DESC NULLS FIRST
+    Projection: test.c3, MAX(test.c2) AS max
+      Aggregate: groupBy=[[test.c3]], aggr=[[MAX(test.c2)]]
+        TableScan: test
+    "#
+    .trim();
+    assert_eq!(expected_logical_plan, actual_logical_plan);
+
+    let physical_plan = dataframe.create_physical_plan().await?;
+
+    // TODO: find the GroupedHashAggregateStream node and see if we can assert bucket count
+    finder(physical_plan.clone());
+
+    let actual_phys_plan = displayable(physical_plan.as_ref()).indent(true).to_string();
+    let mut expected_physical_plan = r#"
+GlobalLimitExec: skip=0, fetch=2
+  SortPreservingMergeExec: [max@1 DESC], fetch=2
+    SortExec: fetch=2, expr=[max@1 DESC]
+      ProjectionExec: expr=[c3@0 as c3, MAX(test.c2)@1 as max]
+        AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[MAX(test.c2)]
+          CoalesceBatchesExec: target_batch_size=8192
+            RepartitionExec: partitioning=Hash([c3@0], 8), input_partitions=8
+              AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[MAX(test.c2)]
+                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+    "#
+    .trim()
+    .to_string();
+    expected_physical_plan += "\n";
+    expected_physical_plan += actual_phys_plan
+        .lines()
+        .last()
+        .expect("Plan should not be empty");
+    expected_physical_plan += "\n";
+    assert_eq!(actual_phys_plan, expected_physical_plan);
+
+    let batches = collect(physical_plan, ctx.task_ctx()).await?;
+    let actual_rows = format!("{}", pretty_format_batches(batches.as_slice())?);
+    let expected = r#"
++-------+-----+
+| c3    | max |
++-------+-----+
+| true  | 10  |
+| false | 9   |
++-------+-----+
+"#
+    .trim();
+    assert_eq!(expected, actual_rows);
+
+    Ok(())
+}
+
+fn finder(plan: Arc<dyn ExecutionPlan>) {
+    if let Some(_aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
+        println!("Found it!");
+    }
+    for child in &plan.children() {
+        finder(child.clone());
+    }
 }
 
 #[tokio::test]

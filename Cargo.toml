@@ -39,6 +39,7 @@ arrow-flight = { version = "45.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "45.0.0", default-features = false }
 parquet = { version = "45.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.36.1", features = ["visitor"] }
+zerocopy = "0.6.1"
 
 [profile.release]
 codegen-units = 1

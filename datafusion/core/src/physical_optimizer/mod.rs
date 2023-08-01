@@ -33,6 +33,7 @@ pub mod repartition;
 pub mod replace_with_order_preserving_variants;
 pub mod sort_enforcement;
 mod sort_pushdown;
+pub mod topk_aggregation;
 mod utils;
 
 #[cfg(test)]

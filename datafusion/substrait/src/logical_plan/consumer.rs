@@ -1280,7 +1280,7 @@ async fn make_datafusion_like(
     let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr else {
         return Err(DataFusionError::Substrait(format!(
             "Expect Utf8 literal for escape char, but found {escape_char_expr:?}",
-        )))
+        )));
     };
 
     Ok(Arc::new(Expr::Like(Like {

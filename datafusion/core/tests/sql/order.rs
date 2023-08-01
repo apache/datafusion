@@ -48,7 +48,9 @@ async fn sort_with_lots_of_repetition_values() -> Result<()> {
 async fn create_external_table_with_order() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a_id ASC) LOCATION 'file://path/to/table';";
-    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = ctx.state().create_logical_plan(sql).await? else {
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) =
+        ctx.state().create_logical_plan(sql).await?
+    else {
         panic!("Wrong command")
     };
 

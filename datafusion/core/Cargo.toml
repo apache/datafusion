@@ -84,7 +84,8 @@ parking_lot = "0.12"
 parquet = { workspace = true }
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
-rand = "0.8"
+rand = { version = "0.8", features = ["small_rng"] }
+rand_distr = "0.4.3"
 smallvec = { version = "1.6", features = ["union"] }
 sqlparser = { workspace = true }
 tempfile = "3"
@@ -93,6 +94,7 @@ tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 xz2 = { version = "0.1", optional = true }
+zerocopy = { workspace = true }
 zstd = { version = "0.12", optional = true, default-features = false }
 
 
@@ -107,6 +109,8 @@ env_logger = "0.10"
 half = "2.2.1"
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
+ptree = "0.4.0"
+rand_distr = "0.4.3"
 regex = "1.5.4"
 rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
@@ -159,3 +163,7 @@ name = "sql_query_with_io"
 [[bench]]
 harness = false
 name = "sort"
+
+[[bench]]
+harness = false
+name = "topk_aggregate"
