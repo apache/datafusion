@@ -113,10 +113,10 @@ impl PhysicalExpr for GetIndexedFieldExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let array = self.arg.evaluate(batch)?.into_array(1);
-        let key = self.key.evaluate(batch)?.into_array(1);
+        let array = self.arg.evaluate(batch)?.into_array(batch.num_rows());
+        let key = self.key.evaluate(batch)?.into_array(batch.num_rows());
         if let Some(extra_key) = &self.extra_key {
-            let extra_key = extra_key.evaluate(batch)?.into_array(1);
+            let extra_key = extra_key.evaluate(batch)?.into_array(batch.num_rows());
             match (array.data_type(), key.data_type(), extra_key.data_type()) {
                 (DataType::List(_), DataType::Int64, DataType::Int64)
                 | (DataType::List(_), DataType::Int64, DataType::Null)

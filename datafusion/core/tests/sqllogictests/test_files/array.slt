@@ -298,17 +298,28 @@ select make_array(1, 2, 3)[-1], make_array(1.0, 2.0, 3.0)[-2], make_array('h', '
 ----
 3 2 l
 
-# TODO: support columns for single and multiple indixes
 # single index with columns #1 (positive index)
 query ?RT
 select column1[2], column2[3], column3[1] from arrays;
 ----
 [3, ] 3.3 L
+[5, 6] 6.6 i
+[7, 8] 9.9 d
+[9, 10] 12.2 s
+NULL 15.5 a
+[13, 14] NULL ,
+[, 18] 18.8 NULL
 
 # single index with columns #2 (zero index)
 query ?RT
 select column1[0], column2[0], column3[0] from arrays;
 ----
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
+NULL NULL NULL
 NULL NULL NULL
 
 # single index with columns #3 (negative index)
@@ -316,8 +327,15 @@ query ?RT
 select column1[-2], column2[-3], column3[-1] from arrays;
 ----
 [, 2] 1.1 m
+[3, 4] NULL m
+[5, 6] 7.7 r
+[7, ] 10.1 t
+NULL 13.3 t
+[11, 12] NULL ,
+[15, 16] 16.6 NULL
 
 ## array[i:j]
+
 # multiple index with columns #1 (positive index)
 query IRT
 select make_array(1, 2, 3)[1:2], make_array(1.0, 2.0, 3.0)[2:3], make_array('h', 'e', 'l', 'l', 'o')[2:4];
@@ -342,13 +360,12 @@ select make_array(1, 2, 3)[0:0], make_array(1.0, 2.0, 3.0)[0:2], make_array('h',
 # ----
 
 # multiple index with columns #1 (positive index)
-# query ?RT
-# select column1[2:4], column2[1:3], column3[3:5] from arrays;
+# query ???
+# select column1[2:4], column2[1:4], column3[3:4] from arrays;
 # ----
-# [3, ] 3.3 L
 
 # multiple index with columns #2 (zero index)
-# query ?RT
+# query ???
 # select column1[0:5], column2[0:3], column3[0:9] from arrays;
 # ----
 # NULL NULL NULL

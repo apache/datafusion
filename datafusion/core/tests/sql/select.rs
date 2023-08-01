@@ -50,6 +50,8 @@ async fn query_get_indexed_field() -> Result<()> {
         "| i0 |",
         "+----+",
         "| 0  |",
+        "| 4  |",
+        "| 7  |",
         "+----+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -94,11 +96,13 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     let sql = "SELECT some_list[1] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------+",
-        "| i0     |",
-        "+--------+",
-        "| [0, 1] |",
-        "+--------+",
+        "+----------+",
+        "| i0       |",
+        "+----------+",
+        "| [0, 1]   |",
+        "| [5, 6]   |",
+        "| [11, 12] |",
+        "+----------+",
     ];
     assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_list[1][1] as i0 FROM ints LIMIT 3";
@@ -109,6 +113,8 @@ async fn query_nested_get_indexed_field() -> Result<()> {
         "| i0 |",
         "+----+",
         "| 0  |",
+        "| 5  |",
+        "| 11 |",
         "+----+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -179,6 +185,8 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
         "| i0 |",
         "+----+",
         "| 0  |",
+        "| 4  |",
+        "| 8  |",
         "+----+",
     ];
     assert_batches_eq!(expected, &actual);
