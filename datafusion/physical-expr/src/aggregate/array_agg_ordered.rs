@@ -18,9 +18,16 @@
 //! Defines physical expressions which specify ordering requirement
 //! that can evaluated at runtime during query execution
 
+use std::any::Any;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::{Array, ListArray};
@@ -28,12 +35,8 @@ use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
+
 use itertools::izip;
-use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 /// Expression for a ARRAY_AGG(ORDER BY) aggregation.
 /// When aggregation works in multiple partitions
@@ -100,14 +103,9 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
         let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
             format_state_name(&self.name, "array_agg_orderings"),
-            Field::new(
-                "item",
-                DataType::Struct(Fields::from(orderings.clone())),
-                true,
-            ),
+            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
             false,
         ));
-        fields.extend(orderings);
         Ok(fields)
     }
 
@@ -207,6 +205,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             let mut partition_values = vec![];
             // Stores ordering requirement expression results coming from each partition
             let mut partition_ordering_values = vec![];
+
+            // Existing values should be merged also.
+            partition_values.push(self.values.clone());
+            partition_ordering_values.push(self.ordering_values.clone());
             for index in 0..agg_orderings.len() {
                 let ordering = ScalarValue::try_from_array(agg_orderings, index)?;
                 // Ordering requirement expression values for each entry in the ARRAY_AGG list
@@ -228,11 +230,13 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                 .iter()
                 .map(|sort_expr| sort_expr.options)
                 .collect::<Vec<_>>();
-            self.values = merge_ordered_arrays(
+            let (new_values, new_orderings) = merge_ordered_arrays(
                 &partition_values,
                 &partition_ordering_values,
                 &sort_options,
             )?;
+            self.values = new_values;
+            self.ordering_values = new_orderings;
         } else {
             return Err(DataFusionError::Execution(
                 "Expects to receive a list array".to_string(),
@@ -244,17 +248,6 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.evaluate()?];
         result.push(self.evaluate_orderings()?);
-        let last_ordering = if let Some(ordering) = self.ordering_values.last() {
-            ordering.clone()
-        } else {
-            // In case ordering is empty, construct ordering as NULL:
-            self.datatypes
-                .iter()
-                .skip(1)
-                .map(ScalarValue::try_from)
-                .collect::<Result<Vec<_>>>()?
-        };
-        result.extend(last_ordering);
         Ok(result)
     }
 
@@ -426,7 +419,7 @@ fn merge_ordered_arrays(
     ordering_values: &[Vec<Vec<ScalarValue>>],
     // Defines according to which ordering comparisons should be done.
     sort_options: &[SortOptions],
-) -> Result<Vec<ScalarValue>> {
+) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
     // Keep track the most recent data of each branch, in binary heap data structure.
     let mut heap: BinaryHeap<CustomElement> = BinaryHeap::new();
 
@@ -449,6 +442,7 @@ fn merge_ordered_arrays(
         .map(|idx| values[idx].len())
         .collect::<Vec<_>>();
     let mut merged_values = vec![];
+    let mut merged_orderings = vec![];
     // Continue iterating the loop until consuming data of all branches.
     loop {
         let min_elem = if let Some(min_elem) = heap.pop() {
@@ -490,6 +484,7 @@ fn merge_ordered_arrays(
         indices[branch_idx] += 1;
         let row_idx = indices[branch_idx];
         merged_values.push(min_elem.value.clone());
+        merged_orderings.push(min_elem.ordering.clone());
         if row_idx < end_indices[branch_idx] {
             // Push next entry in the most recently consumed branch to the heap
             // If there is an available entry
@@ -500,7 +495,7 @@ fn merge_ordered_arrays(
         }
     }
 
-    Ok(merged_values)
+    Ok((merged_values, merged_orderings))
 }
 
 #[cfg(test)]
@@ -553,14 +548,28 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         let expected =
             Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
+        let expected_ts = vec![
+            Arc::new(Int64Array::from(vec![0, 0, 0, 0, 1, 1, 1, 1, 2, 2])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef,
+        ];
 
-        let merged_vals = merge_ordered_arrays(
+        let (merged_vals, merged_ts) = merge_ordered_arrays(
             &[lhs_vals, rhs_vals],
             &[lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        let merged_ts = (0..merged_ts[0].len())
+            .map(|col_idx| {
+                ScalarValue::iter_to_array(
+                    (0..merged_ts.len())
+                        .map(|row_idx| merged_ts[row_idx][col_idx].clone()),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         assert_eq!(&merged_vals, &expected);
+        assert_eq!(&merged_ts, &expected_ts);
 
         Ok(())
     }
@@ -607,15 +616,27 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         let expected =
             Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 1, 1, 2, 2])) as ArrayRef;
-
-        let merged_vals = merge_ordered_arrays(
+        let expected_ts = vec![
+            Arc::new(Int64Array::from(vec![2, 2, 1, 1, 1, 1, 0, 0, 0, 0])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![4, 4, 3, 3, 2, 2, 1, 1, 0, 0])) as ArrayRef,
+        ];
+        let (merged_vals, merged_ts) = merge_ordered_arrays(
             &[lhs_vals, rhs_vals],
             &[lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        let merged_ts = (0..merged_ts[0].len())
+            .map(|col_idx| {
+                ScalarValue::iter_to_array(
+                    (0..merged_ts.len())
+                        .map(|row_idx| merged_ts[row_idx][col_idx].clone()),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         assert_eq!(&merged_vals, &expected);
+        assert_eq!(&merged_ts, &expected_ts);
         Ok(())
     }
 }
