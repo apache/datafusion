@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Implementation of sqllogictest for datafusion. Optionally uses postgres for
-/// comparison, if the `postgres` feature is enabled.
+/// Implementation of sqllogictest for datafusion.
 
 mod conversion;
 mod datafusion_engine;
