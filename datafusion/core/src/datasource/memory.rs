@@ -26,13 +26,13 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{Constraints, SchemaExt};
+use datafusion_common::{plan_err, Constraints, DataFusionError, SchemaExt};
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 
 use crate::datasource::{TableProvider, TableType};
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::insert::{DataSink, InsertExec};

@@ -18,7 +18,7 @@
 //! Utility functions for complex field access
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 
 /// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
 /// # Error
@@ -32,22 +32,20 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
         }
         (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
             if s.is_empty() {
-                Err(DataFusionError::Plan(
-                    "Struct based indexed access requires a non empty string".to_string(),
-                ))
+                plan_err!(
+                    "Struct based indexed access requires a non empty string"
+                )
             } else {
                 let field = fields.iter().find(|f| f.name() == s);
                 field.ok_or(DataFusionError::Plan(format!("Field {s} not found in struct"))).map(|f| f.as_ref().clone())
             }
         }
-        (DataType::Struct(_), _) => Err(DataFusionError::Plan(
-            "Only utf8 strings are valid as an indexed field in a struct".to_string(),
-        )),
-        (DataType::List(_), _) => Err(DataFusionError::Plan(
-            "Only ints are valid as an indexed field in a list".to_string(),
-        )),
-        (other, _) => Err(DataFusionError::Plan(
-            format!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}")
-        )),
+        (DataType::Struct(_), _) => plan_err!(
+            "Only utf8 strings are valid as an indexed field in a struct"
+        ),
+        (DataType::List(_), _) => plan_err!(
+            "Only ints are valid as an indexed field in a list"
+        ),
+        (other, _) => plan_err!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}"),
     }
 }

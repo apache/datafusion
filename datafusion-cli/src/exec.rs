@@ -259,9 +259,9 @@ mod tests {
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             create_external_table(&ctx, cmd).await?;
         } else {
-            return Err(DataFusionError::Plan(
-                "LogicalPlan is not a CreateExternalTable".to_string(),
-            ));
+            return plan_err!(
+                "LogicalPlan is not a CreateExternalTable"
+            );
         }
 
         ctx.runtime_env()

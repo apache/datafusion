@@ -195,9 +195,9 @@ mod tests {
                 assert_eq!(value, builder.get_config_value(&key).unwrap());
             }
         } else {
-            return Err(DataFusionError::Plan(
-                "LogicalPlan is not a CreateExternalTable".to_string(),
-            ));
+            return plan_err!(
+                "LogicalPlan is not a CreateExternalTable"
+            );
         }
 
         Ok(())
@@ -228,9 +228,9 @@ mod tests {
                 assert_eq!(value, builder.get_config_value(&key).unwrap());
             }
         } else {
-            return Err(DataFusionError::Plan(
-                "LogicalPlan is not a CreateExternalTable".to_string(),
-            ));
+            return plan_err!(
+                "LogicalPlan is not a CreateExternalTable"
+            );
         }
 
         Ok(())
@@ -265,9 +265,9 @@ mod tests {
                 assert_eq!(value, builder.get_config_value(&key).unwrap());
             }
         } else {
-            return Err(DataFusionError::Plan(
-                "LogicalPlan is not a CreateExternalTable".to_string(),
-            ));
+            return plan_err!(
+                "LogicalPlan is not a CreateExternalTable"
+            );
         }
 
         Ok(())

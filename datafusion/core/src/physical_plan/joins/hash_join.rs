@@ -76,7 +76,7 @@ use arrow::{
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
-use datafusion_common::{DataFusionError, JoinType, Result};
+use datafusion_common::{plan_err, DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
@@ -138,9 +138,7 @@ impl HashJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
         if on.is_empty() {
-            return Err(DataFusionError::Plan(
-                "On constraints in HashJoinExec should be non-empty".to_string(),
-            ));
+            return plan_err!("On constraints in HashJoinExec should be non-empty");
         }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
@@ -310,14 +308,14 @@ impl ExecutionPlan for HashJoinExec {
                 ));
 
         if breaking {
-            Err(DataFusionError::Plan(format!(
+            plan_err!(
                 "Join Error: The join with cannot be executed with unbounded inputs. {}",
                 if left && right {
                     "Currently, we do not support unbounded inputs on both sides."
                 } else {
                     "Please consider a different type of join or sources."
                 }
-            )))
+            )
         } else {
             Ok(left || right)
         }
@@ -469,10 +467,10 @@ impl ExecutionPlan for HashJoinExec {
                 ))
             }
             PartitionMode::Auto => {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
                     PartitionMode::Auto
-                )));
+                );
             }
         };
 

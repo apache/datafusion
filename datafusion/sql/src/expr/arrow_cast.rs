@@ -23,6 +23,7 @@ use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 
+use datafusion_common::plan_err;
 use datafusion_expr::{Expr, ExprSchemable};
 
 pub const ARROW_CAST_NAME: &str = "arrow_cast";
@@ -51,10 +52,7 @@ pub const ARROW_CAST_NAME: &str = "arrow_cast";
 /// [`BuiltinScalarFunction`]: datafusion_expr::BuiltinScalarFunction
 pub fn create_arrow_cast(mut args: Vec<Expr>, schema: &DFSchema) -> Result<Expr> {
     if args.len() != 2 {
-        return Err(DataFusionError::Plan(format!(
-            "arrow_cast needs 2 arguments, {} provided",
-            args.len()
-        )));
+        return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
     let arg1 = args.pop().unwrap();
     let arg0 = args.pop().unwrap();
@@ -63,9 +61,9 @@ pub fn create_arrow_cast(mut args: Vec<Expr>, schema: &DFSchema) -> Result<Expr>
     let data_type_string = if let Expr::Literal(ScalarValue::Utf8(Some(v))) = arg1 {
         v
     } else {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "arrow_cast requires its second argument to be a constant string, got {arg1}"
-        )));
+        );
     };
 
     // do the actual lookup to the appropriate data type

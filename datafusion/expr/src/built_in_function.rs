@@ -23,7 +23,7 @@ use crate::{
     conditional_expressions, struct_expressions, Signature, TypeSignature, Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -480,9 +480,7 @@ impl BuiltinScalarFunction {
         // or the execution panics.
 
         if input_expr_types.is_empty() && !self.supports_zero_argument() {
-            return Err(DataFusionError::Plan(
-                self.generate_signature_error_msg(input_expr_types),
-            ));
+            return plan_err!("{}", self.generate_signature_error_msg(input_expr_types));
         }
 
         // verify that this is a valid set of data types for this function
@@ -1340,9 +1338,7 @@ impl FromStr for BuiltinScalarFunction {
         if let Some(func) = NAME_TO_FUNCTION.get(name) {
             Ok(*func)
         } else {
-            Err(DataFusionError::Plan(format!(
-                "There is no built-in function named {name}"
-            )))
+            plan_err!("There is no built-in function named {name}")
         }
     }
 }

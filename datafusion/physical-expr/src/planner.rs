@@ -26,6 +26,7 @@ use crate::{
     PhysicalExpr,
 };
 use arrow::datatypes::{DataType, Schema};
+use datafusion_common::plan_err;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
@@ -75,9 +76,7 @@ pub fn create_physical_expr(
                         let scalar_value = provider.get_value(variable_names.clone())?;
                         Ok(Arc::new(Literal::new(scalar_value)))
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "No system variable provider found".to_string(),
-                    )),
+                    _ => plan_err!("No system variable provider found"),
                 }
             } else {
                 match execution_props.get_var_provider(VarType::UserDefined) {
@@ -85,9 +84,7 @@ pub fn create_physical_expr(
                         let scalar_value = provider.get_value(variable_names.clone())?;
                         Ok(Arc::new(Literal::new(scalar_value)))
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "No user defined variable provider found".to_string(),
-                    )),
+                    _ => plan_err!("No user defined variable provider found"),
                 }
             }
         }

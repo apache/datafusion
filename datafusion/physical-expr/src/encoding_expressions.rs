@@ -22,8 +22,11 @@ use arrow::{
     datatypes::DataType,
 };
 use base64::{engine::general_purpose, Engine as _};
-use datafusion_common::cast::{as_generic_binary_array, as_generic_string_array};
 use datafusion_common::ScalarValue;
+use datafusion_common::{
+    cast::{as_generic_binary_array, as_generic_string_array},
+    plan_err,
+};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
@@ -279,9 +282,9 @@ impl FromStr for Encoding {
                     .map(|i| i.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in encoding named '{name}', currently supported encodings are: {options}",
-                )));
+                return plan_err!(
+                    "There is no built-in encoding named '{name}', currently supported encodings are: {options}"
+                );
             }
         })
     }
