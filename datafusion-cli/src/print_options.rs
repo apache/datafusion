@@ -28,7 +28,7 @@ pub struct PrintOptions {
 
 fn print_timing_info(row_count: usize, now: Instant) {
     println!(
-        "{} {} in set. Query took {:.3} seconds.",
+        "{} {} in set. Query took {:.3} seconds.\n",
         row_count,
         if row_count == 1 { "row" } else { "rows" },
         now.elapsed().as_secs_f64()
