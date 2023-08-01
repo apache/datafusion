@@ -52,7 +52,6 @@ impl GroupOrdering {
         } = ordering;
 
         Ok(match mode {
-            GroupByOrderMode::None => GroupOrdering::None,
             GroupByOrderMode::PartiallyOrdered => {
                 let partial =
                     GroupOrderingPartial::try_new(input_schema, order_indices, ordering)?;
