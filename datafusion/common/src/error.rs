@@ -399,6 +399,56 @@ impl DataFusionError {
     }
 }
 
+/// Unwrap an `Option` if possible. Otherwise return an `DataFusionError::Internal`.
+/// In normal usage of DataFusion the unwrap should always succeed.
+///
+/// Example: `let values = unwrap_or_internal_err!(values)`
+#[macro_export]
+macro_rules! unwrap_or_internal_err {
+    ($Value: ident) => {
+        $Value.ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "{} should not be None",
+                stringify!($Value)
+            ))
+        })?
+    };
+}
+
+#[macro_export]
+macro_rules! with_dollar_sign {
+    ($($body:tt)*) => {
+        macro_rules! __with_dollar_sign { $($body)* }
+        __with_dollar_sign!($);
+    }
+}
+
+/// Add a macros for concise  DataFusionError::* errors declaration
+/// supports placeholders the same way as `format!`
+/// Examples:
+///     plan_err!("Error")
+///     plan_err!("Error {}", val)
+///     plan_err!("Error {:?}", val)
+///     plan_err!("Error {val}")
+///     plan_err!("Error {val:?}")
+macro_rules! make_error {
+    ($NAME:ident, $ERR:ident) => {
+        with_dollar_sign! {
+            ($d:tt) => {
+                #[macro_export]
+                macro_rules! $NAME {
+                    ($d($d args:expr),*) => {
+                        Err(DataFusionError::$ERR(format!($d($d args),*).into()))
+                    }
+                }
+            }
+        }
+    };
+}
+
+// DataFusionError::Plan
+make_error!(plan_err, Plan);
+
 #[cfg(test)]
 mod test {
     use std::sync::Arc;
@@ -476,6 +526,39 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_make_error_parse_input() {
+        let res: Result<(), DataFusionError> = plan_err!("Err");
+        let res = res.unwrap_err();
+        assert_eq!(res.to_string(), "Error during planning: Err");
+
+        let extra1 = "extra1";
+        let extra2 = "extra2";
+
+        let res: Result<(), DataFusionError> = plan_err!("Err {} {}", extra1, extra2);
+        let res = res.unwrap_err();
+        assert_eq!(res.to_string(), "Error during planning: Err extra1 extra2");
+
+        let res: Result<(), DataFusionError> =
+            plan_err!("Err {:?} {:#?}", extra1, extra2);
+        let res = res.unwrap_err();
+        assert_eq!(
+            res.to_string(),
+            "Error during planning: Err \"extra1\" \"extra2\""
+        );
+
+        let res: Result<(), DataFusionError> = plan_err!("Err {extra1} {extra2}");
+        let res = res.unwrap_err();
+        assert_eq!(res.to_string(), "Error during planning: Err extra1 extra2");
+
+        let res: Result<(), DataFusionError> = plan_err!("Err {extra1:?} {extra2:#?}");
+        let res = res.unwrap_err();
+        assert_eq!(
+            res.to_string(),
+            "Error during planning: Err \"extra1\" \"extra2\""
+        );
+    }
+
     /// Model what happens when implementing SendableRecordBatchStream:
     /// DataFusion code needs to return an ArrowError
     fn return_arrow_error() -> arrow::error::Result<()> {
@@ -498,51 +581,3 @@ mod test {
         assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
     }
 }
-
-#[macro_export]
-macro_rules! internal_err {
-    ($($arg:tt)*) => {
-        Err(DataFusionError::Internal(format!($($arg)*)))
-    };
-}
-
-/// Unwrap an `Option` if possible. Otherwise return an `DataFusionError::Internal`.
-/// In normal usage of DataFusion the unwrap should always succeed.
-///
-/// Example: `let values = unwrap_or_internal_err!(values)`
-#[macro_export]
-macro_rules! unwrap_or_internal_err {
-    ($Value: ident) => {
-        $Value.ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "{} should not be None",
-                stringify!($Value)
-            ))
-        })?
-    };
-}
-
-#[macro_export]
-macro_rules! with_dollar_sign {
-    ($($body:tt)*) => {
-        macro_rules! __with_dollar_sign { $($body)* }
-        __with_dollar_sign!($);
-    }
-}
-
-macro_rules! make_error {
-    ($NAME:ident, $ERR:ident) => {
-        with_dollar_sign! {
-            ($d:tt) => {
-                #[macro_export]
-                macro_rules! $NAME {
-                    ($d($d args:expr),*) => {
-                        Err(DataFusionError::$ERR(format!($d($d args),*).into()))
-                    }
-                }
-            }
-        }
-    };
-}
-
-make_error!(plan_err, Plan);
