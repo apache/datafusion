@@ -138,7 +138,7 @@ impl SortMergeJoinExec {
             &on,
             left_schema.fields.len(),
             &Self::maintains_input_order(join_type),
-            Some(JoinSide::Left),
+            Some(Self::probe_side(&join_type)),
         )?;
 
         let schema =
@@ -161,6 +161,8 @@ impl SortMergeJoinExec {
 
     /// Get probe side information for sort merge join.
     pub fn probe_side(join_type: &JoinType) -> JoinSide {
+        // When output schema contains only right side, probe side is right.
+        // Otherwise it is left.
         match join_type {
             JoinType::Inner
             | JoinType::Left

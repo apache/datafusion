@@ -169,7 +169,7 @@ fn replace_on_columns_of_right_ordering(
     }
 }
 
-/// Calculate output ordering of SortMergeJoin
+/// Calculate output ordering of join node.
 pub fn calculate_join_output_ordering(
     left_ordering: LexOrderingRef,
     right_ordering: LexOrderingRef,
@@ -394,6 +394,7 @@ pub fn combine_join_ordering_equivalence_properties(
         }
         (true, false) => {
             new_properties.extend(left_oeq_properties.classes().iter().cloned());
+            // In this special case, right side ordering can be prefixed with left side ordering.
             if probe_side == Some(JoinSide::Left)
                 && right.output_ordering().is_some()
                 && *join_type == JoinType::Inner
@@ -429,6 +430,7 @@ pub fn combine_join_ordering_equivalence_properties(
                 left_columns_len,
             )?;
             new_properties.extend(right_oeq_classes);
+            // In this special case, left side ordering can be prefixed with right side ordering.
             if probe_side == Some(JoinSide::Right)
                 && left.output_ordering().is_some()
                 && *join_type == JoinType::Inner

@@ -225,6 +225,8 @@ impl HashJoinExec {
 
     /// Get probe side information for hash join
     pub fn probe_side(join_type: &JoinType) -> JoinSide {
+        // When output schema contains only left side, probe side is left.
+        // Otherwise it is right.
         match join_type {
             JoinType::Inner
             | JoinType::Right
