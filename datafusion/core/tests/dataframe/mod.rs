@@ -1058,7 +1058,7 @@ async fn unnest_column_preserve_nulls_not_supported() -> Result<()> {
 
     assert_eq!(
         results.unwrap_err().to_string(),
-        "This feature is not implemented: Unest with preserve_nulls=true"
+        "This feature is not implemented: Unnest with preserve_nulls=true"
     );
     Ok(())
 }

@@ -148,7 +148,7 @@ impl ExecutionPlan for UnnestExec {
 
         if self.options.preserve_nulls {
             return Err(DataFusionError::NotImplemented(
-                "Unest with preserve_nulls=true".to_string(),
+                "Unnest with preserve_nulls=true".to_string(),
             ));
         }
 
