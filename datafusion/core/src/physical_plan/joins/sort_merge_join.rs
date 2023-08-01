@@ -137,7 +137,7 @@ impl SortMergeJoinExec {
             join_type,
             &on,
             left_schema.fields.len(),
-            &maintains_input_order(join_type),
+            &Self::maintains_input_order(join_type),
             Some(JoinSide::Left),
         )?;
 
@@ -160,9 +160,8 @@ impl SortMergeJoinExec {
     }
 
     /// Get probe side information for sort merge join.
-    /// Current algorithm uses left side as probe side.
-    pub fn probe_side(&self) -> JoinSide {
-        match self.join_type {
+    pub fn probe_side(join_type: &JoinType) -> JoinSide {
+        match join_type {
             JoinType::Inner
             | JoinType::Left
             | JoinType::Full
@@ -171,6 +170,18 @@ impl SortMergeJoinExec {
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
                 JoinSide::Right
             }
+        }
+    }
+
+    /// Calculate maintains flags for SortMergeJoin.
+    fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
+        match join_type {
+            JoinType::Inner => vec![true, false],
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![true, false],
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                vec![false, true]
+            }
+            _ => vec![false, false],
         }
     }
 
@@ -197,18 +208,6 @@ impl DisplayAs for SortMergeJoinExec {
                 )
             }
         }
-    }
-}
-
-/// Calculate maintains flags for SortMergeJoin.
-fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
-    match join_type {
-        JoinType::Inner => vec![true, false],
-        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![true, false],
-        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-            vec![false, true]
-        }
-        _ => vec![false, false],
     }
 }
 
@@ -264,7 +263,7 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        maintains_input_order(self.join_type)
+        Self::maintains_input_order(self.join_type)
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -286,7 +285,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             &self.right,
             self.schema(),
             &self.maintains_input_order(),
-            Some(JoinSide::Left),
+            Some(Self::probe_side(&self.join_type)),
             self.equivalence_properties(),
         )
         .unwrap()
@@ -330,7 +329,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         }
 
         let (streamed, buffered, on_streamed, on_buffered) =
-            if self.probe_side() == JoinSide::Left {
+            if SortMergeJoinExec::probe_side(&self.join_type) == JoinSide::Left {
                 (
                     self.left.clone(),
                     self.right.clone(),

@@ -122,16 +122,6 @@ pub struct HashJoinExec {
     pub(crate) null_equals_null: bool,
 }
 
-fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
-    vec![
-        false,
-        matches!(
-            join_type,
-            JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
-        ),
-    ]
-}
-
 impl HashJoinExec {
     /// Tries to create a new [HashJoinExec].
     /// # Error
@@ -166,8 +156,8 @@ impl HashJoinExec {
             *join_type,
             &on,
             left_schema.fields.len(),
-            &maintains_input_order(*join_type),
-            Some(JoinSide::Right),
+            &Self::maintains_input_order(*join_type),
+            Some(Self::probe_side(join_type)),
         )?;
 
         Ok(HashJoinExec {
@@ -220,6 +210,29 @@ impl HashJoinExec {
     /// Get null_equals_null
     pub fn null_equals_null(&self) -> bool {
         self.null_equals_null
+    }
+
+    /// Calculate maintains input order flags for HashJoinEXec
+    fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
+        vec![
+            false,
+            matches!(
+                join_type,
+                JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
+            ),
+        ]
+    }
+
+    /// Get probe side information for hash join
+    pub fn probe_side(join_type: &JoinType) -> JoinSide {
+        match join_type {
+            JoinType::Inner
+            | JoinType::Right
+            | JoinType::Full
+            | JoinType::RightAnti
+            | JoinType::RightSemi => JoinSide::Right,
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => JoinSide::Left,
+        }
     }
 }
 
@@ -367,7 +380,7 @@ impl ExecutionPlan for HashJoinExec {
     // are processed sequentially in the probe phase, and unmatched rows are directly output
     // as results, these results tend to retain the order of the probe side table.
     fn maintains_input_order(&self) -> Vec<bool> {
-        maintains_input_order(self.join_type)
+        Self::maintains_input_order(self.join_type)
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -389,7 +402,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.right,
             self.schema(),
             &self.maintains_input_order(),
-            Some(JoinSide::Right),
+            Some(Self::probe_side(&self.join_type)),
             self.equivalence_properties(),
         )
         .unwrap()
