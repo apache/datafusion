@@ -77,7 +77,7 @@ impl DisplayAs for MemoryExec {
                     .map(|output_ordering| {
                         let order_strings: Vec<_> =
                             output_ordering.iter().map(|e| e.to_string()).collect();
-                        format!(", output_ordering: {}", order_strings.join(","))
+                        format!(", output_ordering={}", order_strings.join(","))
                     })
                     .unwrap_or_else(|| "".to_string());
 
