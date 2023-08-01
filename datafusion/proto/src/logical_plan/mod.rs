@@ -16,8 +16,11 @@
 // under the License.
 
 use crate::common::{byte_to_string, proto_error, str_to_byte};
+use crate::protobuf::constraint::ConstraintMode;
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
+use crate::protobuf::{
+    Constraint, Constraints, CustomTableScanNode, LogicalExprNodeCollection,
+};
 use crate::{
     convert_required,
     protobuf::{
@@ -495,6 +498,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
+                let constraints = (create_extern_table.constraints.clone()).ok_or_else(|| {
+                    DataFusionError::Internal(String::from(
+                        "Protobuf deserialization error, CreateExternalTableNode was missing required table constraints.",
+                    ))
+                })?;
+
                 let definition = if !create_extern_table.definition.is_empty() {
                     Some(create_extern_table.definition.clone())
                 } else {
@@ -536,6 +545,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     definition,
                     unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
+                    constraints: constraints.into(),
                 })))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -1211,6 +1221,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     order_exprs,
                     unbounded,
                     options,
+                    constraints,
                 },
             )) => {
                 let mut converted_order_exprs: Vec<LogicalExprNodeCollection> = vec![];
@@ -1241,6 +1252,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             file_compression_type: file_compression_type.to_string(),
                             unbounded: *unbounded,
                             options: options.clone(),
+                            constraints: Some(constraints.clone().into()),
                         },
                     )),
                 })

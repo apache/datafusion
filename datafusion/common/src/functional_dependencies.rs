@@ -25,7 +25,7 @@ use std::fmt::{Display, Formatter};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Constraint {
+pub enum Constraint {
     /// Columns with the given indices form a composite primary key (they are
     /// jointly unique and not nullable):
     PrimaryKey(Vec<usize>),
@@ -36,7 +36,7 @@ enum Constraint {
 /// This object encapsulates a list of functional constraints:
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Constraints {
-    inner: Vec<Constraint>,
+    pub inner: Vec<Constraint>,
 }
 
 impl Constraints {
@@ -48,7 +48,7 @@ impl Constraints {
     // This method is private.
     // Outside callers can either create empty constraint using `Constraints::empty` API.
     // or create constraint from table constraints using `Constraints::new_from_table_constraints` API.
-    fn new(constraints: Vec<Constraint>) -> Self {
+    pub fn new(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
     }
 

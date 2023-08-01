@@ -170,7 +170,7 @@ mod tests {
 
     use crate::execution::context::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
-    use datafusion_common::{DFSchema, OwnedTableReference, Constraints};
+    use datafusion_common::{Constraints, DFSchema, OwnedTableReference};
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
