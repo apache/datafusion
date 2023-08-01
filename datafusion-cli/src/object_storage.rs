@@ -159,14 +159,14 @@ fn get_bucket_name(url: &Url) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use datafusion::common::plan_err;
     use datafusion::{
         datasource::listing::ListingTableUrl,
         logical_expr::{DdlStatement, LogicalPlan},
         prelude::SessionContext,
     };
     use object_store::{aws::AmazonS3ConfigKey, gcp::GoogleConfigKey};
-    use super::*;
-    use datafusion::common::plan_err;
 
     #[tokio::test]
     async fn s3_object_store_builder() -> Result<()> {
@@ -195,9 +195,7 @@ mod tests {
                 assert_eq!(value, builder.get_config_value(&key).unwrap());
             }
         } else {
-            return plan_err!(
-                "LogicalPlan is not a CreateExternalTable"
-            );
+            return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
 
         Ok(())
@@ -228,9 +226,7 @@ mod tests {
                 assert_eq!(value, builder.get_config_value(&key).unwrap());
             }
         } else {
-            return plan_err!(
-                "LogicalPlan is not a CreateExternalTable"
-            );
+            return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
 
         Ok(())
@@ -265,9 +261,7 @@ mod tests {
                 assert_eq!(value, builder.get_config_value(&key).unwrap());
             }
         } else {
-            return plan_err!(
-                "LogicalPlan is not a CreateExternalTable"
-            );
+            return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
 
         Ok(())
