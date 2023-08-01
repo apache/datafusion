@@ -718,14 +718,14 @@ impl RecordBatchStream for HashJoinStream {
 // "+----+----+-----+----+----+-----+",
 // "| a1 | b1 | c1  | a2 | b2 | c2  |",
 // "+----+----+-----+----+----+-----+",
+// "| 9  | 8  | 90  | 8  | 8  | 80  |",
 // "| 11 | 8  | 110 | 8  | 8  | 80  |",
 // "| 13 | 10 | 130 | 10 | 10 | 100 |",
 // "| 13 | 10 | 130 | 12 | 10 | 120 |",
-// "| 9  | 8  | 90  | 8  | 8  | 80  |",
 // "+----+----+-----+----+----+-----+"
 // And the result of build and probe indices are:
-// Build indices:  5, 6, 6, 4
-// Probe indices: 3, 4, 5, 3
+// Build indices: 4, 5, 6, 6
+// Probe indices: 3, 3, 4, 5
 #[allow(clippy::too_many_arguments)]
 pub fn build_equal_condition_join_indices(
     build_hashmap: &JoinHashMap,
