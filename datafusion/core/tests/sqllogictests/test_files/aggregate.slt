@@ -2290,3 +2290,161 @@ true
 false
 true
 NULL
+
+
+
+#
+# regr_slope() tests
+#
+
+# invalid input
+statement error
+select regr_slope();
+
+statement error
+select regr_slope(*);
+
+statement error
+select regr_slope(*) from aggregate_test_100;
+
+statement error
+select regr_slope(1);
+
+statement error
+select regr_slope(1,2,3);
+
+statement error
+select regr_slope(1, 'foo');
+
+statement error
+select regr_slope('foo', 1);
+
+statement error
+select regr_slope('foo', 'bar');
+
+
+
+# regr_slope() NULL result
+query R
+select regr_slope(1,1);
+----
+NULL
+
+query R
+select regr_slope(1, NULL);
+----
+NULL
+
+query R
+select regr_slope(NULL, 1);
+----
+NULL
+
+query R
+select regr_slope(NULL, NULL);
+----
+NULL
+
+query R
+select regr_slope(column2, column1) from (values (1,2), (1,4), (1,6));
+----
+NULL
+
+
+
+# regr_slope() basic tests
+query R
+select regr_slope(column2, column1) from (values (1,2), (2,4), (3,6));
+----
+2
+
+query R
+select regr_slope(c12, c11) from aggregate_test_100;
+----
+0.051534002628
+
+
+
+# regr_slope() ignore NULLs
+query R
+select regr_slope(column2, column1) from (values (1,NULL), (2,4), (3,6));
+----
+2
+
+query R
+select regr_slope(column2, column1) from (values (1,NULL), (NULL,4), (3,6));
+----
+NULL
+
+query R
+select regr_slope(column2, column1) from (values (1,NULL), (NULL,4), (NULL,NULL));
+----
+NULL
+
+query TR rowsort
+select column3, regr_slope(column2, column1)
+from (values (1,2,'a'), (2,4,'a'), (1,3,'b'), (3,9,'b'), (1,10,'c'), (NULL,100,'c'))
+group by column3;
+----
+a 2
+b 3
+c NULL
+
+
+
+# regr_slope() testing merge_batch() from RegrSlopeAccumulator's internal implementation
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query R
+select regr_slope(c12, c11) from aggregate_test_100;
+----
+0.051534002628
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+query R
+select regr_slope(c12, c11) from aggregate_test_100;
+----
+0.051534002628
+
+statement ok
+set datafusion.execution.batch_size = 3;
+
+query R
+select regr_slope(c12, c11) from aggregate_test_100;
+----
+0.051534002628
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+
+
+# regr_slope testing retract_batch() from RegrSlopeAccumulator's internal implementation
+query R
+select regr_slope(column2, column1)
+over (order by column1 rows between 2 preceding and current row)
+from (values (1,2), (2,4), (3,6), (4,12), (5,15), (6, 18));
+----
+NULL
+2
+2
+4
+4.5
+3
+
+query R
+select regr_slope(column2, column1)
+over (order by column1 rows between 2 preceding and current row)
+from (values (1,2), (2,4), (3,6), (3, NULL), (4, NULL), (5,15), (6,18), (7, 21));
+----
+NULL
+2
+2
+2
+NULL
+NULL
+3
+3
