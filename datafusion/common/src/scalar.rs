@@ -4633,6 +4633,7 @@ mod tests {
         assert_eq!(expected, data_type.try_into().unwrap())
     }
 
+    // this test fails on aarch  so don't run it there
     #[cfg(not(target_arch = "aarch64"))]
     #[test]
     fn size_of_scalar() {
