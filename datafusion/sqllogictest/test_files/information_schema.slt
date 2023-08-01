@@ -183,6 +183,7 @@ datafusion.explain.show_statistics false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.bounded_order_preserving_variants false
 datafusion.optimizer.enable_round_robin_repartition true
+datafusion.optimizer.enable_topk_aggregation true
 datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.max_passes 3

@@ -56,7 +56,7 @@ pub(crate) enum ExecutionState {
 use super::order::GroupOrdering;
 use super::AggregateExec;
 
-/// Hash based Grouping Aggregator
+/// HashTable based Grouping Aggregator
 ///
 /// # Design Goals
 ///
@@ -145,7 +145,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// accumulator. If present, only those rows for which the filter
     /// evaluate to true should be included in the aggregate results.
     ///
-    /// For example, for an aggregate like `SUM(x FILTER x > 100)`,
+    /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
     /// the filter expression is  `x > 100`.
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
 
@@ -266,7 +266,7 @@ impl GroupedHashAggregateStream {
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
-fn create_group_accumulator(
+pub(crate) fn create_group_accumulator(
     agg_expr: &Arc<dyn AggregateExpr>,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {

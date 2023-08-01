@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};

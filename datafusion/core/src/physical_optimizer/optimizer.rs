@@ -27,6 +27,9 @@ use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
 use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::repartition::Repartition;
+use crate::physical_optimizer::sort_enforcement::EnforceSorting;
+use crate::physical_optimizer::topk_aggregation::TopKAggregation;
 use crate::{error::Result, physical_plan::ExecutionPlan};
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
@@ -94,6 +97,11 @@ impl PhysicalOptimizer {
             // diagnostic error message when this happens. It makes no changes to the
             // given query plan; i.e. it only acts as a final gatekeeping rule.
             Arc::new(PipelineChecker::new()),
+            // The aggregation limiter will try to find situations where the accumulator count
+            // is not tied to the cardinality, i.e. when the output of the aggregation is passed
+            // into an `order by max(x) limit y`. In this case it will copy the limit value down
+            // to the aggregation, allowing it to use only y number of accumulators.
+            Arc::new(TopKAggregation::new()),
         ];
 
         Self::with_rules(rules)
