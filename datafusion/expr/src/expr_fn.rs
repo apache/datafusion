@@ -979,6 +979,7 @@ mod test {
         test_unary_scalar_expr!(Log10, log10);
         test_unary_scalar_expr!(Ln, ln);
         test_scalar_expr!(Atan2, atan2, y, x);
+        test_scalar_expr!(Nanvl, nanvl, x, y);
 
         test_scalar_expr!(Ascii, ascii, input);
         test_scalar_expr!(BitLength, bit_length, string);
