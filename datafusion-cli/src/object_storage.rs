@@ -165,8 +165,8 @@ mod tests {
         prelude::SessionContext,
     };
     use object_store::{aws::AmazonS3ConfigKey, gcp::GoogleConfigKey};
-
     use super::*;
+    use datafusion::common::plan_err;
 
     #[tokio::test]
     async fn s3_object_store_builder() -> Result<()> {
