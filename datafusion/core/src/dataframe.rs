@@ -163,7 +163,7 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.unnest_column_wtith_optons("a")?;
+    /// let df = df.unnest_column_with_options("a")?;
     /// # Ok(())
     /// # }
     /// ```
