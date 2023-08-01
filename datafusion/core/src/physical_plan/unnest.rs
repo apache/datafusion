@@ -27,6 +27,7 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_common::UnnestOptions;
 use datafusion_common::{cast::as_primitive_array, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use futures::Stream;
@@ -43,7 +44,10 @@ use crate::physical_plan::{
 
 use super::DisplayAs;
 
-/// Unnest the given column by joining the row with each value in the nested type.
+/// Unnest the given column by joining the row with each value in the
+/// nested type.
+///
+/// See [`UnnestOptions`] for more details and an example.
 #[derive(Debug)]
 pub struct UnnestExec {
     /// Input execution plan
@@ -52,15 +56,23 @@ pub struct UnnestExec {
     schema: SchemaRef,
     /// The unnest column
     column: Column,
+    /// Options
+    options: UnnestOptions,
 }
 
 impl UnnestExec {
     /// Create a new [UnnestExec].
-    pub fn new(input: Arc<dyn ExecutionPlan>, column: Column, schema: SchemaRef) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        column: Column,
+        schema: SchemaRef,
+        options: UnnestOptions,
+    ) -> Self {
         UnnestExec {
             input,
             schema,
             column,
+            options,
         }
     }
 }
@@ -107,6 +119,7 @@ impl ExecutionPlan for UnnestExec {
             children[0].clone(),
             self.column.clone(),
             self.schema.clone(),
+            self.options.clone(),
         )))
     }
 
@@ -132,6 +145,12 @@ impl ExecutionPlan for UnnestExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
+
+        if self.options.preserve_nulls {
+            return Err(DataFusionError::NotImplemented(
+                "Unest with preserve_nulls=true".to_string(),
+            ));
+        }
 
         Ok(Box::pin(UnnestStream {
             input,

@@ -37,7 +37,7 @@ use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::parquet_test_data;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, ScalarValue, UnnestOptions};
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::Expr::Wildcard;
@@ -1045,6 +1045,82 @@ async fn unnest_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn unnest_column_preserve_nulls_not_supported() -> Result<()> {
+    // Unnest, preserving nulls not yet supported
+    let options = UnnestOptions::new().with_preserve_nulls(true);
+
+    let results = table_with_lists_and_nulls()
+        .await?
+        .clone()
+        .unnest_column_with_options("list", options)?
+        .collect()
+        .await;
+
+    assert_eq!(
+        results.unwrap_err().to_string(),
+        "This feature is not implemented: Unest with preserve_nulls=true"
+    );
+    Ok(())
+}
+#[tokio::test]
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/7087
+async fn unnest_column_nulls() -> Result<()> {
+    let df = table_with_lists_and_nulls().await?;
+    let results = df.clone().collect().await?;
+    let expected = vec![
+        "+--------+----+",
+        "| list   | id |",
+        "+--------+----+",
+        "| [1, 2] | A  |",
+        "|        | B  |",
+        "| []     | C  |",
+        "| [3]    | D  |",
+        "+--------+----+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // Unnest, preserving nulls (row with B is preserved)
+    let options = UnnestOptions::new().with_preserve_nulls(true);
+
+    let results = df
+        .clone()
+        .unnest_column_with_options("list", options)?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+------+----+",
+        "| list | id |",
+        "+------+----+",
+        "| 1    | A  |",
+        "| 2    | A  |",
+        "|      | B  |",
+        "| 3    | D  |",
+        "+------+----+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // NOTE this is incorrect,
+    let options = UnnestOptions::new().with_preserve_nulls(false);
+    let results = df
+        .unnest_column_with_options("list", options)?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+------+----+",
+        "| list | id |",
+        "+------+----+",
+        "| 1    | A  |",
+        "| 2    | A  |",
+        "|      | B  |", // this row should not be here
+        "| 3    | D  |",
+        "+------+----+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn unnest_fixed_list() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
@@ -1103,6 +1179,77 @@ async fn unnest_fixed_list() -> Result<()> {
         "| 3        | tag31 |",
         "| 3        | tag32 |",
         "| 4        |       |",
+        "| 5        | tag51 |",
+        "| 5        | tag52 |",
+        "| 6        | tag61 |",
+        "| 6        | tag62 |",
+        "+----------+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/7087
+async fn unnest_fixed_list_nonull() -> Result<()> {
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
+
+    for idx in 0..6 {
+        // Append shape id.
+        shape_id_builder.append_value(idx as u32 + 1);
+
+        tags_builder
+            .values()
+            .append_value(format!("tag{}1", idx + 1));
+        tags_builder
+            .values()
+            .append_value(format!("tag{}2", idx + 1));
+        tags_builder.append(true);
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df.clone().collect().await?;
+    let expected = vec![
+        "+----------+----------------+",
+        "| shape_id | tags           |",
+        "+----------+----------------+",
+        "| 1        | [tag11, tag12] |",
+        "| 2        | [tag21, tag22] |",
+        "| 3        | [tag31, tag32] |",
+        "| 4        | [tag41, tag42] |",
+        "| 5        | [tag51, tag52] |",
+        "| 6        | [tag61, tag62] |",
+        "+----------+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    let options = UnnestOptions::new().with_preserve_nulls(true);
+    let results = df
+        .unnest_column_with_options("tags", options)?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----------+-------+",
+        "| shape_id | tags  |",
+        "+----------+-------+",
+        "| 1        | tag11 |",
+        "| 1        | tag12 |",
+        "| 2        | tag21 |",
+        "| 2        | tag22 |",
+        "| 3        | tag31 |",
+        "| 3        | tag32 |",
+        "| 4        | tag41 |",
+        "| 4        | tag42 |",
         "| 5        | tag51 |",
         "| 5        | tag52 |",
         "| 6        | tag61 |",
@@ -1287,6 +1434,40 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
         ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
         ("points", Arc::new(points_builder.finish()) as ArrayRef),
         ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    ctx.table("shapes").await
+}
+
+/// A a data frame that a list of integers and string IDs
+async fn table_with_lists_and_nulls() -> Result<DataFrame> {
+    let mut list_builder = ListBuilder::new(UInt32Builder::new());
+    let mut id_builder = StringBuilder::new();
+
+    // [1, 2],  A
+    list_builder.values().append_value(1);
+    list_builder.values().append_value(2);
+    list_builder.append(true);
+    id_builder.append_value("A");
+
+    // NULL, B
+    list_builder.append(false);
+    id_builder.append_value("B");
+
+    // [],  C
+    list_builder.append(true);
+    id_builder.append_value("C");
+
+    // [3], D
+    list_builder.values().append_value(3);
+    list_builder.append(true);
+    id_builder.append_value("D");
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("list", Arc::new(list_builder.finish()) as ArrayRef),
+        ("id", Arc::new(id_builder.finish()) as ArrayRef),
     ])?;
 
     let ctx = SessionContext::new();

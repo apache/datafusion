@@ -34,6 +34,7 @@ pub mod stats;
 mod table_reference;
 pub mod test_util;
 pub mod tree_node;
+mod unnest;
 pub mod utils;
 
 pub use column::Column;
@@ -51,6 +52,7 @@ pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::{OwnedSchemaReference, SchemaReference};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
+pub use unnest::UnnestOptions;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.
