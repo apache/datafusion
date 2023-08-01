@@ -157,7 +157,7 @@ impl HashJoinExec {
             &on,
             left_schema.fields.len(),
             &Self::maintains_input_order(*join_type),
-            Some(Self::probe_side(join_type)),
+            Some(Self::probe_side()),
         )?;
 
         Ok(HashJoinExec {
@@ -223,18 +223,10 @@ impl HashJoinExec {
         ]
     }
 
-    /// Get probe side information for this hash join.
-    pub fn probe_side(join_type: &JoinType) -> JoinSide {
-        // When output schema contains only the left side, probe side is left.
-        // Otherwise probe side is the right side.
-        match join_type {
-            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => JoinSide::Left,
-            JoinType::Inner
-            | JoinType::Right
-            | JoinType::Full
-            | JoinType::RightAnti
-            | JoinType::RightSemi => JoinSide::Right,
-        }
+    /// Get probe side information for the hash join.
+    pub fn probe_side() -> JoinSide {
+        // In current implementation right side is always probe side.
+        JoinSide::Right
     }
 }
 
@@ -404,7 +396,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.right,
             self.schema(),
             &self.maintains_input_order(),
-            Some(Self::probe_side(&self.join_type)),
+            Some(Self::probe_side()),
             self.equivalence_properties(),
         )
         .unwrap()

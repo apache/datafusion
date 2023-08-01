@@ -315,13 +315,16 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
+/// Update right table ordering equivalences so that they point to valid indices
+/// at the output of the join schema. To do so, we increment column indices by left table size
+/// when join schema consist of combination of left and right schema (Inner, Left, Full, Right joins).
 fn get_updated_right_ordering_equivalence_properties(
     join_type: &JoinType,
     right_oeq_classes: &[OrderingEquivalentClass],
     left_columns_len: usize,
 ) -> Result<Vec<OrderingEquivalentClass>> {
     match join_type {
-        // In these modes, indices of the right schema should be offseted by
+        // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
             add_offset_to_ordering_equivalence_classes(

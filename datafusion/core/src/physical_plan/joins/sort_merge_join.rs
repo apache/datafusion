@@ -159,7 +159,8 @@ impl SortMergeJoinExec {
         })
     }
 
-    /// Get probe side information for this sort merge  join.
+    /// Get probe side (e.g streaming side) information for this sort merge join.
+    /// In current implementation, probe side is determined according to join type.
     pub fn probe_side(join_type: &JoinType) -> JoinSide {
         // When output schema contains only the right side, probe side is right.
         // Otherwise probe side is the left side.
@@ -329,22 +330,12 @@ impl ExecutionPlan for SortMergeJoinExec {
                  consider using RepartitionExec",
             )));
         }
-
+        let (on_left, on_right) = self.on.iter().cloned().unzip();
         let (streamed, buffered, on_streamed, on_buffered) =
             if SortMergeJoinExec::probe_side(&self.join_type) == JoinSide::Left {
-                (
-                    self.left.clone(),
-                    self.right.clone(),
-                    self.on.iter().map(|on| on.0.clone()).collect(),
-                    self.on.iter().map(|on| on.1.clone()).collect(),
-                )
+                (self.left.clone(), self.right.clone(), on_left, on_right)
             } else {
-                (
-                    self.right.clone(),
-                    self.left.clone(),
-                    self.on.iter().map(|on| on.1.clone()).collect(),
-                    self.on.iter().map(|on| on.0.clone()).collect(),
-                )
+                (self.right.clone(), self.left.clone(), on_right, on_left)
             };
 
         // execute children plans
