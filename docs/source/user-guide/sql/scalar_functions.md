@@ -356,8 +356,8 @@ log2(numeric_expression)
 
 ### `nanvl`
 
-Returns the first of its arguments that is not _NaN_.
-Returns the second of its argument otherwise.
+Returns the first argument if it's not _NaN_.
+Returns the second argument otherwise.
 
 ```
 nanvl(expression_x, expression_y)
@@ -367,7 +367,7 @@ nanvl(expression_x, expression_y)
 
 - **expression_x**: Numeric expression to return if it's not _NaN_.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-- **expression_x**: Numeric expression to return if the first expression is _NaN_.
+- **expression_y**: Numeric expression to return if the first expression is _NaN_.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `pi`
