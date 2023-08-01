@@ -458,43 +458,47 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>true</p></td>
 <td><p>Should DataFusion execute sorts in a per-partition fashion and merge afterwards instead of coalescing first and sorting globally. With this flag is enabled, plans in the form below <code class="docutils literal notranslate"><span class="pre">text</span> <span class="pre">&quot;SortExec:</span> <span class="pre">[a&#64;0</span> <span class="pre">ASC]&quot;,</span> <span class="pre">&quot;</span> <span class="pre">CoalescePartitionsExec&quot;,</span> <span class="pre">&quot;</span> <span class="pre">RepartitionExec:</span> <span class="pre">partitioning=RoundRobinBatch(8),</span> <span class="pre">input_partitions=1&quot;,</span> </code> would turn into the plan below which performs better in multithreaded environments <code class="docutils literal notranslate"><span class="pre">text</span> <span class="pre">&quot;SortPreservingMergeExec:</span> <span class="pre">[a&#64;0</span> <span class="pre">ASC]&quot;,</span> <span class="pre">&quot;</span> <span class="pre">SortExec:</span> <span class="pre">[a&#64;0</span> <span class="pre">ASC]&quot;,</span> <span class="pre">&quot;</span> <span class="pre">RepartitionExec:</span> <span class="pre">partitioning=RoundRobinBatch(8),</span> <span class="pre">input_partitions=1&quot;,</span> </code></p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.skip_failed_rules</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.bounded_order_preserving_variants</p></td>
+<td><p>false</p></td>
+<td><p>When true, DataFusion will opportunistically remove sorts by replacing <code class="docutils literal notranslate"><span class="pre">RepartitionExec</span></code> with <code class="docutils literal notranslate"><span class="pre">SortPreservingRepartitionExec</span></code>, and <code class="docutils literal notranslate"><span class="pre">CoalescePartitionsExec</span></code> with <code class="docutils literal notranslate"><span class="pre">SortPreservingMergeExec</span></code>, even when the query is bounded.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.skip_failed_rules</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.max_passes</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.max_passes</p></td>
 <td><p>3</p></td>
 <td><p>Number of times that the optimizer will attempt to optimize the plan</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.top_down_join_key_reordering</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.top_down_join_key_reordering</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, the physical plan optimizer will run a top down process to reorder the join keys</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.prefer_hash_join</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.prefer_hash_join</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.hash_join_single_partition_threshold</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.hash_join_single_partition_threshold</p></td>
 <td><p>1048576</p></td>
 <td><p>The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.logical_plan_only</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.logical_plan_only</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will only print logical plans</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.physical_plan_only</p></td>
+<tr class="row-even"><td><p>datafusion.explain.physical_plan_only</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will only print physical plans</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, SQL parser will parse float as decimal type</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.dialect</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.dialect</p></td>
 <td><p>generic</p></td>
 <td><p>Configure the SQL dialect used by DataFusion’s parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.</p></td>
 </tr>
@@ -542,7 +546,7 @@ Environment variables are read during <code class="docutils literal notranslate"
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.0.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.1.<br>
 </p>
     </div>
     
