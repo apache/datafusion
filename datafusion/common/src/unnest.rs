@@ -23,12 +23,13 @@
 /// Conceptually this operation is like joining each row with all the
 /// values in the list column.
 ///
-/// If `preserve_nulls` is false, the default, nulls and empty lists
-/// from the input column are not carried through to the output.
+/// If `preserve_nulls` is false, nulls and empty lists
+/// from the input column are not carried through to the output. This
+/// is the default behavior for other systems such as ClickHouse and
+/// DuckDB
 ///
-/// If `preserve_nulls` is true, nulls from the input column are
-/// carried through to the output. This is the default behavior for
-/// other systems such as ClickHouse and DuckDB
+/// If `preserve_nulls` is true (the default), nulls from the input
+/// column are carried through to the output.
 ///
 /// # Examples
 ///
@@ -59,10 +60,19 @@
 ///      └─────────┘ └─────┘                └─────────┘ └─────┘
 ///        c1         c2                        c1        c2
 /// ```
-#[derive(Debug, Clone, PartialEq, PartialOrd, Hash, Default, Eq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Hash, Eq)]
 pub struct UnnestOptions {
-    /// Should nulls in the input be preserved? Defaults to false
+    /// Should nulls in the input be preserved? Defaults to true
     pub preserve_nulls: bool,
+}
+
+impl Default for UnnestOptions {
+    fn default() -> Self {
+        Self {
+            // default to true to maintain backwards compatible behavior
+            preserve_nulls: true,
+        }
+    }
 }
 
 impl UnnestOptions {

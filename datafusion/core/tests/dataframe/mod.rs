@@ -1047,7 +1047,7 @@ async fn unnest_columns() -> Result<()> {
 #[tokio::test]
 async fn unnest_column_preserve_nulls_not_supported() -> Result<()> {
     // Unnest, preserving nulls not yet supported
-    let options = UnnestOptions::new().with_preserve_nulls(true);
+    let options = UnnestOptions::new().with_preserve_nulls(false);
 
     let results = table_with_lists_and_nulls()
         .await?
@@ -1058,7 +1058,7 @@ async fn unnest_column_preserve_nulls_not_supported() -> Result<()> {
 
     assert_eq!(
         results.unwrap_err().to_string(),
-        "This feature is not implemented: Unnest with preserve_nulls=true"
+        "This feature is not implemented: Unnest with preserve_nulls=false"
     );
     Ok(())
 }

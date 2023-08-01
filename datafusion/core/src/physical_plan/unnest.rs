@@ -146,9 +146,9 @@ impl ExecutionPlan for UnnestExec {
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
 
-        if self.options.preserve_nulls {
+        if !self.options.preserve_nulls {
             return Err(DataFusionError::NotImplemented(
-                "Unnest with preserve_nulls=true".to_string(),
+                "Unnest with preserve_nulls=false".to_string(),
             ));
         }
 
