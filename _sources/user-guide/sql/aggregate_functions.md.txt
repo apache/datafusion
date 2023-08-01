@@ -245,6 +245,7 @@ last_value(expression [ORDER BY expression])
 - [var](#var)
 - [var_pop](#var_pop)
 - [var_samp](#var_samp)
+- [regr_slope](#regr_slope)
 
 ### `corr`
 
@@ -382,6 +383,22 @@ var_samp(expression)
 #### Arguments
 
 - **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `regr_slope`
+
+Returns the slope of the linear regression line for non-null pairs in aggregate columns.
+Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k\*X + b) using minimal RSS fitting.
+
+```
+regr_slope(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression2**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## Approximate

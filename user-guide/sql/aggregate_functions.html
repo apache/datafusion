@@ -688,6 +688,22 @@
      </li>
     </ul>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#regr-slope">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       regr_slope
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id24">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
@@ -705,7 +721,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id24">
+      <a class="reference internal nav-link" href="#id25">
        Arguments
       </a>
      </li>
@@ -721,7 +737,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id25">
+      <a class="reference internal nav-link" href="#id26">
        Arguments
       </a>
      </li>
@@ -737,7 +753,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id26">
+      <a class="reference internal nav-link" href="#id27">
        Arguments
       </a>
      </li>
@@ -753,7 +769,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id27">
+      <a class="reference internal nav-link" href="#id28">
        Arguments
       </a>
      </li>
@@ -1052,6 +1068,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 <li><p><a class="reference internal" href="#var">var</a></p></li>
 <li><p><a class="reference internal" href="#var-pop">var_pop</a></p></li>
 <li><p><a class="reference internal" href="#var-samp">var_samp</a></p></li>
+<li><p><a class="reference internal" href="#regr-slope">regr_slope</a></p></li>
 </ul>
 <section id="corr">
 <h3><code class="docutils literal notranslate"><span class="pre">corr</span></code><a class="headerlink" href="#corr" title="Permalink to this heading">¶</a></h3>
@@ -1201,6 +1218,23 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </ul>
 </section>
 </section>
+<section id="regr-slope">
+<h3><code class="docutils literal notranslate"><span class="pre">regr_slope</span></code><a class="headerlink" href="#regr-slope" title="Permalink to this heading">¶</a></h3>
+<p>Returns the slope of the linear regression line for non-null pairs in aggregate columns.
+Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_slope</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id24">
+<h4>Arguments<a class="headerlink" href="#id24" title="Permalink to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression1</strong>: Expression to operate on.
+Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+<li><p><strong>expression2</strong>: Expression to operate on.
+Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+</ul>
+</section>
+</section>
 </section>
 <section id="approximate">
 <h2>Approximate<a class="headerlink" href="#approximate" title="Permalink to this heading">¶</a></h2>
@@ -1217,8 +1251,8 @@ HyperLogLog algorithm.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_distinct</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id24">
-<h4>Arguments<a class="headerlink" href="#id24" title="Permalink to this heading">¶</a></h4>
+<section id="id25">
+<h4>Arguments<a class="headerlink" href="#id25" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1232,8 +1266,8 @@ It is an alias of <code class="docutils literal notranslate"><span class="pre">a
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id25">
-<h4>Arguments<a class="headerlink" href="#id25" title="Permalink to this heading">¶</a></h4>
+<section id="id26">
+<h4>Arguments<a class="headerlink" href="#id26" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1246,8 +1280,8 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">percentile</span><span class="p">,</span> <span class="n">centroids</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id26">
-<h4>Arguments<a class="headerlink" href="#id26" title="Permalink to this heading">¶</a></h4>
+<section id="id27">
+<h4>Arguments<a class="headerlink" href="#id27" title="Permalink to this heading">¶</a></h4>
 <ul>
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1267,8 +1301,8 @@ t-digest algorithm.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">percentile</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id27">
-<h4>Arguments<a class="headerlink" href="#id27" title="Permalink to this heading">¶</a></h4>
+<section id="id28">
+<h4>Arguments<a class="headerlink" href="#id28" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
