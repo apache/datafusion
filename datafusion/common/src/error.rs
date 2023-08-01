@@ -446,7 +446,7 @@ macro_rules! make_error {
     };
 }
 
-// DataFusionError::Plan
+// Exposes a macro to create `DataFusionError::Plan`
 make_error!(plan_err, Plan);
 
 #[cfg(test)]

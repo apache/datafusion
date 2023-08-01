@@ -184,7 +184,7 @@ pub fn coerce_types(
         }
         AggregateFunction::Correlation => {
             if !is_correlation_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun,
                     input_types[0]
@@ -197,7 +197,7 @@ pub fn coerce_types(
             let input_types_valid = // number of input already checked before
                 valid_types.contains(&input_types[0]) && valid_types.contains(&input_types[1]);
             if !input_types_valid {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun,
                     input_types[0]
