@@ -19,7 +19,7 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use crate::physical_plan::common::{batch_byte_size, spawn_buffered, IPCWriter};
+use crate::physical_plan::common::{batch_byte_size, IPCWriter};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -79,16 +79,15 @@ impl ExternalSorterMetrics {
 /// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
 ///
 /// The basic architecture of the algorithm:
-/// 1. get a non-empty new batch from input
+/// 1. get a non-empty new batch from input and sort it
 /// 2. check with the memory manager if we could buffer the batch in memory
 /// 2.1 if memory sufficient, then buffer batch in memory, go to 1.
-/// 2.2 if the memory threshold is reached, sort all buffered batches and spill to file.
+/// 2.2 if the memory threshold is reached, spill all buffered batches and to file.
 ///     buffer the batch in memory, go to 1.
 /// 3. when input is exhausted, merge all in memory batches and spills to get a total order.
 struct ExternalSorter {
     schema: SchemaRef,
     in_mem_batches: Vec<RecordBatch>,
-    in_mem_batches_sorted: bool,
     spills: Vec<NamedTempFile>,
     /// Sort expressions
     expr: Arc<[PhysicalSortExpr]>,
@@ -118,7 +117,6 @@ impl ExternalSorter {
         Self {
             schema,
             in_mem_batches: vec![],
-            in_mem_batches_sorted: true,
             spills: vec![],
             expr: expr.into(),
             metrics,
@@ -133,34 +131,32 @@ impl ExternalSorter {
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
     ///
     /// Updates memory usage metrics, and possibly triggers spilling to disk
-    async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
+    async fn insert_batch(&mut self, mut input: RecordBatch) -> Result<()> {
         if input.num_rows() == 0 {
             return Ok(());
         }
 
+        // Eagerly sort the batch to potentially reduce the number of rows
+        // after applying the fetch parameter; first perform a memory reservation
+        // for the sorting procedure.
+        let mut reservation =
+            MemoryConsumer::new(format!("insert_batch{}", self.partition_id))
+                .register(&self.runtime.memory_pool);
+
+        // TODO: This should probably be try_grow (#5885)
+        reservation.resize(input.get_array_memory_size());
+        // Maybe we should keep a single batch at all times and perform
+        // concatenate with the incoming batch + sort instead?
+        input = sort_batch(&input, &self.expr, self.fetch)?;
+        reservation.free();
+
         let size = batch_byte_size(&input);
         if self.reservation.try_grow(size).is_err() {
-            let before = self.reservation.size();
-            self.in_mem_sort().await?;
-            // Sorting may have freed memory, especially if fetch is not `None`
-            //
-            // As such we check again, and if the memory usage has dropped by
-            // a factor of 2, and we can allocate the necessary capacity,
-            // we don't spill
-            //
-            // The factor of 2 aims to avoid a degenerate case where the
-            // memory required for `fetch` is just under the memory available,
-            // causing repeated re-sorting of data
-            if self.reservation.size() > before / 2
-                || self.reservation.try_grow(size).is_err()
-            {
-                self.spill().await?;
-                self.reservation.try_grow(size)?
-            }
+            self.spill().await?;
+            self.reservation.try_grow(size)?
         }
 
         self.in_mem_batches.push(input);
-        self.in_mem_batches_sorted = false;
         Ok(())
     }
 
@@ -169,12 +165,12 @@ impl ExternalSorter {
     }
 
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
-    fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+    fn merge(&mut self) -> Result<SendableRecordBatchStream> {
         if self.spilled_before() {
             let mut streams = vec![];
             if !self.in_mem_batches.is_empty() {
                 let in_mem_stream =
-                    self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
+                    self.in_mem_stream(self.metrics.baseline.intermediate())?;
                 streams.push(in_mem_stream);
             }
 
@@ -192,7 +188,7 @@ impl ExternalSorter {
                 self.fetch,
             )
         } else if !self.in_mem_batches.is_empty() {
-            let result = self.in_mem_sort_stream(self.metrics.baseline.clone());
+            let result = self.in_mem_stream(self.metrics.baseline.clone());
             // Report to the memory manager we are no longer using memory
             self.reservation.free();
             result
@@ -221,10 +217,12 @@ impl ExternalSorter {
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
-        self.in_mem_sort().await?;
-
         let spillfile = self.runtime.disk_manager.create_tmp_file("Sorting")?;
-        let batches = std::mem::take(&mut self.in_mem_batches);
+
+        let batches = self.in_mem_stream(self.metrics.baseline.intermediate())?
+            .try_collect()
+            .await?;
+
         spill_sorted_batches(batches, spillfile.path(), self.schema.clone()).await?;
         let used = self.reservation.free();
         self.metrics.spill_count.add(1);
@@ -233,30 +231,8 @@ impl ExternalSorter {
         Ok(used)
     }
 
-    /// Sorts the in_mem_batches in place
-    async fn in_mem_sort(&mut self) -> Result<()> {
-        if self.in_mem_batches_sorted {
-            return Ok(());
-        }
-
-        self.in_mem_batches = self
-            .in_mem_sort_stream(self.metrics.baseline.intermediate())?
-            .try_collect()
-            .await?;
-
-        let size: usize = self
-            .in_mem_batches
-            .iter()
-            .map(|x| x.get_array_memory_size())
-            .sum();
-
-        self.reservation.resize(size);
-        self.in_mem_batches_sorted = true;
-        Ok(())
-    }
-
-    /// Consumes in_mem_batches returning a sorted stream
-    fn in_mem_sort_stream(
+    /// Consumes in_mem_batches returning a stream
+    fn in_mem_stream(
         &mut self,
         metrics: BaselineMetrics,
     ) -> Result<SendableRecordBatchStream> {
@@ -275,14 +251,15 @@ impl ExternalSorter {
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
-            return self.sort_batch_stream(batch, metrics);
+            let output = sort_batch(&batch, &self.expr, self.fetch)?;
+            return self.sort_batch_stream(output, metrics);
         }
 
         let streams = std::mem::take(&mut self.in_mem_batches)
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
-                Ok(spawn_buffered(self.sort_batch_stream(batch, metrics)?, 1))
+                Ok(self.sort_batch_stream(batch, metrics)?)
             })
             .collect::<Result<_>>()?;
 
@@ -302,22 +279,9 @@ impl ExternalSorter {
         metrics: BaselineMetrics,
     ) -> Result<SendableRecordBatchStream> {
         let schema = batch.schema();
-
-        let mut reservation =
-            MemoryConsumer::new(format!("sort_batch_stream{}", self.partition_id))
-                .register(&self.runtime.memory_pool);
-
-        // TODO: This should probably be try_grow (#5885)
-        reservation.resize(batch.get_array_memory_size());
-
-        let fetch = self.fetch;
-        let expressions = self.expr.clone();
         let stream = futures::stream::once(futures::future::lazy(move |_| {
-            let sorted = sort_batch(&batch, &expressions, fetch)?;
-            metrics.record_output(sorted.num_rows());
-            drop(batch);
-            reservation.free();
-            Ok(sorted)
+            metrics.record_output(batch.num_rows());
+            Ok(batch)
         }));
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -629,7 +593,7 @@ impl ExecutionPlan for SortExec {
                     let batch = batch?;
                     sorter.insert_batch(batch).await?;
                 }
-                sorter.sort()
+                sorter.merge()
             })
             .try_flatten(),
         )))
