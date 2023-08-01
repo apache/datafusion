@@ -756,34 +756,30 @@ pub fn build_equal_condition_join_indices(
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
-    // The chained list algorithm generates build indices for each probe row in a reversed sequence:
-    //
-    // Probe Indices: [1, 1, 1]
+    // The chained list algorithm generates build indices for each probe row in a reversed sequence as such:
     // Build Indices: [5, 4, 3]
+    // Probe Indices: [1, 1, 1]
     //
     // This affects the output sequence. Hypothetically, it's possible to preserve the lexicographic order on the build side.
     // Let's consider probe rows [0,1] as an example:
     //
     // When the probe iteration sequence is reversed, the following pairings can be derived:
     //
-    // Probe Row 1:
+    // For probe row 1:
     //     (5, 1)
     //     (4, 1)
     //     (3, 1)
     //
-    // Probe Row 0:
+    // For probe row 0:
     //     (5, 0)
     //     (4, 0)
     //     (3, 0)
     //
-    // After reversing both sets of indices, we obtain:
+    // After reversing both sets of indices, we obtain reversed indices:
     //
-    // Reversed Indices for Probe Row 0:
     //     (3,0)
     //     (4,0)
     //     (5,0)
-    //
-    // Reversed Indices for Probe Row 1:
     //     (3,1)
     //     (4,1)
     //     (5,1)
@@ -813,6 +809,7 @@ pub fn build_equal_condition_join_indices(
             }
         }
     }
+    // Reversing both sets of indices
     build_indices.as_slice_mut().reverse();
     probe_indices.as_slice_mut().reverse();
 
