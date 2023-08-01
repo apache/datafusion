@@ -18,10 +18,10 @@ mod conversion;
 mod datafusion_engine;
 mod output;
 
-pub use datafusion_engine::DataFusionTestEngine;
+pub use datafusion_engine::DataFusion;
 
 #[cfg(feature = "postgres")]
 mod postgres_engine;
 
 #[cfg(feature = "postgres")]
-pub use postgres_engine::PostgresTestEngine;
+pub use postgres_engine::Postgres;

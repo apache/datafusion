@@ -14,50 +14,34 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 
-use std::{time::Duration, path::PathBuf};
+use std::{path::PathBuf, time::Duration};
 
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::prelude::SessionContext;
-use sqllogictest::DBOutput;
 use log::info;
+use sqllogictest::DBOutput;
 
-use super::{error::Result, DFSqlLogicTestError};
+use super::{error::Result, normalize, DFSqlLogicTestError};
 
 use crate::engines::output::{DFColumnType, DFOutput};
 
-use super::{convert_batches, convert_schema_to_types};
-
-pub struct DataFusionTestEngine {
+pub struct DataFusion {
     ctx: SessionContext,
     relative_path: PathBuf,
 }
 
-impl DataFusionTestEngine {
+impl DataFusion {
     pub fn new(context: SessionContext, relative_path: PathBuf) -> Self {
-        Self { ctx: context, relative_path }
-    }
-}
-
-async fn run_query(
-    ctx: &SessionContext,
-    sql: impl Into<String>,
-) -> Result<DFOutput> {
-    let df = ctx.sql(sql.into().as_str()).await?;
-
-    let types = convert_schema_to_types(df.schema().fields().as_slice());
-    let results: Vec<RecordBatch> = df.collect().await?;
-    let rows = convert_batches(results)?;
-
-    if rows.is_empty() && types.is_empty() {
-        Ok(DBOutput::StatementComplete(0))
-    } else {
-        Ok(DBOutput::Rows { types, rows })
+        Self {
+            ctx: context,
+            relative_path,
+        }
     }
 }
 
 #[async_trait]
-impl sqllogictest::AsyncDB for DataFusionTestEngine {
+impl sqllogictest::AsyncDB for DataFusion {
     type Error = DFSqlLogicTestError;
     type ColumnType = DFColumnType;
 
@@ -72,7 +56,7 @@ impl sqllogictest::AsyncDB for DataFusionTestEngine {
 
     /// Engine name of current database.
     fn engine_name(&self) -> &str {
-        "DataFusionTestEngine"
+        "DataFusion"
     }
 
     /// [`Runner`] calls this function to perform sleep.
@@ -82,5 +66,19 @@ impl sqllogictest::AsyncDB for DataFusionTestEngine {
     /// this by `tokio::time::sleep`.
     async fn sleep(dur: Duration) {
         tokio::time::sleep(dur).await;
+    }
+}
+
+async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
+    let df = ctx.sql(sql.into().as_str()).await?;
+
+    let types = normalize::convert_schema_to_types(df.schema().fields());
+    let results: Vec<RecordBatch> = df.collect().await?;
+    let rows = normalize::convert_batches(results)?;
+
+    if rows.is_empty() && types.is_empty() {
+        Ok(DBOutput::StatementComplete(0))
+    } else {
+        Ok(DBOutput::Rows { types, rows })
     }
 }

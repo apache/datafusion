@@ -23,12 +23,7 @@ use rust_decimal::prelude::*;
 /// Represents a constant for NULL string in your database.
 pub const NULL_STR: &str = "NULL";
 
-/// Converts a bool value into a string.
-///
-/// # Arguments
-///
-/// * `value` - The bool value to convert.
-pub fn bool_to_str(value: bool) -> String {
+pub(crate) fn bool_to_str(value: bool) -> String {
     if value {
         "true".to_string()
     } else {
@@ -36,13 +31,7 @@ pub fn bool_to_str(value: bool) -> String {
     }
 }
 
-/// Converts a varchar into a string, trimming end line breaks.
-/// Returns "(empty)" string for empty input.
-///
-/// # Arguments
-///
-/// * `value` - The varchar value to convert.
-pub fn varchar_to_str(value: &str) -> String {
+pub(crate) fn varchar_to_str(value: &str) -> String {
     if value.is_empty() {
         "(empty)".to_string()
     } else {
@@ -50,12 +39,7 @@ pub fn varchar_to_str(value: &str) -> String {
     }
 }
 
-/// Converts a 16-bit floating-point number into a string.
-///
-/// # Arguments
-///
-/// * `value` - The 16-bit floating-point number to convert.
-pub fn f16_to_str(value: f16) -> String {
+pub(crate) fn f16_to_str(value: f16) -> String {
     if value.is_nan() {
         "NaN".to_string()
     } else if value == f16::INFINITY {
@@ -67,12 +51,7 @@ pub fn f16_to_str(value: f16) -> String {
     }
 }
 
-/// Converts a 32-bit floating-point number into a string.
-///
-/// # Arguments
-///
-/// * `value` - The 32-bit floating-point number to convert.
-pub fn f32_to_str(value: f32) -> String {
+pub(crate) fn f32_to_str(value: f32) -> String {
     if value.is_nan() {
         "NaN".to_string()
     } else if value == f32::INFINITY {
@@ -84,12 +63,7 @@ pub fn f32_to_str(value: f32) -> String {
     }
 }
 
-/// Converts a 64-bit floating-point number into a string.
-///
-/// # Arguments
-///
-/// * `value` - The 64-bit floating-point number to convert.
-pub fn f64_to_str(value: f64) -> String {
+pub(crate) fn f64_to_str(value: f64) -> String {
     if value.is_nan() {
         "NaN".to_string()
     } else if value == f64::INFINITY {
@@ -101,42 +75,17 @@ pub fn f64_to_str(value: f64) -> String {
     }
 }
 
-/// Converts a 128-bit integer into a string using specified precision and scale.
-///
-/// # Arguments
-///
-/// * `value` - The 128-bit integer to convert.
-/// * `precision` - The number of significant digits.
-/// * `scale` - The number of digits to the right of the decimal point.
-pub fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
+pub(crate) fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
     big_decimal_to_str(
         BigDecimal::from_str(&Decimal128Type::format_decimal(value, *precision, *scale))
             .unwrap(),
     )
 }
 
-/// Converts a BigDecimal into a string, rounding the result to 12 decimal places.
-///
-/// # Arguments
-///
-/// * `value` - The BigDecimal value to convert.
-pub fn big_decimal_to_str(value: BigDecimal) -> String {
-    value.round(12).normalized().to_string()
+pub(crate) fn decimal_to_str(value: Decimal) -> String {
+    big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
 }
 
-/// Converts a 128-bit decimal into a string using specified precision and scale.
-///
-/// # Arguments
-///
-/// * `value` - The 128-bit decimal to convert.
-///
-/// # Panics
-///
-/// Panics if the decimal is not valid.
-///
-/// # Returns
-///
-/// The string representation of the decimal.
-pub fn decimal_to_str(value: Decimal) -> String {
-    big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+pub(crate) fn big_decimal_to_str(value: BigDecimal) -> String {
+    value.round(12).normalized().to_string()
 }

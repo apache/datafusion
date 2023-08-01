@@ -49,14 +49,14 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub struct PostgresTestEngine {
+pub struct Postgres {
     client: tokio_postgres::Client,
     join_handle: JoinHandle<()>,
     /// Relative test file path
     relative_path: PathBuf,
 }
 
-impl PostgresTestEngine {
+impl Postgres {
     /// Creates a runner for executing queries against an existing postgres connection.
     /// `relative_path` is used for display output and to create a postgres schema.
     ///
@@ -205,14 +205,14 @@ fn schema_name(relative_path: &Path) -> String {
         .unwrap_or_else(|| "default_schema".to_string())
 }
 
-impl Drop for PostgresTestEngine {
+impl Drop for Postgres {
     fn drop(&mut self) {
         self.join_handle.abort()
     }
 }
 
 #[async_trait]
-impl sqllogictest::AsyncDB for PostgresTestEngine {
+impl sqllogictest::AsyncDB for Postgres {
     type Error = Error;
     type ColumnType = DFColumnType;
 

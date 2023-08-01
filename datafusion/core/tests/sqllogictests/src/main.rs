@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
 
-use datafusion_sqllogictest::{DataFusionTestEngine, PostgresTestEngine};
+use datafusion_sqllogictest::{DataFusion, Postgres};
 use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
@@ -126,7 +126,7 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         return Ok(());
     };
     let mut runner = sqllogictest::Runner::new(|| async {
-        Ok(DataFusionTestEngine::new(
+        Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
         ))
@@ -145,7 +145,7 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
     } = test_file;
     info!("Running with Postgres runner: {}", path.display());
     let mut runner =
-        sqllogictest::Runner::new(|| PostgresTestEngine::connect(relative_path.clone()));
+        sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
     runner.with_column_validator(strict_column_validator);
     runner
         .run_file_async(path)
@@ -168,7 +168,7 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
         return Ok(());
     };
     let mut runner = sqllogictest::Runner::new(|| async {
-        Ok(DataFusionTestEngine::new(
+        Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
         ))
