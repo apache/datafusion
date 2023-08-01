@@ -248,6 +248,17 @@ pub fn create_aggregate_expr(
                 "CORR(DISTINCT) aggregations are not available".to_string(),
             ));
         }
+        (AggregateFunction::RegrSlope, false) => Arc::new(expressions::RegrSlope::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            rt_type,
+        )),
+        (AggregateFunction::RegrSlope, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "REGR_SLOPE(DISTINCT) aggregations are not available".to_string(),
+            ));
+        }
         (AggregateFunction::ApproxPercentileCont, false) => {
             if input_phy_exprs.len() == 2 {
                 Arc::new(expressions::ApproxPercentileCont::new(
