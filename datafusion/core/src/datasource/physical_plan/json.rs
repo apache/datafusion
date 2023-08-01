@@ -426,6 +426,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn nd_json_exec_file_without_projection(
         file_compression_type: FileCompressionType,
@@ -497,6 +498,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn nd_json_exec_file_with_missing_column(
         file_compression_type: FileCompressionType,
@@ -550,6 +552,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn nd_json_exec_file_projection(
         file_compression_type: FileCompressionType,
@@ -601,6 +604,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn nd_json_exec_file_mixed_order_projection(
         file_compression_type: FileCompressionType,
@@ -712,6 +716,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn test_chunked_json(
         file_compression_type: FileCompressionType,
