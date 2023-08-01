@@ -42,7 +42,7 @@ use datafusion_expr::{
     array_replace, array_replace_all, array_replace_n, array_to_string, ascii, asin,
     asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest, exp, nanvl,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -522,6 +522,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::StructFun => Self::Struct,
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
+            ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
         }
     }
@@ -1526,6 +1527,10 @@ pub fn parse_expr(
                 ScalarFunction::CurrentDate => Ok(current_date()),
                 ScalarFunction::CurrentTime => Ok(current_time()),
                 ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Nanvl => Ok(nanvl(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),

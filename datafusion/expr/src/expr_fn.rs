@@ -787,6 +787,7 @@ scalar_expr!(
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
+scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 

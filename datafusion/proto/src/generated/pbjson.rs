@@ -18281,6 +18281,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayReplaceN => "ArrayReplaceN",
             Self::ArrayRemoveAll => "ArrayRemoveAll",
             Self::ArrayReplaceAll => "ArrayReplaceAll",
+            Self::Nanvl => "Nanvl",
         };
         serializer.serialize_str(variant)
     }
@@ -18402,6 +18403,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "ArrayReplaceN",
             "ArrayRemoveAll",
             "ArrayReplaceAll",
+            "Nanvl",
         ];
 
         struct GeneratedVisitor;
@@ -18554,6 +18556,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "ArrayReplaceN" => Ok(ScalarFunction::ArrayReplaceN),
                     "ArrayRemoveAll" => Ok(ScalarFunction::ArrayRemoveAll),
                     "ArrayReplaceAll" => Ok(ScalarFunction::ArrayReplaceAll),
+                    "Nanvl" => Ok(ScalarFunction::Nanvl),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

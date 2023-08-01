@@ -259,6 +259,53 @@ pub fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// Nanvl SQL function
+pub fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::Float64 => {
+            let compute_nanvl = |x: f64, y: f64| {
+                if x.is_nan() {
+                    y
+                } else {
+                    x
+                }
+            };
+
+            Ok(Arc::new(make_function_inputs2!(
+                &args[0],
+                &args[1],
+                "x",
+                "y",
+                Float64Array,
+                { compute_nanvl }
+            )) as ArrayRef)
+        }
+
+        DataType::Float32 => {
+            let compute_nanvl = |x: f32, y: f32| {
+                if x.is_nan() {
+                    y
+                } else {
+                    x
+                }
+            };
+
+            Ok(Arc::new(make_function_inputs2!(
+                &args[0],
+                &args[1],
+                "x",
+                "y",
+                Float32Array,
+                { compute_nanvl }
+            )) as ArrayRef)
+        }
+
+        other => Err(DataFusionError::Internal(format!(
+            "Unsupported data type {other:?} for function nanvl"
+        ))),
+    }
+}
+
 /// Pi SQL function
 pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if !matches!(&args[0], ColumnarValue::Array(_)) {
