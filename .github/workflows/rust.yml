@@ -95,8 +95,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Run tests (excluding doctests)
+      - name: Run tests with features (excluding doctests)
         run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions
+      - name: Run tests without features (excluding doctests)
+        run: cargo test --lib --tests --bins --no-default-features
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
