@@ -75,7 +75,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Transformed::Yes(LogicalPlan::Aggregate(
-                Aggregate::try_new(agg.input.clone(), agg.group_expr.clone(), aggr_expr)?,
+                Aggregate::try_new(agg.input.clone(), agg.group_expr, aggr_expr)?,
             )))
         }
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {

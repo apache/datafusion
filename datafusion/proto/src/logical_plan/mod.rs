@@ -2443,6 +2443,8 @@ mod roundtrip_tests {
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
         }
+        test(Operator::ArrowAt);
+        test(Operator::AtArrow);
         test(Operator::StringConcat);
         test(Operator::RegexNotIMatch);
         test(Operator::RegexNotMatch);
