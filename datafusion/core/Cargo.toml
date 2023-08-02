@@ -52,7 +52,7 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusi
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-apache-avro = { version = "0.14", optional = true }
+apache-avro = { version = "0.15", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }

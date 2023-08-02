@@ -38,7 +38,7 @@ default = []
 pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
-apache-avro = { version = "0.14", default-features = false, features = ["snappy"], optional = true }
+apache-avro = { version = "0.15", default-features = false, features = ["snappy"], optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 chrono = { version = "0.4", default-features = false }
