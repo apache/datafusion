@@ -42,9 +42,9 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::Expr::Wildcard;
 use datafusion_expr::{
-    avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col, scalar_subquery,
-    sum, AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunction,
+    array_agg, avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col,
+    scalar_subquery, sum, AggregateFunction, Expr, ExprSchemable, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunction,
 };
 use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
@@ -1338,5 +1338,25 @@ async fn use_var_provider() -> Result<()> {
         .sql("SELECT foo FROM csv_table WHERE bar > @var")
         .await?;
     dataframe.collect().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_array_agg() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .aggregate(vec![], vec![array_agg(col("a"))])?;
+
+    let results = df.collect().await?;
+
+    let expected = vec![
+        "+-------------------------------------+",
+        "| ARRAY_AGG(test.a)                   |",
+        "+-------------------------------------+",
+        "| [abcDEF, abc123, CBAdef, 123AbcDef] |",
+        "+-------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
     Ok(())
 }
