@@ -815,6 +815,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn query_compress_data(
         file_compression_type: FileCompressionType,
@@ -869,6 +870,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn query_compress_csv() -> Result<()> {
         let ctx = SessionContext::new();
@@ -1021,6 +1023,7 @@ mod tests {
     }
 
     #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn test_csv_parallel_compressed(n_partitions: usize) -> Result<()> {
         let config = SessionConfig::new()

@@ -64,9 +64,9 @@ use kernels_arrow::{
 };
 
 use arrow_array::{Datum, Scalar};
-
-use crate::array_expressions::{array_append, array_concat, array_prepend};
-
+use crate::array_expressions::{
+    array_append, array_concat, array_has_all, array_prepend,
+};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
@@ -982,6 +982,8 @@ impl BinaryExpr {
                 (_, DataType::List(_)) => array_prepend(&[left, right]),
                 _ => binary_string_array_op!(left, right, concat_elements),
             },
+            AtArrow => array_has_all(&[left, right]),
+            ArrowAt => array_has_all(&[right, left]),
         }
     }
 }

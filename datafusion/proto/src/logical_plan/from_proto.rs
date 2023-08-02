@@ -549,6 +549,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Stddev => Self::Stddev,
             protobuf::AggregateFunction::StddevPop => Self::StddevPop,
             protobuf::AggregateFunction::Correlation => Self::Correlation,
+            protobuf::AggregateFunction::RegrSlope => Self::RegrSlope,
             protobuf::AggregateFunction::ApproxPercentileCont => {
                 Self::ApproxPercentileCont
             }
@@ -1634,6 +1635,8 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "RegexNotIMatch" => Ok(Operator::RegexNotIMatch),
         "RegexNotMatch" => Ok(Operator::RegexNotMatch),
         "StringConcat" => Ok(Operator::StringConcat),
+        "AtArrow" => Ok(Operator::AtArrow),
+        "ArrowAt" => Ok(Operator::ArrowAt),
         other => Err(proto_error(format!(
             "Unsupported binary operator '{other:?}'"
         ))),
