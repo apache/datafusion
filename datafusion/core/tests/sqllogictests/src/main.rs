@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
 
+use datafusion_sqllogictest::{DataFusion, Postgres};
 use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
@@ -28,10 +29,6 @@ use tempfile::TempDir;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{DataFusionError, Result};
 
-use crate::engines::datafusion::DataFusion;
-use crate::engines::postgres::Postgres;
-
-mod engines;
 mod setup;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";

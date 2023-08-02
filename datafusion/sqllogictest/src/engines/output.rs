@@ -54,4 +54,4 @@ impl ColumnType for DFColumnType {
     }
 }
 
-pub type DFOutput = DBOutput<DFColumnType>;
+pub(crate) type DFOutput = DBOutput<DFColumnType>;
