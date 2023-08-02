@@ -63,18 +63,18 @@ GlobalLimitExec: skip=0, fetch=5
 --------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # preserve_inner_join
-query III nosort
-SELECT t1.a, t2.a as a2, t2.b
+query IIII nosort
+SELECT t1.a, t1.b, t1.c, t2.a as a2
  FROM annotated_data as t1
  INNER JOIN annotated_data as t2
  ON t1.d = t2.d ORDER BY a2, t2.b
  LIMIT 5
 ----
-1 0 0
-1 0 0
-1 0 0
-1 0 0
-1 0 0
+0 0 0 0
+0 0 2 0
+0 0 3 0
+0 0 6 0
+0 0 20 0
 
 query TT
 EXPLAIN SELECT t2.a as a2, t2.b

@@ -726,7 +726,7 @@ impl DefaultPhysicalPlanner {
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
-                        order_bys.clone(),
+                        order_bys,
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -737,6 +737,14 @@ impl DefaultPhysicalPlanner {
                     let can_repartition = !groups.is_empty()
                         && session_state.config().target_partitions() > 1
                         && session_state.config().repartition_aggregations();
+
+                    // Some aggregators may be modified during initialization for
+                    // optimization purposes. For example, a FIRST_VALUE may turn
+                    // into a LAST_VALUE with the reverse ordering requirement.
+                    // To reflect such changes to subsequent stages, use the updated
+                    // `AggregateExpr`/`PhysicalSortExpr` objects.
+                    let updated_aggregates = initial_aggr.aggr_expr.clone();
+                    let updated_order_bys = initial_aggr.order_by_expr.clone();
 
                     let (initial_aggr, next_partition_mode): (
                         Arc<dyn ExecutionPlan>,
@@ -761,9 +769,9 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(AggregateExec::try_new(
                         next_partition_mode,
                         final_grouping_set,
-                        aggregates,
+                        updated_aggregates,
                         filters,
-                        order_bys,
+                        updated_order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))

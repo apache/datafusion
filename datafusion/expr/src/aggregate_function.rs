@@ -61,6 +61,8 @@ pub enum AggregateFunction {
     CovariancePop,
     /// Correlation
     Correlation,
+    /// Slope from linear regression
+    RegrSlope,
     /// Approximate continuous percentile function
     ApproxPercentileCont,
     /// Approximate continuous percentile function with weight
@@ -102,6 +104,7 @@ impl AggregateFunction {
             Covariance => "COVARIANCE",
             CovariancePop => "COVARIANCE_POP",
             Correlation => "CORRELATION",
+            RegrSlope => "REGR_SLOPE",
             ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             ApproxMedian => "APPROX_MEDIAN",
@@ -152,6 +155,7 @@ impl FromStr for AggregateFunction {
             "var" => AggregateFunction::Variance,
             "var_pop" => AggregateFunction::VariancePop,
             "var_samp" => AggregateFunction::Variance,
+            "regr_slope" => AggregateFunction::RegrSlope,
             // approximate
             "approx_distinct" => AggregateFunction::ApproxDistinct,
             "approx_median" => AggregateFunction::ApproxMedian,
@@ -228,6 +232,7 @@ impl AggregateFunction {
             }
             AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
             AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
+            AggregateFunction::RegrSlope => Ok(DataType::Float64),
             AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
             AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
                 "item",
@@ -311,10 +316,10 @@ impl AggregateFunction {
             | AggregateFunction::LastValue => {
                 Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
             }
-            AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
-                Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-            }
-            AggregateFunction::Correlation => {
+            AggregateFunction::Covariance
+            | AggregateFunction::CovariancePop
+            | AggregateFunction::Correlation
+            | AggregateFunction::RegrSlope => {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::ApproxPercentileCont => {

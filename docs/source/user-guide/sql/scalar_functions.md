@@ -43,6 +43,7 @@
 - [log](#log)
 - [log10](#log10)
 - [log2](#log2)
+- [nanvl](#nanvl)
 - [pi](#pi)
 - [power](#power)
 - [pow](#pow)
@@ -351,6 +352,22 @@ log2(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `nanvl`
+
+Returns the first argument if it's not _NaN_.
+Returns the second argument otherwise.
+
+```
+nanvl(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: Numeric expression to return if it's not _NaN_.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression_y**: Numeric expression to return if the first expression is _NaN_.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `pi`
