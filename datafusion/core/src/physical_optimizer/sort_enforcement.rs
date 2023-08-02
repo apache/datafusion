@@ -2859,3 +2859,82 @@ mod tests {
         Ok(())
     }
 }
+
+mod test_bug {
+    use crate::physical_plan::{collect, displayable, ExecutionPlan};
+    use crate::prelude::SessionContext;
+    use arrow::util::pretty::print_batches;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use std::sync::Arc;
+
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
+        let formatted = crate::physical_plan::displayable(plan.as_ref())
+            .indent(true)
+            .to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+    }
+
+    #[tokio::test]
+    async fn test_repartition_bug() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(2);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER) as VALUES
+          (0, 0, 0),
+          (1, 1, 1),
+          (2, 2, 2),
+          (3, 3, 3)",
+        )
+        .await?;
+
+        let sql = "SELECT l.col0, LAST_VALUE(r.col1 ORDER BY r.col0) as last_col1
+        FROM tab0 as l
+        JOIN tab0 as r
+        ON l.col0 = r.col0
+        GROUP BY l.col0, l.col1, l.col2
+        ORDER BY l.col0";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "SortPreservingMergeExec: [col0@0 ASC NULLS LAST]",
+                "  SortExec: expr=[col0@0 ASC NULLS LAST]",
+                "    ProjectionExec: expr=[col0@0 as col0, LAST_VALUE(r.col1) ORDER BY [r.col0 ASC NULLS LAST]@3 as last_col1]",
+                "      AggregateExec: mode=FinalPartitioned, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)]",
+                "        CoalesceBatchesExec: target_batch_size=8192",
+                "          RepartitionExec: partitioning=Hash([col0@0, col1@1, col2@2], 2), input_partitions=2",
+                "            AggregateExec: mode=Partial, gby=[col0@0 as col0, col1@1 as col1, col2@2 as col2], aggr=[LAST_VALUE(r.col1)], ordering_mode=PartiallyOrdered",
+                "              SortExec: expr=[col0@3 ASC NULLS LAST]",
+                "                CoalesceBatchesExec: target_batch_size=8192",
+                "                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]",
+                "                    CoalesceBatchesExec: target_batch_size=8192",
+                "                      RepartitionExec: partitioning=Hash([col0@0], 2), input_partitions=1",
+                "                        MemoryExec: partitions=1, partition_sizes=[1]",
+                "                    CoalesceBatchesExec: target_batch_size=8192",
+                "                      RepartitionExec: partitioning=Hash([col0@0], 2), input_partitions=1",
+                "                        MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+}
