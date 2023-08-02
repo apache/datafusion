@@ -54,7 +54,7 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
     fn schema(&self) -> SchemaRef;
 }
 
-/// Trait for a [`Stream`] of [`RecordBatch`]es
+/// Trait for a [`Stream`](futures::stream::Stream) of [`RecordBatch`]es
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
