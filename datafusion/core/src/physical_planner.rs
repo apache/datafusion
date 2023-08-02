@@ -189,12 +189,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
 
             if let (Some(list_key), Some(extra_key)) = (&key.list_key, extra_key) {
-                let key = create_physical_name(&list_key, false)?;
-                let extra_key = create_physical_name(&extra_key, false)?;
+                let key = create_physical_name(list_key, false)?;
+                let extra_key = create_physical_name(extra_key, false)?;
                 Ok(format!("{expr}[{key}:{extra_key}]"))
             } else {
                 let key = if let Some(list_key) = &key.list_key {
-                    create_physical_name(&list_key, false)?
+                    create_physical_name(list_key, false)?
                 } else {
                     create_physical_name(
                         &Expr::Literal(key.struct_key.clone().unwrap()),
