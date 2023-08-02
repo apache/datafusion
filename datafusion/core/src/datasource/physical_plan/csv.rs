@@ -667,7 +667,6 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
-    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_projection(
         file_compression_type: FileCompressionType,
@@ -731,7 +730,6 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
-    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_mixed_order_projection(
         file_compression_type: FileCompressionType,
@@ -795,7 +793,6 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
-    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_limit(
         file_compression_type: FileCompressionType,
@@ -859,7 +856,6 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
-    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_missing_column(
         file_compression_type: FileCompressionType,
@@ -911,7 +907,6 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
-    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_partition(
         file_compression_type: FileCompressionType,
@@ -1061,7 +1056,6 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
-    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn test_chunked_csv(
         file_compression_type: FileCompressionType,
