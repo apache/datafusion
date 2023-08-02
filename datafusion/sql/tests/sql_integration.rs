@@ -259,6 +259,13 @@ CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), Primar
 }
 
 #[test]
+fn plan_create_table_with_unique() {
+    let sql = "create table person (id int unique, name string)";
+    let plan = "CreateMemoryTable: Bare { table: \"person\" } constraints=[Unique([0])]\n  EmptyRelation";
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_create_table_no_pk() {
     let sql = "create table person (id int, name string)";
     let plan = r#"
