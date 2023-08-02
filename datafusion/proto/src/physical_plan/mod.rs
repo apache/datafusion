@@ -1401,6 +1401,7 @@ mod roundtrip_tests {
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
     use datafusion::physical_plan::expressions::{
         date_time_interval_expr, like, BinaryExpr, GetIndexedFieldExpr,
+        GetIndexedFieldExprKey,
     };
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1931,8 +1932,11 @@ mod roundtrip_tests {
 
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
-        let get_indexed_field_expr =
-            Arc::new(GetIndexedFieldExpr::new(col_a, col_b, None));
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
+            col_a,
+            GetIndexedFieldExprKey::new(Some(col_b), None),
+            None,
+        ));
 
         let plan = Arc::new(ProjectionExec::try_new(
             vec![(get_indexed_field_expr, "result".to_string())],
