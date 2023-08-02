@@ -639,6 +639,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             constraints,
         } = statement;
 
+        let mut constraints = constraints;
+        for column in &columns {
+            for option in &column.options {
+                if let ast::ColumnOption::Unique { is_primary } = option.option {
+                    constraints.push(ast::TableConstraint::Unique {
+                        name: None,
+                        columns: vec![column.name.clone()],
+                        is_primary,
+                    })
+                }
+            }
+        }
         // semantic checks
         if file_type == "PARQUET" && !columns.is_empty() {
             Err(DataFusionError::Plan(
