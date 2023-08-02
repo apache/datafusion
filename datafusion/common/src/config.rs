@@ -235,6 +235,23 @@ config_namespace! {
         ///
         /// Defaults to the number of CPU cores on the system
         pub planning_concurrency: usize, default = num_cpus::get()
+
+        /// How much memory is set aside, for each spillable sort, to
+        /// ensure an in-memory merge can occur. This setting has no
+        /// if the sort can not spill (there is no `DiskManager`
+        /// configured)
+        ///
+        /// As part of spilling to disk, in memory data must be sorted
+        /// / merged before writing the file. This in-memory
+        /// sort/merge requires memory as well, so To avoid allocating
+        /// once memory is exhausted, DataFusion sets aside this
+        /// many bytes before.
+        pub sort_spill_reservation_bytes: usize, default = 10 * 1024 * 1024
+
+        /// When sorting, below what size should data be concatenated
+        /// and sorted in a single RecordBatch rather than sorted in
+        /// batches and merged.
+        pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
     }
 }
 

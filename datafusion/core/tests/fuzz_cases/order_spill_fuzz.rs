@@ -22,13 +22,13 @@ use arrow::{
     compute::SortOptions,
     record_batch::RecordBatch,
 };
-use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_execution::memory_pool::GreedyMemoryPool;
 use rand::Rng;
 use std::sync::Arc;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
@@ -76,10 +76,20 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         let exec = MemoryExec::try_new(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort, Arc::new(exec)));
 
+        let session_config = SessionConfig::new();
+        // Make sure there is enough space for the initial spill
+        // reservation
+        let pool_size = pool_size.saturating_add(
+            session_config
+                .options()
+                .execution
+                .sort_spill_reservation_bytes,
+        );
+
         let runtime_config = RuntimeConfig::new()
             .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)));
         let runtime = Arc::new(RuntimeEnv::new(runtime_config).unwrap());
-        let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
+        let session_ctx = SessionContext::with_config_rt(session_config, runtime);
 
         let task_ctx = session_ctx.task_ctx();
         let collected = collect(sort.clone(), task_ctx).await.unwrap();
@@ -88,9 +98,17 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         let actual = batches_to_vec(&collected);
 
         if spill {
-            assert_ne!(sort.metrics().unwrap().spill_count().unwrap(), 0);
+            assert_ne!(
+                sort.metrics().unwrap().spill_count().unwrap(),
+                0,
+                "{pool_size} {size}"
+            );
         } else {
-            assert_eq!(sort.metrics().unwrap().spill_count().unwrap(), 0);
+            assert_eq!(
+                sort.metrics().unwrap().spill_count().unwrap(),
+                0,
+                "{pool_size} {size}"
+            );
         }
 
         assert_eq!(
