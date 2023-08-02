@@ -144,7 +144,7 @@ impl Drop for SharedRegistration {
 /// number of bytes of memory in a [`MemoryPool`] that is freed back
 /// to the pool on drop.
 ///
-/// The reservation can be grown or srhunk over time.
+/// The reservation can be grown or shrunk over time.
 #[derive(Debug)]
 pub struct MemoryReservation {
     registration: Arc<SharedRegistration>,
