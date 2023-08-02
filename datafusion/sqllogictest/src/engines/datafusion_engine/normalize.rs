@@ -113,13 +113,13 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
 
 /// normalize path references
 ///
-/// ```
+/// ```text
 /// CsvExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 ///
 /// into:
 ///
-/// ```
+/// ```text
 /// CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
