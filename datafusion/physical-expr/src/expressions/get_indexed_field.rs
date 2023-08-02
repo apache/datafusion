@@ -22,13 +22,11 @@ use arrow::array::Array;
 
 use crate::array_expressions::{array_element, array_slice};
 use crate::physical_expr::down_cast_any_ref;
-use crate::struct_expressions::struct_extract;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::DataFusionError;
-use datafusion_common::Result;
+use datafusion_common::{cast::as_struct_array, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     field_util::get_indexed_field as get_data_type_field, ColumnarValue,
 };
@@ -36,11 +34,78 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-/// expression to get a field of a struct array.
+/// Key of `GetIndexedFieldExpr`.
+/// This structure is needed to separate the responsibilities of the key for `DataType::List` and `DataType::Struct`.
+/// If we use index with `DataType::List`, then we use the `list_key` argument with `struct_key` equal to `None`.
+/// If we use index with `DataType::Struct`, then we use the `struct_key` argument with `list_key` equal to `None`.
+/// `list_key` can be any expression, unlike `struct_key` which can only be `ScalarValue::Utf8`.
+#[derive(Clone, Hash, Debug)]
+pub struct GetIndexedFieldExprKey {
+    /// The key expression for `DataType::List`
+    list_key: Option<Arc<dyn PhysicalExpr>>,
+    /// The key expression for `DataType::Struct`
+    struct_key: Option<ScalarValue>,
+}
+
+impl GetIndexedFieldExprKey {
+    /// Create new get field expression key
+    pub fn new(
+        list_key: Option<Arc<dyn PhysicalExpr>>,
+        struct_key: Option<ScalarValue>,
+    ) -> Self {
+        Self {
+            list_key,
+            struct_key,
+        }
+    }
+
+    /// Get the key expression for `DataType::List`
+    pub fn list_key(&self) -> &Option<Arc<dyn PhysicalExpr>> {
+        &self.list_key
+    }
+
+    /// Get the key expression for `DataType::Struct`
+    pub fn struct_key(&self) -> &Option<ScalarValue> {
+        &self.struct_key
+    }
+}
+
+impl std::fmt::Display for GetIndexedFieldExprKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if let Some(list_key) = &self.list_key {
+            write!(f, "{}", list_key)
+        } else {
+            write!(f, "{}", self.struct_key.clone().unwrap())
+        }
+    }
+}
+
+impl PartialEq<dyn Any> for GetIndexedFieldExprKey {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                if let Some(list_key) = &self.list_key {
+                    list_key.eq(&x.list_key.clone().unwrap())
+                } else {
+                    self.struct_key
+                        .clone()
+                        .unwrap()
+                        .eq(&x.struct_key.clone().unwrap())
+                }
+            })
+            .unwrap_or(false)
+    }
+}
+
+/// Expression to get a field of a struct array.
 #[derive(Debug, Hash)]
 pub struct GetIndexedFieldExpr {
+    /// The expression to find
     arg: Arc<dyn PhysicalExpr>,
-    key: Arc<dyn PhysicalExpr>,
+    /// The key statement
+    key: GetIndexedFieldExprKey,
+    /// The extra key (it can be used only with `DataType::List`)
     extra_key: Option<Arc<dyn PhysicalExpr>>,
 }
 
@@ -48,7 +113,7 @@ impl GetIndexedFieldExpr {
     /// Create new get field expression
     pub fn new(
         arg: Arc<dyn PhysicalExpr>,
-        key: Arc<dyn PhysicalExpr>,
+        key: GetIndexedFieldExprKey,
         extra_key: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
         Self {
@@ -59,7 +124,7 @@ impl GetIndexedFieldExpr {
     }
 
     /// Get the input key
-    pub fn key(&self) -> &Arc<dyn PhysicalExpr> {
+    pub fn key(&self) -> &GetIndexedFieldExprKey {
         &self.key
     }
 
@@ -91,38 +156,48 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         let arg_dt = self.arg.data_type(input_schema)?;
-        let key_dt = self.key.data_type(input_schema)?;
+        let key = if let Some(list_key) = &self.key.list_key {
+            (Some(list_key.data_type(input_schema)?), None)
+        } else {
+            (None, self.key.struct_key.clone())
+        };
         let extra_key_dt = if let Some(extra_key) = &self.extra_key {
             Some(extra_key.data_type(input_schema)?)
         } else {
             None
         };
-        get_data_type_field(&arg_dt, &key_dt, &extra_key_dt)
-            .map(|f| f.data_type().clone())
+        get_data_type_field(&arg_dt, &key, &extra_key_dt).map(|f| f.data_type().clone())
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
         let arg_dt = self.arg.data_type(input_schema)?;
-        let key_dt = self.key.data_type(input_schema)?;
+        let key = if let Some(list_key) = &self.key.list_key {
+            (Some(list_key.data_type(input_schema)?), None)
+        } else {
+            (None, self.key.struct_key.clone())
+        };
         let extra_key_dt = if let Some(extra_key) = &self.extra_key {
             Some(extra_key.data_type(input_schema)?)
         } else {
             None
         };
-        get_data_type_field(&arg_dt, &key_dt, &extra_key_dt).map(|f| f.is_nullable())
+        get_data_type_field(&arg_dt, &key, &extra_key_dt).map(|f| f.is_nullable())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let array = self.arg.evaluate(batch)?.into_array(batch.num_rows());
-        let key = self.key.evaluate(batch)?.into_array(batch.num_rows());
         if let Some(extra_key) = &self.extra_key {
+            let list_key = self
+                .key
+                .list_key
+                .clone()
+                .unwrap()
+                .evaluate(batch)?
+                .into_array(batch.num_rows());
             let extra_key = extra_key.evaluate(batch)?.into_array(batch.num_rows());
-            match (array.data_type(), key.data_type(), extra_key.data_type()) {
-                (DataType::List(_), DataType::Int64, DataType::Int64)
-                | (DataType::List(_), DataType::Int64, DataType::Null)
-                | (DataType::List(_), DataType::Null, DataType::Int64)
-                | (DataType::List(_), DataType::Null, DataType::Null) => Ok(ColumnarValue::Array(array_slice(&[
-                    array, key, extra_key
+            match (array.data_type(), list_key.data_type(), extra_key.data_type()) {
+                (DataType::List(_), DataType::Int64, DataType::Int64) => Ok(ColumnarValue::Array(array_slice(&[
+                    array, list_key, extra_key
                 ])?)),
                 (DataType::List(_), key, extra_key) => Err(DataFusionError::Execution(
                     format!("get indexed field is only possible on lists with int64 indexes. \
@@ -131,22 +206,37 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                     format!("get indexed field is only possible on lists with int64 indexes or struct \
                              with utf8 indexes. Tried {dt:?} with {key:?} and {extra_key:?} indices"))),
             }
+        } else if let Some(list_key) = &self.key.list_key {
+            let list_key = list_key.evaluate(batch)?.into_array(batch.num_rows());
+            match (array.data_type(), list_key.data_type()) {
+                    (DataType::List(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
+                        array, list_key
+                    ])?)),
+                    (DataType::List(_), key) => Err(DataFusionError::Execution(
+                        format!("get indexed field is only possible on lists with int64 indexes. \
+                            Tried with {key:?} index"))),
+                    (dt, key) => Err(DataFusionError::Execution(
+                                format!("get indexed field is only possible on lists with int64 indexes or struct \
+                                         with utf8 indexes. Tried {dt:?} with {key:?} index"))),
+                }
         } else {
-            match (array.data_type(), key.data_type()) {
-                (DataType::List(_), DataType::Int64)
-                | (DataType::List(_), DataType::Null) => Ok(ColumnarValue::Array(array_element(&[
-                    array, key
-                ])?)),
-                (DataType::Struct(_), DataType::Utf8) => Ok(ColumnarValue::Array(struct_extract(&[
-                    array, key
-                ])?)),
-                (DataType::Struct(_), key) => Err(DataFusionError::Execution(
-                    format!("get indexed field is only possible on struct with utf8 indexes. \
-                             Tried with {key:?} index"))),
-                (dt, key) => Err(DataFusionError::Execution(
-                    format!("get indexed field is only possible on lists with int64 indexes or struct \
-                             with utf8 indexes. Tried {dt:?} with {key:?} index"))),
-            }
+            let struct_key = self.key.struct_key.clone().unwrap();
+            match (array.data_type(), struct_key) {
+                    (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
+                        let as_struct_array = as_struct_array(&array)?;
+                        match as_struct_array.column_by_name(&k) {
+                            None => Err(DataFusionError::Execution(
+                                format!("get indexed field {k} not found in struct"))),
+                            Some(col) => Ok(ColumnarValue::Array(col.clone()))
+                        }
+                    }
+                    (DataType::Struct(_), key) => Err(DataFusionError::Execution(
+                        format!("get indexed field is only possible on struct with utf8 indexes. \
+                                 Tried with {key:?} index"))),
+                    (dt, key) => Err(DataFusionError::Execution(
+                                    format!("get indexed field is only possible on lists with int64 indexes or struct \
+                                             with utf8 indexes. Tried {dt:?} with {key:?} index"))),
+                }
         }
     }
 
@@ -241,14 +331,16 @@ mod tests {
             ),
         ]);
         let expr = col("str", &schema).unwrap();
-        let key = col("key", &schema).unwrap();
         // only one row should be processed
-        let key_array = StringArray::from(vec![Some("a"), None, None, None]);
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![Arc::new(struct_array), Arc::new(key_array)],
-        )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(expr, key, None));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(struct_array)])?;
+        let expr = Arc::new(GetIndexedFieldExpr::new(
+            expr,
+            GetIndexedFieldExprKey::new(
+                None,
+                Some(ScalarValue::Utf8(Some(String::from("a")))),
+            ),
+            None,
+        ));
         let result = expr.evaluate(&batch)?.into_array(1);
         let result =
             as_boolean_array(&result).expect("failed to downcast to BooleanArray");
@@ -257,17 +349,14 @@ mod tests {
     }
 
     fn struct_schema() -> Schema {
-        Schema::new(vec![
-            Field::new_struct(
-                "str",
-                Fields::from(vec![
-                    Field::new("a", DataType::Boolean, true),
-                    Field::new("b", DataType::Int64, true),
-                ]),
-                true,
-            ),
-            Field::new("key", DataType::Utf8, true),
-        ])
+        Schema::new(vec![Field::new_struct(
+            "str",
+            Fields::from(vec![
+                Field::new("a", DataType::Boolean, true),
+                Field::new("b", DataType::Int64, true),
+            ]),
+            true,
+        )])
     }
 
     fn list_schema(cols: &[&str]) -> Schema {
@@ -305,7 +394,11 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(list_col), Arc::new(key_col)],
         )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(expr, key, None));
+        let expr = Arc::new(GetIndexedFieldExpr::new(
+            expr,
+            GetIndexedFieldExprKey::new(Some(key), None),
+            None,
+        ));
         let result = expr.evaluate(&batch)?.into_array(1);
         let result = as_string_array(&result).expect("failed to downcast to ListArray");
         let expected = StringArray::from(expected_list);
@@ -342,7 +435,11 @@ mod tests {
                 Arc::new(extra_key_col),
             ],
         )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(expr, key, Some(extra_key)));
+        let expr = Arc::new(GetIndexedFieldExpr::new(
+            expr,
+            GetIndexedFieldExprKey::new(Some(key), None),
+            Some(extra_key),
+        ));
         let result = expr.evaluate(&batch)?.into_array(1);
         let result = as_list_array(&result).expect("failed to downcast to ListArray");
         let (expected, _, _) =
@@ -363,7 +460,11 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(list_builder.finish()), key_array],
         )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(expr, key, None));
+        let expr = Arc::new(GetIndexedFieldExpr::new(
+            expr,
+            GetIndexedFieldExprKey::new(Some(key), None),
+            None,
+        ));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         assert!(result.is_null(0));
         Ok(())
@@ -384,7 +485,11 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(list_builder.finish()), Arc::new(key_array)],
         )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(expr, key_expr, None));
+        let expr = Arc::new(GetIndexedFieldExpr::new(
+            expr,
+            GetIndexedFieldExprKey::new(Some(key_expr), None),
+            None,
+        ));
         let result = expr.evaluate(&batch)?.into_array(1);
         assert!(result.is_null(0));
         Ok(())

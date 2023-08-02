@@ -359,21 +359,52 @@ impl ScalarUDF {
     }
 }
 
+/// Key of `GetIndexedFieldKey`.
+/// This structure is needed to separate the responsibilities of the key for `DataType::List` and `DataType::Struct`.
+/// If we use index with `DataType::List`, then we use the `list_key` argument with `struct_key` equal to `None`.
+/// If we use index with `DataType::Struct`, then we use the `struct_key` argument with `list_key` equal to `None`.
+/// `list_key` can be any expression, unlike `struct_key` which can only be `ScalarValue::Utf8`.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct GetIndexedFieldKey {
+    /// The key expression for `DataType::List`
+    pub list_key: Option<Expr>,
+    /// The key expression for `DataType::Struct`
+    pub struct_key: Option<ScalarValue>,
+}
+
+impl GetIndexedFieldKey {
+    /// Create a new GetIndexedFieldKey expression
+    pub fn new(list_key: Option<Expr>, struct_key: Option<ScalarValue>) -> Self {
+        // value must be either `list_key` or `struct_key`
+        assert_ne!(list_key.is_some(), struct_key.is_some());
+        assert_ne!(list_key.is_none(), struct_key.is_none());
+
+        Self {
+            list_key,
+            struct_key,
+        }
+    }
+}
+
 /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by `key`.
 /// If `extra_key` is not `None`, returns the slice of a [`arrow::array::ListArray`] in the range from `key` to `extra_key`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct GetIndexedField {
-    /// the expression to take the field from
+    /// The expression to take the field from
     pub expr: Box<Expr>,
     /// The name of the field to take
-    pub key: Box<Expr>,
+    pub key: Box<GetIndexedFieldKey>,
     /// The right border of the field to take
     pub extra_key: Option<Box<Expr>>,
 }
 
 impl GetIndexedField {
     /// Create a new GetIndexedField expression
-    pub fn new(expr: Box<Expr>, key: Box<Expr>, extra_key: Option<Box<Expr>>) -> Self {
+    pub fn new(
+        expr: Box<Expr>,
+        key: Box<GetIndexedFieldKey>,
+        extra_key: Option<Box<Expr>>,
+    ) -> Self {
         Self {
             expr,
             key,
@@ -1152,6 +1183,11 @@ impl fmt::Display for Expr {
                 extra_key,
                 expr,
             }) => {
+                let key = if let Some(list_key) = &key.list_key {
+                    format!("{list_key}")
+                } else {
+                    format!("{0}", key.struct_key.clone().unwrap())
+                };
                 if let Some(extra_key) = extra_key {
                     write!(f, "({expr})[{key}:{extra_key}]")
                 } else {
@@ -1352,7 +1388,13 @@ fn create_name(e: &Expr) -> Result<String> {
             expr,
         }) => {
             let expr = create_name(expr)?;
-            let key = create_name(key)?;
+            let key = if let Some(list_key) = &key.list_key {
+                create_name(list_key)?
+            } else if let Some(ScalarValue::Utf8(Some(struct_key))) = &key.struct_key {
+                struct_key.to_string()
+            } else {
+                String::new()
+            };
             if let Some(extra_key) = extra_key {
                 let extra_key = create_name(extra_key)?;
                 Ok(format!("{expr}[{key}:{extra_key}]"))

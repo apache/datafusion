@@ -34,9 +34,9 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
-    Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
+    Expr, ExprSchemable, GetIndexedField, GetIndexedFieldKey, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -504,7 +504,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         expr: SQLExpr,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Box<Expr>, Option<Box<Expr>>)> {
+    ) -> Result<(Box<GetIndexedFieldKey>, Option<Box<Expr>>)> {
         let (key, extra_key) = match expr.clone() {
             SQLExpr::JsonAccess {
                 left,
@@ -515,10 +515,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     self.sql_expr_to_logical_expr(*left, schema, planner_context)?;
                 let right =
                     self.sql_expr_to_logical_expr(*right, schema, planner_context)?;
-                (left, Some(Box::new(right)))
+
+                (
+                    GetIndexedFieldKey::new(Some(left), None),
+                    Some(Box::new(right)),
+                )
             }
+            SQLExpr::Value(
+                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            ) => (
+                GetIndexedFieldKey::new(None, Some(ScalarValue::Utf8(Some(s)))),
+                None,
+            ),
             _ => (
-                self.sql_expr_to_logical_expr(expr, schema, planner_context)?,
+                GetIndexedFieldKey::new(
+                    Some(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
+                    None,
+                ),
                 None,
             ),
         };
