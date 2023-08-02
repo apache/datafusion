@@ -1730,7 +1730,8 @@ fn create_external_table_csv() {
 #[test]
 fn create_external_table_with_pk() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int, primary key(c1)) STORED AS CSV LOCATION 'foo.csv'";
-    let expected = "CreateExternalTable: Bare { table: \"t\" } constraints=[PrimaryKey([0])]";
+    let expected =
+        "CreateExternalTable: Bare { table: \"t\" } constraints=[PrimaryKey([0])]";
     quick_test(sql, expected);
 }
 
