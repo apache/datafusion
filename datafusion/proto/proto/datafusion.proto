@@ -613,6 +613,7 @@ enum AggregateFunction {
   // we append "_AGG" to obey name scoping rules.
   FIRST_VALUE_AGG = 24;
   LAST_VALUE_AGG = 25;
+  REGR_SLOPE = 26;
 }
 
 message AggregateExprNode {

@@ -354,6 +354,12 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
+        /// When true, DataFusion will opportunistically remove sorts by replacing
+        /// `RepartitionExec` with `SortPreservingRepartitionExec`, and
+        /// `CoalescePartitionsExec` with `SortPreservingMergeExec`,
+        /// even when the query is bounded.
+        pub bounded_order_preserving_variants: bool, default = false
+
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
         /// rule. When set to false, any rules that produce errors will cause the query to fail

@@ -19,7 +19,7 @@
 name = "gen"
 description = "Code generation for proto"
 version = "0.1.0"
-edition = "2021"
+edition = { workspace = true }
 rust-version = "1.64"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-datafusion"

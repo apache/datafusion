@@ -148,7 +148,7 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Variance => {
+        AggregateFunction::Variance | AggregateFunction::VariancePop => {
             if !is_variance_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
@@ -157,16 +157,7 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::VariancePop => {
-            if !is_variance_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
-            }
-            Ok(input_types.to_vec())
-        }
-        AggregateFunction::Covariance => {
+        AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
             if !is_covariance_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
@@ -175,25 +166,7 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::CovariancePop => {
-            if !is_covariance_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
-            }
-            Ok(input_types.to_vec())
-        }
-        AggregateFunction::Stddev => {
-            if !is_stddev_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
-            }
-            Ok(input_types.to_vec())
-        }
-        AggregateFunction::StddevPop => {
+        AggregateFunction::Stddev | AggregateFunction::StddevPop => {
             if !is_stddev_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
@@ -204,6 +177,18 @@ pub fn coerce_types(
         }
         AggregateFunction::Correlation => {
             if !is_correlation_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::RegrSlope => {
+            let valid_types = [NUMERICS.to_vec(), vec![DataType::Null]].concat();
+            let input_types_valid = // number of input already checked before
+                valid_types.contains(&input_types[0]) && valid_types.contains(&input_types[1]);
+            if !input_types_valid {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]

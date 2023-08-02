@@ -41,8 +41,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::intervals::is_operator_supported;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::intervals::check_support;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries,
     OrderingEquivalenceProperties, PhysicalExpr,
@@ -191,11 +190,8 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Statistics {
         let predicate = self.predicate();
 
-        if let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() {
-            let columns = collect_columns(predicate);
-            if !is_operator_supported(binary.op()) || columns.is_empty() {
-                return Statistics::default();
-            }
+        if !check_support(predicate) {
+            return Statistics::default();
         }
 
         let input_stats = self.input.statistics();

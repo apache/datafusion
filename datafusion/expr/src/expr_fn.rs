@@ -136,6 +136,17 @@ pub fn sum(expr: Expr) -> Expr {
     ))
 }
 
+/// Create an expression to represent the array_agg() aggregate function
+pub fn array_agg(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::ArrayAgg,
+        vec![expr],
+        false,
+        None,
+        None,
+    ))
+}
+
 /// Create an expression to represent the avg() aggregate function
 pub fn avg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
