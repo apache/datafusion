@@ -660,6 +660,41 @@ select round(log2(a), 5), round(log2(b), 5), round(log2(c), 5) from signed_integ
 NaN 13.28771 NaN
 NaN 6.64386 NaN
 
+## nanvl
+
+# nanvl scalar function
+query RRR rowsort
+select nanvl(0, 1), nanvl(asin(10), 2), nanvl(3, asin(10));
+----
+0 2 3
+
+# nanvl scalar nulls
+query R rowsort
+select nanvl(null, 64);
+----
+NULL
+
+# nanvl scalar nulls #1
+query R rowsort
+select nanvl(2, null);
+----
+NULL
+
+# nanvl scalar nulls #2
+query R rowsort
+select nanvl(null, null);
+----
+NULL
+
+# nanvl with columns (round is needed to normalize the outputs of different operating systems)
+query RRR rowsort
+select round(nanvl(asin(f + a), 2), 5), round(nanvl(asin(b + c), 3), 5), round(nanvl(asin(d + e), 4), 5) from small_floats;
+----
+0.7754 1.11977 -0.9273
+2 -0.20136 0.7754
+2 -1.11977 4
+NULL NULL NULL
+
 ## pi
 
 # pi scalar function

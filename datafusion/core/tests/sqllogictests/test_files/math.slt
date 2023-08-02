@@ -93,3 +93,9 @@ query RRRRRRR
 SELECT atan2(2.0, 1.0), atan2(-2.0, 1.0), atan2(2.0, -1.0), atan2(-2.0, -1.0), atan2(NULL, 1.0), atan2(2.0, NULL), atan2(NULL, NULL);
 ----
 1.107148717794 -1.107148717794 2.034443935796 -2.034443935796 NULL NULL NULL
+
+# nanvl
+query RRR
+SELECT nanvl(asin(10), 1.0), nanvl(1.0, 2.0), nanvl(asin(10), asin(10))
+----
+1 1 NaN
