@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::{SchemaExt, ToDFSchema};
+use datafusion_common::{Constraints, SchemaExt, ToDFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
@@ -561,6 +561,7 @@ pub struct ListingTable {
     definition: Option<String>,
     collected_statistics: StatisticsCache,
     infinite_source: bool,
+    constraints: Option<Constraints>,
 }
 
 impl ListingTable {
@@ -598,6 +599,7 @@ impl ListingTable {
             definition: None,
             collected_statistics: Default::default(),
             infinite_source,
+            constraints: None,
         };
 
         Ok(table)
@@ -655,6 +657,14 @@ impl ListingTable {
         }
         Ok(all_sort_orders)
     }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        if !constraints.is_empty() {
+            self.constraints = Some(constraints);
+        }
+        self
+    }
 }
 
 #[async_trait]
@@ -665,6 +675,10 @@ impl TableProvider for ListingTable {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        self.constraints.as_ref()
     }
 
     fn table_type(&self) -> TableType {

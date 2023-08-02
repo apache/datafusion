@@ -112,9 +112,10 @@ impl DdlStatement {
                 match self.0 {
                     DdlStatement::CreateExternalTable(CreateExternalTable {
                         ref name,
+                        constraints,
                         ..
                     }) => {
-                        write!(f, "CreateExternalTable: {name:?}")
+                        write!(f, "CreateExternalTable: {name:?}{constraints}")
                     }
                     DdlStatement::CreateMemoryTable(CreateMemoryTable {
                         name,

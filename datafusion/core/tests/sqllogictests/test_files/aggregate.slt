@@ -2448,3 +2448,28 @@ NULL
 NULL
 3
 3
+
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table2 (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER,
+  primary key(c)
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION 'tests/data/window_2.csv'; 
+
+query III rowsort
+SELECT c, b, SUM(d)
+FROM multiple_ordered_table2
+GROUP BY c
+ORDER BY c
+LIMIT 4;
+----
+0 0 0
+1 0 2
+2 0 0
+3 0 0

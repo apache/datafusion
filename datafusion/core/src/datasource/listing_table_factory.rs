@@ -147,8 +147,9 @@ impl TableProviderFactory for ListingTableFactory {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table =
-            ListingTable::try_new(config)?.with_definition(cmd.definition.clone());
+        let table = ListingTable::try_new(config)?
+            .with_definition(cmd.definition.clone())
+            .with_constraints(cmd.constraints.clone());
         Ok(Arc::new(table))
     }
 }
