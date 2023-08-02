@@ -20,7 +20,6 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::format::DEFAULT_FORMAT_OPTIONS;
 use crate::intervals::Interval;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
@@ -29,6 +28,7 @@ use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;

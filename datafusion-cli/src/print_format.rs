@@ -20,8 +20,8 @@ use arrow::csv::writer::WriterBuilder;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_expr::format::DEFAULT_FORMAT_OPTIONS;
 use std::str::FromStr;
 
 /// Allow records to be printed in different formats

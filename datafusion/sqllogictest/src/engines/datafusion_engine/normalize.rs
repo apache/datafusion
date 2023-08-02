@@ -17,9 +17,9 @@
 
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
-use datafusion_physical_expr::format::DEFAULT_FORMAT_OPTIONS;
 use lazy_static::lazy_static;
 use std::path::PathBuf;
 

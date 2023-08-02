@@ -1035,13 +1035,13 @@ async fn timestamp_sub_with_tz() -> Result<()> {
     let sql = "SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----+---------+",
-        "| val | ts_diff |",
-        "+-----+---------+",
-        "| 3   | PT30S   |",
-        "| 1   | PT20S   |",
-        "| 2   | PT10S   |",
-        "+-----+---------+",
+        "+-----+-----------------------------------+",
+        "| val | ts_diff                           |",
+        "+-----+-----------------------------------+",
+        "| 3   | 0 days 0 hours 0 mins 30.000 secs |",
+        "| 1   | 0 days 0 hours 0 mins 20.000 secs |",
+        "| 2   | 0 days 0 hours 0 mins 10.000 secs |",
+        "+-----+-----------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
