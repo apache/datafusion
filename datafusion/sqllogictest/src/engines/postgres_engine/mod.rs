@@ -16,7 +16,6 @@
 // under the License.
 
 /// Postgres engine implementation for sqllogictest.
-
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 

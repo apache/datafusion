@@ -16,7 +16,6 @@
 // under the License.
 
 /// DataFusion engine implementation for sqllogictest.
-
 mod error;
 mod normalize;
 mod runner;

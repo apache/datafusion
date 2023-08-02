@@ -57,7 +57,7 @@ impl sqllogictest::AsyncDB for DataFusion {
         "DataFusion"
     }
 
-    /// [`Runner`] calls this function to perform sleep.
+    /// [`DataFusion`] calls this function to perform sleep.
     ///
     /// The default implementation is `std::thread::sleep`, which is universal to any async runtime
     /// but would block the current thread. If you are running in tokio runtime, you should override

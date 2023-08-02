@@ -16,7 +16,6 @@
 // under the License.
 
 /// Implementation of sqllogictest for datafusion.
-
 mod conversion;
 mod datafusion_engine;
 mod output;
