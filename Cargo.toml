@@ -32,12 +32,12 @@ rust-version = "1.70"
 version = "28.0.0"
 
 [workspace.dependencies]
-arrow = { version = "44.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
-arrow-array = { version = "44.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "44.0.0", default-features = false }
-arrow-flight = { version = "44.0.0", features = ["flight-sql-experimental"] }
-arrow-schema = { version = "44.0.0", default-features = false }
-parquet = { version = "44.0.0", features = ["arrow", "async", "object_store"] }
+arrow = { version = "45.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow-array = { version = "45.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-buffer = { version = "45.0.0", default-features = false }
+arrow-flight = { version = "45.0.0", features = ["flight-sql-experimental"] }
+arrow-schema = { version = "45.0.0", default-features = false }
+parquet = { version = "45.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.36.1", features = ["visitor"] }
 
 [profile.release]
@@ -57,11 +57,3 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "2950d8b8fef2fb776905bcb35ac9c10aa5151aca"}
