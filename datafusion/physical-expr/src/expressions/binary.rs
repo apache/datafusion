@@ -63,7 +63,6 @@ use kernels_arrow::{
     is_not_distinct_from_utf8,
 };
 
-use arrow_array::{Datum, Scalar};
 use crate::array_expressions::{
     array_append, array_concat, array_has_all, array_prepend,
 };
@@ -71,6 +70,7 @@ use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
+use arrow_array::{Datum, Scalar};
 
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::ScalarValue;
