@@ -498,6 +498,7 @@ impl SessionContext {
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
+                println!("batches len:{:?}", batches.len());
                 let table = Arc::new(
                     // pass constraints to the mem table.
                     MemTable::try_new(schema, batches)?.with_constraints(constraints),

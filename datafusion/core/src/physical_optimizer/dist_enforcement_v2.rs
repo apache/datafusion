@@ -47,6 +47,26 @@ fn are_exprs_equal(lhs: &[Arc<dyn PhysicalExpr>], rhs: &[Arc<dyn PhysicalExpr>])
     }
 }
 
+fn add_roundrobin_on_top(input: Arc<dyn ExecutionPlan>, n_target: usize) -> Result<Arc<dyn ExecutionPlan>>{
+    Ok(if input.output_partitioning().partition_count() < n_target {
+        Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(n_target))?)
+    } else{
+        input
+    })
+}
+
+fn add_hash_on_top(input: Arc<dyn ExecutionPlan>, hash_exprs: Vec<Arc<dyn PhysicalExpr>>, n_target: usize) -> Result<Arc<dyn ExecutionPlan>>{
+    if n_target == 1{
+        return Ok(input);
+    }
+    if let Partitioning::Hash(exprs, n_partition) = input.output_partitioning() {
+        if are_exprs_equal(&exprs, &hash_exprs) && n_partition == n_target{
+            return Ok(input);
+        }
+    }
+    Ok(Arc::new(RepartitionExec::try_new(input, Partitioning::Hash(hash_exprs, n_target))?))
+}
+
 fn ensure_distribution(
     plan: Arc<dyn ExecutionPlan>,
     target_partitions: usize,
@@ -54,6 +74,7 @@ fn ensure_distribution(
     if plan.children().is_empty() {
         return Ok(Transformed::No(plan));
     }
+    let would_benefit = plan.benefits_from_input_partitioning();
     let new_children = izip!(
         plan.children().iter(),
         plan.required_input_distribution().iter()
@@ -67,29 +88,12 @@ fn ensure_distribution(
                     child.clone()
                 }
             }
-            Distribution::HashPartitioned(exprs) => match child.output_partitioning() {
-                Partitioning::RoundRobinBatch(_) => Arc::new(RepartitionExec::try_new(
-                    child.clone(),
-                    Partitioning::Hash(exprs.to_vec(), target_partitions),
-                )?),
-                Partitioning::Hash(out_exprs, n_partition) => {
-                    if are_exprs_equal(&out_exprs, &exprs)
-                        && n_partition == target_partitions
-                    {
-                        child.clone()
-                    } else {
-                        Arc::new(RepartitionExec::try_new(
-                            child.clone(),
-                            Partitioning::Hash(exprs.to_vec(), target_partitions),
-                        )?)
-                    }
+            Distribution::HashPartitioned(exprs) => {
+                let mut new_child = child.clone();
+                if would_benefit {
+                    new_child = add_roundrobin_on_top(new_child, target_partitions)?;
                 }
-                Partitioning::UnknownPartitioning(_n_partition) => {
-                    Arc::new(RepartitionExec::try_new(
-                        child.clone(),
-                        Partitioning::Hash(exprs.to_vec(), target_partitions),
-                    )?)
-                }
+                add_hash_on_top(new_child, exprs.to_vec(), target_partitions)?
             },
             Distribution::UnspecifiedDistribution => child.clone(),
         };
