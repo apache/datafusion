@@ -964,13 +964,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     if let Some(extra_key) = extra_key {
                         protobuf::GetIndexedField {
                             extra_key: Some(Box::new(extra_key.as_ref().try_into()?)),
-                            key: Some(Box::new(key.as_ref().try_into()?)),
+                            key: Some(Box::new(
+                                (&key.as_ref().list_key.clone().unwrap()).try_into()?,
+                            )),
                             expr: Some(Box::new(expr.as_ref().try_into()?)),
                         }
                     } else {
                         protobuf::GetIndexedField {
                             extra_key: None,
-                            key: Some(Box::new(key.as_ref().try_into()?)),
+                            key: Some(Box::new(
+                                (&key.as_ref().list_key.clone().unwrap()).try_into()?,
+                            )),
                             expr: Some(Box::new(expr.as_ref().try_into()?)),
                         }
                     },

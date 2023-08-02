@@ -54,7 +54,7 @@ use datafusion_expr::{
     to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetIndexedField, GroupingSet,
+    Case, Cast, Expr, GetIndexedField, GetIndexedFieldKey, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -938,7 +938,7 @@ pub fn parse_expr(
 
             Ok(Expr::GetIndexedField(GetIndexedField::new(
                 Box::new(expr),
-                Box::new(key),
+                Box::new(GetIndexedFieldKey::new(Some(key), None)),
                 None,
             )))
         }

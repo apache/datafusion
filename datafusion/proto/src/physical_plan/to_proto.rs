@@ -393,7 +393,14 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                     protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
                         Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
                             arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                            key: Some(Box::new(expr.key().to_owned().try_into()?)),
+                            key: Some(Box::new(
+                                expr.key()
+                                    .list_key()
+                                    .clone()
+                                    .unwrap()
+                                    .to_owned()
+                                    .try_into()?,
+                            )),
                         }),
                     ),
                 ),
