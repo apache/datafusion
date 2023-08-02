@@ -110,22 +110,12 @@ pub fn get_scan_files(
 ) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
     let mut collector: Vec<Vec<Vec<PartitionedFile>>> = vec![];
     plan.apply(&mut |plan| {
-        let plan_any = plan.as_any();
-        let file_groups =
-            if let Some(parquet_exec) = plan_any.downcast_ref::<ParquetExec>() {
-                parquet_exec.base_config().file_groups.clone()
-            } else if let Some(avro_exec) = plan_any.downcast_ref::<AvroExec>() {
-                avro_exec.base_config().file_groups.clone()
-            } else if let Some(json_exec) = plan_any.downcast_ref::<NdJsonExec>() {
-                json_exec.base_config().file_groups.clone()
-            } else if let Some(csv_exec) = plan_any.downcast_ref::<CsvExec>() {
-                csv_exec.base_config().file_groups.clone()
-            } else {
-                return Ok(VisitRecursion::Continue);
-            };
-
-        collector.push(file_groups);
-        Ok(VisitRecursion::Skip)
+        if let Some(file_scan_config) = plan.file_scan_config() {
+            collector.push(file_scan_config.file_groups.clone());
+            Ok(VisitRecursion::Skip)
+        } else {
+            Ok(VisitRecursion::Continue)
+        }
     })?;
     Ok(collector)
 }

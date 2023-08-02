@@ -240,6 +240,10 @@ impl ExecutionPlan for CsvExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn file_scan_config(&self) -> Option<&FileScanConfig> {
+        Some(&self.base_config)
+    }
 }
 
 /// A Config for [`CsvOpener`]
