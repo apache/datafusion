@@ -880,9 +880,11 @@ impl From<protobuf::Constraint> for datafusion_common::Constraint {
                     elem.indices.into_iter().map(|item| item as usize).collect(),
                 )
             }
-            protobuf::constraint::ConstraintMode::Unique(elem) => datafusion_common::Constraint::Unique(
-                elem.indices.into_iter().map(|item| item as usize).collect(),
-            ),
+            protobuf::constraint::ConstraintMode::Unique(elem) => {
+                datafusion_common::Constraint::Unique(
+                    elem.indices.into_iter().map(|item| item as usize).collect(),
+                )
+            }
         }
     }
 }

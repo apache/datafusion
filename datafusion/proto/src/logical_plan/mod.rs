@@ -16,11 +16,8 @@
 // under the License.
 
 use crate::common::{byte_to_string, proto_error, str_to_byte};
-use crate::protobuf::constraint::ConstraintMode;
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::{
-    Constraint, Constraints, CustomTableScanNode, LogicalExprNodeCollection,
-};
+use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
     convert_required,
     protobuf::{
