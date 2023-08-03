@@ -147,8 +147,7 @@ impl ExternalSorter {
 
             // TODO: This should probably be try_grow (#5885)
             reservation.resize(input.get_array_memory_size());
-            // Maybe we should keep a single batch at all times and perform
-            // concatenate with the incoming batch + sort instead?
+            // Maybe we should perform sorting in a parallel task to unblock the caller
             input = sort_batch(&input, &self.expr, self.fetch)?;
             reservation.free();
             batch_sorted = true;
@@ -242,7 +241,7 @@ impl ExternalSorter {
 
         let (sorted, batches): (Vec<bool>, Vec<RecordBatch>) =
             std::mem::take(&mut self.in_mem_batches).into_iter().unzip();
-        assert_eq!(sorted.iter().all(|&s| s), true);
+        assert!(sorted.iter().all(|&s| s));
 
         spill_sorted_batches(batches, spillfile.path(), self.schema.clone()).await?;
         let used = self.reservation.free();
@@ -294,12 +293,13 @@ impl ExternalSorter {
         // This is a very rough heuristic and likely could be refined further
         if self.reservation.size() < 1048576 {
             // Concatenate memory batches together and sort
-            let (sorted, batches): (Vec<bool>, Vec<RecordBatch>) =
+            let (_, batches): (Vec<bool>, Vec<RecordBatch>) =
                 std::mem::take(&mut self.in_mem_batches).into_iter().unzip();
             let batch = concat_batches(&self.schema, &batches)?;
-            let sorted = sorted.iter().all(|&s| s);
             self.in_mem_batches.clear();
-            return self.sort_batch_stream(batch, sorted, metrics);
+            // Even if all individual batches were themselves sorted the resulting concatenated one
+            // isn't guaranteed to be sorted, so we must perform sorting on the stream.
+            return self.sort_batch_stream(batch, false, metrics);
         }
 
         let streams = std::mem::take(&mut self.in_mem_batches)
@@ -494,8 +494,8 @@ impl SortExec {
     /// Create a new sort execution plan with the option to preserve
     /// the partitioning of the input plan
     #[deprecated(
-    since = "22.0.0",
-    note = "use `new`, `with_fetch` and `with_preserve_partioning` instead"
+        since = "22.0.0",
+        note = "use `new`, `with_fetch` and `with_preserve_partioning` instead"
     )]
     pub fn new_with_partitioning(
         expr: Vec<PhysicalSortExpr>,
@@ -665,7 +665,7 @@ impl ExecutionPlan for SortExec {
                 }
                 sorter.sort()
             })
-                .try_flatten(),
+            .try_flatten(),
         )))
     }
 
@@ -869,7 +869,7 @@ mod tests {
                     ],
                     Arc::new(CoalescePartitionsExec::new(csv)),
                 )
-                    .with_fetch(fetch),
+                .with_fetch(fetch),
             );
 
             let task_ctx = session_ctx.task_ctx();
