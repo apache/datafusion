@@ -707,7 +707,8 @@ impl DataFrame {
         Ok(pretty::print_batches(&results)?)
     }
 
-    fn task_ctx(&self) -> TaskContext {
+    /// Get a new TaskContext to run in this session
+    pub fn task_ctx(&self) -> TaskContext {
         TaskContext::from(&self.session_state)
     }
 
