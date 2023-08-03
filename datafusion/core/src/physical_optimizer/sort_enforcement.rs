@@ -3072,7 +3072,7 @@ mod tests_bug {
             WITH ORDER (a ASC, b ASC, c ASC)
             LOCATION 'tests/data/window_2.csv';",
         )
-            .await?;
+        .await?;
 
         let sql = "SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
           FROM annotated_data_infinite2
@@ -3090,6 +3090,139 @@ mod tests_bug {
                 "ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as first_c]",
                 "  AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered",
                 "    CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_group_by_pk() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(8);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE TABLE sales_global_with_pk (zip_code INT,
+          country VARCHAR(3),
+          sn INT,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT,
+          primary key(sn)
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)",
+        )
+        .await?;
+
+        let sql = "SELECT *
+          FROM(SELECT *, SUM(l.amount) OVER(ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as sum_amount
+            FROM sales_global_with_pk AS l
+          ) as l
+          GROUP BY l.sn
+          ORDER BY l.sn";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "SortPreservingMergeExec: [sn@2 ASC NULLS LAST]",
+                "  SortExec: expr=[sn@2 ASC NULLS LAST]",
+                "    ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount]",
+                "      AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, zip_code@1 as zip_code, country@2 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]",
+                "        CoalesceBatchesExec: target_batch_size=8192",
+                "          RepartitionExec: partitioning=Hash([sn@0, zip_code@1, country@2, ts@3, currency@4, amount@5, sum_amount@6], 8), input_partitions=8",
+                "            AggregateExec: mode=Partial, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+                "                ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, SUM(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@6 as sum_amount]",
+                "                  BoundedWindowAggExec: wdw=[SUM(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: \"SUM(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]",
+                "                    CoalescePartitionsExec",
+                "                      MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_bug() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(8);
+        let ctx = SessionContext::with_config(config);
+
+        let sql = "WITH _sample_data AS (
+         SELECT 1 as a, 'aa' AS b
+         UNION ALL
+         SELECT 3 as a, 'aa' AS b
+         UNION ALL
+         SELECT 5 as a, 'bb' AS b
+         UNION ALL
+         SELECT 7 as a, 'bb' AS b
+            ), _data2 AS (
+         SELECT
+         row_number() OVER (PARTITION BY s.b ORDER BY s.a) AS seq,
+         s.a,
+         s.b
+         FROM _sample_data s
+            )
+            SELECT d.b, MAX(d.a) AS max_a
+            FROM _data2 d
+            GROUP BY d.b
+            ORDER BY d.b;";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "SortPreservingMergeExec: [b@0 ASC NULLS LAST]",
+                "  SortExec: expr=[b@0 ASC NULLS LAST]",
+                "    ProjectionExec: expr=[b@0 as b, MAX(d.a)@1 as max_a]",
+                "      AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[MAX(d.a)]",
+                "        CoalesceBatchesExec: target_batch_size=8192",
+                "          RepartitionExec: partitioning=Hash([b@0], 8), input_partitions=8",
+                "            AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[MAX(d.a)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4",
+                "                UnionExec",
+                "                  ProjectionExec: expr=[1 as a, aa as b]",
+                "                    EmptyExec: produce_one_row=true",
+                "                  ProjectionExec: expr=[3 as a, aa as b]",
+                "                    EmptyExec: produce_one_row=true",
+                "                  ProjectionExec: expr=[5 as a, bb as b]",
+                "                    EmptyExec: produce_one_row=true",
+                "                  ProjectionExec: expr=[7 as a, bb as b]",
+                "                    EmptyExec: produce_one_row=true",
+            ]
         };
 
         let actual: Vec<&str> = formatted.trim().lines().collect();
