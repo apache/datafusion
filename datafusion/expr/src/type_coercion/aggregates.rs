@@ -19,7 +19,7 @@ use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use std::ops::Deref;
 
 use crate::{AggregateFunction, Signature, TypeSignature};
@@ -106,10 +106,11 @@ pub fn coerce_types(
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval.
             if !is_sum_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
@@ -117,10 +118,11 @@ pub fn coerce_types(
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval
             if !is_avg_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
@@ -130,10 +132,11 @@ pub fn coerce_types(
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval.
             if !is_bit_and_or_xor_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
@@ -141,46 +144,51 @@ pub fn coerce_types(
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval.
             if !is_bool_and_or_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
         AggregateFunction::Variance | AggregateFunction::VariancePop => {
             if !is_variance_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
         AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
             if !is_covariance_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
         AggregateFunction::Stddev | AggregateFunction::StddevPop => {
             if !is_stddev_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
         AggregateFunction::Correlation => {
             if !is_correlation_support_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
@@ -189,64 +197,70 @@ pub fn coerce_types(
             let input_types_valid = // number of input already checked before
                 valid_types.contains(&input_types[0]) && valid_types.contains(&input_types[1]);
             if !input_types_valid {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
         AggregateFunction::ApproxPercentileCont => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             if input_types.len() == 3 && !is_integer_arg_type(&input_types[2]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                         "The percentile sample points count for {:?} must be integer, not {:?}.",
                         agg_fun, input_types[2]
-                    )));
+                    );
             }
             let mut result = input_types.to_vec();
             if can_coerce_from(&DataType::Float64, &input_types[1]) {
                 result[1] = DataType::Float64;
             } else {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "Could not coerce the percent argument for {:?} to Float64. Was  {:?}.",
                     agg_fun, input_types[1]
-                )));
+                );
             }
             Ok(result)
         }
         AggregateFunction::ApproxPercentileContWithWeight => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             if !is_approx_percentile_cont_supported_arg_type(&input_types[1]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The weight argument for {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[1]
-                )));
+                    agg_fun,
+                    input_types[1]
+                );
             }
             if !matches!(input_types[2], DataType::Float64) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The percentile argument for {:?} must be Float64, not {:?}.",
-                    agg_fun, input_types[2]
-                )));
+                    agg_fun,
+                    input_types[2]
+                );
             }
             Ok(input_types.to_vec())
         }
         AggregateFunction::ApproxMedian => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
-                )));
+                    agg_fun,
+                    input_types[0]
+                );
             }
             Ok(input_types.to_vec())
         }
@@ -270,22 +284,22 @@ fn check_arg_count(
     match signature {
         TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
             if input_types.len() != *agg_count {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} expects {:?} arguments, but {:?} were provided",
                     agg_fun,
                     agg_count,
                     input_types.len()
-                )));
+                );
             }
         }
         TypeSignature::Exact(types) => {
             if types.len() != input_types.len() {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} expects {:?} arguments, but {:?} were provided",
                     agg_fun,
                     types.len(),
                     input_types.len()
-                )));
+                );
             }
         }
         TypeSignature::OneOf(variants) => {
@@ -293,18 +307,18 @@ fn check_arg_count(
                 .iter()
                 .any(|v| check_arg_count(agg_fun, input_types, v).is_ok());
             if !ok {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {:?} does not accept {:?} function arguments.",
                     agg_fun,
                     input_types.len()
-                )));
+                );
             }
         }
         TypeSignature::VariadicAny => {
             if input_types.is_empty() {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function {agg_fun:?} expects at least one argument"
-                )));
+                );
             }
         }
         _ => {
@@ -355,9 +369,7 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
         DataType::Dictionary(_, dict_value_type) => {
             sum_return_type(dict_value_type.as_ref())
         }
-        other => Err(DataFusionError::Plan(format!(
-            "SUM does not support type \"{other:?}\""
-        ))),
+        other => plan_err!("SUM does not support type \"{other:?}\""),
     }
 }
 
@@ -366,9 +378,7 @@ pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
     if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
-        Err(DataFusionError::Plan(format!(
-            "VAR does not support {arg_type:?}"
-        )))
+        plan_err!("VAR does not support {arg_type:?}")
     }
 }
 
@@ -377,9 +387,7 @@ pub fn covariance_return_type(arg_type: &DataType) -> Result<DataType> {
     if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
-        Err(DataFusionError::Plan(format!(
-            "COVAR does not support {arg_type:?}"
-        )))
+        plan_err!("COVAR does not support {arg_type:?}")
     }
 }
 
@@ -388,9 +396,7 @@ pub fn correlation_return_type(arg_type: &DataType) -> Result<DataType> {
     if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
-        Err(DataFusionError::Plan(format!(
-            "CORR does not support {arg_type:?}"
-        )))
+        plan_err!("CORR does not support {arg_type:?}")
     }
 }
 
@@ -399,9 +405,7 @@ pub fn stddev_return_type(arg_type: &DataType) -> Result<DataType> {
     if NUMERICS.contains(arg_type) {
         Ok(DataType::Float64)
     } else {
-        Err(DataFusionError::Plan(format!(
-            "STDDEV does not support {arg_type:?}"
-        )))
+        plan_err!("STDDEV does not support {arg_type:?}")
     }
 }
 
@@ -426,9 +430,7 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
         DataType::Dictionary(_, dict_value_type) => {
             avg_return_type(dict_value_type.as_ref())
         }
-        other => Err(DataFusionError::Plan(format!(
-            "AVG does not support {other:?}"
-        ))),
+        other => plan_err!("AVG does not support {other:?}"),
     }
 }
 
@@ -449,9 +451,7 @@ pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
         DataType::Dictionary(_, dict_value_type) => {
             avg_sum_type(dict_value_type.as_ref())
         }
-        other => Err(DataFusionError::Plan(format!(
-            "AVG does not support {other:?}"
-        ))),
+        other => plan_err!("AVG does not support {other:?}"),
     }
 }
 

@@ -49,7 +49,7 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, JoinType, Result};
+use datafusion_common::{plan_err, DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
@@ -108,11 +108,11 @@ impl SortMergeJoinExec {
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
         if sort_options.len() != on.len() {
-            return Err(DataFusionError::Plan(format!(
+            return plan_err!(
                 "Expected number of sort options: {}, actual: {}",
                 on.len(),
                 sort_options.len()
-            )));
+            );
         }
 
         let (left_sort_exprs, right_sort_exprs): (Vec<_>, Vec<_>) = on

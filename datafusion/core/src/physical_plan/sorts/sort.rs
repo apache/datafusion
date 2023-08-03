@@ -35,7 +35,7 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
 };
@@ -749,9 +749,7 @@ impl ExecutionPlan for SortExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            Err(DataFusionError::Plan(
-                "Sort Error: Can not sort unbounded inputs.".to_string(),
-            ))
+            plan_err!("Sort Error: Can not sort unbounded inputs.")
         } else {
             Ok(false)
         }

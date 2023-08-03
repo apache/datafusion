@@ -15,21 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
-use crate::engines::output::{DFColumnType, DFOutput};
-
-use self::error::{DFSqlLogicTestError, Result};
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
 use log::info;
 use sqllogictest::DBOutput;
 
-mod error;
-mod normalize;
-mod util;
+use super::{error::Result, normalize, DFSqlLogicTestError};
+
+use crate::engines::output::{DFColumnType, DFOutput};
 
 pub struct DataFusion {
     ctx: SessionContext,
@@ -61,7 +57,7 @@ impl sqllogictest::AsyncDB for DataFusion {
         "DataFusion"
     }
 
-    /// [`Runner`] calls this function to perform sleep.
+    /// [`DataFusion`] calls this function to perform sleep.
     ///
     /// The default implementation is `std::thread::sleep`, which is universal to any async runtime
     /// but would block the current thread. If you are running in tokio runtime, you should override

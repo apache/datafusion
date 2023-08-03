@@ -24,7 +24,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 
-use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_common::{plan_err, DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use log::debug;
 
@@ -69,9 +69,7 @@ impl StreamingTableExec {
                     "target schema does not contain partition schema. \
                         Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
                 );
-                return Err(DataFusionError::Plan(
-                    "Mismatch between schema and batches".to_string(),
-                ));
+                return plan_err!("Mismatch between schema and batches");
             }
         }
 

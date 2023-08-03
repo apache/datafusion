@@ -23,7 +23,7 @@ use crate::{
     conditional_expressions, struct_expressions, Signature, TypeSignature, Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -89,6 +89,8 @@ pub enum BuiltinScalarFunction {
     Log10,
     /// log2
     Log2,
+    /// nanvl
+    Nanvl,
     /// pi
     Pi,
     /// power
@@ -328,6 +330,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Log => Volatility::Immutable,
             BuiltinScalarFunction::Log10 => Volatility::Immutable,
             BuiltinScalarFunction::Log2 => Volatility::Immutable,
+            BuiltinScalarFunction::Nanvl => Volatility::Immutable,
             BuiltinScalarFunction::Pi => Volatility::Immutable,
             BuiltinScalarFunction::Power => Volatility::Immutable,
             BuiltinScalarFunction::Round => Volatility::Immutable,
@@ -480,9 +483,7 @@ impl BuiltinScalarFunction {
         // or the execution panics.
 
         if input_expr_types.is_empty() && !self.supports_zero_argument() {
-            return Err(DataFusionError::Plan(
-                self.generate_signature_error_msg(input_expr_types),
-            ));
+            return plan_err!("{}", self.generate_signature_error_msg(input_expr_types));
         }
 
         // verify that this is a valid set of data types for this function
@@ -756,6 +757,11 @@ impl BuiltinScalarFunction {
             },
 
             BuiltinScalarFunction::Log => match &input_expr_types[0] {
+                Float32 => Ok(Float32),
+                _ => Ok(Float64),
+            },
+
+            BuiltinScalarFunction::Nanvl => match &input_expr_types[0] {
                 Float32 => Ok(Float32),
                 _ => Ok(Float64),
             },
@@ -1120,6 +1126,10 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
+            BuiltinScalarFunction::Nanvl => Signature::one_of(
+                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
+                self.volatility(),
+            ),
             BuiltinScalarFunction::Factorial => {
                 Signature::uniform(1, vec![Int64], self.volatility())
             }
@@ -1193,6 +1203,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Log => &["log"],
         BuiltinScalarFunction::Log10 => &["log10"],
         BuiltinScalarFunction::Log2 => &["log2"],
+        BuiltinScalarFunction::Nanvl => &["nanvl"],
         BuiltinScalarFunction::Pi => &["pi"],
         BuiltinScalarFunction::Power => &["power", "pow"],
         BuiltinScalarFunction::Radians => &["radians"],
@@ -1340,9 +1351,7 @@ impl FromStr for BuiltinScalarFunction {
         if let Some(func) = NAME_TO_FUNCTION.get(name) {
             Ok(*func)
         } else {
-            Err(DataFusionError::Plan(format!(
-                "There is no built-in function named {name}"
-            )))
+            plan_err!("There is no built-in function named {name}")
         }
     }
 }

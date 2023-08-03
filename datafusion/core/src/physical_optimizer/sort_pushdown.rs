@@ -27,7 +27,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{
@@ -424,10 +424,9 @@ fn shift_right_required(
     if new_right_required.len() == parent_required.len() {
         Ok(new_right_required)
     } else {
-        Err(DataFusionError::Plan(
+        plan_err!(
             "Expect to shift all the parent required column indexes for SortMergeJoin"
-                .to_string(),
-        ))
+        )
     }
 }
 

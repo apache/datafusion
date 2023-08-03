@@ -19,11 +19,11 @@ use arrow::datatypes::{Decimal128Type, DecimalType};
 use bigdecimal::BigDecimal;
 use half::f16;
 use rust_decimal::prelude::*;
-use rust_decimal::Decimal;
 
+/// Represents a constant for NULL string in your database.
 pub const NULL_STR: &str = "NULL";
 
-pub fn bool_to_str(value: bool) -> String {
+pub(crate) fn bool_to_str(value: bool) -> String {
     if value {
         "true".to_string()
     } else {
@@ -31,7 +31,7 @@ pub fn bool_to_str(value: bool) -> String {
     }
 }
 
-pub fn varchar_to_str(value: &str) -> String {
+pub(crate) fn varchar_to_str(value: &str) -> String {
     if value.is_empty() {
         "(empty)".to_string()
     } else {
@@ -39,7 +39,7 @@ pub fn varchar_to_str(value: &str) -> String {
     }
 }
 
-pub fn f16_to_str(value: f16) -> String {
+pub(crate) fn f16_to_str(value: f16) -> String {
     if value.is_nan() {
         "NaN".to_string()
     } else if value == f16::INFINITY {
@@ -51,7 +51,7 @@ pub fn f16_to_str(value: f16) -> String {
     }
 }
 
-pub fn f32_to_str(value: f32) -> String {
+pub(crate) fn f32_to_str(value: f32) -> String {
     if value.is_nan() {
         "NaN".to_string()
     } else if value == f32::INFINITY {
@@ -63,7 +63,7 @@ pub fn f32_to_str(value: f32) -> String {
     }
 }
 
-pub fn f64_to_str(value: f64) -> String {
+pub(crate) fn f64_to_str(value: f64) -> String {
     if value.is_nan() {
         "NaN".to_string()
     } else if value == f64::INFINITY {
@@ -75,17 +75,17 @@ pub fn f64_to_str(value: f64) -> String {
     }
 }
 
-pub fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
+pub(crate) fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
     big_decimal_to_str(
         BigDecimal::from_str(&Decimal128Type::format_decimal(value, *precision, *scale))
             .unwrap(),
     )
 }
 
-pub fn decimal_to_str(value: Decimal) -> String {
+pub(crate) fn decimal_to_str(value: Decimal) -> String {
     big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
 }
 
-pub fn big_decimal_to_str(value: BigDecimal) -> String {
+pub(crate) fn big_decimal_to_str(value: BigDecimal) -> String {
     value.round(12).normalized().to_string()
 }

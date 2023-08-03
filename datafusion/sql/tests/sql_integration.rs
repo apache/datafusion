@@ -22,6 +22,7 @@ use std::{sync::Arc, vec};
 use arrow_schema::*;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
+use datafusion_common::plan_err;
 use datafusion_common::{
     assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
     TableReference,
@@ -2695,10 +2696,7 @@ impl ContextProvider for MockContextProvider {
                 Field::new("Id", DataType::UInt32, false),
                 Field::new("lower", DataType::UInt32, false),
             ])),
-            _ => Err(DataFusionError::Plan(format!(
-                "No table named: {} found",
-                name.table()
-            ))),
+            _ => plan_err!("No table named: {} found", name.table()),
         };
 
         match schema {

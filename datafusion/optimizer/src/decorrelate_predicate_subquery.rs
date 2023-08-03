@@ -21,7 +21,7 @@ use crate::utils::{conjunction, replace_qualified_name, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_common::{plan_err, Column, DataFusionError, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -204,12 +204,13 @@ fn build_join(
     let in_predicate_opt = where_in_expr_opt
         .clone()
         .map(|where_in_expr| {
-            query_info.query.subquery.head_output_expr()?.map_or(
-                Err(DataFusionError::Plan(
-                    "single expression required.".to_string(),
-                )),
-                |expr| Ok(Expr::eq(where_in_expr, expr)),
-            )
+            query_info
+                .query
+                .subquery
+                .head_output_expr()?
+                .map_or(plan_err!("single expression required."), |expr| {
+                    Ok(Expr::eq(where_in_expr, expr))
+                })
         })
         .map_or(Ok(None), |v| v.map(Some))?;
 

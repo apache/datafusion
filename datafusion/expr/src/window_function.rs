@@ -24,7 +24,7 @@ use crate::aggregate_function::AggregateFunction;
 use crate::type_coercion::functions::data_types;
 use crate::{AggregateUDF, Signature, TypeSignature, Volatility, WindowUDF};
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 use strum_macros::EnumIter;
@@ -145,11 +145,7 @@ impl FromStr for BuiltInWindowFunction {
             "FIRST_VALUE" => BuiltInWindowFunction::FirstValue,
             "LAST_VALUE" => BuiltInWindowFunction::LastValue,
             "NTH_VALUE" => BuiltInWindowFunction::NthValue,
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in window function named {name}"
-                )))
-            }
+            _ => return plan_err!("There is no built-in window function named {name}"),
         })
     }
 }
