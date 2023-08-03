@@ -291,8 +291,12 @@ impl ExternalSorter {
     /// Returns the final sorted output of all batches inserted via
     /// [`Self::insert_batch`] as a stream of [`RecordBatch`]es.
     ///
-    /// This may be an in memory sort/merge if all input fit into memory, or
-    /// a streaming merge from spill files on disk.
+    /// This process could either be:
+    ///
+    /// 1. An in-memory sort/merge (if the input fit in memory)
+    ///
+    /// 2. A combined streaming merge incorporating both in-memory
+    /// batches and data from spill files on disk.
     fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         if self.spilled_before() {
             let mut streams = vec![];
