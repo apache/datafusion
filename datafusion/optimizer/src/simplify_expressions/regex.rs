@@ -131,6 +131,15 @@ fn str_from_literal(l: &Literal) -> Option<&str> {
     }
 }
 
+/// returns a str represented by `Literal` if it contains a valid utf8
+/// sequence and is unsafe for like (maybe has  '%' or '_')
+fn str_from_literal_unsafe_like(l: &Literal) -> Option<&str> {
+    // if not utf8, no good
+    let s = std::str::from_utf8(&l.0).ok()?;
+
+    Some(s)
+}
+
 fn is_safe_for_like(c: char) -> bool {
     (c != '%') && (c != '_')
 }
@@ -214,7 +223,7 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
             for hir in alters {
                 let mut is_safe = false;
                 if let HirKind::Literal(l) = hir.kind() {
-                    if let Some(safe_literal) = str_from_literal(l).map(lit) {
+                    if let Some(safe_literal) = str_from_literal_unsafe_like(l).map(lit) {
                         literals.push(safe_literal);
                         is_safe = true;
                     }
@@ -227,7 +236,7 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
 
             return Some(literals);
         } else if let HirKind::Literal(l) = sub.kind() {
-            if let Some(safe_literal) = str_from_literal(l).map(lit) {
+            if let Some(safe_literal) = str_from_literal_unsafe_like(l).map(lit) {
                 return Some(vec![safe_literal]);
             }
             return None;
