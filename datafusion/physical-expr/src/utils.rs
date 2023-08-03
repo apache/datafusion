@@ -40,6 +40,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
+use datafusion_common::utils::longest_consecutive_prefix;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 
@@ -828,12 +829,35 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
     let data = mutable.freeze();
     Ok(make_array(data))
 }
+
+/// Return indices of each item in `required_exprs` inside `provided_exprs`.
+/// All of the indices should be found inside `provided_exprs`.
+/// Also found indices should be a permutation of range consecutive range from 0 to n.
+/// Such as \[2,1,0\] is valid (\[0,1,2\] is consecutive). However, \[3,1,0\] is not
+/// valid (\[0,1,3\] is not consecutive).
+fn get_lexicographical_match_indices(
+    required_exprs: &[Arc<dyn PhysicalExpr>],
+    provided_exprs: &[Arc<dyn PhysicalExpr>],
+) -> Option<Vec<usize>> {
+    let indices_of_equality = get_indices_of_exprs_strict(required_exprs, provided_exprs);
+    let mut ordered_indices = indices_of_equality.clone();
+    ordered_indices.sort();
+    let n_match = indices_of_equality.len();
+    let first_n = longest_consecutive_prefix(ordered_indices);
+    // If we found all the expressions, return early:
+    if n_match == required_exprs.len() && first_n == n_match && n_match > 0 {
+        return Some(indices_of_equality);
+    }
+    None
+}
+
 /// This function attempts to find a full match between required and provided
 /// sorts, returning the indices and sort options of the matches found.
 ///
 /// First, it normalizes the sort requirements and then checks for matches.
 /// If no full match is found, it then checks against ordering equivalence properties.
 /// If still no full match is found, it returns `None`.
+/// required_columns columns of lexicographical ordering.
 pub fn get_indices_of_matching_sort_exprs_with_order_eq<
     F: Fn() -> EquivalenceProperties,
     F2: Fn() -> OrderingEquivalenceProperties,
@@ -882,10 +906,9 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq<
         .map(|req| req.expr.clone())
         .collect::<Vec<_>>();
 
-    let indices_of_equality =
-        get_indices_of_exprs_strict(&normalized_required_expr, &provided_sorts);
-    // If we found all the expressions, return early:
-    if indices_of_equality.len() == normalized_required_expr.len() {
+    if let Some(indices_of_equality) =
+        get_lexicographical_match_indices(&normalized_required_expr, &provided_sorts)
+    {
         return Some((
             indices_of_equality
                 .iter()
@@ -900,16 +923,15 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq<
         let head = class.head();
         for ordering in class.others().iter().chain(std::iter::once(head)) {
             let order_eq_class_exprs = convert_to_expr(ordering);
-            let indices_of_equality = get_indices_of_exprs_strict(
+            if let Some(indices_of_equality) = get_lexicographical_match_indices(
                 &normalized_required_expr,
                 &order_eq_class_exprs,
-            );
-            if indices_of_equality.len() == normalized_required_expr.len() {
+            ) {
                 return Some((
                     indices_of_equality
                         .iter()
                         .map(|index| ordering[*index].options)
-                        .collect::<Vec<_>>(),
+                        .collect(),
                     indices_of_equality,
                 ));
             }

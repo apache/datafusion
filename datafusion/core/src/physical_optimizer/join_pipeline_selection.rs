@@ -1313,15 +1313,15 @@ mod order_preserving_join_swap_tests {
         let expected_input = vec![
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c@2)], filter=0@0 + 0 > 1@1 - 3 AND 0@0 + 0 < 1@1 + 3",
-            "    MemoryExec: partitions=0, partition_sizes=[]",
-            "    MemoryExec: partitions=0, partition_sizes=[]",
+            "    MemoryExec: partitions=0, partition_sizes=[], output_ordering=a@0 ASC",
+            "    MemoryExec: partitions=0, partition_sizes=[], output_ordering=d@0 ASC",
         ];
         let expected_optimized = vec![
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
             "  SortExec: expr=[e@4 ASC]",
             "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c@2)], filter=0@0 + 0 > 1@1 - 3 AND 0@0 + 0 < 1@1 + 3",
-            "      MemoryExec: partitions=0, partition_sizes=[]",
-            "      MemoryExec: partitions=0, partition_sizes=[]",
+            "      MemoryExec: partitions=0, partition_sizes=[], output_ordering=a@0 ASC",
+            "      MemoryExec: partitions=0, partition_sizes=[], output_ordering=d@0 ASC",
         ];
         assert_optimized_orthogonal!(expected_input, expected_optimized, physical_plan);
         Ok(())
