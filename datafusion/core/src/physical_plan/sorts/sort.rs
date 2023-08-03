@@ -198,7 +198,7 @@ struct ExternalSorter {
     schema: SchemaRef,
     /// Potentially unsorted in memory buffer
     in_mem_batches: Vec<RecordBatch>,
-    /// if `Self::in_mem_batches` are srted
+    /// if `Self::in_mem_batches` are sorted
     in_mem_batches_sorted: bool,
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
