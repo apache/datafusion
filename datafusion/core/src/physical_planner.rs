@@ -195,11 +195,11 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             } else {
                 let key = if let Some(list_key) = &key.list_key {
                     create_physical_name(list_key, false)?
+                } else if let Some(ScalarValue::Utf8(Some(struct_key))) = &key.struct_key
+                {
+                    struct_key.to_string()
                 } else {
-                    create_physical_name(
-                        &Expr::Literal(key.struct_key.clone().unwrap()),
-                        false,
-                    )?
+                    String::from("")
                 };
                 Ok(format!("{expr}[{key}]"))
             }
