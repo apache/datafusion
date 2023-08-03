@@ -332,6 +332,8 @@ pub struct FileSinkConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// A writer mode that determines how data is written to the file
     pub writer_mode: FileWriterMode,
+    /// Controls whether existing data should be overwritten by this sink
+    pub overwrite: bool
 }
 
 impl FileSinkConfig {

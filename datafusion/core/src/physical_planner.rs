@@ -17,6 +17,7 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
+use crate::datasource::listing::ListingTableInsertMode;
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -532,7 +533,7 @@ impl DefaultPhysicalPlanner {
                 }
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
-                    op: WriteOp::Insert,
+                    op: WriteOp::InsertInto,
                     input,
                     ..
                 }) => {
@@ -540,7 +541,24 @@ impl DefaultPhysicalPlanner {
                     let schema = session_state.schema_for_ref(table_name)?;
                     if let Some(provider) = schema.table(name).await {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
-                        provider.insert_into(session_state, input_exec).await
+                        provider.insert_into(session_state, input_exec, false).await
+                    } else {
+                        return Err(DataFusionError::Execution(format!(
+                            "Table '{table_name}' does not exist"
+                        )));
+                    }
+                }
+                LogicalPlan::Dml(DmlStatement {
+                    table_name,
+                    op: WriteOp::InsertOverwrite,
+                    input,
+                    ..
+                }) => {
+                    let name = table_name.table();
+                    let schema = session_state.schema_for_ref(table_name)?;
+                    if let Some(provider) = schema.table(name).await {
+                        let input_exec = self.create_initial_plan(input, session_state).await?;
+                        provider.insert_into(session_state, input_exec, true).await
                     } else {
                         return Err(DataFusionError::Execution(format!(
                             "Table '{table_name}' does not exist"

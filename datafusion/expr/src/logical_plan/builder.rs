@@ -236,12 +236,19 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         table_name: impl Into<OwnedTableReference>,
         table_schema: &Schema,
+        overwrite: bool,
     ) -> Result<Self> {
         let table_schema = table_schema.clone().to_dfschema_ref()?;
+        let op;
+        if overwrite{
+            op = WriteOp::InsertOverwrite;
+        } else{
+            op = WriteOp::InsertInto;
+        }
         Ok(Self::from(LogicalPlan::Dml(DmlStatement {
             table_name: table_name.into(),
             table_schema,
-            op: WriteOp::Insert,
+            op,
             input: Arc::new(input),
         })))
     }

@@ -127,10 +127,12 @@ pub trait TableProvider: Sync + Send {
         &self,
         _state: &SessionState,
         _input: Arc<dyn ExecutionPlan>,
+        _overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let msg = "Insertion not implemented for this table".to_owned();
+        let msg = "Insert into not implemented for this table".to_owned();
         Err(DataFusionError::NotImplemented(msg))
     }
+
 }
 
 /// A factory which creates [`TableProvider`]s at runtime given a URL.

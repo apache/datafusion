@@ -270,6 +270,9 @@ impl FileFormat for CsvFormat {
         _state: &SessionState,
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if conf.overwrite{
+            return Err(DataFusionError::NotImplemented("Overwrites are not implemented yet for CSV".into()))
+        }
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(
             conf,

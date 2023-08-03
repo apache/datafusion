@@ -934,12 +934,14 @@ impl DataFrame {
     pub async fn write_table(
         self,
         table_name: &str,
+        overwrite: bool,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         let arrow_schema = Schema::from(self.schema());
         let plan = LogicalPlanBuilder::insert_into(
             self.plan,
             table_name.to_owned(),
             &arrow_schema,
+            overwrite,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await

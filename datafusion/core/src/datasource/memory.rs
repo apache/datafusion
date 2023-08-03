@@ -204,6 +204,7 @@ impl TableProvider for MemTable {
         &self,
         _state: &SessionState,
         input: Arc<dyn ExecutionPlan>,
+        overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
@@ -545,7 +546,7 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

@@ -30,7 +30,7 @@ use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
-use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::listing::{ListingTableUrl, ListingTableInsertMode};
 use crate::datasource::{
     file_format::{
         avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
@@ -39,6 +39,7 @@ use crate::datasource::{
 };
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
+use crate::logical_expr::Expr;
 
 /// Options that control the reading of CSV files.
 ///
@@ -73,6 +74,10 @@ pub struct CsvReadOptions<'a> {
     pub file_compression_type: FileCompressionType,
     /// Flag indicating whether this file may be unbounded (as in a FIFO file).
     pub infinite: bool,
+    /// Indicates how the file is sorted
+    pub file_sort_order: Vec<Vec<Expr>>,
+    /// Setting controls how inserts to this file should be handled
+    pub insert_mode: ListingTableInsertMode,
 }
 
 impl<'a> Default for CsvReadOptions<'a> {
@@ -95,6 +100,8 @@ impl<'a> CsvReadOptions<'a> {
             table_partition_cols: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             infinite: false,
+            file_sort_order: vec![],
+            insert_mode: ListingTableInsertMode::AppendToFile,
         }
     }
 
@@ -171,6 +178,16 @@ impl<'a> CsvReadOptions<'a> {
         self.file_compression_type = file_compression_type;
         self
     }
+
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>)->Self{
+        self.file_sort_order = file_sort_order;
+        self
+    }
+
+    pub fn insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self{
+        self.insert_mode = insert_mode;
+        self
+    }
 }
 
 /// Options that control the reading of Parquet files.
@@ -178,7 +195,7 @@ impl<'a> CsvReadOptions<'a> {
 /// Note this structure is supplied when a datasource is created and
 /// can not not vary from statement to statement. For settings that
 /// can vary statement to statement see
-/// [`ConfigOptions`](crate::config::ConfigOptions).
+/// [`ConfigOptions`](crate::config::ConfigO  ptions).
 #[derive(Clone)]
 pub struct ParquetReadOptions<'a> {
     /// File extension; only files with this extension are selected for data input.
@@ -464,6 +481,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             // TODO: Add file sort order into CsvReadOptions and introduce here.
             .with_file_sort_order(vec![])
             .with_infinite_source(self.infinite)
+            .with_insert_mode(self.insert_mode.clone())
     }
 
     async fn get_resolved_schema(

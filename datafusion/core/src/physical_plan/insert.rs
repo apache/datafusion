@@ -232,6 +232,9 @@ impl ExecutionPlan for InsertExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if partition!=0{
+            return Err(DataFusionError::Internal("InsertExec can only be called on partition 0!".into()))
+        }
         let data = self.make_all_input_streams(context.clone())?;
 
         let count_schema = self.count_schema.clone();
