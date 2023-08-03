@@ -75,7 +75,7 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::utils::bisect;
-use datafusion_common::JoinType;
+use datafusion_common::{plan_err, JoinType};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
@@ -278,9 +278,9 @@ impl SymmetricHashJoinExec {
 
         // Error out if no "on" contraints are given:
         if on.is_empty() {
-            return Err(DataFusionError::Plan(
-                "On constraints in SymmetricHashJoinExec should be non-empty".to_string(),
-            ));
+            return plan_err!(
+                "On constraints in SymmetricHashJoinExec should be non-empty"
+            );
         }
 
         // Check if the join is valid with the given on constraints:

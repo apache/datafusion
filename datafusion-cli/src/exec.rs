@@ -263,6 +263,7 @@ async fn create_external_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::common::plan_err;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
@@ -271,9 +272,7 @@ mod tests {
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             create_external_table(&ctx, cmd).await?;
         } else {
-            return Err(DataFusionError::Plan(
-                "LogicalPlan is not a CreateExternalTable".to_string(),
-            ));
+            return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
 
         ctx.runtime_env()

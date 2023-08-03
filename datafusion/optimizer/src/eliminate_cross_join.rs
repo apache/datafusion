@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
     CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
@@ -155,9 +155,7 @@ fn flatten_join_inputs(
             vec![left, right]
         }
         _ => {
-            return Err(DataFusionError::Plan(
-                "flatten_join_inputs just can call join/cross_join".to_string(),
-            ));
+            return plan_err!("flatten_join_inputs just can call join/cross_join");
         }
     };
 

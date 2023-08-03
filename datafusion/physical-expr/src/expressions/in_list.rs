@@ -377,6 +377,7 @@ mod tests {
     use super::*;
     use crate::expressions;
     use crate::expressions::{col, lit, try_cast};
+    use datafusion_common::plan_err;
     use datafusion_common::Result;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
 
@@ -396,9 +397,9 @@ mod tests {
             .collect();
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
-            None => Err(DataFusionError::Plan(format!(
+            None => plan_err!(
                 "Can not find compatible types to compare {expr_type:?} with {list_types:?}"
-            ))),
+            ),
             Some(data_type) => {
                 // find the coerced type
                 let cast_expr = try_cast(expr, input_schema, data_type.clone())?;

@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::{SchemaExt, ToDFSchema};
+use datafusion_common::{plan_err, SchemaExt, ToDFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
@@ -640,14 +640,10 @@ impl ListingTable {
                         })
                     }
                     else {
-                        Err(DataFusionError::Plan(
-                            format!("Expected single column references in output_ordering, got {expr}")
-                        ))
+                        plan_err!("Expected single column references in output_ordering, got {expr}")
                     }
                 } else {
-                    Err(DataFusionError::Plan(
-                        format!("Expected Expr::Sort in output_ordering, but got {expr}")
-                    ))
+                    plan_err!("Expected Expr::Sort in output_ordering, but got {expr}")
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -777,17 +773,16 @@ impl TableProvider for ListingTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
         if !self.schema().equivalent_names_and_types(&input.schema()) {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 // Return an error if schema of the input query does not match with the table schema.
-                "Inserting query must have the same schema with the table.".to_string(),
-            ));
+                "Inserting query must have the same schema with the table."
+            );
         }
 
         if self.table_paths().len() > 1 {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "Writing to a table backed by multiple files is not supported yet"
-                    .to_owned(),
-            ));
+            );
         }
 
         let table_path = &self.table_paths()[0];
@@ -806,10 +801,9 @@ impl TableProvider for ListingTable {
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
 
         if file_groups.len() > 1 {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "Datafusion currently supports tables from single partition and/or file."
-                    .to_owned(),
-            ));
+            );
         }
 
         // Sink related option, apart from format

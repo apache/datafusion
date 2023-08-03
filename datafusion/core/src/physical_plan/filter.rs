@@ -37,7 +37,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
@@ -74,9 +74,9 @@ impl FilterExec {
                 input: input.clone(),
                 metrics: ExecutionPlanMetricsSet::new(),
             }),
-            other => Err(DataFusionError::Plan(format!(
-                "Filter predicate must return boolean values, not {other:?}"
-            ))),
+            other => {
+                plan_err!("Filter predicate must return boolean values, not {other:?}")
+            }
         }
     }
 

@@ -61,7 +61,10 @@ use crate::{
     scalar::ScalarValue,
 };
 
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::{
+    plan_err,
+    tree_node::{TreeNode, VisitRecursion},
+};
 use datafusion_physical_expr::expressions::Column;
 
 use arrow::compute::cast;
@@ -557,12 +560,12 @@ impl SchemaAdapter {
                         projection.push(file_idx);
                     }
                     false => {
-                        return Err(DataFusionError::Plan(format!(
+                        return plan_err!(
                             "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
                             file_field.name(),
                             file_field.data_type(),
                             table_field.data_type()
-                        )))
+                        )
                     }
                 }
             }

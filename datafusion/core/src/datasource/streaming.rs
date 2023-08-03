@@ -23,7 +23,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{Expr, TableType};
 use log::debug;
 
@@ -52,9 +52,7 @@ impl StreamingTable {
                     "target schema does not contain partition schema. \
                         Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
                 );
-                return Err(DataFusionError::Plan(
-                    "Mismatch between schema and batches".to_string(),
-                ));
+                return plan_err!("Mismatch between schema and batches");
             }
         }
 
