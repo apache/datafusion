@@ -80,22 +80,22 @@ fn ensure_distribution(
         plan.required_input_distribution().iter()
     )
     .map(|(child, requirement)| {
+        let mut new_child = child.clone();
+        if would_benefit {
+            new_child = add_roundrobin_on_top(new_child, target_partitions)?;
+        }
         let new_child = match requirement {
             Distribution::SinglePartition => {
                 if child.output_partitioning().partition_count() > 1 {
-                    Arc::new(CoalescePartitionsExec::new(child.clone()))
+                    Arc::new(CoalescePartitionsExec::new(new_child))
                 } else {
-                    child.clone()
+                    new_child
                 }
             }
             Distribution::HashPartitioned(exprs) => {
-                let mut new_child = child.clone();
-                if would_benefit {
-                    new_child = add_roundrobin_on_top(new_child, target_partitions)?;
-                }
                 add_hash_on_top(new_child, exprs.to_vec(), target_partitions)?
             },
-            Distribution::UnspecifiedDistribution => child.clone(),
+            Distribution::UnspecifiedDistribution => new_child,
         };
 
         Ok(new_child)

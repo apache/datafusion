@@ -2918,12 +2918,10 @@ mod test_bug {
                 "                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col0@0, col0@0)]",
                 "                    CoalesceBatchesExec: target_batch_size=8192",
                 "                      RepartitionExec: partitioning=Hash([col0@0], 2), input_partitions=2",
-                "                        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "                          MemoryExec: partitions=1, partition_sizes=[1]",
+                "                        MemoryExec: partitions=2, partition_sizes=[1, 0]",
                 "                    CoalesceBatchesExec: target_batch_size=8192",
                 "                      RepartitionExec: partitioning=Hash([col0@0], 2), input_partitions=2",
-                "                        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "                          MemoryExec: partitions=1, partition_sizes=[1]",
+                "                        MemoryExec: partitions=2, partition_sizes=[1, 0]",
             ]
         };
 
@@ -2970,30 +2968,30 @@ mod test_bug {
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan);
 
-        // let displayable_plan = displayable(physical_plan.as_ref());
-        // let formatted = format!("{}", displayable_plan.indent(false));
-        // let expected = {
-        //     vec![
-        //         "ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]",
-        //         "  CoalesceBatchesExec: target_batch_size=8192",
-        //         "    HashJoinExec: mode=Partitioned, join_type=Left, on=[(t1_id@0, t2_id@1)]",
-        //         "      CoalesceBatchesExec: target_batch_size=8192",
-        //         "        RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4",
-        //         "          MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
-        //         "      ProjectionExec: expr=[SUM(t2.t2_int)@1 as SUM(t2.t2_int), t2_id@0 as t2_id]",
-        //         "        AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]",
-        //         "          CoalesceBatchesExec: target_batch_size=8192",
-        //         "            RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4",
-        //         "              AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]",
-        //         "                MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
-        //     ]
-        // };
-        //
-        // let actual: Vec<&str> = formatted.trim().lines().collect();
-        // assert_eq!(
-        //     expected, actual,
-        //     "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        // );
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]",
+                "  CoalesceBatchesExec: target_batch_size=8192",
+                "    HashJoinExec: mode=Partitioned, join_type=Left, on=[(t1_id@0, t2_id@1)]",
+                "      CoalesceBatchesExec: target_batch_size=8192",
+                "        RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4",
+                "          MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
+                "      ProjectionExec: expr=[SUM(t2.t2_int)@1 as SUM(t2.t2_int), t2_id@0 as t2_id]",
+                "        AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]",
+                "          CoalesceBatchesExec: target_batch_size=8192",
+                "            RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4",
+                "              AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]",
+                "                MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
 
         let batches = collect(physical_plan, ctx.task_ctx()).await?;
         print_batches(&batches)?;
