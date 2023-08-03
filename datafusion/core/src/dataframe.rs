@@ -53,12 +53,6 @@ use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::prelude::SessionContext;
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
-    let formatted = crate::physical_plan::displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-}
-
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
 /// [Spark DataFrame](https://spark.apache.org/docs/latest/sql-programming-guide.html)
@@ -753,7 +747,6 @@ impl DataFrame {
     pub async fn collect_partitioned(self) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        print_plan(&plan);
         collect_partitioned(plan, task_ctx).await
     }
 
