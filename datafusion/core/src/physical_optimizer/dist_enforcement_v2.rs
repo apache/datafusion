@@ -5,9 +5,9 @@ use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_physical_expr::PhysicalExpr;
 use itertools::izip;
 use std::sync::Arc;
-use datafusion_physical_expr::PhysicalExpr;
 
 #[derive(Default)]
 pub struct EnforceDistributionV2 {}
@@ -39,32 +39,47 @@ impl PhysicalOptimizerRule for EnforceDistributionV2 {
     }
 }
 
-fn are_exprs_equal(lhs: &[Arc<dyn PhysicalExpr>], rhs: &[Arc<dyn PhysicalExpr>]) -> bool{
-    if lhs.len()!=rhs.len(){
+fn are_exprs_equal(lhs: &[Arc<dyn PhysicalExpr>], rhs: &[Arc<dyn PhysicalExpr>]) -> bool {
+    if lhs.len() != rhs.len() {
         false
-    } else{
+    } else {
         izip!(lhs.iter(), rhs.iter()).all(|(lhs, rhs)| lhs.eq(rhs))
     }
 }
 
-fn add_roundrobin_on_top(input: Arc<dyn ExecutionPlan>, n_target: usize) -> Result<Arc<dyn ExecutionPlan>>{
-    Ok(if input.output_partitioning().partition_count() < n_target {
-        Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(n_target))?)
-    } else{
-        input
-    })
+fn add_roundrobin_on_top(
+    input: Arc<dyn ExecutionPlan>,
+    n_target: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    Ok(
+        if input.output_partitioning().partition_count() < n_target {
+            Arc::new(RepartitionExec::try_new(
+                input,
+                Partitioning::RoundRobinBatch(n_target),
+            )?)
+        } else {
+            input
+        },
+    )
 }
 
-fn add_hash_on_top(input: Arc<dyn ExecutionPlan>, hash_exprs: Vec<Arc<dyn PhysicalExpr>>, n_target: usize) -> Result<Arc<dyn ExecutionPlan>>{
-    if n_target == 1{
+fn add_hash_on_top(
+    input: Arc<dyn ExecutionPlan>,
+    hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    n_target: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if n_target == 1 {
         return Ok(input);
     }
     if let Partitioning::Hash(exprs, n_partition) = input.output_partitioning() {
-        if are_exprs_equal(&exprs, &hash_exprs) && n_partition == n_target{
+        if are_exprs_equal(&exprs, &hash_exprs) && n_partition == n_target {
             return Ok(input);
         }
     }
-    Ok(Arc::new(RepartitionExec::try_new(input, Partitioning::Hash(hash_exprs, n_target))?))
+    Ok(Arc::new(RepartitionExec::try_new(
+        input,
+        Partitioning::Hash(hash_exprs, n_target),
+    )?))
 }
 
 fn ensure_distribution(
@@ -77,11 +92,22 @@ fn ensure_distribution(
     let would_benefit = plan.benefits_from_input_partitioning();
     let new_children = izip!(
         plan.children().iter(),
-        plan.required_input_distribution().iter()
+        plan.required_input_distribution().iter(),
+        plan.required_input_ordering().iter(),
+        plan.maintains_input_order().iter(),
     )
-    .map(|(child, requirement)| {
+    .map(|(child, requirement, required_input_ordering, maintains)| {
         let mut new_child = child.clone();
-        if would_benefit {
+
+        // We can reorder a child if:
+        //   - It has no ordering to preserve, or
+        //   - Its parent has no required input ordering and does not
+        //     maintain input ordering.
+        // Check if this condition holds:
+        let can_reorder =
+            child.output_ordering().is_none() || (!required_input_ordering.is_some() && !maintains);
+
+        if would_benefit && can_reorder {
             new_child = add_roundrobin_on_top(new_child, target_partitions)?;
         }
         let new_child = match requirement {
@@ -94,7 +120,7 @@ fn ensure_distribution(
             }
             Distribution::HashPartitioned(exprs) => {
                 add_hash_on_top(new_child, exprs.to_vec(), target_partitions)?
-            },
+            }
             Distribution::UnspecifiedDistribution => new_child,
         };
 

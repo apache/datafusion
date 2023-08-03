@@ -2860,7 +2860,7 @@ mod tests {
     }
 }
 
-mod test_bug {
+mod tests_bug {
     use crate::physical_plan::{collect, displayable, ExecutionPlan};
     use crate::prelude::SessionContext;
     use arrow::util::pretty::print_batches;
@@ -2950,7 +2950,7 @@ mod test_bug {
             (44, 'x', 3),
             (55, 'w', 3);",
         )
-            .await?;
+        .await?;
 
         ctx.sql(
             "CREATE TABLE t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
@@ -2959,7 +2959,7 @@ mod test_bug {
             (33, 'c', 3),
             (44, 'd', 4);",
         )
-            .await?;
+        .await?;
 
         let sql = "SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1";
 
@@ -2984,6 +2984,61 @@ mod test_bug {
                 "            RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4",
                 "              AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[SUM(t2.t2_int)]",
                 "                MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_group_by_bug() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(4);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC, c ASC)
+            LOCATION 'tests/data/window_2.csv';",
+        )
+        .await?;
+
+        let sql = "SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
+          FROM annotated_data_infinite2
+          GROUP BY a, b";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST_VALUE(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as first_c]",
+                "  AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered",
+                "    CoalesceBatchesExec: target_batch_size=8192",
+                "      RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1",
+                "        AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[LAST_VALUE(annotated_data_infinite2.c)], ordering_mode=FullyOrdered",
+                "          CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true",
             ]
         };
 
