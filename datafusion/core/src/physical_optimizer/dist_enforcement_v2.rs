@@ -50,15 +50,15 @@ fn are_exprs_equal(lhs: &[Arc<dyn PhysicalExpr>], rhs: &[Arc<dyn PhysicalExpr>])
 fn add_roundrobin_on_top(
     input: Arc<dyn ExecutionPlan>,
     n_target: usize,
-) -> Result<Arc<dyn ExecutionPlan>> {
+) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
     Ok(
         if input.output_partitioning().partition_count() < n_target {
-            Arc::new(RepartitionExec::try_new(
+            (Arc::new(RepartitionExec::try_new(
                 input,
                 Partitioning::RoundRobinBatch(n_target),
-            )?)
+            )?), true)
         } else {
-            input
+            (input, false)
         },
     )
 }
@@ -67,19 +67,19 @@ fn add_hash_on_top(
     input: Arc<dyn ExecutionPlan>,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
-) -> Result<Arc<dyn ExecutionPlan>> {
+) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
     if n_target == 1 {
-        return Ok(input);
+        return Ok((input, false));
     }
     if let Partitioning::Hash(exprs, n_partition) = input.output_partitioning() {
         if are_exprs_equal(&exprs, &hash_exprs) && n_partition == n_target {
-            return Ok(input);
+            return Ok((input, false));
         }
     }
-    Ok(Arc::new(RepartitionExec::try_new(
+    Ok((Arc::new(RepartitionExec::try_new(
         input,
         Partitioning::Hash(hash_exprs, n_target),
-    )?))
+    )?), true))
 }
 
 fn ensure_distribution(
@@ -90,7 +90,7 @@ fn ensure_distribution(
         return Ok(Transformed::No(plan));
     }
     let would_benefit = plan.benefits_from_input_partitioning();
-    let new_children = izip!(
+    let new_children_with_flags = izip!(
         plan.children().iter(),
         plan.required_input_distribution().iter(),
         plan.required_input_ordering().iter(),
@@ -98,6 +98,7 @@ fn ensure_distribution(
     )
     .map(|(child, requirement, required_input_ordering, maintains)| {
         let mut new_child = child.clone();
+        let mut is_changed = false;
 
         // We can reorder a child if:
         //   - It has no ordering to preserve, or
@@ -108,24 +109,28 @@ fn ensure_distribution(
             child.output_ordering().is_none() || (!required_input_ordering.is_some() && !maintains);
 
         if would_benefit && can_reorder {
-            new_child = add_roundrobin_on_top(new_child, target_partitions)?;
+            (new_child, is_changed) = add_roundrobin_on_top(new_child, target_partitions)?;
         }
-        let new_child = match requirement {
+        match requirement {
             Distribution::SinglePartition => {
                 if child.output_partitioning().partition_count() > 1 {
-                    Arc::new(CoalescePartitionsExec::new(new_child))
-                } else {
-                    new_child
+                    new_child = Arc::new(CoalescePartitionsExec::new(new_child));
+                    is_changed = true;
                 }
             }
             Distribution::HashPartitioned(exprs) => {
-                add_hash_on_top(new_child, exprs.to_vec(), target_partitions)?
+                (new_child, is_changed) = add_hash_on_top(new_child, exprs.to_vec(), target_partitions)?;
             }
-            Distribution::UnspecifiedDistribution => new_child,
+            Distribution::UnspecifiedDistribution => {},
         };
-
-        Ok(new_child)
+        Ok((new_child, is_changed))
     })
     .collect::<Result<Vec<_>>>()?;
-    Ok(Transformed::Yes(plan.with_new_children(new_children)?))
+    let (new_children, changed_flags): (Vec<_>, Vec<_>) = new_children_with_flags.into_iter().unzip();
+    if changed_flags.iter().any(|item| *item) {
+        Ok(Transformed::Yes(plan.with_new_children(new_children)?))
+    }else{
+        Ok(Transformed::No(plan))
+    }
+
 }
