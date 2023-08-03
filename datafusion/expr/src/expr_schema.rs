@@ -25,7 +25,9 @@ use crate::type_coercion::binary::get_result_type;
 use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
-use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use datafusion_common::{
+    plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema, Result,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -330,9 +332,7 @@ impl ExprSchemable for Expr {
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
-            Err(DataFusionError::Plan(format!(
-                "Cannot automatically convert {this_type:?} to {cast_to_type:?}"
-            )))
+            plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
         }
     }
 }

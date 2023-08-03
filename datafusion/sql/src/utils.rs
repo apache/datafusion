@@ -20,6 +20,7 @@
 use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use sqlparser::ast::Ident;
 
+use datafusion_common::plan_err;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, GetIndexedField,
@@ -121,12 +122,12 @@ fn check_column_satisfies_expr(
     message_prefix: &str,
 ) -> Result<()> {
     if !columns.contains(expr) {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "{}: Expression {} could not be resolved from available columns: {}",
             message_prefix,
             expr,
             expr_vec_fmt!(columns)
-        )));
+        );
     }
     Ok(())
 }
@@ -511,9 +512,7 @@ pub(crate) fn make_decimal_type(
         (Some(p), Some(s)) => (p as u8, s as i8),
         (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
-            return Err(DataFusionError::Plan(
-                "Cannot specify only scale for decimal data type".to_string(),
-            ))
+            return plan_err!("Cannot specify only scale for decimal data type")
         }
         (None, None) => (DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
     };
@@ -523,9 +522,9 @@ pub(crate) fn make_decimal_type(
         || precision > DECIMAL128_MAX_PRECISION
         || scale.unsigned_abs() > precision
     {
-        Err(DataFusionError::Plan(format!(
+        plan_err!(
             "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 38`, and `scale <= precision`."
-        )))
+        )
     } else {
         Ok(DataType::Decimal128(precision, scale))
     }

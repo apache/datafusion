@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::DataFusionError;
+use datafusion_common::{plan_err, DataFusionError};
 
 use crate::datasource::file_format::arrow::{ArrowFormat, DEFAULT_ARROW_EXTENSION};
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
@@ -439,10 +439,9 @@ pub trait ReadOptions<'a> {
                 .to_listing_options(config)
                 .infer_schema(&state, &table_path)
                 .await?),
-            (None, true) => Err(DataFusionError::Plan(
-                "Schema inference for infinite data sources is not supported."
-                    .to_string(),
-            )),
+            (None, true) => {
+                plan_err!("Schema inference for infinite data sources is not supported.")
+            }
         }
     }
 }

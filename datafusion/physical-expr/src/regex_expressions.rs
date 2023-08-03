@@ -26,6 +26,7 @@ use arrow::array::{
     OffsetSizeTrait,
 };
 use arrow::compute;
+use datafusion_common::plan_err;
 use datafusion_common::{cast::as_generic_string_array, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use hashbrown::HashMap;
@@ -65,7 +66,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             match flags {
                 Some(f) if f.iter().any(|s| s == Some("g")) => {
-                    Err(DataFusionError::Plan("regexp_match() does not support the \"global\" option".to_owned()))
+                    plan_err!("regexp_match() does not support the \"global\" option")
                 },
                 _ => compute::regexp_match(values, regex, flags).map_err(DataFusionError::ArrowError),
             }

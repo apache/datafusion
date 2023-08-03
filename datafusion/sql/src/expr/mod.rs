@@ -29,6 +29,7 @@ mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
+use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
@@ -414,9 +415,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return Err(DataFusionError::Plan(
-                "Invalid pattern in LIKE expression".to_string(),
-            ));
+            return plan_err!("Invalid pattern in LIKE expression");
         }
         Ok(Expr::Like(Like::new(
             negated,
@@ -439,9 +438,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return Err(DataFusionError::Plan(
-                "Invalid pattern in SIMILAR TO expression".to_string(),
-            ));
+            return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
         Ok(Expr::SimilarTo(Like::new(
             negated,
@@ -503,10 +500,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?)),
                 order_by,
             ))),
-            _ => Err(DataFusionError::Plan(
+            _ => plan_err!(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
-                    .to_string(),
-            )),
+            ),
         }
     }
 }
@@ -628,10 +624,7 @@ mod tests {
         ) -> Result<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
                 Some(table) => Ok(table.clone()),
-                _ => Err(DataFusionError::Plan(format!(
-                    "Table not found: {}",
-                    name.table()
-                ))),
+                _ => plan_err!("Table not found: {}", name.table()),
             }
         }
 
