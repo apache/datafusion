@@ -108,7 +108,7 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
 
     for sub in parts {
         if let HirKind::Literal(l) = sub.kind() {
-            s.push_str(str_from_literal(l)?);
+            s.push_str(like_str_from_literal(l)?);
         } else {
             return None;
         }
@@ -120,7 +120,7 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
 
 /// returns a str represented by `Literal` if it contains a valid utf8
 /// sequence and is safe for like (has no '%' and '_')
-fn str_from_literal(l: &Literal) -> Option<&str> {
+fn like_str_from_literal(l: &Literal) -> Option<&str> {
     // if not utf8, no good
     let s = std::str::from_utf8(&l.0).ok()?;
 
@@ -132,8 +132,7 @@ fn str_from_literal(l: &Literal) -> Option<&str> {
 }
 
 /// returns a str represented by `Literal` if it contains a valid utf8
-/// sequence and is unsafe for like (maybe has  '%' or '_')
-fn str_from_literal_unsafe_like(l: &Literal) -> Option<&str> {
+fn str_from_literal(l: &Literal) -> Option<&str> {
     // if not utf8, no good
     let s = std::str::from_utf8(&l.0).ok()?;
 
@@ -205,7 +204,7 @@ fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
         2 => Some(lit("")),
         3 => {
             let HirKind::Literal(l) = v[1].kind() else { return None };
-            str_from_literal(l).map(lit)
+            like_str_from_literal(l).map(lit)
         }
         _ => None,
     }
@@ -223,7 +222,7 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
             for hir in alters {
                 let mut is_safe = false;
                 if let HirKind::Literal(l) = hir.kind() {
-                    if let Some(safe_literal) = str_from_literal_unsafe_like(l).map(lit) {
+                    if let Some(safe_literal) = str_from_literal(l).map(lit) {
                         literals.push(safe_literal);
                         is_safe = true;
                     }
@@ -236,7 +235,7 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
 
             return Some(literals);
         } else if let HirKind::Literal(l) = sub.kind() {
-            if let Some(safe_literal) = str_from_literal_unsafe_like(l).map(lit) {
+            if let Some(safe_literal) = str_from_literal(l).map(lit) {
                 return Some(vec![safe_literal]);
             }
             return None;
@@ -251,7 +250,7 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
             return Some(mode.expr(Box::new(left.clone()), "%".to_owned()));
         }
         HirKind::Literal(l) => {
-            let s = str_from_literal(l)?;
+            let s = like_str_from_literal(l)?;
             return Some(mode.expr(Box::new(left.clone()), format!("%{s}%")));
         }
         HirKind::Concat(inner) if is_anchored_literal(inner) => {
