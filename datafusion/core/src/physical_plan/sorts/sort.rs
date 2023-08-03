@@ -147,7 +147,6 @@ impl ExternalSorter {
 
             // TODO: This should probably be try_grow (#5885)
             reservation.resize(input.get_array_memory_size());
-            // Maybe we should perform sorting in a parallel task to unblock the caller
             input = sort_batch(&input, &self.expr, self.fetch)?;
             reservation.free();
             batch_sorted = true;
@@ -253,7 +252,14 @@ impl ExternalSorter {
 
     /// Sorts the in_mem_batches in place
     async fn in_mem_sort(&mut self) -> Result<()> {
-        if self.in_mem_batches.iter().all(|(sorted, _)| *sorted) {
+        if self.in_mem_batches.iter().all(|(sorted, _)| *sorted) && self.fetch.is_none() {
+            // Do not sort if all the in-mem batches are sorted _and_ there was no `fetch` specified.
+            // If a `fetch` was specified we could hit a pathological case even if all the batches
+            // are sorted whereby we have ~100 batches with 1 row each (in case of `LIMIT 1`), and
+            // it turns out this is a problem when reading from the spills:
+            // `Failure while reading spill file: NamedTempFile("/var..."). Error: Execution error: channel closed`
+            // Even if a larger `fetch` was used we would likely benefit from merging the individual
+            // batches together during sort.
             return Ok(());
         }
 
