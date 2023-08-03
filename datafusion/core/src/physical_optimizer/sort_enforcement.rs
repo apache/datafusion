@@ -3237,4 +3237,61 @@ mod tests_bug {
         // assert_eq!(0, 1);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_first_value() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(8);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE TABLE sales_global (zip_code INT,
+          country VARCHAR(3),
+          sn INT,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
+          (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)",
+        )
+        .await?;
+
+        let sql = "SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
+      LAST_VALUE(amount ORDER BY ts ASC) AS fv2
+      FROM sales_global";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv2]",
+                "  AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]",
+                "    CoalescePartitionsExec",
+                "      AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]",
+                "        SortExec: expr=[ts@0 ASC NULLS LAST]",
+                "          MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
 }
