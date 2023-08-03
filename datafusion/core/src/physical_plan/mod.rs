@@ -22,6 +22,7 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
+use crate::datasource::physical_plan::FileScanConfig;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use datafusion_common::Result;
 pub use datafusion_common::{ColumnStatistics, Statistics};
@@ -226,6 +227,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
     fn statistics(&self) -> Statistics;
+
+    /// Returns the [`FileScanConfig`] in case this is a data source scanning execution plan or `None` otherwise.
+    fn file_scan_config(&self) -> Option<&FileScanConfig> {
+        None
+    }
 }
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
