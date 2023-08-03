@@ -1,3 +1,22 @@
+                                 License Information
+
+This repository consists of:
+
+1. Code copyrighted by the Apache Software Foundation that is licensed under
+   Apache License Version 2.0, which is reproduced below.
+2. Code copyrighted by Synnada, Inc., which is currently (August 1, 2023) held
+   under exclusive copyright. Synnada, Inc. does not currently offer any licenses
+   for this code, but it may in the future.
+
+For more information about (2), see the following files:
+1. SYNNADA-NOTICE.txt, which outlines how Synnada, Inc. contributes to the
+   Apache Arrow/Datafusion project and categorizes these contributions.
+2. SYNNADA-CONTRIBUTIONS.txt, which lists the commit hashes identifying code
+   copyrighted by Synnada, Inc.
+3. SYNNADA-README.md, which states the goals and views of Synnada, Inc.'s with
+   respect to its relationship with the Apache Arrow/Datafusion project.
+
+--
 
                                  Apache License
                            Version 2.0, January 2004
