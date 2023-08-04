@@ -122,12 +122,15 @@ fn update_repartition_from_context(
     let mut new_children = repartition_context.plan.children();
     let benefits_from_partitioning =
         repartition_context.plan.benefits_from_input_partitioning();
-    for (child, repartition_onwards, benefits) in izip!(
+    let required_input_orderings = repartition_context.plan.required_input_ordering();
+    for (child, repartition_onwards, benefits, required_ordering) in izip!(
         new_children.iter_mut(),
         repartition_context.repartition_onwards.iter(),
-        benefits_from_partitioning.into_iter()
+        benefits_from_partitioning.into_iter(),
+        required_input_orderings.into_iter(),
     ) {
-        if !benefits {
+        // if repartition masses with ordering requirement
+        if required_ordering.is_some() {
             if let Some(exec_tree) = repartition_onwards {
                 *child = remove_parallelization(exec_tree)?;
             }
@@ -180,20 +183,18 @@ fn ensure_distribution(
         .any(|item| *item);
     let mut is_updated = false;
 
-    // println!("start");
-    // print_plan(&repartition_context.plan);
-    // println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
-    // println!("plan required dist: {:?}", repartition_context.plan.required_input_distribution());
+    println!("start");
+    print_plan(&repartition_context.plan);
+    println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
+    println!("plan required dist: {:?}", repartition_context.plan.required_input_distribution());
 
-    let (plan, mut updated_repartition_onwards) = if false
-        && !would_benefit
-        && !repartition_context.plan.as_any().is::<ProjectionExec>()
+    let (plan, mut updated_repartition_onwards) = if repartition_context.plan.required_input_ordering().iter().any(|item| item.is_some())
     {
-        // println!("start");
-        // print_plan(&repartition_context.plan);
+        println!("----------start--------------");
+        print_plan(&repartition_context.plan);
         let new_plan = update_repartition_from_context(&repartition_context)?;
-        // print_plan(&new_plan);
-        // println!("end");
+        print_plan(&new_plan);
+        println!("----------end------------");
         let n_child = new_plan.children().len();
         is_updated = true;
         (new_plan, vec![None; n_child])
@@ -216,18 +217,19 @@ fn ensure_distribution(
             let mut new_child = child.clone();
             let mut is_changed = false;
 
-            // We can reorder a child if:
-            //   - It has no ordering to preserve, or
-            //   - Its parent has no required input ordering and does not
-            //     maintain input ordering.
-            //   - input partition is 1, in this case repartition preservers ordering.
-            // Check if this condition holds:
-            let can_reorder = child.output_ordering().is_none()
-                || (!required_input_ordering.is_some() && !maintains);
-                // || child.output_partitioning().partition_count() == 1;
+            // // We can reorder a child if:
+            // //   - It has no ordering to preserve, or
+            // //   - Its parent has no required input ordering and does not
+            // //     maintain input ordering.
+            // //   - input partition is 1, in this case repartition preservers ordering.
+            // // Check if this condition holds:
+            // let can_reorder = child.output_ordering().is_none()
+            //     || (!required_input_ordering.is_some() && !maintains);
+            //     // || child.output_partitioning().partition_count() == 1;
+
             // println!("child.output_ordering(): {:?}", child.output_ordering());
             // print_plan(&child);
-            if would_benefit && can_reorder {
+            if would_benefit && required_input_ordering.is_none() {
                 (new_child, is_changed) = add_roundrobin_on_top(
                     new_child,
                     target_partitions,
