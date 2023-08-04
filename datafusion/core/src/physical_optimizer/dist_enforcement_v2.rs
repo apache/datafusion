@@ -190,6 +190,14 @@ fn ensure_distribution(
     if repartition_context.plan.children().is_empty() {
         return Ok(Transformed::No(repartition_context));
     }
+    // Don't need to apply when the returned row count is not greater than 1
+    let stats = repartition_context.plan.statistics();
+    if stats.is_exact {
+        let should_repartition = stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
+        if should_repartition{
+            return Ok(Transformed::No(repartition_context));
+        }
+    }
 
     let mut is_updated = false;
 
