@@ -17,21 +17,24 @@
 
 //! This file has test utils for hash joins
 
+use crate::physical_plan::joins::nested_loop_join::distribution_from_join_type;
 use crate::physical_plan::joins::utils::{JoinFilter, JoinOn};
 use crate::physical_plan::joins::{
-    HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, SlidingNestedLoopJoinExec,
+    StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::{common, ExecutionPlan, Partitioning};
+use crate::physical_plan::{common, Distribution, ExecutionPlan, Partitioning};
+use crate::test::columns;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::{
     ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
     TimestampMillisecondArray,
 };
 use arrow_schema::Schema;
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::intervals::test_utils::{
@@ -510,4 +513,114 @@ pub fn create_memory_table(
         right = right.with_sort_information(sorted);
     }
     Ok((Arc::new(left), Arc::new(right)))
+}
+
+pub async fn partitioned_sliding_nested_join_with_filter(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    join_type: &JoinType,
+    filter: JoinFilter,
+    context: Arc<TaskContext>,
+) -> Result<Vec<RecordBatch>> {
+    let partition_count = 4;
+    let mut output_partition = 1;
+    let distribution = distribution_from_join_type(join_type);
+    // left
+    let left = if matches!(distribution[0], Distribution::SinglePartition) {
+        left
+    } else {
+        output_partition = partition_count;
+        Arc::new(RepartitionExec::try_new(
+            left,
+            Partitioning::RoundRobinBatch(partition_count),
+        )?)
+    } as Arc<dyn ExecutionPlan>;
+
+    let right = if matches!(distribution[1], Distribution::SinglePartition) {
+        right
+    } else {
+        output_partition = partition_count;
+        Arc::new(RepartitionExec::try_new(
+            right,
+            Partitioning::RoundRobinBatch(partition_count),
+        )?)
+    } as Arc<dyn ExecutionPlan>;
+
+    let left_sort_expr = left.output_ordering().map(|order| order.to_vec()).ok_or(
+        DataFusionError::Internal(
+            "SlidingNestedLoopJoinExec needs left and right side ordered.".to_owned(),
+        ),
+    )?;
+    let right_sort_expr = right.output_ordering().map(|order| order.to_vec()).ok_or(
+        DataFusionError::Internal(
+            "SlidingNestedLoopJoinExec needs left and right side ordered.".to_owned(),
+        ),
+    )?;
+
+    let join = Arc::new(SlidingNestedLoopJoinExec::try_new(
+        left,
+        right,
+        filter,
+        join_type,
+        left_sort_expr,
+        right_sort_expr,
+    )?);
+    let mut batches = vec![];
+    for i in 0..output_partition {
+        let stream = join.execute(i, context.clone())?;
+        let more_batches = common::collect(stream).await?;
+        batches.extend(
+            more_batches
+                .into_iter()
+                .filter(|b| b.num_rows() > 0)
+                .collect::<Vec<_>>(),
+        );
+    }
+    Ok(batches)
+}
+
+pub async fn partitioned_nested_join_with_filter(
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    join_type: &JoinType,
+    filter: Option<JoinFilter>,
+    context: Arc<TaskContext>,
+) -> Result<(Vec<String>, Vec<RecordBatch>)> {
+    let partition_count = 4;
+    let mut output_partition = 1;
+    let distribution = distribution_from_join_type(join_type);
+    // left
+    let left = if matches!(distribution[0], Distribution::SinglePartition) {
+        left
+    } else {
+        output_partition = partition_count;
+        Arc::new(RepartitionExec::try_new(
+            left,
+            Partitioning::RoundRobinBatch(partition_count),
+        )?)
+    } as Arc<dyn ExecutionPlan>;
+
+    let right = if matches!(distribution[1], Distribution::SinglePartition) {
+        right
+    } else {
+        output_partition = partition_count;
+        Arc::new(RepartitionExec::try_new(
+            right,
+            Partitioning::RoundRobinBatch(partition_count),
+        )?)
+    } as Arc<dyn ExecutionPlan>;
+    let join = Arc::new(NestedLoopJoinExec::try_new(left, right, filter, join_type)?);
+    let columns = columns(&join.schema());
+    let mut batches = vec![];
+    for i in 0..output_partition {
+        let stream = join.execute(i, context.clone())?;
+        let more_batches = common::collect(stream).await?;
+        batches.extend(
+            more_batches
+                .into_iter()
+                .filter(|b| b.num_rows() > 0)
+                .collect::<Vec<_>>(),
+        );
+    }
+    Ok((columns, batches))
 }

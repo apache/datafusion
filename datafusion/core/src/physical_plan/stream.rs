@@ -22,17 +22,18 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
+use crate::physical_plan::common::{AbortOnDropMany, AbortOnDropSingle};
 use crate::physical_plan::displayable;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use futures::stream::BoxStream;
-use futures::{Future, Stream, StreamExt};
+use futures::{Future, SinkExt, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::metrics::BaselineMetrics;
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
@@ -205,6 +206,156 @@ impl RecordBatchReceiverStreamBuilder {
         let inner = futures::stream::select(rx_stream, check_stream).boxed();
 
         Box::pin(RecordBatchReceiverStream { schema, inner })
+    }
+}
+
+/// This object is used to construct multiple broadcast streams from a single
+/// `SendableRecordBatchStream`. It broadcasts the stream by spawning new tokio
+/// tasks, potentially improving parallelism. This struct also manages task
+/// cancellations and error propagation correctly.
+///
+/// Construct a new instance using `Self::new` or `Self::with_capacity`.
+pub struct RecordBatchBroadcastStreamsBuilder {
+    txs: Vec<futures::channel::mpsc::Sender<Result<RecordBatch>>>,
+    rxs: Vec<futures::channel::mpsc::Receiver<Result<RecordBatch>>>,
+    schema: SchemaRef,
+}
+
+impl RecordBatchBroadcastStreamsBuilder {
+    /// Constructs a new `RecordBatchBroadcastStreamsBuilder` with the provided
+    /// schema and a specified number of broadcast channels. Each channel has a
+    /// default capacity of 100.
+    pub fn new(schema: SchemaRef, n_broadcast: usize) -> Self {
+        let capacity = 100;
+        let (txs, rxs) = (0..n_broadcast)
+            .map(|_| futures::channel::mpsc::channel(capacity))
+            .unzip();
+        Self { txs, rxs, schema }
+    }
+
+    /// Constructs a new `RecordBatchBroadcastStreamsBuilder` with the provided
+    /// schema, a specified number of broadcast channels, and the specified
+    /// channel capacity.
+    pub fn with_capacity(schema: SchemaRef, n_broadcast: usize, capacity: usize) -> Self {
+        let (txs, rxs) = (0..n_broadcast)
+            .map(|_| futures::channel::mpsc::channel(capacity))
+            .unzip();
+        Self { txs, rxs, schema }
+    }
+
+    /// Broadcasts an `input` stream to multiple output streams.
+    ///
+    /// This function creates a new task to pull data from the input and sends it
+    /// to the output partitions based on the desired partitioning. It also waits
+    /// for the input-consuming task to complete in a separate task, and propagates
+    /// any errors (including panics) to all output channels.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The input execution plan.
+    /// * `partition` - The partition to execute the plan on.
+    /// * `context` - The task context for the execution.
+    ///
+    /// # Returns
+    ///
+    /// This function returns a tuple consisting of:
+    /// * A vector of `SendableRecordBatchStream`s, with each stream representing
+    ///   an individual output stream,
+    /// * An `AbortHelper` to manage the underlying tasks. It's crucial to retain
+    ///   this `AbortHelper` and prevent it from being dropped inadvertently.
+    ///   Dropping the `AbortHelper` will cease all communication by aborting
+    ///   all associated tasks.
+    pub fn broadcast(
+        self,
+        input: Arc<dyn ExecutionPlan>,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<(Vec<SendableRecordBatchStream>, Arc<AbortOnDropMany<()>>)> {
+        let stream = input.execute(partition, context)?;
+        assert_eq!(self.schema, input.schema());
+
+        // Create a task to pull data from the input stream and send to output channels
+        let input_task: JoinHandle<Result<()>> =
+            tokio::spawn(Self::pull_from_input(stream, self.txs.clone()));
+
+        // Create a task to wait for the input-consuming task to complete
+        let join_handle = vec![tokio::spawn(Self::wait_for_task(
+            AbortOnDropSingle::new(input_task),
+            self.txs,
+        ))];
+
+        let abort_helper = Arc::new(AbortOnDropMany(join_handle));
+
+        let streams = self
+            .rxs
+            .into_iter()
+            .map(|rx| {
+                Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), rx))
+                    as SendableRecordBatchStream
+            })
+            .collect();
+
+        Ok((streams, abort_helper))
+    }
+
+    /// Pulls data from the specified input plan and feeds it to output
+    /// partitions based on the desired partitioning.
+    ///
+    /// The argument `txs` denotes the target channels for each output partition.
+    async fn pull_from_input(
+        mut stream: SendableRecordBatchStream,
+        mut txs: Vec<futures::channel::mpsc::Sender<Result<RecordBatch>>>,
+    ) -> Result<()> {
+        while let Some(item) = stream.next().await {
+            // Clone the item for each broadcast channel
+            if let Ok(item) = &item {
+                for channel in txs.iter_mut() {
+                    channel
+                        .send(Ok(item.clone()))
+                        .await
+                        .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Waits for `input_task`, which is consuming one of the inputs to complete.
+    /// Upon each successful completion, sends a `None` to each of the output tx
+    /// channels to signal one of the inputs is done. Upon error, propagates the
+    /// errors to all output tx channels.
+    async fn wait_for_task(
+        input_task: AbortOnDropSingle<Result<()>>,
+        mut txs: Vec<futures::channel::mpsc::Sender<Result<RecordBatch>>>,
+    ) {
+        // Wait for completion and propagate error. Note that we ignore errors
+        // on send (.ok), as this means the receiver has already shut down.
+        match input_task.await {
+            // Error in joining task
+            Err(e) => {
+                let e = Arc::new(e);
+
+                for tx in txs.iter_mut() {
+                    let err = Err(DataFusionError::Context(
+                        "Broadcast Error".to_string(),
+                        Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
+                    ));
+                    tx.send(err).await.ok();
+                }
+            }
+            // Error from running input task
+            Ok(Err(e)) => {
+                let e = Arc::new(e);
+
+                for tx in txs.iter_mut() {
+                    // Wrap it, because we need to send errors to all output partitions
+                    let err = Err(DataFusionError::External(Box::new(e.clone())));
+                    tx.send(err).await.ok();
+                }
+            }
+            // Input task completed successfully
+            Ok(Ok(())) => {}
+        }
     }
 }
 
