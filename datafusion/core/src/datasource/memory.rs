@@ -127,6 +127,7 @@ impl MemTable {
         }
 
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
+
         if let Some(num_partitions) = output_partitions {
             let exec = RepartitionExec::try_new(
                 Arc::new(exec),
