@@ -136,6 +136,17 @@ pub fn sum(expr: Expr) -> Expr {
     ))
 }
 
+/// Create an expression to represent the array_agg() aggregate function
+pub fn array_agg(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::ArrayAgg,
+        vec![expr],
+        false,
+        None,
+        None,
+    ))
+}
+
 /// Create an expression to represent the avg() aggregate function
 pub fn avg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -787,6 +798,7 @@ scalar_expr!(
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
+scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 
@@ -978,6 +990,7 @@ mod test {
         test_unary_scalar_expr!(Log10, log10);
         test_unary_scalar_expr!(Ln, ln);
         test_scalar_expr!(Atan2, atan2, y, x);
+        test_scalar_expr!(Nanvl, nanvl, x, y);
 
         test_scalar_expr!(Ascii, ascii, input);
         test_scalar_expr!(BitLength, bit_length, string);

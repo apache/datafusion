@@ -46,10 +46,10 @@ use datafusion_expr::{
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, now, nullif, octet_length, pi, power, radians, random,
-    regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
-    sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with,
-    strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
+    lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, pi, power, radians,
+    random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
+    rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt,
+    starts_with, strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
     to_timestamp_millis, to_timestamp_seconds, translate, trim, trim_array, trunc, upper,
     uuid,
     window_frame::regularize,
@@ -522,6 +522,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::StructFun => Self::Struct,
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
+            ScalarFunction::Nanvl => Self::Nanvl,
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
         }
     }
@@ -549,6 +550,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Stddev => Self::Stddev,
             protobuf::AggregateFunction::StddevPop => Self::StddevPop,
             protobuf::AggregateFunction::Correlation => Self::Correlation,
+            protobuf::AggregateFunction::RegrSlope => Self::RegrSlope,
             protobuf::AggregateFunction::ApproxPercentileCont => {
                 Self::ApproxPercentileCont
             }
@@ -1526,6 +1528,10 @@ pub fn parse_expr(
                 ScalarFunction::CurrentDate => Ok(current_date()),
                 ScalarFunction::CurrentTime => Ok(current_time()),
                 ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Nanvl => Ok(nanvl(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),

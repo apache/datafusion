@@ -27,6 +27,7 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
+use datafusion_common::plan_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::{downcast_value, ScalarValue};
@@ -152,9 +153,9 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
 
     // Ensure the percentile is between 0 and 1.
     if !(0.0..=1.0).contains(&percentile) {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
-        )));
+        );
     }
     Ok(percentile)
 }

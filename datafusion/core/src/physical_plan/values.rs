@@ -26,7 +26,7 @@ use crate::physical_plan::{
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::ScalarValue;
+use datafusion_common::{plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use std::any::Any;
@@ -48,7 +48,7 @@ impl ValuesExec {
         data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
         if data.is_empty() {
-            return Err(DataFusionError::Plan("Values list cannot be empty".into()));
+            return plan_err!("Values list cannot be empty");
         }
         let n_row = data.len();
         let n_col = schema.fields().len();
@@ -72,9 +72,9 @@ impl ValuesExec {
                                 ScalarValue::try_from_array(&a, 0)
                             }
                             Ok(ColumnarValue::Array(a)) => {
-                                Err(DataFusionError::Plan(format!(
+                                plan_err!(
                                     "Cannot have array values {a:?} in a values list"
-                                )))
+                                )
                             }
                             Err(err) => Err(err),
                         }

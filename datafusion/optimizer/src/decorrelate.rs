@@ -22,7 +22,7 @@ use crate::utils::{
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
-use datafusion_common::Result;
+use datafusion_common::{plan_err, Result};
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -132,9 +132,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 match (&pull_up_expr_opt, &self.pull_up_having_expr) {
                     (Some(_), Some(_)) => {
                         // Error path
-                        Err(DataFusionError::Plan(
-                            "Unsupported Subquery plan".to_string(),
-                        ))
+                        plan_err!("Unsupported Subquery plan")
                     }
                     (Some(_), None) => {
                         self.pull_up_having_expr = pull_up_expr_opt;

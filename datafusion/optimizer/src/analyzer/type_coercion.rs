@@ -23,7 +23,9 @@ use arrow::datatypes::{DataType, IntervalUnit};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    plan_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
     ScalarUDF, WindowFunction,
@@ -293,9 +295,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let result_type =
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
-                    None => Err(DataFusionError::Plan(format!(
+                    None => plan_err!(
                         "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
-                    ))),
+                    ),
                     Some(coerced_type) => {
                         // find the coerced type
                         let cast_expr = expr.cast_to(&coerced_type, &self.schema)?;

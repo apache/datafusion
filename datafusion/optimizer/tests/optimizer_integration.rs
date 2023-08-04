@@ -18,7 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -392,7 +392,7 @@ impl ContextProvider for MySchemaProvider {
                 schema: Arc::new(schema),
             }))
         } else {
-            Err(DataFusionError::Plan("table does not exist".to_string()))
+            plan_err!("table does not exist")
         }
     }
 

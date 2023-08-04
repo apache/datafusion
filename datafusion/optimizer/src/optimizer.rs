@@ -447,7 +447,9 @@ mod tests {
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
+    use datafusion_common::{
+        plan_err, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    };
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
     use std::sync::{Arc, Mutex};
@@ -613,7 +615,7 @@ mod tests {
             _: &LogicalPlan,
             _: &dyn OptimizerConfig,
         ) -> Result<Option<LogicalPlan>> {
-            Err(DataFusionError::Plan("rule failed".to_string()))
+            plan_err!("rule failed")
         }
 
         fn name(&self) -> &str {

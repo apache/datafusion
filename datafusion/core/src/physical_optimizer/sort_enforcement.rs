@@ -56,7 +56,7 @@ use crate::physical_plan::{with_new_children_if_necessary, Distribution, Executi
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::utils::{get_at_indices, longest_consecutive_prefix};
-use datafusion_common::DataFusionError;
+use datafusion_common::{plan_err, DataFusionError};
 use datafusion_physical_expr::utils::{
     convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy,
     ordering_satisfy_requirement_concrete,
@@ -597,17 +597,16 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys) = if let Some(exec) =
-        window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
-    {
-        (exec.window_expr(), &exec.partition_keys)
-    } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-        (exec.window_expr(), &exec.partition_keys)
-    } else {
-        return Err(DataFusionError::Plan(
-            "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
-        ));
-    };
+    let (window_expr, partition_keys) =
+        if let Some(exec) = window_exec.as_any().downcast_ref::<BoundedWindowAggExec>() {
+            (exec.window_expr(), &exec.partition_keys)
+        } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
+            (exec.window_expr(), &exec.partition_keys)
+        } else {
+            return plan_err!(
+                "Expects to receive either WindowAggExec of BoundedWindowAggExec"
+            );
+        };
     let partitionby_exprs = window_expr[0].partition_by();
     let orderby_sort_keys = window_expr[0].order_by();
 
@@ -814,10 +813,7 @@ fn get_sort_exprs(
             sort_preserving_merge_exec.fetch(),
         ))
     } else {
-        Err(DataFusionError::Plan(
-            "Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec"
-                .to_string(),
-        ))
+        plan_err!("Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec")
     }
 }
 

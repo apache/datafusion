@@ -26,6 +26,7 @@ use crate::{
     },
     print_options::PrintOptions,
 };
+use datafusion::sql::{parser::DFParser, sqlparser::dialect::dialect_from_str};
 use datafusion::{
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
@@ -192,18 +193,29 @@ async fn exec_and_print(
     let now = Instant::now();
 
     let sql = unescape_input(&sql)?;
-    let plan = ctx.state().create_logical_plan(&sql).await?;
-    let df = match &plan {
-        LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-            create_external_table(ctx, cmd).await?;
-            ctx.execute_logical_plan(plan).await?
-        }
-        _ => ctx.execute_logical_plan(plan).await?,
-    };
+    let task_ctx = ctx.task_ctx();
+    let dialect = &task_ctx.session_config().options().sql_parser.dialect;
+    let dialect = dialect_from_str(dialect).ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "Unsupported SQL dialect: {dialect}. Available dialects: \
+                 Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                 MsSQL, ClickHouse, BigQuery, Ansi."
+        ))
+    })?;
+    let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
+    for statement in statements {
+        let plan = ctx.state().statement_to_plan(statement).await?;
+        let df = match &plan {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
+                create_external_table(ctx, cmd).await?;
+                ctx.execute_logical_plan(plan).await?
+            }
+            _ => ctx.execute_logical_plan(plan).await?,
+        };
 
-    let results = df.collect().await?;
-    print_options.print_batches(&results, now)?;
-
+        let results = df.collect().await?;
+        print_options.print_batches(&results, now)?;
+    }
     Ok(())
 }
 
@@ -251,6 +263,7 @@ async fn create_external_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::common::plan_err;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
@@ -259,9 +272,7 @@ mod tests {
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             create_external_table(&ctx, cmd).await?;
         } else {
-            return Err(DataFusionError::Plan(
-                "LogicalPlan is not a CreateExternalTable".to_string(),
-            ));
+            return plan_err!("LogicalPlan is not a CreateExternalTable");
         }
 
         ctx.runtime_env()

@@ -62,7 +62,7 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_common::{plan_err, DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
@@ -1206,19 +1206,20 @@ impl DefaultPhysicalPlanner {
                         ).await?;
                     }
 
-                    let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
-                        "No installed planner was able to convert the custom node to an execution plan: {:?}", e.node
-                    )))?;
+                    let plan = match maybe_plan {
+                        Some(v) => Ok(v),
+                        _ => plan_err!("No installed planner was able to convert the custom node to an execution plan: {:?}", e.node)
+                    }?;
 
                     // Ensure the ExecutionPlan's schema matches the
                     // declared logical schema to catch and warn about
                     // logic errors when creating user defined plans.
                     if !e.node.schema().matches_arrow_schema(&plan.schema()) {
-                        Err(DataFusionError::Plan(format!(
+                        plan_err!(
                             "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
                             LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
                             e.node, e.node.schema(), plan.schema()
-                        )))
+                        )
                     } else {
                         Ok(plan)
                     }
@@ -1555,10 +1556,10 @@ pub fn create_window_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
             if !is_window_valid(window_frame) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
-                    )));
+                    );
             }
 
             let window_frame = Arc::new(window_frame.clone());
@@ -1572,9 +1573,7 @@ pub fn create_window_expr_with_name(
                 physical_input_schema,
             )
         }
-        other => Err(DataFusionError::Plan(format!(
-            "Invalid window expression '{other:?}'"
-        ))),
+        other => plan_err!("Invalid window expression '{other:?}'"),
     }
 }
 
