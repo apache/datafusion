@@ -3294,4 +3294,75 @@ mod tests_bug {
         // assert_eq!(0, 1);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_joins() -> Result<()> {
+        let mut config = SessionConfig::new().with_repartition_joins(false).with_target_partitions(1).with_round_robin_repartition(true).with_batch_size(4096);
+        let ctx = SessionContext::with_config(config.clone());
+
+        ctx.sql(
+            "CREATE TABLE join_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+        AS VALUES
+        (11, 'a', 1),
+        (22, 'b', 2),
+        (33, 'c', 3),
+        (44, 'd', 4);",
+        )
+            .await?;
+
+        ctx.sql(
+            "CREATE TABLE join_t2(t2_id INT UNSIGNED, t2_name VARCHAR, t2_int INT UNSIGNED)
+            AS VALUES
+            (11, 'z', 3),
+            (22, 'y', 1),
+            (44, 'x', 3),
+            (55, 'w', 3);",
+        )
+            .await?;
+
+        let mut state = ctx.state();
+        state.config_mut().options_mut().execution.target_partitions = 2;
+        // let config = config.with_target_partitions(2);
+        let ctx = SessionContext::with_state(state);
+
+        // let ctx = SessionContext::with_config(config);
+        let sql = "select *, join_t1.t1_id + 11
+        from join_t1, join_t2
+        where join_t1.t1_id + 11 = join_t2.t2_id";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@4 as t2_id, t2_name@5 as t2_name, t2_int@6 as t2_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(join_t1.t1_id + Int64(11)@3, CAST(join_t2.t2_id AS Int64)@3)]",
+                "        CoalescePartitionsExec",
+                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(join_t2.t2_id AS Int64)]",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
 }

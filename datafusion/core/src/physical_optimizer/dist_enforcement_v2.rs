@@ -13,6 +13,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use itertools::izip;
 use std::sync::Arc;
+use crate::physical_plan::projection::ProjectionExec;
 
 #[derive(Default)]
 pub struct EnforceDistributionV2 {}
@@ -116,12 +117,16 @@ fn update_repartition_from_context(
     repartition_context: &RepartitionContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut new_children = repartition_context.plan.children();
-    for (child, repartition_onwards) in izip!(
+    let benefits_from_partitioning = repartition_context.plan.benefits_from_input_partitioning();
+    for (child, repartition_onwards, benefits) in izip!(
         new_children.iter_mut(),
-        repartition_context.repartition_onwards.iter()
+        repartition_context.repartition_onwards.iter(),
+        benefits_from_partitioning.into_iter()
     ) {
-        if let Some(exec_tree) = repartition_onwards {
-            *child = update_repartitions(exec_tree)?;
+        if !benefits {
+            if let Some(exec_tree) = repartition_onwards {
+                *child = remove_parallelization(exec_tree)?;
+            }
         }
     }
     repartition_context
@@ -130,11 +135,11 @@ fn update_repartition_from_context(
         .with_new_children(new_children)
 }
 
-fn update_repartitions(exec_tree: &ExecTree) -> Result<Arc<dyn ExecutionPlan>> {
+fn remove_parallelization(exec_tree: &ExecTree) -> Result<Arc<dyn ExecutionPlan>> {
     let mut updated_children = exec_tree.plan.children();
     for child in &exec_tree.children {
         let child_idx = child.idx;
-        let new_child = update_repartitions(&child)?;
+        let new_child = remove_parallelization(&child)?;
         updated_children[child_idx] = new_child;
     }
     if let Some(repartition) = exec_tree.plan.as_any().downcast_ref::<RepartitionExec>() {
@@ -163,14 +168,17 @@ fn ensure_distribution(
     if repartition_context.plan.children().is_empty() {
         return Ok(Transformed::No(repartition_context));
     }
-    let would_benefit = repartition_context.plan.benefits_from_input_partitioning();
+    let would_benefit = repartition_context.plan.benefits_from_input_partitioning().iter().any(|item|*item);
     let mut is_updated = false;
-    let (plan, mut updated_repartition_onwards) = if !would_benefit {
-        // println!("start");
-        // print_plan(&repartition_context.plan);
+    println!("start");
+    print_plan(&repartition_context.plan);
+    println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
+    let (plan, mut updated_repartition_onwards) = if !would_benefit && !repartition_context.plan.as_any().is::<ProjectionExec>() {
+        println!("start");
+        print_plan(&repartition_context.plan);
         let new_plan = update_repartition_from_context(&repartition_context)?;
-        // print_plan(&new_plan);
-        // println!("end");
+        print_plan(&new_plan);
+        println!("end");
         let n_child = new_plan.children().len();
         is_updated = true;
         (new_plan, vec![None; n_child])
@@ -282,10 +290,10 @@ impl RepartitionContext {
                     Some(ExecTree::new(plan, idx, vec![]))
                 } else {
                     let mut new_repartition_onwards = vec![];
-                    let would_benefit = plan.benefits_from_input_partitioning();
-                    for (required_dist, repartition_onwards) in izip!(
+                    for (required_dist, repartition_onwards, would_benefit) in izip!(
                         plan.required_input_distribution().iter(),
-                        repartition_onwards.into_iter()
+                        repartition_onwards.into_iter(),
+                        plan.benefits_from_input_partitioning().into_iter()
                     ) {
                         if let Some(repartition_onwards) = repartition_onwards {
                             if let Distribution::UnspecifiedDistribution = required_dist {

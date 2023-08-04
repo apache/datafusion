@@ -202,7 +202,7 @@ fn optimize_partitions(
                     child.clone(),
                     false, // child is not root
                     can_reorder_child,
-                    plan.benefits_from_input_partitioning(),
+                    plan.benefits_from_input_partitioning().iter().any(|item|*item),
                     repartition_file_scans,
                     repartition_file_min_size,
                 )

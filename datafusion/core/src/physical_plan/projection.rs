@@ -282,14 +282,14 @@ impl ExecutionPlan for ProjectionExec {
         )?))
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         let all_column_expr = self
             .expr
             .iter()
             .all(|(e, _)| e.as_any().downcast_ref::<Column>().is_some());
         // If expressions are all column_expr, then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
-        !all_column_expr
+        vec![!all_column_expr]
     }
 
     fn execute(
@@ -495,7 +495,7 @@ mod tests {
         // pick column c1 and name it column c1 in the output schema
         let projection =
             ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
-        assert!(!projection.benefits_from_input_partitioning());
+        assert!(!projection.benefits_from_input_partitioning()[0]);
         Ok(())
     }
 
@@ -513,7 +513,7 @@ mod tests {
         let projection =
             ProjectionExec::try_new(vec![(c1_plus_c2, "c2 + c9".to_string())], csv)?;
 
-        assert!(projection.benefits_from_input_partitioning());
+        assert!(projection.benefits_from_input_partitioning()[0]);
         Ok(())
     }
 
