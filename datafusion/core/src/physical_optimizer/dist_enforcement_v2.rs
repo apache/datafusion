@@ -3,7 +3,7 @@ use crate::physical_optimizer::utils::is_repartition;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::union::UnionExec;
+use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::{
     with_new_children_if_necessary, Distribution, ExecutionPlan, Partitioning,
 };
@@ -170,15 +170,15 @@ fn ensure_distribution(
     }
     let would_benefit = repartition_context.plan.benefits_from_input_partitioning().iter().any(|item|*item);
     let mut is_updated = false;
-    println!("start");
-    print_plan(&repartition_context.plan);
-    println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
+    // println!("start");
+    // print_plan(&repartition_context.plan);
+    // println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
     let (plan, mut updated_repartition_onwards) = if !would_benefit && !repartition_context.plan.as_any().is::<ProjectionExec>() {
-        println!("start");
-        print_plan(&repartition_context.plan);
+        // println!("start");
+        // print_plan(&repartition_context.plan);
         let new_plan = update_repartition_from_context(&repartition_context)?;
-        print_plan(&new_plan);
-        println!("end");
+        // print_plan(&new_plan);
+        // println!("end");
         let n_child = new_plan.children().len();
         is_updated = true;
         (new_plan, vec![None; n_child])
@@ -239,6 +239,40 @@ fn ensure_distribution(
     .collect::<Result<Vec<_>>>()?;
     let (new_children, changed_flags): (Vec<_>, Vec<_>) =
         new_children_with_flags.into_iter().unzip();
+
+    // special case for UnionExec: We want to "bubble up" hash-partitioned data. So instead of:
+    //
+    // Agg:
+    //   Repartition (hash):
+    //     Union:
+    //       - Agg:
+    //           Repartition (hash):
+    //             Data
+    //       - Agg:
+    //           Repartition (hash):
+    //             Data
+    //
+    // We can use:
+    //
+    // Agg:
+    //   Interleave:
+    //     - Agg:
+    //         Repartition (hash):
+    //           Data
+    //     - Agg:
+    //         Repartition (hash):
+    //           Data
+    if plan.as_any().is::<UnionExec>() {
+        if can_interleave(&new_children) {
+            let plan = Arc::new(InterleaveExec::try_new(new_children)?) as _;
+            let new_repartition_context = RepartitionContext {
+                plan,
+                repartition_onwards: updated_repartition_onwards,
+            };
+            return Ok(Transformed::Yes(new_repartition_context))
+        }
+    }
+
     if is_updated || changed_flags.iter().any(|item| *item) {
         let new_plan = plan.clone().with_new_children(new_children)?;
         let new_repartition_context = RepartitionContext {

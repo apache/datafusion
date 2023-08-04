@@ -3365,4 +3365,96 @@ mod tests_bug {
         // assert_eq!(0, 1);
         Ok(())
     }
+
+
+    #[tokio::test]
+    async fn test_union1() -> Result<()> {
+        let mut config = SessionConfig::new().with_target_partitions(4);
+        let ctx = SessionContext::with_config(config.clone());
+
+        ctx.sql(
+            "CREATE TABLE t1(
+              id INT,
+              name TEXT,
+            ) as VALUES
+              (1, 'Alex'),
+              (2, 'Bob'),
+              (3, 'Alice')
+            ;",
+        )
+            .await?;
+
+        ctx.sql(
+            "CREATE TABLE t2(
+              id TINYINT,
+              name TEXT,
+            ) as VALUES
+              (1, 'Alex'),
+              (2, 'Bob'),
+              (3, 'John')
+            ;",
+        )
+            .await?;
+
+        let mut state = ctx.state();
+        // state.config_mut().options_mut().execution.target_partitions = 2;
+        let ctx = SessionContext::with_state(state);
+
+        let sql = "(
+            SELECT name FROM t1
+            EXCEPT
+            SELECT name FROM t2
+        )
+        UNION ALL
+        (
+            SELECT name FROM t2
+            EXCEPT
+            SELECT name FROM t1
+        )";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "InterleaveExec",
+                "  CoalesceBatchesExec: target_batch_size=8192",
+                "    HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]",
+                "      AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]",
+                "        CoalesceBatchesExec: target_batch_size=8192",
+                "          RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4",
+                "            AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]",
+                "              MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
+                "      CoalesceBatchesExec: target_batch_size=8192",
+                "        RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4",
+                "          MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
+                "  CoalesceBatchesExec: target_batch_size=8192",
+                "    HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]",
+                "      AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]",
+                "        CoalesceBatchesExec: target_batch_size=8192",
+                "          RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4",
+                "            AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]",
+                "              MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
+                "      CoalesceBatchesExec: target_batch_size=8192",
+                "        RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4",
+                "          MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
 }
