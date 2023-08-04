@@ -152,7 +152,11 @@ fn remove_parallelization(exec_tree: &ExecTree) -> Result<Arc<dyn ExecutionPlan>
     if let Some(repartition) = exec_tree.plan.as_any().downcast_ref::<RepartitionExec>() {
         // Leaf node
         if let Partitioning::RoundRobinBatch(_n_target) = repartition.partitioning() {
-            return Ok(repartition.input().clone());
+            // If repartition input have an ordering, remove repartition (masses with ordering)
+            // otherwise keep it as is. Because repartition doesn't affect ordering.
+            if repartition.input().output_ordering().is_some() {
+                return Ok(repartition.input().clone());
+            }
         }
     }
     exec_tree.plan.clone().with_new_children(updated_children)
@@ -176,11 +180,13 @@ fn ensure_distribution(
     if repartition_context.plan.children().is_empty() {
         return Ok(Transformed::No(repartition_context));
     }
-    let would_benefit = repartition_context
-        .plan
-        .benefits_from_input_partitioning()
-        .iter()
-        .any(|item| *item);
+
+    // let would_benefit = repartition_context
+    //     .plan
+    //     .benefits_from_input_partitioning()
+    //     .iter()
+    //     .any(|item| *item);
+
     let mut is_updated = false;
 
     // println!("start");
@@ -192,7 +198,9 @@ fn ensure_distribution(
     {
         // println!("----------start--------------");
         // print_plan(&repartition_context.plan);
+
         let new_plan = update_repartition_from_context(&repartition_context)?;
+
         // print_plan(&new_plan);
         // println!("----------end------------");
         let n_child = new_plan.children().len();
