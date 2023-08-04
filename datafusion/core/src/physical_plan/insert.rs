@@ -36,7 +36,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
-use crate::physical_plan::Distribution;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 
@@ -232,8 +231,10 @@ impl ExecutionPlan for InsertExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition!=0{
-            return Err(DataFusionError::Internal("InsertExec can only be called on partition 0!".into()))
+        if partition != 0 {
+            return Err(DataFusionError::Internal(
+                "InsertExec can only be called on partition 0!".into(),
+            ));
         }
         let data = self.make_all_input_streams(context.clone())?;
 

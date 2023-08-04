@@ -27,7 +27,6 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use arrow_array::RecordBatch;
-use chrono::{DateTime, NaiveDate, Utc};
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -270,8 +269,10 @@ impl FileFormat for CsvFormat {
         _state: &SessionState,
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.overwrite{
-            return Err(DataFusionError::NotImplemented("Overwrites are not implemented yet for CSV".into()))
+        if conf.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented yet for CSV".into(),
+            ));
         }
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(
@@ -639,6 +640,8 @@ impl DataSink for CsvSink {
         // Map errors to DatafusionError.
         let err_converter =
             |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
+        // TODO parallelize serialization accross partitions and batches within partitions
+        // see: https://github.com/apache/arrow-datafusion/issues/7079
         for idx in 0..num_partitions {
             while let Some(maybe_batch) = data[idx].next().await {
                 // Write data to files in a round robin fashion:

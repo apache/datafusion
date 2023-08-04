@@ -17,7 +17,6 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
-use crate::datasource::listing::ListingTableInsertMode;
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;

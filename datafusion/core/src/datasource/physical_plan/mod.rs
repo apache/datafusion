@@ -333,7 +333,7 @@ pub struct FileSinkConfig {
     /// A writer mode that determines how data is written to the file
     pub writer_mode: FileWriterMode,
     /// Controls whether existing data should be overwritten by this sink
-    pub overwrite: bool
+    pub overwrite: bool,
 }
 
 impl FileSinkConfig {

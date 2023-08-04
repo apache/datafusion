@@ -132,7 +132,6 @@ pub trait TableProvider: Sync + Send {
         let msg = "Insert into not implemented for this table".to_owned();
         Err(DataFusionError::NotImplemented(msg))
     }
-
 }
 
 /// A factory which creates [`TableProvider`]s at runtime given a URL.

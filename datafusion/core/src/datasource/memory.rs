@@ -213,6 +213,11 @@ impl TableProvider for MemTable {
                 "Inserting query must have the same schema with the table."
             );
         }
+        if overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrite not implemented for MemoryTable yet".into(),
+            ));
+        }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
         Ok(Arc::new(InsertExec::new(input, sink, self.schema.clone())))
     }
@@ -264,8 +269,9 @@ impl DataSink for MemSink {
         let mut i = 0;
         let mut row_count = 0;
         let num_parts = data.len();
-        for idx in 0..num_parts {
-            while let Some(batch) = data[idx].next().await.transpose()? {
+        // TODO parallelize outer and inner loops
+        for data_part in data.iter_mut().take(num_parts) {
+            while let Some(batch) = data_part.next().await.transpose()? {
                 row_count += batch.num_rows();
                 new_batches[i].push(batch);
                 i = (i + 1) % num_partitions;

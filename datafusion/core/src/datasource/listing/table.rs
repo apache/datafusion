@@ -444,7 +444,8 @@ impl ListingOptions {
         self
     }
 
-    pub fn with_insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self{
+    /// Configure how insertions to this table should be handled.
+    pub fn with_insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self {
         self.insert_mode = insert_mode;
         self
     }
@@ -823,17 +824,27 @@ impl TableProvider for ListingTable {
         //we can append to that file. Otherwise, we can write new files into the directory
         //adding new files to the listing table in order to insert to the table.
         let input_partitions = input.output_partitioning().partition_count();
-        match self.options.insert_mode{
+        match self.options.insert_mode {
             ListingTableInsertMode::AppendToFile => {
-                if input_partitions > file_groups.len(){
-                    return Err(DataFusionError::Plan(format!("Cannot append {input_partitions} partitions to {} files!", file_groups.len())))
+                if input_partitions > file_groups.len() {
+                    return Err(DataFusionError::Plan(format!(
+                        "Cannot append {input_partitions} partitions to {} files!",
+                        file_groups.len()
+                    )));
                 }
                 writer_mode = crate::datasource::file_format::FileWriterMode::Append;
-            },
-            ListingTableInsertMode::AppendNewFiles => writer_mode = crate::datasource::file_format::FileWriterMode::PutMultipart,
-            ListingTableInsertMode::Error => return Err(DataFusionError::Plan("Invalid plan attempting write to table with TableWriteMode::Error!".into())),
+            }
+            ListingTableInsertMode::AppendNewFiles => {
+                writer_mode = crate::datasource::file_format::FileWriterMode::PutMultipart
+            }
+            ListingTableInsertMode::Error => {
+                return Err(DataFusionError::Plan(
+                    "Invalid plan attempting write to table with TableWriteMode::Error!"
+                        .into(),
+                ))
+            }
         }
- 
+
         // Sink related option, apart from format
         let config = FileSinkConfig {
             object_store_url: self.table_paths()[0].object_store(),
@@ -1432,8 +1443,8 @@ mod tests {
         let table_path = ListingTableUrl::parse(temp_path).unwrap();
 
         let file_format = CsvFormat::default();
-        let listing_options = ListingOptions::new(Arc::new(file_format))
-            .with_insert_mode(insert_mode);
+        let listing_options =
+            ListingOptions::new(Arc::new(file_format)).with_insert_mode(insert_mode);
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
@@ -1583,8 +1594,11 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let path = tmp_dir.path().join(filename);
 
-        let initial_table =
-            load_empty_schema_csv_table(schema.clone(), path.to_str().unwrap(), ListingTableInsertMode::AppendToFile)?;
+        let initial_table = load_empty_schema_csv_table(
+            schema.clone(),
+            path.to_str().unwrap(),
+            ListingTableInsertMode::AppendToFile,
+        )?;
         session_ctx.register_table("t", initial_table)?;
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(
@@ -1712,9 +1726,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_append_new_files_to_csv_table() -> Result<()> {
-        let file_type = FileType::CSV;
-        let file_compression_type = FileCompressionType::UNCOMPRESSED;
-
         // Create the initial context, schema, and batch.
         let session_ctx = SessionContext::new();
         // Create a new schema with one field called "a" of type Int32
@@ -1730,28 +1741,17 @@ mod tests {
             vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
-        // Filename with extension
-        let filename = format!(
-            "path{}",
-            file_type
-                .to_owned()
-                .get_ext_with_compression(file_compression_type.clone())
-                .unwrap()
-        );
-
-        // Define batch size for file reader
-        let batch_size = batch.num_rows();
-
         // Create a temporary directory and a CSV file within it.
         let tmp_dir = TempDir::new()?;
-        let path = tmp_dir.path().join(filename);
-
-        session_ctx.register_csv("t", tmp_dir.path().to_str().unwrap(), 
-            CsvReadOptions::new()
-            .insert_mode(ListingTableInsertMode::AppendNewFiles)
-            .schema(schema.as_ref()))
+        session_ctx
+            .register_csv(
+                "t",
+                tmp_dir.path().to_str().unwrap(),
+                CsvReadOptions::new()
+                    .insert_mode(ListingTableInsertMode::AppendNewFiles)
+                    .schema(schema.as_ref()),
+            )
             .await?;
-        let csv_table = session_ctx.table_provider("t").await?;
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(
             schema.clone(),
@@ -1788,7 +1788,11 @@ mod tests {
         assert_batches_eq!(expected, &res);
 
         // Read the records in the table
-        let batches = session_ctx.sql("select count(*) from t").await?.collect().await?;
+        let batches = session_ctx
+            .sql("select count(*) from t")
+            .await?
+            .collect()
+            .await?;
         let expected = vec![
             "+----------+",
             "| COUNT(*) |",
@@ -1825,7 +1829,11 @@ mod tests {
         assert_batches_eq!(expected, &res);
 
         // Read the contents of the table
-        let batches = session_ctx.sql("select count(*) from t").await?.collect().await?;
+        let batches = session_ctx
+            .sql("select count(*) from t")
+            .await?
+            .collect()
+            .await?;
 
         // Define the expected result after the second append.
         let expected = vec![

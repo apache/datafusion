@@ -239,12 +239,13 @@ impl LogicalPlanBuilder {
         overwrite: bool,
     ) -> Result<Self> {
         let table_schema = table_schema.clone().to_dfschema_ref()?;
-        let op;
-        if overwrite{
-            op = WriteOp::InsertOverwrite;
-        } else{
-            op = WriteOp::InsertInto;
-        }
+
+        let op = if overwrite {
+            WriteOp::InsertOverwrite
+        } else {
+            WriteOp::InsertInto
+        };
+
         Ok(Self::from(LogicalPlan::Dml(DmlStatement {
             table_name: table_name.into(),
             table_schema,
