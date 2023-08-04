@@ -179,10 +179,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         //     .required_input_distribution()
         //     .into_iter()
         //     .any(|dist| matches!(dist, Distribution::SinglePartition))
-        self
-            .required_input_distribution()
+        self.required_input_distribution()
             .into_iter()
-            .map(|dist| !matches!(dist, Distribution::SinglePartition)).collect()
+            .map(|dist| !matches!(dist, Distribution::SinglePartition))
+            .collect()
     }
 
     /// Get the EquivalenceProperties within the plan

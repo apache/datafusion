@@ -2,6 +2,7 @@ use crate::physical_optimizer::sort_enforcement::ExecTree;
 use crate::physical_optimizer::utils::is_repartition;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::{
@@ -13,7 +14,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use itertools::izip;
 use std::sync::Arc;
-use crate::physical_plan::projection::ProjectionExec;
 
 #[derive(Default)]
 pub struct EnforceDistributionV2 {}
@@ -32,12 +32,15 @@ impl PhysicalOptimizerRule for EnforceDistributionV2 {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let target_partitions = config.execution.target_partitions;
+        let enable_roundrobin = config.optimizer.enable_round_robin_repartition;
+        let repartition_file_scans = config.optimizer.repartition_file_scans;
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
         let repartition_context = RepartitionContext::new(plan);
         // let res = repartition_context.transform_up(&|plan_with_pipeline_fixer| {ensure_distribution(repartition_context, target_partitions)})?;
 
         // Distribution enforcement needs to be applied bottom-up.
         let updated_plan = repartition_context.transform_up(&|repartition_context| {
-            ensure_distribution(repartition_context, target_partitions)
+            ensure_distribution(repartition_context, target_partitions, enable_roundrobin)
         })?;
 
         Ok(updated_plan.plan)
@@ -117,7 +120,8 @@ fn update_repartition_from_context(
     repartition_context: &RepartitionContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut new_children = repartition_context.plan.children();
-    let benefits_from_partitioning = repartition_context.plan.benefits_from_input_partitioning();
+    let benefits_from_partitioning =
+        repartition_context.plan.benefits_from_input_partitioning();
     for (child, repartition_onwards, benefits) in izip!(
         new_children.iter_mut(),
         repartition_context.repartition_onwards.iter(),
@@ -162,18 +166,29 @@ fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
 fn ensure_distribution(
     repartition_context: RepartitionContext,
     target_partitions: usize,
+    enable_round_robin: bool,
 ) -> Result<Transformed<RepartitionContext>> {
     // let plan = &repartition_context.plan;
     // let mut updated_repartition_onwards = repartition_context.repartition_onwards.clone();
     if repartition_context.plan.children().is_empty() {
         return Ok(Transformed::No(repartition_context));
     }
-    let would_benefit = repartition_context.plan.benefits_from_input_partitioning().iter().any(|item|*item);
+    let would_benefit = repartition_context
+        .plan
+        .benefits_from_input_partitioning()
+        .iter()
+        .any(|item| *item);
     let mut is_updated = false;
+
     // println!("start");
     // print_plan(&repartition_context.plan);
     // println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
-    let (plan, mut updated_repartition_onwards) = if !would_benefit && !repartition_context.plan.as_any().is::<ProjectionExec>() {
+    // println!("plan required dist: {:?}", repartition_context.plan.required_input_distribution());
+
+    let (plan, mut updated_repartition_onwards) = if false
+        && !would_benefit
+        && !repartition_context.plan.as_any().is::<ProjectionExec>()
+    {
         // println!("start");
         // print_plan(&repartition_context.plan);
         let new_plan = update_repartition_from_context(&repartition_context)?;
@@ -193,10 +208,11 @@ fn ensure_distribution(
         plan.required_input_distribution().iter(),
         plan.required_input_ordering().iter(),
         plan.maintains_input_order().iter(),
-        updated_repartition_onwards.iter_mut()
+        updated_repartition_onwards.iter_mut(),
+        plan.benefits_from_input_partitioning()
     )
     .map(
-        |(child, requirement, required_input_ordering, maintains, repartition_onward)| {
+        |(child, requirement, required_input_ordering, maintains, repartition_onward, would_benefit)| {
             let mut new_child = child.clone();
             let mut is_changed = false;
 
@@ -204,10 +220,13 @@ fn ensure_distribution(
             //   - It has no ordering to preserve, or
             //   - Its parent has no required input ordering and does not
             //     maintain input ordering.
+            //   - input partition is 1, in this case repartition preservers ordering.
             // Check if this condition holds:
             let can_reorder = child.output_ordering().is_none()
                 || (!required_input_ordering.is_some() && !maintains);
-
+                // || child.output_partitioning().partition_count() == 1;
+            // println!("child.output_ordering(): {:?}", child.output_ordering());
+            // print_plan(&child);
             if would_benefit && can_reorder {
                 (new_child, is_changed) = add_roundrobin_on_top(
                     new_child,
@@ -269,7 +288,7 @@ fn ensure_distribution(
                 plan,
                 repartition_onwards: updated_repartition_onwards,
             };
-            return Ok(Transformed::Yes(new_repartition_context))
+            return Ok(Transformed::Yes(new_repartition_context));
         }
     }
 

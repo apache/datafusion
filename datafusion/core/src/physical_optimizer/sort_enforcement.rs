@@ -3297,7 +3297,11 @@ mod tests_bug {
 
     #[tokio::test]
     async fn test_joins() -> Result<()> {
-        let mut config = SessionConfig::new().with_repartition_joins(false).with_target_partitions(1).with_round_robin_repartition(true).with_batch_size(4096);
+        let mut config = SessionConfig::new()
+            .with_repartition_joins(false)
+            .with_target_partitions(1)
+            .with_round_robin_repartition(true)
+            .with_batch_size(4096);
         let ctx = SessionContext::with_config(config.clone());
 
         ctx.sql(
@@ -3366,7 +3370,6 @@ mod tests_bug {
         Ok(())
     }
 
-
     #[tokio::test]
     async fn test_union1() -> Result<()> {
         let mut config = SessionConfig::new().with_target_partitions(4);
@@ -3382,7 +3385,7 @@ mod tests_bug {
               (3, 'Alice')
             ;",
         )
-            .await?;
+        .await?;
 
         ctx.sql(
             "CREATE TABLE t2(
@@ -3394,7 +3397,7 @@ mod tests_bug {
               (3, 'John')
             ;",
         )
-            .await?;
+        .await?;
 
         let mut state = ctx.state();
         // state.config_mut().options_mut().execution.target_partitions = 2;
@@ -3442,6 +3445,66 @@ mod tests_bug {
                 "      CoalesceBatchesExec: target_batch_size=8192",
                 "        RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4",
                 "          MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_join_disable1() -> Result<()> {
+        let mut config = SessionConfig::new().with_target_partitions(4).with_repartition_joins(false);
+        let ctx = SessionContext::with_config(config.clone());
+        ctx.sql(
+            "CREATE EXTERNAL TABLE annotated_data (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC, c ASC)
+            LOCATION 'tests/data/window_2.csv';",
+        )
+            .await?;
+
+        let mut state = ctx.state();
+        // state.config_mut().options_mut().execution.target_partitions = 2;
+        let ctx = SessionContext::with_state(state);
+
+        let sql = "SELECT t2.a
+             FROM annotated_data as t1
+             INNER JOIN annotated_data as t2
+             ON t1.c = t2.c ORDER BY t2.a
+             LIMIT 5";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "GlobalLimitExec: skip=0, fetch=5",
+                "  ProjectionExec: expr=[a@1 as a]",
+                "    CoalesceBatchesExec: target_batch_size=8192",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]",
+                "        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true",
+                "        CsvExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
             ]
         };
 
