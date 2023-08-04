@@ -29,15 +29,16 @@ mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
+use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
-    Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
+    Expr, ExprSchemable, GetIndexedField, GetIndexedFieldKey, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -182,7 +183,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
-                    plan_indexed(col(self.normalizer.normalize(id)), keys)
+                    self.plan_indexed(col(self.normalizer.normalize(id)), keys, schema, planner_context)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {column} instead"
@@ -192,7 +193,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::ArrayIndex { obj, indexes } => {
                 let expr = self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
-                plan_indexed(expr, indexes)
+                self.plan_indexed(expr, indexes, schema, planner_context)
             }
 
             SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema, planner_context),
@@ -414,9 +415,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return Err(DataFusionError::Plan(
-                "Invalid pattern in LIKE expression".to_string(),
-            ));
+            return plan_err!("Invalid pattern in LIKE expression");
         }
         Ok(Expr::Like(Like::new(
             negated,
@@ -439,9 +438,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return Err(DataFusionError::Plan(
-                "Invalid pattern in SIMILAR TO expression".to_string(),
-            ));
+            return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
         Ok(Expr::SimilarTo(Like::new(
             negated,
@@ -503,11 +500,75 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?)),
                 order_by,
             ))),
-            _ => Err(DataFusionError::Plan(
+            _ => plan_err!(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
-                    .to_string(),
-            )),
+            ),
         }
+    }
+
+    fn plan_indices(
+        &self,
+        expr: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<(Box<GetIndexedFieldKey>, Option<Box<Expr>>)> {
+        let (key, extra_key) = match expr.clone() {
+            SQLExpr::JsonAccess {
+                left,
+                operator: JsonOperator::Colon,
+                right,
+            } => {
+                let left =
+                    self.sql_expr_to_logical_expr(*left, schema, planner_context)?;
+                let right =
+                    self.sql_expr_to_logical_expr(*right, schema, planner_context)?;
+
+                (
+                    GetIndexedFieldKey::new(Some(left), None),
+                    Some(Box::new(right)),
+                )
+            }
+            SQLExpr::Value(
+                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            ) => (
+                GetIndexedFieldKey::new(None, Some(ScalarValue::Utf8(Some(s)))),
+                None,
+            ),
+            _ => (
+                GetIndexedFieldKey::new(
+                    Some(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
+                    None,
+                ),
+                None,
+            ),
+        };
+
+        Ok((Box::new(key), extra_key))
+    }
+
+    fn plan_indexed(
+        &self,
+        expr: Expr,
+        mut keys: Vec<SQLExpr>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let indices = keys.pop().ok_or_else(|| {
+            ParserError("Internal error: Missing index key expression".to_string())
+        })?;
+
+        let expr = if !keys.is_empty() {
+            self.plan_indexed(expr, keys, schema, planner_context)?
+        } else {
+            expr
+        };
+
+        let (key, extra_key) = self.plan_indices(indices, schema, planner_context)?;
+        Ok(Expr::GetIndexedField(GetIndexedField::new(
+            Box::new(expr),
+            key,
+            extra_key,
+        )))
     }
 }
 
@@ -542,42 +603,6 @@ fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
         };
         Ok(Transformed::Yes(expr))
     })
-}
-
-fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
-    let scalar = match key {
-        SQLExpr::Value(Value::Number(s, _)) => ScalarValue::Int64(Some(
-            s.parse()
-                .map_err(|_| ParserError(format!("Cannot parse {s} as i64.")))?,
-        )),
-        SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
-            ScalarValue::Utf8(Some(s))
-        }
-        _ => {
-            return Err(DataFusionError::SQL(ParserError(format!(
-                "Unsupported index key expression: {key:?}"
-            ))));
-        }
-    };
-
-    Ok(scalar)
-}
-
-fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
-    let key = keys.pop().ok_or_else(|| {
-        ParserError("Internal error: Missing index key expression".to_string())
-    })?;
-
-    let expr = if !keys.is_empty() {
-        plan_indexed(expr, keys)?
-    } else {
-        expr
-    };
-
-    Ok(Expr::GetIndexedField(GetIndexedField::new(
-        Box::new(expr),
-        plan_key(key)?,
-    )))
 }
 
 #[cfg(test)]
@@ -628,10 +653,7 @@ mod tests {
         ) -> Result<Arc<dyn TableSource>> {
             match self.tables.get(name.table()) {
                 Some(table) => Ok(table.clone()),
-                _ => Err(DataFusionError::Plan(format!(
-                    "Table not found: {}",
-                    name.table()
-                ))),
+                _ => plan_err!("Table not found: {}", name.table()),
             }
         }
 

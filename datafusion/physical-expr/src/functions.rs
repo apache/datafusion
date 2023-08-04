@@ -431,6 +431,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayDims => {
             Arc::new(|args| make_scalar_function(array_expressions::array_dims)(args))
         }
+        BuiltinScalarFunction::ArrayElement => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_element)(args))
+        }
         BuiltinScalarFunction::ArrayLength => {
             Arc::new(|args| make_scalar_function(array_expressions::array_length)(args))
         }
@@ -467,6 +470,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayReplaceAll => Arc::new(|args| {
             make_scalar_function(array_expressions::array_replace_all)(args)
         }),
+        BuiltinScalarFunction::ArraySlice => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_slice)(args))
+        }
         BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
             make_scalar_function(array_expressions::array_to_string)(args)
         }),
@@ -476,12 +482,11 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::MakeArray => {
             Arc::new(|args| make_scalar_function(array_expressions::make_array)(args))
         }
-        BuiltinScalarFunction::TrimArray => {
-            Arc::new(|args| make_scalar_function(array_expressions::trim_array)(args))
-        }
+
+        // struct functions
+        BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
 
         // string functions
-        BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::ascii::<i32>)(args)
@@ -899,6 +904,7 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_common::cast::as_uint64_array;
+    use datafusion_common::plan_err;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
     use datafusion_expr::Signature;
@@ -2848,16 +2854,16 @@ mod tests {
 
             match expr {
                 Ok(..) => {
-                    return Err(DataFusionError::Plan(format!(
+                    return plan_err!(
                         "Builtin scalar function {fun} does not support empty arguments"
-                    )));
+                    );
                 }
                 Err(DataFusionError::Plan(err)) => {
                     if !err
                         .contains("No function matches the given name and argument types")
                     {
-                        return Err(DataFusionError::Internal(format!(
-                            "Builtin scalar function {fun} didn't got the right error message with empty arguments")));
+                        return plan_err!(
+                            "Builtin scalar function {fun} didn't got the right error message with empty arguments");
                     }
                 }
                 Err(..) => {

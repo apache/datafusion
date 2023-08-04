@@ -18,7 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource, WindowUDF,
 };
@@ -200,7 +200,7 @@ impl ContextProvider for MyContextProvider {
                 ])),
             }))
         } else {
-            Err(DataFusionError::Plan("table not found".to_string()))
+            plan_err!("table not found")
         }
     }
 

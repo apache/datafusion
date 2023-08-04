@@ -413,7 +413,6 @@ radians(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
-  =======
 
 ### `random`
 
@@ -1447,6 +1446,8 @@ from_unixtime(expression)
 - [array_concat](#array_concat)
 - [array_contains](#array_contains)
 - [array_dims](#array_dims)
+- [array_element](#array_element)
+- [array_extract](#array_extract)
 - [array_indexof](#array_indexof)
 - [array_join](#array_join)
 - [array_length](#array_length)
@@ -1463,12 +1464,15 @@ from_unixtime(expression)
 - [array_replace](#array_replace)
 - [array_replace_n](#array_replace_n)
 - [array_replace_all](#array_replace_all)
+- [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
 - [list_dims](#list_dims)
+- [list_element](#list_element)
+- [list_extract](#list_extract)
 - [list_indexof](#list_indexof)
 - [list_join](#list_join)
 - [list_length](#list_length)
@@ -1485,6 +1489,7 @@ from_unixtime(expression)
 - [list_replace](#list_replace)
 - [list_replace_n](#list_replace_n)
 - [list_replace_all](#list_replace_all)
+- [list_slice](#list_slice)
 - [list_to_string](#list_to_string)
 - [make_array](#make_array)
 - [make_list](#make_list)
@@ -1628,6 +1633,41 @@ array_dims(array)
 #### Aliases
 
 - list_dims
+
+### `array_element`
+
+Extracts the element with the index n from the array.
+
+```
+array_element(array, index)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **index**: Index to extract the element from the array.
+
+#### Example
+
+```
+❯ select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```
+
+#### Aliases
+
+- array_extract
+- list_element
+- list_extract
+
+### `array_extract`
+
+_Alias of [array_element](#array_element)._
 
 ### `array_fill`
 
@@ -1870,6 +1910,10 @@ array_remove(array, element)
 +----------------------------------------------+
 ```
 
+#### Aliases
+
+- list_remove
+
 ### `array_remove_n`
 
 Removes the first `max` elements from the array equal to the given value.
@@ -1896,6 +1940,10 @@ array_remove_n(array, element, max)
 +---------------------------------------------------------+
 ```
 
+#### Aliases
+
+- list_remove_n
+
 ### `array_remove_all`
 
 Removes all elements from the array equal to the given value.
@@ -1920,6 +1968,10 @@ array_remove_all(array, element)
 | [1, 3, 1, 4]                                     |
 +--------------------------------------------------+
 ```
+
+#### Aliases
+
+- list_remove_all
 
 ### `array_replace`
 
@@ -1946,6 +1998,10 @@ array_replace(array, from, to)
 | [1, 5, 2, 3, 2, 1, 4]                                  |
 +--------------------------------------------------------+
 ```
+
+#### Aliases
+
+- list_replace
 
 ### `array_replace_n`
 
@@ -1974,6 +2030,10 @@ array_replace_n(array, from, to, max)
 +-------------------------------------------------------------------+
 ```
 
+#### Aliases
+
+- list_replace_n
+
 ### `array_replace_all`
 
 Replaces all occurrences of the specified element with another specified element.
@@ -1999,6 +2059,33 @@ array_replace_all(array, from, to)
 | [1, 5, 5, 3, 5, 1, 4]                                      |
 +------------------------------------------------------------+
 ```
+
+#### Aliases
+
+- list_replace_all
+
+### `array_slice`
+
+Returns a slice of the array.
+
+```
+array_slice(array, begin, end)
+```
+
+#### Example
+
+```
+❯ select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
++--------------------------------------------------------+
+| array_slice(List([1,2,3,4,5,6,7,8]),Int64(3),Int64(6)) |
++--------------------------------------------------------+
+| [3, 4, 5, 6]                                           |
++--------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_slice
 
 ### `array_to_string`
 
@@ -2071,6 +2158,14 @@ _Alias of [array_concat](#array_concat)._
 
 _Alias of [array_dims](#array_dims)._
 
+### `list_element`
+
+_Alias of [array_element](#array_element)._
+
+### `list_extract`
+
+_Alias of [array_element](#array_element)._
+
 ### `list_indexof`
 
 _Alias of [array_position](#array_position)._
@@ -2135,6 +2230,10 @@ _Alias of [array_replace_n](#array_replace_n)._
 
 _Alias of [array_replace_all](#array_replace_all)._
 
+### `list_slice`
+
+_Alias of [array_slice](#array_slice)._
+
 ### `list_to_string`
 
 _Alias of [list_to_string](#list_to_string)._
@@ -2175,6 +2274,8 @@ _Alias of [make_array](#make_array)._
 ### `trim_array`
 
 Removes the last n elements from the array.
+
+DEPRECATED: use `array_slice` instead!
 
 ```
 trim_array(array, n)

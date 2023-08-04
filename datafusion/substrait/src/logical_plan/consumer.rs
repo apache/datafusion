@@ -53,6 +53,7 @@ use substrait::proto::{
 };
 use substrait::proto::{FunctionArgument, SortField};
 
+use datafusion::common::plan_err;
 use datafusion::logical_expr::expr::{InList, Sort};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -165,7 +166,7 @@ pub async fn from_substrait_plan(
                         Ok(from_substrait_rel(ctx, root.input.as_ref().unwrap(), &function_extension).await?)
                     }
                 },
-                None => Err(DataFusionError::Plan("Cannot parse plan relation: None".to_string()))
+                None => plan_err!("Cannot parse plan relation: None")
             }
         },
         _ => Err(DataFusionError::NotImplemented(format!(
@@ -362,8 +363,7 @@ pub async fn from_substrait_rel(
                     // TODO: collect only one null_eq_null
                     let join_exprs: Vec<(Column, Column, bool)> = predicates
                         .iter()
-                        .map(|p| {
-                            match p {
+                        .map(|p| match p {
                             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                                 match (left.as_ref(), right.as_ref()) {
                                     (Expr::Column(l), Expr::Column(r)) => match op {
@@ -371,20 +371,14 @@ pub async fn from_substrait_rel(
                                         Operator::IsNotDistinctFrom => {
                                             Ok((l.clone(), r.clone(), true))
                                         }
-                                        _ => Err(DataFusionError::Plan(
-                                            "invalid join condition op".to_string(),
-                                        )),
+                                        _ => plan_err!("invalid join condition op"),
                                     },
-                                    _ => Err(DataFusionError::Plan(
-                                        "invalid join condition expression".to_string(),
-                                    )),
+                                    _ => plan_err!("invalid join condition expression"),
                                 }
                             }
-                            _ => Err(DataFusionError::Plan(
+                            _ => plan_err!(
                                 "Non-binary expression is not supported in join condition"
-                                    .to_string(),
-                            )),
-                        }
+                            ),
                         })
                         .collect::<Result<Vec<_>>>()?;
                     let (left_cols, right_cols, null_eq_nulls): (Vec<_>, Vec<_>, Vec<_>) =
@@ -407,9 +401,7 @@ pub async fn from_substrait_rel(
                             join_filter,
                         )?
                         .build(),
-                    None => Err(DataFusionError::Plan(
-                        "Join without join keys require a valid filter".to_string(),
-                    )),
+                    None => plan_err!("Join without join keys require a valid filter"),
                 },
             }
         }
@@ -417,9 +409,7 @@ pub async fn from_substrait_rel(
             Some(ReadType::NamedTable(nt)) => {
                 let table_reference = match nt.names.len() {
                     0 => {
-                        return Err(DataFusionError::Plan(
-                            "No table name found in NamedTable".to_string(),
-                        ));
+                        return plan_err!("No table name found in NamedTable");
                     }
                     1 => TableReference::Bare {
                         table: (&nt.names[0]).into(),
@@ -459,9 +449,7 @@ pub async fn from_substrait_rel(
                                         )?);
                                     Ok(LogicalPlan::TableScan(scan))
                                 }
-                                _ => Err(DataFusionError::Plan(
-                                    "unexpected plan for table".to_string(),
-                                )),
+                                _ => plan_err!("unexpected plan for table"),
                             }
                         }
                         _ => Ok(t),
@@ -564,14 +552,10 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Outer => Ok(JoinType::Full),
             join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
             join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
-            _ => Err(DataFusionError::Plan(format!(
-                "unsupported join type {substrait_join_type:?}"
-            ))),
+            _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {
-        Err(DataFusionError::Plan(format!(
-            "invalid join type variant {join_type:?}"
-        )))
+        plan_err!("invalid join type variant {join_type:?}")
     }
 }
 

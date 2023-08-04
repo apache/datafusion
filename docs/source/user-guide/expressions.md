@@ -187,6 +187,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | array_has_all(array, sub-array)       | Returns true if all elements of sub-array exist in array `array_has_all([1,2,3], [1,3]) -> true`                                                                         |
 | array_has_any(array, sub-array)       | Returns true if any elements exist in both arrays `array_has_any([1,2,3], [1,4]) -> true`                                                                                |
 | array_dims(array)                     | Returns an array of the array's dimensions. `array_dims([[1, 2, 3], [4, 5, 6]]) -> [2, 3]`                                                                               |
+| array_element(array, index)           | Extracts the element with the index n from the array `array_element([1, 2, 3, 4], 3) -> 3`                                                                               |
 | array_length(array, dimension)        | Returns the length of the array dimension. `array_length([1, 2, 3, 4, 5]) -> 5`                                                                                          |
 | array_ndims(array)                    | Returns the number of dimensions of the array. `array_ndims([[1, 2, 3], [4, 5, 6]]) -> 2`                                                                                |
 | array_position(array, element)        | Searches for an element in the array, returns first occurrence. `array_position([1, 2, 2, 3, 4], 2) -> 2`                                                                |
@@ -199,10 +200,11 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | array_replace(array, from, to)        | Replaces the first occurrence of the specified element with another specified element. `array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5) -> [1, 5, 2, 3, 2, 1, 4]`             |
 | array_replace_n(array, from, to, max) | Replaces the first `max` occurrences of the specified element with another specified element. `array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2) -> [1, 5, 5, 3, 2, 1, 4]` |
 | array_replace_all(array, from, to)    | Replaces all occurrences of the specified element with another specified element. `array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5) -> [1, 5, 5, 3, 5, 1, 4]`              |
+| array_slice(array, index)             | Returns a slice of the array. `array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6) -> [3, 4, 5, 6]`                                                                              |
 | array_to_string(array, delimeter)     | Converts each element to its text representation. `array_to_string([1, 2, 3, 4], ',') -> 1,2,3,4`                                                                        |
 | cardinality(array)                    | Returns the total number of elements in the array. `cardinality([[1, 2, 3], [4, 5, 6]]) -> 6`                                                                            |
 | make_array(value1, [value2 [, ...]])  | Returns an Arrow array using the specified input expressions. `make_array(1, 2, 3) -> [1, 2, 3]`                                                                         |
-| trim_array(array, n)                  | Removes the last n elements from the array.                                                                                                                              |
+| trim_array(array, n)                  | Deprecated                                                                                                                                                               |
 
 ## Regular Expressions
 

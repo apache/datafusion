@@ -19,7 +19,7 @@
 
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
 use strum_macros::EnumIter;
@@ -166,9 +166,7 @@ impl FromStr for AggregateFunction {
             // other
             "grouping" => AggregateFunction::Grouping,
             _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {name}"
-                )));
+                return plan_err!("There is no built-in function named {name}");
             }
         })
     }

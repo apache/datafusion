@@ -34,7 +34,7 @@ use crate::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 use async_trait::async_trait;
-use datafusion_common::DataFusionError;
+use datafusion_common::{plan_err, DataFusionError};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -176,10 +176,9 @@ impl ExecutionPlan for CrossJoinExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] || children[1] {
-            Err(DataFusionError::Plan(
+            plan_err!(
                 "Cross Join Error: Cross join is not supported for the unbounded inputs."
-                    .to_string(),
-            ))
+            )
         } else {
             Ok(false)
         }

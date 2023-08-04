@@ -2499,10 +2499,43 @@ mod tests {
             col("c1")
                 .in_list(vec![lit("foo"), lit("bar"), lit("baz"), lit("qux")], false),
         );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o)$")),
+            col("c1").eq(lit("fo_o")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o)$")),
+            col("c1").eq(lit("fo_o")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r)$")),
+            col("c1").eq(lit("fo_o")).or(col("c1").eq(lit("ba_r"))),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("^(fo_o|ba_r)$")),
+            col("c1")
+                .not_eq(lit("fo_o"))
+                .and(col("c1").not_eq(lit("ba_r"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r|ba_z)$")),
+            ((col("c1").eq(lit("fo_o"))).or(col("c1").eq(lit("ba_r"))))
+                .or(col("c1").eq(lit("ba_z"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(fo_o|ba_r|baz|qu_x)$")),
+            col("c1").in_list(
+                vec![lit("fo_o"), lit("ba_r"), lit("baz"), lit("qu_x")],
+                false,
+            ),
+        );
 
         // regular expressions that mismatch captured literals
         assert_no_change(regex_match(col("c1"), lit("(foo|bar)")));
         assert_no_change(regex_match(col("c1"), lit("(foo|bar)*")));
+        assert_no_change(regex_match(col("c1"), lit("(fo_o|b_ar)")));
+        assert_no_change(regex_match(col("c1"), lit("(foo|ba_r)*")));
+        assert_no_change(regex_match(col("c1"), lit("(fo_o|ba_r)*")));
         assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
         assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
         assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));

@@ -27,6 +27,7 @@ use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
 };
 
+use datafusion_common::plan_err;
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -117,15 +118,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )? {
                 Expr::Literal(ScalarValue::Int64(Some(s))) => {
                     if s < 0 {
-                        return Err(DataFusionError::Plan(format!(
-                            "Offset must be >= 0, '{s}' was provided."
-                        )));
+                        return plan_err!("Offset must be >= 0, '{s}' was provided.");
                     }
                     Ok(s as usize)
                 }
-                _ => Err(DataFusionError::Plan(
-                    "Unexpected expression in OFFSET clause".to_string(),
-                )),
+                _ => plan_err!("Unexpected expression in OFFSET clause"),
             }?,
             _ => 0,
         };
@@ -142,9 +139,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
                         Ok(n as usize)
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "LIMIT must not be negative".to_string(),
-                    )),
+                    _ => plan_err!("LIMIT must not be negative"),
                 }?;
                 Some(n)
             }

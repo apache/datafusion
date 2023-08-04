@@ -344,6 +344,7 @@ mod tests {
         DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
     };
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::plan_err;
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::aggregates::NUMERICS;
     use datafusion_expr::{type_coercion, Signature};
@@ -1224,9 +1225,9 @@ mod tests {
         let coerced_phy_exprs =
             coerce_exprs_for_test(fun, input_phy_exprs, input_schema, &fun.signature())?;
         if coerced_phy_exprs.is_empty() {
-            return Err(DataFusionError::Plan(format!(
-                "Invalid or wrong number of arguments passed to aggregate: '{name}'",
-            )));
+            return plan_err!(
+                "Invalid or wrong number of arguments passed to aggregate: '{name}'"
+            );
         }
         create_aggregate_expr(fun, distinct, &coerced_phy_exprs, &[], input_schema, name)
     }

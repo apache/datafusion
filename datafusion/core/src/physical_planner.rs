@@ -62,7 +62,7 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_common::{plan_err, DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
@@ -181,9 +181,28 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField {
+            key,
+            extra_key,
+            expr,
+        }) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr}[{key}]"))
+
+            if let (Some(list_key), Some(extra_key)) = (&key.list_key, extra_key) {
+                let key = create_physical_name(list_key, false)?;
+                let extra_key = create_physical_name(extra_key, false)?;
+                Ok(format!("{expr}[{key}:{extra_key}]"))
+            } else {
+                let key = if let Some(list_key) = &key.list_key {
+                    create_physical_name(list_key, false)?
+                } else if let Some(ScalarValue::Utf8(Some(struct_key))) = &key.struct_key
+                {
+                    struct_key.to_string()
+                } else {
+                    String::from("")
+                };
+                Ok(format!("{expr}[{key}]"))
+            }
         }
         Expr::ScalarFunction(func) => {
             create_function_physical_name(&func.fun.to_string(), false, &func.args)
@@ -1206,19 +1225,20 @@ impl DefaultPhysicalPlanner {
                         ).await?;
                     }
 
-                    let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
-                        "No installed planner was able to convert the custom node to an execution plan: {:?}", e.node
-                    )))?;
+                    let plan = match maybe_plan {
+                        Some(v) => Ok(v),
+                        _ => plan_err!("No installed planner was able to convert the custom node to an execution plan: {:?}", e.node)
+                    }?;
 
                     // Ensure the ExecutionPlan's schema matches the
                     // declared logical schema to catch and warn about
                     // logic errors when creating user defined plans.
                     if !e.node.schema().matches_arrow_schema(&plan.schema()) {
-                        Err(DataFusionError::Plan(format!(
+                        plan_err!(
                             "Extension planner for {:?} created an ExecutionPlan with mismatched schema. \
                             LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
                             e.node, e.node.schema(), plan.schema()
-                        )))
+                        )
                     } else {
                         Ok(plan)
                     }
@@ -1555,10 +1575,10 @@ pub fn create_window_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
             if !is_window_valid(window_frame) {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
-                    )));
+                    );
             }
 
             let window_frame = Arc::new(window_frame.clone());
@@ -1572,9 +1592,7 @@ pub fn create_window_expr_with_name(
                 physical_input_schema,
             )
         }
-        other => Err(DataFusionError::Plan(format!(
-            "Invalid window expression '{other:?}'"
-        ))),
+        other => plan_err!("Invalid window expression '{other:?}'"),
     }
 }
 

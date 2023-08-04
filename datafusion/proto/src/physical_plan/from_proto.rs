@@ -30,7 +30,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    date_time_interval_expr, GetIndexedFieldExpr,
+    date_time_interval_expr, GetIndexedFieldExpr, GetIndexedFieldExprKey,
 };
 use datafusion::physical_plan::expressions::{in_list, LikeExpr};
 use datafusion::physical_plan::{
@@ -317,7 +317,16 @@ pub fn parse_physical_expr(
                     "arg",
                     input_schema,
                 )?,
-                convert_required!(get_indexed_field_expr.key)?,
+                GetIndexedFieldExprKey::new(
+                    Some(parse_required_physical_expr(
+                        get_indexed_field_expr.key.as_deref(),
+                        registry,
+                        "key",
+                        input_schema,
+                    )?),
+                    None,
+                ),
+                None,
             ))
         }
     };

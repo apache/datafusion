@@ -29,6 +29,7 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::plan_err;
 use datafusion_common::{unqualified_field_not_found, DFSchema, DataFusionError, Result};
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
@@ -243,11 +244,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if idents.is_empty() {
             Ok(plan)
         } else if idents.len() != plan.schema().fields().len() {
-            Err(DataFusionError::Plan(format!(
+            plan_err!(
                 "Source table contains {} columns but only {} names given as column alias",
                 plan.schema().fields().len(),
-                idents.len(),
-            )))
+                idents.len()
+            )
         } else {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
@@ -461,10 +462,7 @@ pub(crate) fn idents_to_table_reference(
             let catalog = taker.take(enable_normalization);
             Ok(OwnedTableReference::full(catalog, schema, table))
         }
-        _ => Err(DataFusionError::Plan(format!(
-            "Unsupported compound identifier '{:?}'",
-            taker.0,
-        ))),
+        _ => plan_err!("Unsupported compound identifier '{:?}'", taker.0),
     }
 }
 

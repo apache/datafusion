@@ -40,7 +40,9 @@ use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, JoinType, Result, ScalarValue, SharedResult};
+use datafusion_common::{
+    plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
+};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalenceProperties,
@@ -92,9 +94,9 @@ fn check_join_set_is_valid(
     let right_missing = on_right.difference(right).collect::<HashSet<_>>();
 
     if !left_missing.is_empty() | !right_missing.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}",
-            )));
+        return plan_err!(
+                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}"
+            );
     };
 
     Ok(())
