@@ -183,18 +183,18 @@ fn ensure_distribution(
         .any(|item| *item);
     let mut is_updated = false;
 
-    println!("start");
-    print_plan(&repartition_context.plan);
-    println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
-    println!("plan required dist: {:?}", repartition_context.plan.required_input_distribution());
+    // println!("start");
+    // print_plan(&repartition_context.plan);
+    // println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
+    // println!("plan required dist: {:?}", repartition_context.plan.required_input_distribution());
 
     let (plan, mut updated_repartition_onwards) = if repartition_context.plan.required_input_ordering().iter().any(|item| item.is_some())
     {
-        println!("----------start--------------");
-        print_plan(&repartition_context.plan);
+        // println!("----------start--------------");
+        // print_plan(&repartition_context.plan);
         let new_plan = update_repartition_from_context(&repartition_context)?;
-        print_plan(&new_plan);
-        println!("----------end------------");
+        // print_plan(&new_plan);
+        // println!("----------end------------");
         let n_child = new_plan.children().len();
         is_updated = true;
         (new_plan, vec![None; n_child])
@@ -229,7 +229,7 @@ fn ensure_distribution(
 
             // println!("child.output_ordering(): {:?}", child.output_ordering());
             // print_plan(&child);
-            if would_benefit && required_input_ordering.is_none() {
+            if would_benefit && (required_input_ordering.is_none() || child.output_ordering().is_none()) {
                 (new_child, is_changed) = add_roundrobin_on_top(
                     new_child,
                     target_partitions,

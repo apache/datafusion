@@ -3588,4 +3588,97 @@ mod tests_bug {
         // assert_eq!(0, 1);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_joins2() -> Result<()> {
+        let mut config = SessionConfig::new().with_target_partitions(1);
+        config.options_mut().optimizer.prefer_hash_join = false;
+        let ctx = SessionContext::with_config(config.clone());
+        ctx.sql(
+            "CREATE TABLE hashjoin_datatype_table_t1_source(c1 INT, c2 BIGINT, c3 DECIMAL(5,2), c4 VARCHAR)
+AS VALUES
+(1,    86400000,  1.23,    'abc'),
+(2,    172800000, 456.00,  'def'),
+(null, 259200000, 789.000, 'ghi'),
+(3,    null,      -123.12, 'jkl')
+;",
+        )
+            .await?;
+
+        ctx.sql(
+            "CREATE TABLE hashjoin_datatype_table_t1
+AS SELECT
+  arrow_cast(c1, 'Date32') as c1,
+  arrow_cast(c2, 'Date64') as c2,
+  c3,
+  arrow_cast(c4, 'Dictionary(Int32, Utf8)') as c4
+FROM
+  hashjoin_datatype_table_t1_source",
+        )
+            .await?;
+
+        ctx.sql(
+            "CREATE TABLE hashjoin_datatype_table_t2_source(c1 INT, c2 BIGINT, c3 DECIMAL(10,2), c4 VARCHAR)
+AS VALUES
+(1,    86400000,  -123.12,   'abc'),
+(null, null,      100000.00, 'abcdefg'),
+(null, 259200000, 0.00,      'qwerty'),
+(3,   null,       789.000,   'qwe')
+;",
+        )
+            .await?;
+
+        ctx.sql(
+            "CREATE TABLE hashjoin_datatype_table_t2
+AS SELECT
+  arrow_cast(c1, 'Date32') as c1,
+  arrow_cast(c2, 'Date64') as c2,
+  c3,
+  arrow_cast(c4, 'Dictionary(Int32, Utf8)') as c4
+FROM
+  hashjoin_datatype_table_t2_source",
+        )
+            .await?;
+
+        let mut state = ctx.state();
+        state.config_mut().options_mut().execution.target_partitions = 2;
+        let ctx = SessionContext::with_state(state);
+
+        let sql = "select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "SortMergeJoin: join_type=Inner, on=[(c1@0, c1@0)]",
+                "  SortExec: expr=[c1@0 ASC]",
+                "    CoalesceBatchesExec: target_batch_size=8192",
+                "      RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2",
+                "        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "          MemoryExec: partitions=1, partition_sizes=[1]",
+                "  SortExec: expr=[c1@0 ASC]",
+                "    CoalesceBatchesExec: target_batch_size=8192",
+                "      RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2",
+                "        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+                "          MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
 }
