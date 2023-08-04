@@ -275,7 +275,7 @@ impl ListingOptions {
             target_partitions: 1,
             file_sort_order: vec![],
             infinite_source: false,
-            insert_mode: ListingTableInsertMode::AppendNewFiles,
+            insert_mode: ListingTableInsertMode::AppendToFile,
         }
     }
 
