@@ -76,7 +76,6 @@ impl PhysicalOptimizer {
             // repartitioning and local sorting steps to meet distribution and ordering requirements.
             // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
-
             // // In order to increase the parallelism, the Repartition rule will change the
             // // output partitioning of some operators in the plan tree, which will influence
             // // other rules. Therefore, it should run as soon as possible. It is optional because:
@@ -88,9 +87,7 @@ impl PhysicalOptimizer {
             // // The EnforceDistribution rule is for adding essential repartition to satisfy the required
             // // distribution. Please make sure that the whole plan tree is determined before this rule.
             // Arc::new(EnforceDistribution::new()),
-
             Arc::new(EnforceDistributionV2::new()),
-
             // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
             Arc::new(CombinePartialFinalAggregate::new()),
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required

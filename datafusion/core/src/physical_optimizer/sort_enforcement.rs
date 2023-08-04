@@ -3463,7 +3463,9 @@ mod tests_bug {
 
     #[tokio::test]
     async fn test_join_disable1() -> Result<()> {
-        let mut config = SessionConfig::new().with_target_partitions(4).with_repartition_joins(false);
+        let mut config = SessionConfig::new()
+            .with_target_partitions(4)
+            .with_repartition_joins(false);
         let ctx = SessionContext::with_config(config.clone());
         ctx.sql(
             "CREATE EXTERNAL TABLE annotated_data (
@@ -3478,7 +3480,7 @@ mod tests_bug {
             WITH ORDER (a ASC, b ASC, c ASC)
             LOCATION 'tests/data/window_2.csv';",
         )
-            .await?;
+        .await?;
 
         let mut state = ctx.state();
         // state.config_mut().options_mut().execution.target_partitions = 2;
@@ -3525,7 +3527,9 @@ mod tests_bug {
 
     #[tokio::test]
     async fn test_join_disable2() -> Result<()> {
-        let mut config = SessionConfig::new().with_target_partitions(4).with_repartition_joins(false);
+        let mut config = SessionConfig::new()
+            .with_target_partitions(4)
+            .with_repartition_joins(false);
         let ctx = SessionContext::with_config(config.clone());
         ctx.sql(
             "CREATE EXTERNAL TABLE annotated_data (
@@ -3540,7 +3544,7 @@ mod tests_bug {
             WITH ORDER (a ASC, b ASC, c ASC)
             LOCATION 'tests/data/window_2.csv';",
         )
-            .await?;
+        .await?;
 
         let mut state = ctx.state();
         // state.config_mut().options_mut().execution.target_partitions = 2;
@@ -3615,7 +3619,7 @@ AS SELECT
 FROM
   hashjoin_datatype_table_t1_source",
         )
-            .await?;
+        .await?;
 
         ctx.sql(
             "CREATE TABLE hashjoin_datatype_table_t2_source(c1 INT, c2 BIGINT, c3 DECIMAL(10,2), c4 VARCHAR)
@@ -3638,7 +3642,7 @@ AS SELECT
 FROM
   hashjoin_datatype_table_t2_source",
         )
-            .await?;
+        .await?;
 
         let mut state = ctx.state();
         state.config_mut().options_mut().execution.target_partitions = 2;
@@ -3708,7 +3712,7 @@ AS SELECT
 FROM
   hashjoin_datatype_table_t1_source",
         )
-            .await?;
+        .await?;
 
         ctx.sql(
             "CREATE TABLE hashjoin_datatype_table_t2_source(c1 INT, c2 BIGINT, c3 DECIMAL(10,2), c4 VARCHAR)
@@ -3731,7 +3735,7 @@ AS SELECT
 FROM
   hashjoin_datatype_table_t2_source",
         )
-            .await?;
+        .await?;
 
         let mut state = ctx.state();
         state.config_mut().options_mut().execution.target_partitions = 2;

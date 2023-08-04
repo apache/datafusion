@@ -616,6 +616,11 @@ select a / b from foo;
 statement ok
 create table t as values (arrow_cast(123, 'Decimal256(5,2)'));
 
+# make sure query below runs in single partition
+# otherwise error message may not be deterministic
+statement ok
+set datafusion.execution.target_partitions = 1;
+
 query error DataFusion error: Internal error: Operator \+ is not implemented for types Decimal256\(None,15,2\) and Decimal256\(Some\(12300\),15,2\)\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 select AVG(column1) from t;
 
