@@ -671,7 +671,7 @@ fn prune_hash_values(
 ///
 /// A [Result] object that contains the pruning length. The function will return
 /// an error if there is an issue evaluating the build side filter expression.
-fn determine_prune_length(
+pub(crate) fn determine_prune_length(
     buffer: &RecordBatch,
     build_side_filter_expr: &SortedFilterExpr,
 ) -> Result<usize> {
