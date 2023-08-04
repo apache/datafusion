@@ -571,6 +571,12 @@ scalar_expr!(
     "returns an array of the array's dimensions."
 );
 scalar_expr!(
+    ArrayElement,
+    array_element,
+    array element,
+    "extracts the element with the index n from the array."
+);
+scalar_expr!(
     ArrayFill,
     array_fill,
     element array,
@@ -643,6 +649,12 @@ scalar_expr!(
     "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
+    ArraySlice,
+    array_slice,
+    array offset length,
+    "returns a slice of the array."
+);
+scalar_expr!(
     ArrayToString,
     array_to_string,
     array delimeter,
@@ -658,12 +670,6 @@ nary_scalar_expr!(
     MakeArray,
     array,
     "returns an Arrow array using the specified input expressions."
-);
-scalar_expr!(
-    TrimArray,
-    trim_array,
-    array n,
-    "removes the last n elements from the array."
 );
 
 // string functions
@@ -1071,7 +1077,6 @@ mod test {
         test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
-        test_scalar_expr!(TrimArray, trim_array, array, n);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
     }

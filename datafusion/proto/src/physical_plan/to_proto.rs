@@ -45,7 +45,6 @@ use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 use crate::protobuf;
 use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
-    ScalarValue,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
@@ -394,7 +393,14 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                     protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
                         Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
                             arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                            key: Some(ScalarValue::try_from(expr.key())?),
+                            key: Some(Box::new(
+                                expr.key()
+                                    .list_key()
+                                    .clone()
+                                    .unwrap()
+                                    .to_owned()
+                                    .try_into()?,
+                            )),
                         }),
                     ),
                 ),

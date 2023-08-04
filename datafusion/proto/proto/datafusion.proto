@@ -404,7 +404,8 @@ message RollupNode {
 
 message GetIndexedField {
   LogicalExprNode expr = 1;
-  ScalarValue key = 2;
+  LogicalExprNode key = 2;
+  LogicalExprNode extra_key = 3;
 }
 
 message IsNull {
@@ -566,7 +567,8 @@ enum ScalarFunction {
   ArrayReplace = 96;
   ArrayToString = 97;
   Cardinality = 98;
-  TrimArray = 99;
+  ArrayElement = 99;
+  ArraySlice = 100;
   Encode = 101;
   Decode = 102;
   Cot = 103;
@@ -1489,5 +1491,5 @@ message ColumnStats {
 
 message PhysicalGetIndexedFieldExprNode {
   PhysicalExprNode arg = 1;
-  ScalarValue key = 2;
+  PhysicalExprNode key = 2;
 }

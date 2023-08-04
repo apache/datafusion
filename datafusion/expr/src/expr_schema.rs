@@ -155,10 +155,24 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(schema)?;
-
-                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
+            Expr::GetIndexedField(GetIndexedField {
+                key,
+                extra_key,
+                expr,
+            }) => {
+                let expr_dt = expr.get_type(schema)?;
+                let key = if let Some(list_key) = &key.list_key {
+                    (Some(list_key.get_type(schema)?), None)
+                } else {
+                    (None, key.struct_key.clone())
+                };
+                let extra_key_dt = if let Some(extra_key) = extra_key {
+                    Some(extra_key.get_type(schema)?)
+                } else {
+                    None
+                };
+                get_indexed_field(&expr_dt, &key, &extra_key_dt)
+                    .map(|x| x.data_type().clone())
             }
         }
     }
@@ -266,9 +280,23 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(input_schema)?;
-                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            Expr::GetIndexedField(GetIndexedField {
+                key,
+                extra_key,
+                expr,
+            }) => {
+                let expr_dt = expr.get_type(input_schema)?;
+                let key = if let Some(list_key) = &key.list_key {
+                    (Some(list_key.get_type(input_schema)?), None)
+                } else {
+                    (None, key.struct_key.clone())
+                };
+                let extra_key_dt = if let Some(extra_key) = extra_key {
+                    Some(extra_key.get_type(input_schema)?)
+                } else {
+                    None
+                };
+                get_indexed_field(&expr_dt, &key, &extra_key_dt).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
