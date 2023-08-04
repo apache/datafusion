@@ -196,8 +196,8 @@ impl ExternalSorterMetrics {
 struct ExternalSorter {
     /// schema of the output (and the input)
     schema: SchemaRef,
-    /// A vector of tuples, considting of a flag denoting whether
-    /// the batch is sorted, and the batch itself
+    /// A vector of tuples, with each tuple consisting of a flag
+    /// denoting whether the batch is sorted, and the batch itself
     in_mem_batches: Vec<(bool, RecordBatch)>,
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
@@ -387,14 +387,18 @@ impl ExternalSorter {
 
     /// Sorts the in_mem_batches in place
     async fn in_mem_sort(&mut self) -> Result<()> {
-        if self.in_mem_batches.iter().all(|(sorted, _)| *sorted) && self.fetch.is_none() {
+        if self.in_mem_batches.is_empty()
+            || self.in_mem_batches.iter().all(|(sorted, _)| *sorted)
+                && self.fetch.is_none()
+        {
             // Do not sort if all the in-mem batches are sorted _and_ there was no `fetch` specified.
             // If a `fetch` was specified we could hit a pathological case even if all the batches
-            // are sorted whereby we have ~100 batches with 1 row each (in case of `LIMIT 1`), and
-            // it turns out this is a problem when reading from the spills:
+            // are sorted whereby we have ~100 in-mem batches with 1 row each (in case of `LIMIT 1`),
+            // and then if this gets spilled to disk it turns out this is a problem when reading
+            // a series of 1-row batches from the spill:
             // `Failure while reading spill file: NamedTempFile("/var..."). Error: Execution error: channel closed`
             // Even if a larger `fetch` was used we would likely benefit from merging the individual
-            // batches together during sort.
+            // truncated batches together during sort.
             return Ok(());
         }
 

@@ -16,12 +16,14 @@
 // under the License.
 
 //! This module contains tests for limiting memory at runtime in DataFusion
+#![allow(clippy::items_after_test_module)]
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::streaming::PartitionStream;
 use futures::StreamExt;
+use rstest::rstest;
 use std::sync::Arc;
 
 use datafusion::datasource::streaming::StreamingTable;
@@ -45,17 +47,38 @@ fn init() {
     let _ = env_logger::try_init();
 }
 
+#[rstest]
+#[case::cant_grow_reservation(vec!["Resources exhausted: Failed to allocate additional", "ExternalSorter"], 100_000)]
+#[case::cant_spill_to_disk(vec!["Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)"], 200_000)]
+#[case::no_oom(vec![], 600_000)]
 #[tokio::test]
-async fn oom_sort() {
+async fn sort(#[case] expected_errors: Vec<&str>, #[case] memory_limit: usize) {
     TestCase::new(
         "select * from t order by host DESC",
-        vec![
-            "Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)",
-        ],
-        200_000,
+        expected_errors,
+        memory_limit,
     )
-        .run()
-        .await
+    .run()
+    .await
+}
+
+// We expect to see lower memory thresholds in general when applying a `LIMIT` clause due to eager sorting
+#[rstest]
+#[case::cant_grow_reservation(vec!["Resources exhausted: Failed to allocate additional", "ExternalSorter"], 20_000)]
+#[case::cant_spill_to_disk(vec!["Memory Exhausted while Sorting (DiskManager is disabled)"], 40_000)]
+#[case::no_oom(vec![], 80_000)]
+#[tokio::test]
+async fn sort_with_limit(
+    #[case] expected_errors: Vec<&str>,
+    #[case] memory_limit: usize,
+) {
+    TestCase::new(
+        "select * from t order by host DESC limit 10",
+        expected_errors,
+        memory_limit,
+    )
+    .run()
+    .await
 }
 
 #[tokio::test]
@@ -267,9 +290,19 @@ impl TestCase {
 
         match df.collect().await {
             Ok(_batches) => {
-                panic!("Unexpected success when running, expected memory limit failure")
+                if !expected_errors.is_empty() {
+                    panic!(
+                        "Unexpected success when running, expected memory limit failure"
+                    )
+                }
             }
             Err(e) => {
+                if expected_errors.is_empty() {
+                    panic!(
+                        "Unexpected failure when running, expected sufficient memory {e}"
+                    )
+                }
+
                 for error_substring in expected_errors {
                     assert_contains!(e.to_string(), error_substring);
                 }
