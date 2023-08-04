@@ -284,7 +284,10 @@ of the following crates:
 - [datafusion-expr](https://crates.io/crates/datafusion-expr)
 - [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
 - [datafusion-proto](https://crates.io/crates/datafusion-proto)
-- [datafusion-row](https://crates.io/crates/datafusion-row)
+- [datafusion-execution](https://crates.io/crates/datafusion-execution)
+- [datafusion-sql](https://crates.io/crates/datafusion-sql)
+- [datafusion-optimizer](https://crates.io/crates/datafusion-optimizer)
+- [datafusion-substrait](https://crates.io/crates/datafusion-substrait)
 
 Download and unpack the official release tarball
 
@@ -308,7 +311,6 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/sql && cargo publish)
-(cd datafusion/row && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/execution && cargo publish)
@@ -385,15 +387,16 @@ You can include mention crates.io and PyPI version URLs in the email if applicab
 ```
 We have published new versions of DataFusion to crates.io:
 
-https://crates.io/crates/datafusion/8.0.0
-https://crates.io/crates/datafusion-cli/8.0.0
-https://crates.io/crates/datafusion-common/8.0.0
-https://crates.io/crates/datafusion-expr/8.0.0
-https://crates.io/crates/datafusion-optimizer/8.0.0
-https://crates.io/crates/datafusion-physical-expr/8.0.0
-https://crates.io/crates/datafusion-proto/8.0.0
-https://crates.io/crates/datafusion-row/8.0.0
-https://crates.io/crates/datafusion-sql/8.0.0
+https://crates.io/crates/datafusion/28.0.0
+https://crates.io/crates/datafusion-cli/28.0.0
+https://crates.io/crates/datafusion-common/28.0.0
+https://crates.io/crates/datafusion-expr/28.0.0
+https://crates.io/crates/datafusion-optimizer/28.0.0
+https://crates.io/crates/datafusion-physical-expr/28.0.0
+https://crates.io/crates/datafusion-proto/28.0.0
+https://crates.io/crates/datafusion-sql/28.0.0
+https://crates.io/crates/datafusion-execution/28.0.0
+https://crates.io/crates/datafusion-substrait/28.0.0
 ```
 
 ### Add the release to Apache Reporter
