@@ -181,9 +181,28 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField {
+            key,
+            extra_key,
+            expr,
+        }) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr}[{key}]"))
+
+            if let (Some(list_key), Some(extra_key)) = (&key.list_key, extra_key) {
+                let key = create_physical_name(list_key, false)?;
+                let extra_key = create_physical_name(extra_key, false)?;
+                Ok(format!("{expr}[{key}:{extra_key}]"))
+            } else {
+                let key = if let Some(list_key) = &key.list_key {
+                    create_physical_name(list_key, false)?
+                } else if let Some(ScalarValue::Utf8(Some(struct_key))) = &key.struct_key
+                {
+                    struct_key.to_string()
+                } else {
+                    String::from("")
+                };
+                Ok(format!("{expr}[{key}]"))
+            }
         }
         Expr::ScalarFunction(func) => {
             create_function_physical_name(&func.fun.to_string(), false, &func.args)

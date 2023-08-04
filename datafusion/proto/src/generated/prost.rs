@@ -614,8 +614,10 @@ pub struct RollupNode {
 pub struct GetIndexedField {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, tag = "2")]
-    pub key: ::core::option::Option<ScalarValue>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub extra_key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2124,8 +2126,8 @@ pub struct ColumnStats {
 pub struct PhysicalGetIndexedFieldExprNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(message, optional, tag = "2")]
-    pub key: ::core::option::Option<ScalarValue>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2299,7 +2301,8 @@ pub enum ScalarFunction {
     ArrayReplace = 96,
     ArrayToString = 97,
     Cardinality = 98,
-    TrimArray = 99,
+    ArrayElement = 99,
+    ArraySlice = 100,
     Encode = 101,
     Decode = 102,
     Cot = 103,
@@ -2418,7 +2421,8 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplace => "ArrayReplace",
             ScalarFunction::ArrayToString => "ArrayToString",
             ScalarFunction::Cardinality => "Cardinality",
-            ScalarFunction::TrimArray => "TrimArray",
+            ScalarFunction::ArrayElement => "ArrayElement",
+            ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Encode => "Encode",
             ScalarFunction::Decode => "Decode",
             ScalarFunction::Cot => "Cot",
@@ -2534,7 +2538,8 @@ impl ScalarFunction {
             "ArrayReplace" => Some(Self::ArrayReplace),
             "ArrayToString" => Some(Self::ArrayToString),
             "Cardinality" => Some(Self::Cardinality),
-            "TrimArray" => Some(Self::TrimArray),
+            "ArrayElement" => Some(Self::ArrayElement),
+            "ArraySlice" => Some(Self::ArraySlice),
             "Encode" => Some(Self::Encode),
             "Decode" => Some(Self::Decode),
             "Cot" => Some(Self::Cot),

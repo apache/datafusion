@@ -36,13 +36,14 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
-    abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
-    array_has, array_has_all, array_has_any, array_length, array_ndims, array_position,
-    array_positions, array_prepend, array_remove, array_remove_all, array_remove_n,
-    array_replace, array_replace_all, array_replace_n, array_to_string, ascii, asin,
-    asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
-    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
-    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
+    abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
+    array_fill, array_has, array_has_all, array_has_any, array_length, array_ndims,
+    array_position, array_positions, array_prepend, array_remove, array_remove_all,
+    array_remove_n, array_replace, array_replace_all, array_replace_n, array_slice,
+    array_to_string, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
+    cardinality, cbrt, ceil, character_length, chr, coalesce, concat_expr,
+    concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin, date_part,
+    date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -50,11 +51,10 @@ use datafusion_expr::{
     random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
     rtrim, sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt,
     starts_with, strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
-    to_timestamp_millis, to_timestamp_seconds, translate, trim, trim_array, trunc, upper,
-    uuid,
+    to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
-    Case, Cast, Expr, GetIndexedField, GroupingSet,
+    Case, Cast, Expr, GetIndexedField, GetIndexedFieldKey, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -456,6 +456,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             ScalarFunction::ArrayHas => Self::ArrayHas,
             ScalarFunction::ArrayDims => Self::ArrayDims,
+            ScalarFunction::ArrayElement => Self::ArrayElement,
             ScalarFunction::ArrayFill => Self::ArrayFill,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
@@ -468,10 +469,10 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
             ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
+            ScalarFunction::ArraySlice => Self::ArraySlice,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
-            ScalarFunction::TrimArray => Self::TrimArray,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
             ScalarFunction::DateTrunc => Self::DateTrunc,
@@ -932,17 +933,13 @@ pub fn parse_expr(
                 .expect("Binary expression could not be reduced to a single expression."))
         }
         ExprType::GetIndexedField(field) => {
-            let key = field
-                .key
-                .as_ref()
-                .ok_or_else(|| Error::required("value"))?
-                .try_into()?;
-
             let expr = parse_required_expr(field.expr.as_deref(), registry, "expr")?;
+            let key = parse_required_expr(field.key.as_deref(), registry, "key")?;
 
             Ok(Expr::GetIndexedField(GetIndexedField::new(
                 Box::new(expr),
-                key,
+                Box::new(GetIndexedFieldKey::new(Some(key), None)),
+                None,
             )))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
@@ -1290,6 +1287,11 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::ArraySlice => Ok(array_slice(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
                 ScalarFunction::ArrayToString => Ok(array_to_string(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1297,10 +1299,6 @@ pub fn parse_expr(
                 ScalarFunction::Cardinality => {
                     Ok(cardinality(parse_expr(&args[0], registry)?))
                 }
-                ScalarFunction::TrimArray => Ok(trim_array(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
                 ScalarFunction::ArrayLength => Ok(array_length(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1308,6 +1306,10 @@ pub fn parse_expr(
                 ScalarFunction::ArrayDims => {
                     Ok(array_dims(parse_expr(&args[0], registry)?))
                 }
+                ScalarFunction::ArrayElement => Ok(array_element(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
                 }

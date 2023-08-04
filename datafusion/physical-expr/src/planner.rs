@@ -19,7 +19,8 @@ use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
-        self, binary, date_time_interval_expr, like, Column, GetIndexedFieldExpr, Literal,
+        self, binary, date_time_interval_expr, like, Column, GetIndexedFieldExpr,
+        GetIndexedFieldExprKey, Literal,
     },
     functions, udf,
     var_provider::VarType,
@@ -338,7 +339,34 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField {
+            key,
+            extra_key,
+            expr,
+        }) => {
+            let extra_key_expr = if let Some(extra_key) = extra_key {
+                Some(create_physical_expr(
+                    extra_key,
+                    input_dfschema,
+                    input_schema,
+                    execution_props,
+                )?)
+            } else {
+                None
+            };
+            let key_expr = if let Some(list_key) = &key.list_key {
+                GetIndexedFieldExprKey::new(
+                    Some(create_physical_expr(
+                        list_key,
+                        input_dfschema,
+                        input_schema,
+                        execution_props,
+                    )?),
+                    None,
+                )
+            } else {
+                GetIndexedFieldExprKey::new(None, Some(key.struct_key.clone().unwrap()))
+            };
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(
                     expr,
@@ -346,7 +374,8 @@ pub fn create_physical_expr(
                     input_schema,
                     execution_props,
                 )?,
-                key.clone(),
+                key_expr,
+                extra_key_expr,
             )))
         }
 

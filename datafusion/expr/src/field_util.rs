@@ -20,17 +20,28 @@
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 
-/// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
+/// Returns the field access indexed by `key` and/or `extra_key` from a [`DataType::List`] or [`DataType::Struct`]
 /// # Error
 /// Errors if
-/// * the `data_type` is not a Struct or,
+/// * the `data_type` is not a Struct or a List,
+/// * the `data_type` of extra key does not match with `data_type` of key
 /// * there is no field key is not of the required index type
-pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Field> {
+pub fn get_indexed_field(
+    data_type: &DataType,
+    key: &(Option<DataType>, Option<ScalarValue>),
+    extra_key: &Option<DataType>,
+) -> Result<Field> {
     match (data_type, key) {
-        (DataType::List(lt), ScalarValue::Int64(Some(i))) => {
-            Ok(Field::new(i.to_string(), lt.data_type().clone(), true))
+        (DataType::List(lt), (Some(DataType::Int64), None)) => {
+            match extra_key {
+                Some(DataType::Int64) => Ok(Field::new("list", data_type.clone(), true)),
+                None => Ok(Field::new("list", lt.data_type().clone(), true)),
+                _ => Err(DataFusionError::Plan(
+                    "Only ints are valid as an indexed field in a list".to_string(),
+                )),
+            }
         }
-        (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
+        (DataType::Struct(fields), (None, Some(ScalarValue::Utf8(Some(s))))) => {
             if s.is_empty() {
                 plan_err!(
                     "Struct based indexed access requires a non empty string"
