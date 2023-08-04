@@ -96,7 +96,7 @@ impl InsertExec {
         }
     }
 
-    fn make_input_stream(
+    fn execute_input_stream(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -136,14 +136,14 @@ impl InsertExec {
         }
     }
 
-    fn make_all_input_streams(
+    fn execute_all_input_streams(
         &self,
         context: Arc<TaskContext>,
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let n_input_parts = self.input.output_partitioning().partition_count();
         let mut streams = Vec::with_capacity(n_input_parts);
         for part in 0..n_input_parts {
-            streams.push(self.make_input_stream(part, context.clone())?);
+            streams.push(self.execute_input_stream(part, context.clone())?);
         }
         Ok(streams)
     }
@@ -236,7 +236,7 @@ impl ExecutionPlan for InsertExec {
                 "InsertExec can only be called on partition 0!".into(),
             ));
         }
-        let data = self.make_all_input_streams(context.clone())?;
+        let data = self.execute_all_input_streams(context.clone())?;
 
         let count_schema = self.count_schema.clone();
         let sink = self.sink.clone();
