@@ -1,3 +1,4 @@
+use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::physical_optimizer::sort_enforcement::ExecTree;
 use crate::physical_optimizer::utils::is_repartition;
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -14,7 +15,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use itertools::izip;
 use std::sync::Arc;
-use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 
 #[derive(Default)]
 pub struct EnforceDistributionV2 {}
@@ -41,7 +41,13 @@ impl PhysicalOptimizerRule for EnforceDistributionV2 {
 
         // Distribution enforcement needs to be applied bottom-up.
         let updated_plan = repartition_context.transform_up(&|repartition_context| {
-            ensure_distribution(repartition_context, target_partitions, enable_roundrobin, repartition_file_scans, repartition_file_min_size)
+            ensure_distribution(
+                repartition_context,
+                target_partitions,
+                enable_roundrobin,
+                repartition_file_scans,
+                repartition_file_min_size,
+            )
         })?;
 
         Ok(updated_plan.plan)
@@ -181,7 +187,11 @@ fn ensure_distribution(
     // let plan = repartition_context.plan;
     // let repartition_onwards = repartition_context.repartition_onwards;
     // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
-    if let Some(parquet_exec) = repartition_context.plan.as_any().downcast_ref::<ParquetExec>() {
+    if let Some(parquet_exec) = repartition_context
+        .plan
+        .as_any()
+        .downcast_ref::<ParquetExec>()
+    {
         if repartition_file_scans {
             let plan = Arc::new(
                 parquet_exec
@@ -197,11 +207,10 @@ fn ensure_distribution(
 
     if let Some(csv_exec) = repartition_context.plan.as_any().downcast_ref::<CsvExec>() {
         if repartition_file_scans {
-            if let Some(csv_exec) = csv_exec
-                .get_repartitioned(target_partitions, repartition_file_min_size){
-                let plan = Arc::new(
-                    csv_exec
-                ) as _;
+            if let Some(csv_exec) =
+                csv_exec.get_repartitioned(target_partitions, repartition_file_min_size)
+            {
+                let plan = Arc::new(csv_exec) as _;
                 let new_repartition_context = RepartitionContext {
                     plan,
                     repartition_onwards: repartition_context.repartition_onwards,
