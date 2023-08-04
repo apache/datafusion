@@ -190,22 +190,23 @@ fn ensure_distribution(
     if repartition_context.plan.children().is_empty() {
         return Ok(Transformed::No(repartition_context));
     }
-    // Don't need to apply when the returned row count is not greater than 1
-    let stats = repartition_context.plan.statistics();
-    if stats.is_exact {
-        let should_repartition = stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
-        if should_repartition{
-            return Ok(Transformed::No(repartition_context));
-        }
-    }
+    // // Don't need to apply when the returned row count is not greater than 1
+    // let stats = repartition_context.plan.statistics();
+    // if stats.is_exact {
+    //     let should_repartition =
+    //         stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
+    //     if !should_repartition {
+    //         return Ok(Transformed::No(repartition_context));
+    //     }
+    // }
 
     let mut is_updated = false;
 
-    println!("start");
-    print_plan(&repartition_context.plan);
-    println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
-    println!("plan required dist: {:?}", repartition_context.plan.required_input_distribution());
-    println!("plan required ordering: {:?}", repartition_context.plan.required_input_ordering());
+    // println!("start");
+    // print_plan(&repartition_context.plan);
+    // println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
+    // println!("plan required dist: {:?}", repartition_context.plan.required_input_distribution());
+    // println!("plan required ordering: {:?}", repartition_context.plan.required_input_ordering());
 
     let (plan, mut updated_repartition_onwards) = if repartition_context
         .plan
@@ -213,13 +214,13 @@ fn ensure_distribution(
         .iter()
         .any(|item| item.is_some())
     {
-        println!("----------start--------------");
-        print_plan(&repartition_context.plan);
+        // println!("----------start--------------");
+        // print_plan(&repartition_context.plan);
 
         let new_plan = update_repartition_from_context(&repartition_context)?;
 
-        print_plan(&new_plan);
-        println!("----------end------------");
+        // print_plan(&new_plan);
+        // println!("----------end------------");
         let n_child = new_plan.children().len();
         is_updated = true;
         (new_plan, vec![None; n_child])
@@ -259,41 +260,44 @@ fn ensure_distribution(
             //     || (!required_input_ordering.is_some() && !maintains);
             //     // || child.output_partitioning().partition_count() == 1;
 
-
-            if enable_round_robin && would_benefit && child.output_partitioning().partition_count() < target_partitions
+            if enable_round_robin
+                && would_benefit
+                && child.output_partitioning().partition_count() < target_partitions
                 && (required_input_ordering.is_none()
                     || child.output_ordering().is_none())
             {
                 // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
-                if let Some(parquet_exec) = new_child
-                    .as_any()
-                    .downcast_ref::<ParquetExec>()
+                if let Some(parquet_exec) =
+                    new_child.as_any().downcast_ref::<ParquetExec>()
                 {
                     if repartition_file_scans {
-                        let plan = Arc::new(
-                            parquet_exec
-                                .get_repartitioned(target_partitions, repartition_file_min_size),
-                        ) as _;
-                        return Ok((plan, true));
+                        new_child = Arc::new(parquet_exec.get_repartitioned(
+                            target_partitions,
+                            repartition_file_min_size,
+                        )) as _;
+                        is_changed = true;
                     }
                 }
 
                 if let Some(csv_exec) = new_child.as_any().downcast_ref::<CsvExec>() {
                     if repartition_file_scans {
-                        if let Some(csv_exec) =
-                            csv_exec.get_repartitioned(target_partitions, repartition_file_min_size)
-                        {
-                            let plan = Arc::new(csv_exec) as _;
-                            return Ok((plan, true));
+                        if let Some(csv_exec) = csv_exec.get_repartitioned(
+                            target_partitions,
+                            repartition_file_min_size,
+                        ) {
+                            new_child = Arc::new(csv_exec) as _;
+                            is_changed = true;
+                            // return Ok((plan, true));
                         }
                     }
                 }
-
-                (new_child, is_changed) = add_roundrobin_on_top(
+                let mut is_changed_new = false;
+                (new_child, is_changed_new) = add_roundrobin_on_top(
                     new_child,
                     target_partitions,
                     repartition_onward,
                 )?;
+                is_changed = is_changed || is_changed_new;
             }
 
             match requirement {
@@ -304,12 +308,14 @@ fn ensure_distribution(
                     }
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    (new_child, is_changed) = add_hash_on_top(
+                    let mut is_changed_new = false;
+                    (new_child, is_changed_new) = add_hash_on_top(
                         new_child,
                         exprs.to_vec(),
                         target_partitions,
                         repartition_onward,
                     )?;
+                    is_changed = is_changed || is_changed_new;
                 }
                 Distribution::UnspecifiedDistribution => {}
             };
@@ -473,7 +479,6 @@ impl TreeNode for RepartitionContext {
         }
     }
 }
-
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -647,11 +652,11 @@ mod tests {
                         input,
                         schema.clone(),
                     )
-                        .unwrap(),
+                    .unwrap(),
                 ),
                 schema,
             )
-                .unwrap(),
+            .unwrap(),
         )
     }
 

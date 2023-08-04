@@ -3780,4 +3780,60 @@ FROM
         // assert_eq!(0, 1);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_intersections() -> Result<()> {
+        let mut config = SessionConfig::new().with_target_partitions(4);
+        config.options_mut().optimizer.prefer_hash_join = true;
+        let ctx = SessionContext::with_config(config.clone());
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';",
+        )
+            .await?;
+
+        let mut state = ctx.state();
+        state.config_mut().options_mut().execution.target_partitions = 4;
+        let ctx = SessionContext::with_state(state);
+
+        let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT ALL SELECT int_col, double_col FROM alltypes_plain LIMIT 4";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan);
+
+        let displayable_plan = displayable(physical_plan.as_ref());
+        let formatted = format!("{}", displayable_plan.indent(false));
+        let expected = {
+            vec![
+                "GlobalLimitExec: skip=0, fetch=4",
+                "  CoalescePartitionsExec",
+                "    CoalesceBatchesExec: target_batch_size=8192",
+                "      HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(int_col@0, int_col@0), (double_col@1, double_col@1)]",
+                "        CoalesceBatchesExec: target_batch_size=8192",
+                "          RepartitionExec: partitioning=Hash([int_col@0, double_col@1], 4), input_partitions=4",
+                "            CoalesceBatchesExec: target_batch_size=8192",
+                "              FilterExec: int_col@0 > 0",
+                "                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+                "                  ParquetExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/parquet-testing/data/alltypes_plain.parquet]]}, projection=[int_col, double_col], predicate=int_col@4 > 0, pruning_predicate=int_col_max@0 > 0",
+                "        CoalesceBatchesExec: target_batch_size=8192",
+                "          RepartitionExec: partitioning=Hash([int_col@0, double_col@1], 4), input_partitions=4",
+                "            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+                "              ParquetExec: file_groups={1 group: [[Users/akurmustafa/projects/synnada/arrow-datafusion-synnada/parquet-testing/data/alltypes_plain.parquet]]}, projection=[int_col, double_col]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+
+        // assert_eq!(0, 1);
+        Ok(())
+    }
 }
