@@ -85,6 +85,10 @@ impl ExternalSorterMetrics {
 ///
 /// 1. get a non-empty new batch from input
 ///
+/// 1.2. if a `fetch` parameter has been provided, and the batch size
+///      is larger than `fetch`, sort the incoming batch in order to
+///      reduce its size and thus use less memory.
+///
 /// 2. check with the memory manager there is sufficient space to
 ///   buffer the batch in memory 2.1 if memory sufficient, buffer
 ///   batch in memory, go to 1.
@@ -259,16 +263,8 @@ impl ExternalSorter {
         let mut batch_sorted = false;
         if self.fetch.map_or(false, |f| f < input.num_rows()) {
             // Eagerly sort the batch to potentially reduce the number of rows
-            // after applying the fetch parameter; first perform a memory reservation
-            // for the sorting procedure.
-            let mut reservation =
-                MemoryConsumer::new(format!("insert_batch{}", self.partition_id))
-                    .register(&self.runtime.memory_pool);
-
-            // TODO: This should probably be try_grow (#5885)
-            reservation.resize(input.get_array_memory_size());
+            // after applying the fetch parameter.
             input = sort_batch(&input, &self.expr, self.fetch)?;
-            reservation.free();
             batch_sorted = true;
         }
 
@@ -358,7 +354,7 @@ impl ExternalSorter {
     }
 
     /// Writes any `in_memory_batches` to a spill file and clears
-    /// the batches. The contents of the spil file are sorted.
+    /// the batches. The contents of the spill file are sorted.
     ///
     /// Returns the amount of memory freed.
     async fn spill(&mut self) -> Result<usize> {
