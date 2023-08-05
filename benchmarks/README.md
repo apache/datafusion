@@ -231,8 +231,6 @@ This will produce output like
 
 # Benchmark Runner
 
-## `dfbench`
-
 The `dfbench` program contains subcommands to run the various
 benchmarks. When benchmarking, it should always be built in release
 mode using `--release`.
@@ -250,28 +248,94 @@ USAGE:
     dfbench <SUBCOMMAND>
 
 SUBCOMMANDS:
-    clickbench      Run the clickbench benchmark
-    help            Prints this message or the help of the given subcommand(s)
-    tpch            Run the tpch benchmark.
-    tpch-convert    Convert tpch .slt files to .parquet or .csv files
+    clickbench        Run the clickbench benchmark
+    help              Prints this message or the help of the given subcommand(s)
+    parquet-filter    Test performance of parquet filter pushdown
+    sort              Test performance of parquet filter pushdown
+    tpch              Run the tpch benchmark.
+    tpch-convert      Convert tpch .slt files to .parquet or .csv files
 
 ```
 
-For example, to run the parquet filter benchmarks, do:
+# Benchmarks
 
-```shell
-cargo run --release --bin dfbench -- parquet-filter  --path ./data --scale-factor 1.0
+The output of `dfbench` help includes a descripion of each benchmark, which is reproducer here for convenience
 
-Generated test dataset with 1232662234232432 rows
-Executing 'Selective-ish filter' (filter: request_method = Utf8("GET"))
-Using scan options ParquetScanOptions { pushdown_filters: false, reorder_filters: false, enable_page_index: false }
-Iteration 0 returned 20438 rows in 310.860411 ms
-Iteration 1 returned 20438 rows in 292.474873 ms
-Iteration 2 returned 20438 rows in 300.402753 ms
-Using scan options ParquetScanOptions { pushdown_filters: true, reorder_filters: true, enable_page_index: true }
-Iteration 0 returned 20438 rows in 367.220051 ms
-Iteration 1 returned 20438 rows in 354.972939 ms
+## ClickBench
+
+The ClickBench[1] benchmarks are widely cited in the industry and
+focus on grouping / aggregation / filtering. This runner uses the
+scripts and queries from [2].
+
+[1]: https://github.com/ClickHouse/ClickBench
+[2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
+
+## Parquet Filter
+
+Test performance of parquet filter pushdown
+
+The queries are executed on a synthetic dataset generated during
+the benchmark execution and designed to simulate web server access
+logs.
+
+Example
+
+dfbench parquet-filter  --path ./data --scale-factor 1.0
+
+generates the synthetic dataset at `./data/logs.parquet`. The size
+of the dataset can be controlled through the `size_factor`
+(with the default value of `1.0` generating a ~1GB parquet file).
+
+For each filter we will run the query using different
+`ParquetScanOption` settings.
+
+Example output:
+
 ```
+Running benchmarks with the following options: Opt { debug: false, iterations: 3, partitions: 2, path: "./data",
+batch_size: 8192, scale_factor: 1.0 }
+Generated test dataset with 10699521 rows
+Executing with filter 'request_method = Utf8("GET")'
+Using scan options ParquetScanOptions { pushdown_filters: false, reorder_predicates: false, enable_page_index: false }
+Iteration 0 returned 10699521 rows in 1303 ms
+Iteration 1 returned 10699521 rows in 1288 ms
+Iteration 2 returned 10699521 rows in 1266 ms
+Using scan options ParquetScanOptions { pushdown_filters: true, reorder_predicates: true, enable_page_index: true }
+Iteration 0 returned 1781686 rows in 1970 ms
+Iteration 1 returned 1781686 rows in 2002 ms
+Iteration 2 returned 1781686 rows in 1988 ms
+Using scan options ParquetScanOptions { pushdown_filters: true, reorder_predicates: false, enable_page_index: true }
+Iteration 0 returned 1781686 rows in 1940 ms
+Iteration 1 returned 1781686 rows in 1986 ms
+Iteration 2 returned 1781686 rows in 1947 ms
+...
+```
+
+## Sort
+Test performance of sorting large datasets
+
+This test sorts a a synthetic dataset generated during the
+benchmark execution, designed to simulate sorting web server
+access logs. Such sorting is often done during data transformation
+steps.
+
+The tests sort the entire dataset using several different sort
+orders.
+
+## TPCH
+
+Run the tpch benchmark.
+
+This benchmarks is derived from the [TPC-H][1] version
+[2.17.1]. The data and answers are generated using `tpch-gen` from
+[2].
+
+[1]: http://www.tpc.org/tpch/
+[2]: https://github.com/databricks/tpch-dbgen.git,
+[2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
+
+
+# Older Benchmarks
 
 ## NYC Taxi Benchmark
 

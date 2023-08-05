@@ -30,19 +30,19 @@ use std::sync::Arc;
 use std::time::Instant;
 use structopt::StructOpt;
 
-/// Test performance of parquet filter pushdown
+/// Test performance of sorting large datasets
 ///
-/// The queries are executed on a synthetic dataset generated during
-/// the benchmark execution and designed to simulate sorting web
-/// server access logs.
+/// This test sorts a a synthetic dataset generated during the
+/// benchmark execution, designed to simulate sorting web server
+/// access logs. Such sorting is often done during data transformation
+/// steps.
+///
+/// The tests sort the entire dataset using several different sort
+/// orders.
 ///
 /// Example:
 ///
-/// dfbench sort  --path ./data --scale-factor 1.0
-///
-///
-/// Will iterate over several sort expressions, sorting the entire
-/// dataset each iteration
+/// dfbench sort --path ./data --scale-factor 1.0
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(verbatim_doc_comment)]
 pub struct RunOpt {
