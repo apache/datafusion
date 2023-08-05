@@ -23,10 +23,11 @@ use arrow::{
 };
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
-use datafusion_common::cast::{
-    as_binary_array, as_generic_binary_array, as_generic_string_array,
-};
 use datafusion_common::ScalarValue;
+use datafusion_common::{
+    cast::{as_binary_array, as_generic_binary_array, as_generic_string_array},
+    plan_err,
+};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use md5::Md5;
@@ -224,9 +225,9 @@ impl FromStr for DigestAlgorithm {
                 .map(|i| i.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in digest algorithm named '{name}', currently supported algorithms are: {options}",
-                )));
+                return plan_err!(
+                    "There is no built-in digest algorithm named '{name}', currently supported algorithms are: {options}"
+                );
             }
         })
     }

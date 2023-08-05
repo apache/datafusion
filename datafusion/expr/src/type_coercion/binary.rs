@@ -23,8 +23,8 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{plan_err, DataFusionError};
 
 use crate::type_coercion::is_numeric;
 use crate::Operator;
@@ -82,9 +82,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             | (DataType::Null, DataType::Null)
             | (DataType::Boolean, DataType::Null)
             | (DataType::Null, DataType::Boolean) => Ok(Signature::uniform(DataType::Boolean)),
-            _ => Err(DataFusionError::Plan(format!(
+            _ => plan_err!(
                 "Cannot infer common argument type for logical boolean operation {lhs} {op} {rhs}"
-            ))),
+            ),
         },
         Operator::RegexMatch |
         Operator::RegexIMatch |
@@ -111,6 +111,14 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common string type for string concat operation {lhs} {op} {rhs}"
+                ))
+            })
+        }
+        Operator::AtArrow
+        | Operator::ArrowAt => {
+            array_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
                 ))
             })
         }
@@ -156,9 +164,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else {
-                Err(DataFusionError::Plan(format!(
+                plan_err!(
                     "Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types"
-                )))
+                )
             }
         }
     }
@@ -740,6 +748,15 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (List(_), from_type) | (from_type, List(_)) => Some(from_type.to_owned()),
         _ => None,
     })
+}
+
+fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    // TODO: cast between array elements (#6558)
+    if lhs_type.equals_datatype(rhs_type) {
+        Some(lhs_type.to_owned())
+    } else {
+        None
+    }
 }
 
 fn string_concat_internal_coercion(

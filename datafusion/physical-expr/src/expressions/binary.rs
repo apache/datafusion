@@ -76,8 +76,9 @@ use self::kernels_arrow::{
     add_dyn_temporal_left_scalar, add_dyn_temporal_right_scalar,
     subtract_dyn_temporal_left_scalar, subtract_dyn_temporal_right_scalar,
 };
-
-use crate::array_expressions::{array_append, array_concat, array_prepend};
+use crate::array_expressions::{
+    array_append, array_concat, array_has_all, array_prepend,
+};
 use crate::expressions::cast_column;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
@@ -85,6 +86,7 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::plan_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::{
@@ -1103,6 +1105,8 @@ impl BinaryExpr {
                 (_, DataType::List(_)) => array_prepend(&[left, right]),
                 _ => binary_string_array_op!(left, right, concat_elements),
             },
+            AtArrow => array_has_all(&[left, right]),
+            ArrowAt => array_has_all(&[right, left]),
         }
     }
 }
@@ -1121,9 +1125,9 @@ pub fn binary(
     if (is_utf8_or_large_utf8(lhs_type) && is_timestamp(rhs_type))
         || (is_timestamp(lhs_type) && is_utf8_or_large_utf8(rhs_type))
     {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
-        )));
+        );
     }
     if !lhs_type.eq(rhs_type) && (!is_decimal(lhs_type) && !is_decimal(rhs_type)) {
         return Err(DataFusionError::Internal(format!(

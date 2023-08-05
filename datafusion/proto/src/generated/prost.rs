@@ -614,8 +614,10 @@ pub struct RollupNode {
 pub struct GetIndexedField {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, tag = "2")]
-    pub key: ::core::option::Option<ScalarValue>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub extra_key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2124,8 +2126,8 @@ pub struct ColumnStats {
 pub struct PhysicalGetIndexedFieldExprNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(message, optional, tag = "2")]
-    pub key: ::core::option::Option<ScalarValue>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2299,7 +2301,8 @@ pub enum ScalarFunction {
     ArrayReplace = 96,
     ArrayToString = 97,
     Cardinality = 98,
-    TrimArray = 99,
+    ArrayElement = 99,
+    ArraySlice = 100,
     Encode = 101,
     Decode = 102,
     Cot = 103,
@@ -2310,6 +2313,7 @@ pub enum ScalarFunction {
     ArrayReplaceN = 108,
     ArrayRemoveAll = 109,
     ArrayReplaceAll = 110,
+    Nanvl = 111,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2417,7 +2421,8 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplace => "ArrayReplace",
             ScalarFunction::ArrayToString => "ArrayToString",
             ScalarFunction::Cardinality => "Cardinality",
-            ScalarFunction::TrimArray => "TrimArray",
+            ScalarFunction::ArrayElement => "ArrayElement",
+            ScalarFunction::ArraySlice => "ArraySlice",
             ScalarFunction::Encode => "Encode",
             ScalarFunction::Decode => "Decode",
             ScalarFunction::Cot => "Cot",
@@ -2428,6 +2433,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
             ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
+            ScalarFunction::Nanvl => "Nanvl",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2532,7 +2538,8 @@ impl ScalarFunction {
             "ArrayReplace" => Some(Self::ArrayReplace),
             "ArrayToString" => Some(Self::ArrayToString),
             "Cardinality" => Some(Self::Cardinality),
-            "TrimArray" => Some(Self::TrimArray),
+            "ArrayElement" => Some(Self::ArrayElement),
+            "ArraySlice" => Some(Self::ArraySlice),
             "Encode" => Some(Self::Encode),
             "Decode" => Some(Self::Decode),
             "Cot" => Some(Self::Cot),
@@ -2543,6 +2550,7 @@ impl ScalarFunction {
             "ArrayReplaceN" => Some(Self::ArrayReplaceN),
             "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
+            "Nanvl" => Some(Self::Nanvl),
             _ => None,
         }
     }
@@ -2578,6 +2586,7 @@ pub enum AggregateFunction {
     /// we append "_AGG" to obey name scoping rules.
     FirstValueAgg = 24,
     LastValueAgg = 25,
+    RegrSlope = 26,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2614,6 +2623,7 @@ impl AggregateFunction {
             AggregateFunction::BoolOr => "BOOL_OR",
             AggregateFunction::FirstValueAgg => "FIRST_VALUE_AGG",
             AggregateFunction::LastValueAgg => "LAST_VALUE_AGG",
+            AggregateFunction::RegrSlope => "REGR_SLOPE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2647,6 +2657,7 @@ impl AggregateFunction {
             "BOOL_OR" => Some(Self::BoolOr),
             "FIRST_VALUE_AGG" => Some(Self::FirstValueAgg),
             "LAST_VALUE_AGG" => Some(Self::LastValueAgg),
+            "REGR_SLOPE" => Some(Self::RegrSlope),
             _ => None,
         }
     }

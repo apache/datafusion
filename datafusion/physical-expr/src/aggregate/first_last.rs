@@ -17,21 +17,23 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
+use std::any::Any;
+use std::sync::Arc;
+
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
-use arrow_array::Array;
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::Accumulator;
-
 use arrow::compute;
+use arrow::compute::{lexsort_to_indices, SortColumn};
+use arrow::datatypes::{DataType, Field};
 use arrow_array::cast::AsArray;
-use datafusion_common::utils::get_row_at_idx;
-use std::any::Any;
-use std::sync::Arc;
+use arrow_array::{Array, BooleanArray};
+use arrow_schema::SortOptions;
+use datafusion_common::utils::{compare_rows, get_arrayref_at_indices, get_row_at_idx};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::Accumulator;
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug)]
@@ -76,6 +78,7 @@ impl AggregateExpr for FirstValue {
         Ok(Box::new(FirstValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
+            self.ordering_req.clone(),
         )?))
     }
 
@@ -132,6 +135,7 @@ impl AggregateExpr for FirstValue {
         Ok(Box::new(FirstValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
+            self.ordering_req.clone(),
         )?))
     }
 }
@@ -159,11 +163,17 @@ struct FirstValueAccumulator {
     // Stores ordering values, of the aggregator requirement corresponding to first value
     // of the aggregator. These values are used during merging of multiple partitions.
     orderings: Vec<ScalarValue>,
+    // Stores the applicable ordering requirement.
+    ordering_req: LexOrdering,
 }
 
 impl FirstValueAccumulator {
     /// Creates a new `FirstValueAccumulator` for the given `data_type`.
-    pub fn try_new(data_type: &DataType, ordering_dtypes: &[DataType]) -> Result<Self> {
+    pub fn try_new(
+        data_type: &DataType,
+        ordering_dtypes: &[DataType],
+        ordering_req: LexOrdering,
+    ) -> Result<Self> {
         let orderings = ordering_dtypes
             .iter()
             .map(ScalarValue::try_from)
@@ -172,7 +182,15 @@ impl FirstValueAccumulator {
             first: value,
             is_set: false,
             orderings,
+            ordering_req,
         })
+    }
+
+    // Updates state with the values in the given row.
+    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
+        self.first = row[0].clone();
+        self.orderings = row[1..].to_vec();
+        self.is_set = true;
     }
 }
 
@@ -188,24 +206,41 @@ impl Accumulator for FirstValueAccumulator {
         // If we have seen first value, we shouldn't update it
         if !values[0].is_empty() && !self.is_set {
             let row = get_row_at_idx(values, 0)?;
-            // Update with last value in the array.
-            self.first = row[0].clone();
-            self.orderings = row[1..].to_vec();
-            self.is_set = true;
+            // Update with first value in the array.
+            self.update_with_new_row(&row);
         }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // FIRST_VALUE(first1, first2, first3, ...)
-        let last_idx = states.len() - 1;
-        let is_set_flags = &states[last_idx];
-        let flags = is_set_flags.as_boolean();
-        let mut filtered_first_vals = vec![];
-        for state in states.iter().take(last_idx - 1) {
-            filtered_first_vals.push(compute::filter(state, flags)?)
+        // last index contains is_set flag.
+        let is_set_idx = states.len() - 1;
+        let flags = states[is_set_idx].as_boolean();
+        let filtered_states = filter_states_according_to_is_set(states, flags)?;
+        // 1..is_set_idx range corresponds to ordering section
+        let sort_cols =
+            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
+
+        let ordered_states = if sort_cols.is_empty() {
+            // When no ordering is given, use the existing state as is:
+            filtered_states
+        } else {
+            let indices = lexsort_to_indices(&sort_cols, None)?;
+            get_arrayref_at_indices(&filtered_states, &indices)?
+        };
+        if !ordered_states[0].is_empty() {
+            let first_row = get_row_at_idx(&ordered_states, 0)?;
+            let first_ordering = &first_row[1..];
+            let sort_options = get_sort_options(&self.ordering_req);
+            // Either there is no existing value, or there is an earlier version in new data.
+            if !self.is_set
+                || compare_rows(first_ordering, &self.orderings, &sort_options)?.is_lt()
+            {
+                self.update_with_new_row(&first_row);
+            }
         }
-        self.update_batch(&filtered_first_vals)
+        Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -263,6 +298,7 @@ impl AggregateExpr for LastValue {
         Ok(Box::new(LastValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
+            self.ordering_req.clone(),
         )?))
     }
 
@@ -319,6 +355,7 @@ impl AggregateExpr for LastValue {
         Ok(Box::new(LastValueAccumulator::try_new(
             &self.input_data_type,
             &self.order_by_data_types,
+            self.ordering_req.clone(),
         )?))
     }
 }
@@ -345,11 +382,17 @@ struct LastValueAccumulator {
     // occur due to empty partitions.
     is_set: bool,
     orderings: Vec<ScalarValue>,
+    // Stores the applicable ordering requirement.
+    ordering_req: LexOrdering,
 }
 
 impl LastValueAccumulator {
     /// Creates a new `LastValueAccumulator` for the given `data_type`.
-    pub fn try_new(data_type: &DataType, ordering_dtypes: &[DataType]) -> Result<Self> {
+    pub fn try_new(
+        data_type: &DataType,
+        ordering_dtypes: &[DataType],
+        ordering_req: LexOrdering,
+    ) -> Result<Self> {
         let orderings = ordering_dtypes
             .iter()
             .map(ScalarValue::try_from)
@@ -358,7 +401,15 @@ impl LastValueAccumulator {
             last: ScalarValue::try_from(data_type)?,
             is_set: false,
             orderings,
+            ordering_req,
         })
+    }
+
+    // Updates state with the values in the given row.
+    fn update_with_new_row(&mut self, row: &[ScalarValue]) {
+        self.last = row[0].clone();
+        self.orderings = row[1..].to_vec();
+        self.is_set = true;
     }
 }
 
@@ -374,23 +425,43 @@ impl Accumulator for LastValueAccumulator {
         if !values[0].is_empty() {
             let row = get_row_at_idx(values, values[0].len() - 1)?;
             // Update with last value in the array.
-            self.last = row[0].clone();
-            self.orderings = row[1..].to_vec();
-            self.is_set = true;
+            self.update_with_new_row(&row);
         }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // LAST_VALUE(last1, last2, last3, ...)
-        let last_idx = states.len() - 1;
-        let is_set_flags = &states[last_idx];
-        let flags = is_set_flags.as_boolean();
-        let mut filtered_first_vals = vec![];
-        for state in states.iter().take(last_idx - 1) {
-            filtered_first_vals.push(compute::filter(state, flags)?)
+        // last index contains is_set flag.
+        let is_set_idx = states.len() - 1;
+        let flags = states[is_set_idx].as_boolean();
+        let filtered_states = filter_states_according_to_is_set(states, flags)?;
+        // 1..is_set_idx range corresponds to ordering section
+        let sort_cols =
+            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
+
+        let ordered_states = if sort_cols.is_empty() {
+            // When no ordering is given, use existing state as is:
+            filtered_states
+        } else {
+            let indices = lexsort_to_indices(&sort_cols, None)?;
+            get_arrayref_at_indices(&filtered_states, &indices)?
+        };
+
+        if !ordered_states[0].is_empty() {
+            let last_idx = ordered_states[0].len() - 1;
+            let last_row = get_row_at_idx(&ordered_states, last_idx)?;
+            let last_ordering = &last_row[1..];
+            let sort_options = get_sort_options(&self.ordering_req);
+            // Either there is no existing value, or there is a newer (latest)
+            // version in the new data:
+            if !self.is_set
+                || compare_rows(last_ordering, &self.orderings, &sort_options)?.is_gt()
+            {
+                self.update_with_new_row(&last_row);
+            }
         }
-        self.update_batch(&filtered_first_vals)
+        Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -405,20 +476,57 @@ impl Accumulator for LastValueAccumulator {
     }
 }
 
+/// Filters states according to the `is_set` flag at the last column and returns
+/// the resulting states.
+fn filter_states_according_to_is_set(
+    states: &[ArrayRef],
+    flags: &BooleanArray,
+) -> Result<Vec<ArrayRef>> {
+    states
+        .iter()
+        .map(|state| compute::filter(state, flags).map_err(DataFusionError::ArrowError))
+        .collect::<Result<Vec<_>>>()
+}
+
+/// Combines array refs and their corresponding orderings to construct `SortColumn`s.
+fn convert_to_sort_cols(
+    arrs: &[ArrayRef],
+    sort_exprs: &[PhysicalSortExpr],
+) -> Vec<SortColumn> {
+    arrs.iter()
+        .zip(sort_exprs.iter())
+        .map(|(item, sort_expr)| SortColumn {
+            values: item.clone(),
+            options: Some(sort_expr.options),
+        })
+        .collect::<Vec<_>>()
+}
+
+/// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
+fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
+    ordering_req
+        .iter()
+        .map(|item| item.options)
+        .collect::<Vec<_>>()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::aggregate::first_last::{FirstValueAccumulator, LastValueAccumulator};
+
     use arrow_array::{ArrayRef, Int64Array};
     use arrow_schema::DataType;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Accumulator;
+
     use std::sync::Arc;
 
     #[test]
     fn test_first_last_value_value() -> Result<()> {
         let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[])?;
-        let mut last_accumulator = LastValueAccumulator::try_new(&DataType::Int64, &[])?;
+            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
+        let mut last_accumulator =
+            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![])?;
         // first value in the tuple is start of the range (inclusive),
         // second value in the tuple is end of the range (exclusive)
         let ranges: Vec<(i64, i64)> = vec![(0, 10), (1, 11), (2, 13)];

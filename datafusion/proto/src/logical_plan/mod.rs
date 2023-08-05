@@ -1462,7 +1462,9 @@ mod roundtrip_tests {
         create_udf, CsvReadOptions, SessionConfig, SessionContext,
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
-    use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
+    use datafusion_common::{
+        plan_err, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    };
     use datafusion_expr::expr::{
         self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
         ScalarUDF, Sort,
@@ -2434,6 +2436,8 @@ mod roundtrip_tests {
             let ctx = SessionContext::new();
             roundtrip_expr_test(test_expr, ctx);
         }
+        test(Operator::ArrowAt);
+        test(Operator::AtArrow);
         test(Operator::StringConcat);
         test(Operator::RegexNotIMatch);
         test(Operator::RegexNotMatch);
@@ -2913,11 +2917,11 @@ mod roundtrip_tests {
 
         fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
             if arg_types.len() != 1 {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "dummy_udwf expects 1 argument, got {}: {:?}",
                     arg_types.len(),
                     arg_types
-                )));
+                );
             }
             Ok(Arc::new(arg_types[0].clone()))
         }

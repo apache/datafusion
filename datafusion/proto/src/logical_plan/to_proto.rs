@@ -384,6 +384,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
             AggregateFunction::Correlation => Self::Correlation,
+            AggregateFunction::RegrSlope => Self::RegrSlope,
             AggregateFunction::ApproxPercentileCont => Self::ApproxPercentileCont,
             AggregateFunction::ApproxPercentileContWithWeight => {
                 Self::ApproxPercentileContWithWeight
@@ -675,6 +676,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     AggregateFunction::Correlation => {
                         protobuf::AggregateFunction::Correlation
                     }
+                    AggregateFunction::RegrSlope => {
+                        protobuf::AggregateFunction::RegrSlope
+                    }
                     AggregateFunction::ApproxMedian => {
                         protobuf::AggregateFunction::ApproxMedian
                     }
@@ -951,11 +955,28 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
                 return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => Self {
+            Expr::GetIndexedField(GetIndexedField {
+                key,
+                expr,
+                extra_key,
+            }) => Self {
                 expr_type: Some(ExprType::GetIndexedField(Box::new(
-                    protobuf::GetIndexedField {
-                        key: Some(key.try_into()?),
-                        expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    if let Some(extra_key) = extra_key {
+                        protobuf::GetIndexedField {
+                            extra_key: Some(Box::new(extra_key.as_ref().try_into()?)),
+                            key: Some(Box::new(
+                                (&key.as_ref().list_key.clone().unwrap()).try_into()?,
+                            )),
+                            expr: Some(Box::new(expr.as_ref().try_into()?)),
+                        }
+                    } else {
+                        protobuf::GetIndexedField {
+                            extra_key: None,
+                            key: Some(Box::new(
+                                (&key.as_ref().list_key.clone().unwrap()).try_into()?,
+                            )),
+                            expr: Some(Box::new(expr.as_ref().try_into()?)),
+                        }
                     },
                 ))),
             },
@@ -1404,6 +1425,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             BuiltinScalarFunction::ArrayHas => Self::ArrayHas,
             BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
+            BuiltinScalarFunction::ArrayElement => Self::ArrayElement,
             BuiltinScalarFunction::ArrayFill => Self::ArrayFill,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
             BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
@@ -1416,10 +1438,10 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
             BuiltinScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
             BuiltinScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
+            BuiltinScalarFunction::ArraySlice => Self::ArraySlice,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
             BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
-            BuiltinScalarFunction::TrimArray => Self::TrimArray,
             BuiltinScalarFunction::NullIf => Self::NullIf,
             BuiltinScalarFunction::DatePart => Self::DatePart,
             BuiltinScalarFunction::DateTrunc => Self::DateTrunc,
@@ -1470,6 +1492,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Struct => Self::StructFun,
             BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
             BuiltinScalarFunction::Atan2 => Self::Atan2,
+            BuiltinScalarFunction::Nanvl => Self::Nanvl,
             BuiltinScalarFunction::ArrowTypeof => Self::ArrowTypeof,
         };
 

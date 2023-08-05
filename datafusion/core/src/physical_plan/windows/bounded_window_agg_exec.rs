@@ -31,7 +31,7 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use datafusion_common::Result;
+use datafusion_common::{plan_err, Result};
 use datafusion_execution::TaskContext;
 
 use ahash::RandomState;
@@ -611,9 +611,9 @@ impl LinearSearch {
             .iter()
             .map(|item| match item.evaluate(record_batch)? {
                 ColumnarValue::Array(array) => Ok(array),
-                ColumnarValue::Scalar(scalar) => Err(DataFusionError::Plan(format!(
-                    "Sort operation is not applicable to scalar value {scalar}"
-                ))),
+                ColumnarValue::Scalar(scalar) => {
+                    plan_err!("Sort operation is not applicable to scalar value {scalar}")
+                }
             })
             .collect()
     }

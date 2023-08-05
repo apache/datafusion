@@ -20,7 +20,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 
 /// Performs type coercion for function arguments.
 ///
@@ -52,10 +52,11 @@ pub fn data_types(
     }
 
     // none possible -> Error
-    Err(DataFusionError::Plan(format!(
+    plan_err!(
         "Coercion from {:?} to the signature {:?} failed.",
-        current_types, &signature.type_signature
-    )))
+        current_types,
+        &signature.type_signature
+    )
 }
 
 fn get_valid_types(
@@ -84,11 +85,11 @@ fn get_valid_types(
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::Any(number) => {
             if current_types.len() != *number {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The function expected {} arguments but received {}",
                     number,
                     current_types.len()
-                )));
+                );
             }
             vec![(0..*number).map(|i| current_types[i].clone()).collect()]
         }

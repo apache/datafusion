@@ -22,6 +22,7 @@ use std::{sync::Arc, vec};
 use arrow_schema::*;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
+use datafusion_common::plan_err;
 use datafusion_common::{
     assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
     TableReference,
@@ -329,7 +330,7 @@ fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
-Dml: op=[Insert] table=[person]
+Dml: op=[Insert Into] table=[person]
   Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
     Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
@@ -341,7 +342,7 @@ Dml: op=[Insert] table=[person]
 fn plan_insert_no_target_columns() {
     let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
     let plan = r#"
-Dml: op=[Insert] table=[test_decimal]
+Dml: op=[Insert Into] table=[test_decimal]
   Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
     Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
     "#
@@ -1103,6 +1104,22 @@ fn select_binary_expr_nested() {
     let sql = "SELECT (age + salary)/2 from person";
     let expected = "Projection: (person.age + person.salary) / Int64(2)\
                         \n  TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_at_arrow_operator() {
+    let sql = "SELECT left @> right from array";
+    let expected = "Projection: array.left @> array.right\
+                        \n  TableScan: array";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_arrow_at_operator() {
+    let sql = "SELECT left <@ right from array";
+    let expected = "Projection: array.left <@ array.right\
+                        \n  TableScan: array";
     quick_test(sql, expected);
 }
 
@@ -2643,6 +2660,18 @@ impl ContextProvider for MockContextProvider {
                 Field::new("price", DataType::Float64, false),
                 Field::new("delivered", DataType::Boolean, false),
             ])),
+            "array" => Ok(Schema::new(vec![
+                Field::new(
+                    "left",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+                Field::new(
+                    "right",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+            ])),
             "lineitem" => Ok(Schema::new(vec![
                 Field::new("l_item_id", DataType::UInt32, false),
                 Field::new("l_description", DataType::Utf8, false),
@@ -2667,10 +2696,7 @@ impl ContextProvider for MockContextProvider {
                 Field::new("Id", DataType::UInt32, false),
                 Field::new("lower", DataType::UInt32, false),
             ])),
-            _ => Err(DataFusionError::Plan(format!(
-                "No table named: {} found",
-                name.table()
-            ))),
+            _ => plan_err!("No table named: {} found", name.table()),
         };
 
         match schema {
@@ -3854,7 +3880,7 @@ fn test_prepare_statement_insert_infer() {
     let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3)";
 
     let expected_plan = r#"
-Dml: op=[Insert] table=[person]
+Dml: op=[Insert Into] table=[person]
   Projection: column1 AS id, column2 AS first_name, column3 AS last_name
     Values: ($1, $2, $3)
         "#
@@ -3878,7 +3904,7 @@ Dml: op=[Insert] table=[person]
         ScalarValue::Utf8(Some("Turing".to_string())),
     ];
     let expected_plan = r#"
-Dml: op=[Insert] table=[person]
+Dml: op=[Insert Into] table=[person]
   Projection: column1 AS id, column2 AS first_name, column3 AS last_name
     Values: (UInt32(1), Utf8("Alan"), Utf8("Turing"))
         "#

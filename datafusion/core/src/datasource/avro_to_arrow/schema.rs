@@ -17,7 +17,9 @@
 
 use crate::arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit, UnionMode};
 use crate::error::{DataFusionError, Result};
-use apache_avro::schema::{Alias, Name};
+use apache_avro::schema::{
+    Alias, DecimalSchema, EnumSchema, FixedSchema, Name, RecordSchema,
+};
 use apache_avro::types::Value;
 use apache_avro::Schema as AvroSchema;
 use arrow::datatypes::{Field, UnionFields};
@@ -29,7 +31,7 @@ use std::sync::Arc;
 pub fn to_arrow_schema(avro_schema: &apache_avro::Schema) -> Result<Schema> {
     let mut schema_fields = vec![];
     match avro_schema {
-        AvroSchema::Record { fields, .. } => {
+        AvroSchema::Record(RecordSchema { fields, .. }) => {
             for field in fields {
                 schema_fields.push(schema_to_field_with_props(
                     &field.schema,
@@ -84,7 +86,12 @@ fn schema_to_field_with_props(
         }
         AvroSchema::Union(us) => {
             // If there are only two variants and one of them is null, set the other type as the field data type
-            let has_nullable = us.find_schema(&Value::Null).is_some();
+            let has_nullable = us
+                .find_schema_with_known_schemata::<apache_avro::Schema>(
+                    &Value::Null,
+                    None,
+                )
+                .is_some();
             let sub_schemas = us.variants();
             if has_nullable && sub_schemas.len() == 2 {
                 nullable = true;
@@ -109,7 +116,7 @@ fn schema_to_field_with_props(
                 DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
             }
         }
-        AvroSchema::Record { name, fields, .. } => {
+        AvroSchema::Record(RecordSchema { name, fields, .. }) => {
             let fields: Result<_> = fields
                 .iter()
                 .map(|field| {
@@ -130,7 +137,7 @@ fn schema_to_field_with_props(
                 .collect();
             DataType::Struct(fields?)
         }
-        AvroSchema::Enum { symbols, name, .. } => {
+        AvroSchema::Enum(EnumSchema { symbols, name, .. }) => {
             return Ok(Field::new_dict(
                 name.fullname(None),
                 index_type(symbols.len()),
@@ -139,10 +146,12 @@ fn schema_to_field_with_props(
                 false,
             ))
         }
-        AvroSchema::Fixed { size, .. } => DataType::FixedSizeBinary(*size as i32),
-        AvroSchema::Decimal {
+        AvroSchema::Fixed(FixedSchema { size, .. }) => {
+            DataType::FixedSizeBinary(*size as i32)
+        }
+        AvroSchema::Decimal(DecimalSchema {
             precision, scale, ..
-        } => DataType::Decimal128(*precision as u8, *scale as i8),
+        }) => DataType::Decimal128(*precision as u8, *scale as i8),
         AvroSchema::Uuid => DataType::FixedSizeBinary(16),
         AvroSchema::Date => DataType::Date32,
         AvroSchema::TimeMillis => DataType::Time32(TimeUnit::Millisecond),
@@ -241,35 +250,35 @@ fn index_type(len: usize) -> DataType {
 fn external_props(schema: &AvroSchema) -> HashMap<String, String> {
     let mut props = HashMap::new();
     match &schema {
-        AvroSchema::Record {
+        AvroSchema::Record(RecordSchema {
             doc: Some(ref doc), ..
-        }
-        | AvroSchema::Enum {
+        })
+        | AvroSchema::Enum(EnumSchema {
             doc: Some(ref doc), ..
-        }
-        | AvroSchema::Fixed {
+        })
+        | AvroSchema::Fixed(FixedSchema {
             doc: Some(ref doc), ..
-        } => {
+        }) => {
             props.insert("avro::doc".to_string(), doc.clone());
         }
         _ => {}
     }
     match &schema {
-        AvroSchema::Record {
+        AvroSchema::Record(RecordSchema {
             name: Name { namespace, .. },
             aliases: Some(aliases),
             ..
-        }
-        | AvroSchema::Enum {
+        })
+        | AvroSchema::Enum(EnumSchema {
             name: Name { namespace, .. },
             aliases: Some(aliases),
             ..
-        }
-        | AvroSchema::Fixed {
+        })
+        | AvroSchema::Fixed(FixedSchema {
             name: Name { namespace, .. },
             aliases: Some(aliases),
             ..
-        } => {
+        }) => {
             let aliases: Vec<String> = aliases
                 .iter()
                 .map(|alias| aliased(alias, namespace.as_deref(), None))
@@ -308,7 +317,7 @@ mod test {
     use crate::arrow::datatypes::DataType::{Binary, Float32, Float64, Timestamp, Utf8};
     use crate::arrow::datatypes::TimeUnit::Microsecond;
     use crate::arrow::datatypes::{Field, Schema};
-    use apache_avro::schema::{Alias, Name};
+    use apache_avro::schema::{Alias, EnumSchema, FixedSchema, Name, RecordSchema};
     use apache_avro::Schema as AvroSchema;
     use arrow::datatypes::DataType::{Boolean, Int32, Int64};
 
@@ -326,7 +335,7 @@ mod test {
 
     #[test]
     fn test_external_props() {
-        let record_schema = AvroSchema::Record {
+        let record_schema = AvroSchema::Record(RecordSchema {
             name: Name {
                 name: "record".to_string(),
                 namespace: None,
@@ -335,7 +344,8 @@ mod test {
             doc: Some("record documentation".to_string()),
             fields: vec![],
             lookup: Default::default(),
-        };
+            attributes: Default::default(),
+        });
         let props = external_props(&record_schema);
         assert_eq!(
             props.get("avro::doc"),
@@ -345,7 +355,7 @@ mod test {
             props.get("avro::aliases"),
             Some(&"[fooalias,baralias]".to_string())
         );
-        let enum_schema = AvroSchema::Enum {
+        let enum_schema = AvroSchema::Enum(EnumSchema {
             name: Name {
                 name: "enum".to_string(),
                 namespace: None,
@@ -353,7 +363,9 @@ mod test {
             aliases: Some(vec![alias("fooenum"), alias("barenum")]),
             doc: Some("enum documentation".to_string()),
             symbols: vec![],
-        };
+            default: None,
+            attributes: Default::default(),
+        });
         let props = external_props(&enum_schema);
         assert_eq!(
             props.get("avro::doc"),
@@ -363,7 +375,7 @@ mod test {
             props.get("avro::aliases"),
             Some(&"[fooenum,barenum]".to_string())
         );
-        let fixed_schema = AvroSchema::Fixed {
+        let fixed_schema = AvroSchema::Fixed(FixedSchema {
             name: Name {
                 name: "fixed".to_string(),
                 namespace: None,
@@ -371,7 +383,8 @@ mod test {
             aliases: Some(vec![alias("foofixed"), alias("barfixed")]),
             size: 1,
             doc: None,
-        };
+            attributes: Default::default(),
+        });
         let props = external_props(&fixed_schema);
         assert_eq!(
             props.get("avro::aliases"),

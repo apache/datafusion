@@ -22,7 +22,7 @@ use crate::utils::{
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
-use datafusion_common::Result;
+use datafusion_common::{plan_err, Result};
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -132,9 +132,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 match (&pull_up_expr_opt, &self.pull_up_having_expr) {
                     (Some(_), Some(_)) => {
                         // Error path
-                        Err(DataFusionError::Plan(
-                            "Unsupported Subquery plan".to_string(),
-                        ))
+                        plan_err!("Unsupported Subquery plan")
                     }
                     (Some(_), None) => {
                         self.pull_up_having_expr = pull_up_expr_opt;
@@ -376,10 +374,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     for e in agg_expr.iter() {
         let result_expr = e.clone().transform_up(&|expr| {
             let new_expr = match expr {
-                Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
-                    fun,
-                    ..
-                }) => {
+                Expr::AggregateFunction(expr::AggregateFunction { fun, .. }) => {
                     if matches!(fun, datafusion_expr::AggregateFunction::Count) {
                         Transformed::Yes(Expr::Literal(ScalarValue::Int64(Some(0))))
                     } else {
@@ -394,6 +389,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             Ok(new_expr)
         })?;
 
+        let result_expr = result_expr.unalias();
         let props = ExecutionProps::new();
         let info = SimplifyContext::new(&props).with_schema(schema.clone());
         let simplifier = ExprSimplifier::new(info);
