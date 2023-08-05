@@ -116,9 +116,7 @@ pub(crate) fn spawn_buffered(
 
             builder.build()
         }
-        _ => {
-            return input;
-        }
+        _ => input,
     }
 }
 
