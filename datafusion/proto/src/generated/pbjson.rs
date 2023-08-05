@@ -466,6 +466,14 @@ impl serde::Serialize for AggregateFunction {
             Self::FirstValueAgg => "FIRST_VALUE_AGG",
             Self::LastValueAgg => "LAST_VALUE_AGG",
             Self::RegrSlope => "REGR_SLOPE",
+            Self::RegrIntercept => "REGR_INTERCEPT",
+            Self::RegrCount => "REGR_COUNT",
+            Self::RegrR2 => "REGR_R2",
+            Self::RegrAvgx => "REGR_AVGX",
+            Self::RegrAvgy => "REGR_AVGY",
+            Self::RegrSxx => "REGR_SXX",
+            Self::RegrSyy => "REGR_SYY",
+            Self::RegrSxy => "REGR_SXY",
         };
         serializer.serialize_str(variant)
     }
@@ -504,6 +512,14 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "FIRST_VALUE_AGG",
             "LAST_VALUE_AGG",
             "REGR_SLOPE",
+            "REGR_INTERCEPT",
+            "REGR_COUNT",
+            "REGR_R2",
+            "REGR_AVGX",
+            "REGR_AVGY",
+            "REGR_SXX",
+            "REGR_SYY",
+            "REGR_SXY",
         ];
 
         struct GeneratedVisitor;
@@ -573,6 +589,14 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "FIRST_VALUE_AGG" => Ok(AggregateFunction::FirstValueAgg),
                     "LAST_VALUE_AGG" => Ok(AggregateFunction::LastValueAgg),
                     "REGR_SLOPE" => Ok(AggregateFunction::RegrSlope),
+                    "REGR_INTERCEPT" => Ok(AggregateFunction::RegrIntercept),
+                    "REGR_COUNT" => Ok(AggregateFunction::RegrCount),
+                    "REGR_R2" => Ok(AggregateFunction::RegrR2),
+                    "REGR_AVGX" => Ok(AggregateFunction::RegrAvgx),
+                    "REGR_AVGY" => Ok(AggregateFunction::RegrAvgy),
+                    "REGR_SXX" => Ok(AggregateFunction::RegrSxx),
+                    "REGR_SYY" => Ok(AggregateFunction::RegrSyy),
+                    "REGR_SXY" => Ok(AggregateFunction::RegrSxy),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
