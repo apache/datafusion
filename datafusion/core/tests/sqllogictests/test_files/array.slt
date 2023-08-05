@@ -19,9 +19,7 @@
 ## Array Expressions Tests
 #############
 
-
 ### Tables
-
 
 statement ok
 CREATE TABLE values(
@@ -829,6 +827,28 @@ select array_slice(make_array(1, 2, 3, 4, 5), column2, column3), array_slice(col
 [4, 5] [] []
 [1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
 [5] [, 54, 55, 56, 57, 58, 59, 60] [55]
+
+# make_array with nulls
+query ????
+select make_array(make_array('a','b'), null),
+       make_array(make_array('a','b'), null, make_array('c','d')),
+       make_array(null, make_array('a','b'), null),
+       make_array(null, make_array('a','b'), null, null, make_array('c','d'));
+----
+[[a, b], ] [[a, b], , [c, d]] [, [a, b], ] [, [a, b], , , [c, d]]
+
+query ?
+select make_array(column5, null, column5) from arrays_values_without_nulls;
+----
+[[2, 3], , [2, 3]]
+[[4, 5], , [4, 5]]
+[[6, 7], , [6, 7]]
+[[8, 9], , [8, 9]]
+
+query ?
+select make_array(['a','b'], null);
+----
+[[a, b], ]
 
 ## array_append (aliases: `list_append`, `array_push_back`, `list_push_back`)
 

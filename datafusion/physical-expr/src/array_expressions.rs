@@ -212,6 +212,12 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
     }
 }
 
+#[derive(Debug)]
+enum ListOrNull<'a> {
+    List(&'a dyn Array),
+    Null,
+}
+
 /// Convert one or more [`ArrayRef`] of the same type into a
 /// `ListArray`
 ///
@@ -238,18 +244,18 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
 ///
 /// Calling `array(col1, col2)` where col1 and col2 are lists
 /// would return a single new `ListArray`, where each row was a list
-/// of the corresponding elements of col1 and col2 flattened.
+/// of the corresponding elements of col1 and col2.
 ///
 /// ``` text
-/// ┌──────────────┐   ┌──────────────┐        ┌────────────────────────┐
-/// │ ┌──────────┐ │   │ ┌──────────┐ │        │ ┌────────────────────┐ │
-/// │ │  [A, X]  │ │   │ │    []    │ │        │ │       [A, X]       │ │
-/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────┤ │
-/// │ │[NULL, Y] │ │   │ │[Q, R, S] │ │───────▶│ │ [NULL, Y, Q, R, S] │ │
-/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────┤ │
-/// │ │  [C, Z]  │ │   │ │   NULL   │ │        │ │    [C, Z, NULL]    │ │
-/// │ └──────────┘ │   │ └──────────┘ │        │ └────────────────────┘ │
-/// └──────────────┘   └──────────────┘        └────────────────────────┘
+/// ┌──────────────┐   ┌──────────────┐        ┌─────────────────────────────┐
+/// │ ┌──────────┐ │   │ ┌──────────┐ │        │ ┌────────────────────────┐  │
+/// │ │  [A, X]  │ │   │ │    []    │ │        │ │    [[A, X], []]        │  │
+/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────────┤  │
+/// │ │[NULL, Y] │ │   │ │[Q, R, S] │ │───────▶│ │ [[NULL, Y], [Q, R, S]] │  │
+/// │ ├──────────┤ │   │ ├──────────┤ │        │ ├────────────────────────│  │
+/// │ │  [C, Z]  │ │   │ │   NULL   │ │        │ │    [[C, Z], NULL]      │  │
+/// │ └──────────┘ │   │ └──────────┘ │        │ └────────────────────────┘  │
+/// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
 fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
@@ -260,23 +266,53 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
 
     let res = match data_type {
         DataType::List(..) => {
-            let arrays =
-                downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+            let mut arrays = vec![];
+            let mut row_count = 0;
 
-            // Assume number of rows is the same for all arrays
-            let row_count = arrays[0].len();
+            for arg in args {
+                let list_arr = arg.as_list_opt::<i32>();
+                if let Some(list_arr) = list_arr {
+                    // Assume number of rows is the same for all arrays
+                    row_count = list_arr.len();
+                    arrays.push(ListOrNull::List(list_arr));
+                } else if arg.as_any().downcast_ref::<NullArray>().is_some() {
+                    arrays.push(ListOrNull::Null);
+                } else {
+                    return Err(DataFusionError::Internal(
+                        "Unsupported argument type for array".to_string(),
+                    ));
+                }
+            }
 
-            let capacity = Capacities::Array(arrays.iter().map(|a| a.len()).sum());
-            let array_data = arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+            let mut total_capacity = 0;
+            let mut array_data = vec![];
+            for arr in arrays.iter() {
+                if let ListOrNull::List(arr) = arr {
+                    total_capacity += arr.len();
+                    array_data.push(arr.to_data());
+                }
+            }
+            let capacity = Capacities::Array(total_capacity);
             let array_data = array_data.iter().collect();
+
             let mut mutable =
                 MutableArrayData::with_capacities(array_data, true, capacity);
 
             for i in 0..row_count {
-                for (j, _) in arrays.iter().enumerate() {
-                    mutable.extend(j, i, i + 1);
+                let mut nulls = 0;
+                for (j, arr) in arrays.iter().enumerate() {
+                    match arr {
+                        ListOrNull::List(_) => {
+                            mutable.extend(j - nulls, i, i + 1);
+                        }
+                        ListOrNull::Null => {
+                            mutable.extend_nulls(1);
+                            nulls += 1;
+                        }
+                    }
                 }
             }
+
             let list_data_type =
                 DataType::List(Arc::new(Field::new("item", data_type, true)));
 
