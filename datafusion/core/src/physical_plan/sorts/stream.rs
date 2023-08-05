@@ -146,6 +146,7 @@ impl PartitionedStream for RowCursorStream {
         Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
             r.and_then(|batch| {
                 let cursor = self.convert_batch(&batch)?;
+                println!("size of row converter: {:?}", self.converter.size());
                 Ok((cursor, batch))
             })
         }))
