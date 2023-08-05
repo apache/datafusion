@@ -387,9 +387,11 @@ impl ExternalSorter {
 
     /// Sorts the in_mem_batches in place
     async fn in_mem_sort(&mut self) -> Result<()> {
-        if self.in_mem_batches.is_empty()
-            || self.in_mem_batches.iter().all(|(sorted, _)| *sorted)
-                && self.fetch.is_none()
+        let batch_count = self.in_mem_batches.len();
+        let all_batches_sorted = self.in_mem_batches.iter().all(|(sorted, _)| *sorted);
+        if batch_count == 0
+            || batch_count == 1 && all_batches_sorted
+            || all_batches_sorted && self.fetch.is_none()
         {
             // Do not sort if all the in-mem batches are sorted _and_ there was no `fetch` specified.
             // If a `fetch` was specified we could hit a pathological case even if all the batches
