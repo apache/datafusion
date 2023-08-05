@@ -53,6 +53,33 @@ use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::prelude::SessionContext;
 
+/// Contains options that control how data is
+/// written out from a DataFrame
+pub struct DataFrameWriteOptions {
+    /// Controls if existing data should be overwritten
+    overwrite: bool, // TODO, enable DataFrame COPY TO write without TableProvider
+                     // settings such as LOCATION and FILETYPE can be set here
+                     // e.g. add location: Option<Path>
+}
+
+impl DataFrameWriteOptions {
+    /// Create a new DataFrameWriteOptions with default values
+    pub fn new() -> Self {
+        DataFrameWriteOptions { overwrite: false }
+    }
+    /// Set the overwrite option to true or false
+    pub fn with_overwrite(mut self, overwrite: bool) -> Self {
+        self.overwrite = overwrite;
+        self
+    }
+}
+
+impl Default for DataFrameWriteOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
 /// [Spark DataFrame](https://spark.apache.org/docs/latest/sql-programming-guide.html)
@@ -923,6 +950,27 @@ impl DataFrame {
             self.session_state,
             LogicalPlanBuilder::except(left_plan, right_plan, true)?,
         ))
+    }
+
+    /// Write this DataFrame to the referenced table
+    /// This method uses on the same underlying implementation
+    /// as the SQL Insert Into statement.
+    /// Unlike most other DataFrame methods, this method executes
+    /// eagerly, writing data, and returning the count of rows written.
+    pub async fn write_table(
+        self,
+        table_name: &str,
+        write_options: DataFrameWriteOptions,
+    ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        let arrow_schema = Schema::from(self.schema());
+        let plan = LogicalPlanBuilder::insert_into(
+            self.plan,
+            table_name.to_owned(),
+            &arrow_schema,
+            write_options.overwrite,
+        )?
+        .build()?;
+        DataFrame::new(self.session_state, plan).collect().await
     }
 
     /// Write a `DataFrame` to a CSV file.

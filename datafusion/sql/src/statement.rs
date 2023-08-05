@@ -359,9 +359,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if or.is_some() {
                     plan_err!("Inserts with or clauses not supported")?;
                 }
-                if overwrite {
-                    plan_err!("Insert overwrite is not supported")?;
-                }
                 if partitioned.is_some() {
                     plan_err!("Partitioned inserts not yet supported")?;
                 }
@@ -378,7 +375,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan_err!("Insert-returning clause not supported")?;
                 }
                 let _ = into; // optional keyword doesn't change behavior
-                self.insert_to_plan(table_name, columns, source)
+                self.insert_to_plan(table_name, columns, source, overwrite)
             }
 
             Statement::Update {
@@ -934,6 +931,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         table_name: ObjectName,
         columns: Vec<Ident>,
         source: Box<Query>,
+        overwrite: bool,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
@@ -1027,10 +1025,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<datafusion_expr::Expr>>>()?;
         let source = project(source, exprs)?;
 
+        let op = if overwrite {
+            WriteOp::InsertOverwrite
+        } else {
+            WriteOp::InsertInto
+        };
+
         let plan = LogicalPlan::Dml(DmlStatement {
             table_name,
             table_schema: Arc::new(table_schema),
-            op: WriteOp::Insert,
+            op,
             input: Arc::new(source),
         });
         Ok(plan)
