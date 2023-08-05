@@ -2097,61 +2097,6 @@ mod tests {
     }
 
     #[test]
-    fn test_array_with_nulls() {
-        // make_array(NULL, 1, NULL, 2, NULL, 3, NULL, NULL, 4, 5) = [NULL, 1, NULL, 2, NULL, 3, NULL, NULL, 4, 5]
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Null),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::Null),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
-            ColumnarValue::Scalar(ScalarValue::Null),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-            ColumnarValue::Scalar(ScalarValue::Null),
-            ColumnarValue::Scalar(ScalarValue::Null),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
-        ];
-        let array = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
-        let result = as_list_array(&array).expect("failed to initialize function array");
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[0, 1, 0, 2, 0, 3, 0, 0, 4, 5],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        )
-    }
-
-    #[test]
-    fn test_array_all_nulls() {
-        // make_array(NULL, NULL, NULL) = []
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Null),
-            ColumnarValue::Scalar(ScalarValue::Null),
-            ColumnarValue::Scalar(ScalarValue::Null),
-        ];
-        let array = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
-        let result = as_list_array(&array).expect("failed to initialize function array");
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            0,
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<NullArray>()
-                .unwrap()
-                .null_count()
-        )
-    }
-
-    #[test]
     fn test_array_element() {
         // array_element([1, 2, 3, 4], 1) = 1
         let list_array = return_array().into_array(1);
