@@ -207,6 +207,16 @@ impl ListingTableConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+///controls how new data should be inserted to a ListingTable
+pub enum ListingTableInsertMode {
+    ///Data should be appended to an existing file
+    AppendToFile,
+    ///Data is appended as new files in existing TablePaths
+    AppendNewFiles,
+    ///Throw an error if insert into is attempted on this table
+    Error,
+}
 /// Options for creating a [`ListingTable`]
 #[derive(Clone, Debug)]
 pub struct ListingOptions {
@@ -245,6 +255,8 @@ pub struct ListingOptions {
     /// In order to support infinite inputs, DataFusion may adjust query
     /// plans (e.g. joins) to run the given query in full pipelining mode.
     pub infinite_source: bool,
+    ///This setting controls how inserts to this table should be handled
+    pub insert_mode: ListingTableInsertMode,
 }
 
 impl ListingOptions {
@@ -263,6 +275,7 @@ impl ListingOptions {
             target_partitions: 1,
             file_sort_order: vec![],
             infinite_source: false,
+            insert_mode: ListingTableInsertMode::AppendToFile,
         }
     }
 
@@ -428,6 +441,12 @@ impl ListingOptions {
     /// ```
     pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
+        self
+    }
+
+    /// Configure how insertions to this table should be handled.
+    pub fn with_insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self {
+        self.insert_mode = insert_mode;
         self
     }
 
@@ -770,6 +789,7 @@ impl TableProvider for ListingTable {
         &self,
         state: &SessionState,
         input: Arc<dyn ExecutionPlan>,
+        overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
         if !self.schema().equivalent_names_and_types(&input.schema()) {
@@ -781,7 +801,7 @@ impl TableProvider for ListingTable {
 
         if self.table_paths().len() > 1 {
             return plan_err!(
-                "Writing to a table backed by multiple files is not supported yet"
+                "Writing to a table backed by multiple partitions is not supported yet"
             );
         }
 
@@ -799,20 +819,41 @@ impl TableProvider for ListingTable {
         .await?;
 
         let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
-
-        if file_groups.len() > 1 {
-            return plan_err!(
-                "Datafusion currently supports tables from single partition and/or file."
-            );
+        let writer_mode;
+        //if we are writing a single output_partition to a table backed by a single file
+        //we can append to that file. Otherwise, we can write new files into the directory
+        //adding new files to the listing table in order to insert to the table.
+        let input_partitions = input.output_partitioning().partition_count();
+        match self.options.insert_mode {
+            ListingTableInsertMode::AppendToFile => {
+                if input_partitions > file_groups.len() {
+                    return Err(DataFusionError::Plan(format!(
+                        "Cannot append {input_partitions} partitions to {} files!",
+                        file_groups.len()
+                    )));
+                }
+                writer_mode = crate::datasource::file_format::FileWriterMode::Append;
+            }
+            ListingTableInsertMode::AppendNewFiles => {
+                writer_mode = crate::datasource::file_format::FileWriterMode::PutMultipart
+            }
+            ListingTableInsertMode::Error => {
+                return Err(DataFusionError::Plan(
+                    "Invalid plan attempting write to table with TableWriteMode::Error!"
+                        .into(),
+                ))
+            }
         }
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
             object_store_url: self.table_paths()[0].object_store(),
+            table_paths: self.table_paths().clone(),
             file_groups,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
-            writer_mode: crate::datasource::file_format::FileWriterMode::Append,
+            writer_mode,
+            overwrite,
         };
 
         self.options()
@@ -1396,12 +1437,14 @@ mod tests {
     fn load_empty_schema_csv_table(
         schema: SchemaRef,
         temp_path: &str,
+        insert_mode: ListingTableInsertMode,
     ) -> Result<Arc<dyn TableProvider>> {
         File::create(temp_path)?;
         let table_path = ListingTableUrl::parse(temp_path).unwrap();
 
         let file_format = CsvFormat::default();
-        let listing_options = ListingOptions::new(Arc::new(file_format));
+        let listing_options =
+            ListingOptions::new(Arc::new(file_format)).with_insert_mode(insert_mode);
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
@@ -1551,8 +1594,11 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let path = tmp_dir.path().join(filename);
 
-        let initial_table =
-            load_empty_schema_csv_table(schema.clone(), path.to_str().unwrap())?;
+        let initial_table = load_empty_schema_csv_table(
+            schema.clone(),
+            path.to_str().unwrap(),
+            ListingTableInsertMode::AppendToFile,
+        )?;
         session_ctx.register_table("t", initial_table)?;
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(
@@ -1566,7 +1612,7 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()
@@ -1673,6 +1719,137 @@ mod tests {
 
         // Assert that the batches read from the file after the second append match the expected result.
         assert_batches_eq!(expected, &batches?);
+
+        // Return Ok if the function
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_new_files_to_csv_table() -> Result<()> {
+        // Create the initial context, schema, and batch.
+        let session_ctx = SessionContext::new();
+        // Create a new schema with one field called "a" of type Int32
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "column1",
+            DataType::Int32,
+            false,
+        )]));
+
+        // Create a new batch of data to insert into the table
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        // Create a temporary directory and a CSV file within it.
+        let tmp_dir = TempDir::new()?;
+        session_ctx
+            .register_csv(
+                "t",
+                tmp_dir.path().to_str().unwrap(),
+                CsvReadOptions::new()
+                    .insert_mode(ListingTableInsertMode::AppendNewFiles)
+                    .schema(schema.as_ref()),
+            )
+            .await?;
+        // Create and register the source table with the provided schema and inserted data
+        let source_table = Arc::new(MemTable::try_new(
+            schema.clone(),
+            vec![vec![batch.clone(), batch.clone()]],
+        )?);
+        session_ctx.register_table("source", source_table.clone())?;
+        // Convert the source table into a provider so that it can be used in a query
+        let source = provider_as_source(source_table);
+        // Create a table scan logical plan to read from the source table
+        let scan_plan = LogicalPlanBuilder::scan("source", source, None)?
+            .repartition(Partitioning::Hash(vec![Expr::Column("column1".into())], 6))?
+            .build()?;
+        // Create an insert plan to insert the source data into the initial table
+        let insert_into_table =
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+        // Create a physical plan from the insert plan
+        let plan = session_ctx
+            .state()
+            .create_physical_plan(&insert_into_table)
+            .await?;
+
+        // Execute the physical plan and collect the results
+        let res = collect(plan, session_ctx.task_ctx()).await?;
+        // Insert returns the number of rows written, in our case this would be 6.
+        let expected = vec![
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
+        ];
+
+        // Assert that the batches read from the file match the expected result.
+        assert_batches_eq!(expected, &res);
+
+        // Read the records in the table
+        let batches = session_ctx
+            .sql("select count(*) from t")
+            .await?
+            .collect()
+            .await?;
+        let expected = vec![
+            "+----------+",
+            "| COUNT(*) |",
+            "+----------+",
+            "| 6        |",
+            "+----------+",
+        ];
+
+        // Assert that the batches read from the file match the expected result.
+        assert_batches_eq!(expected, &batches);
+
+        //asert that 6 files were added to the table
+        let num_files = tmp_dir.path().read_dir()?.count();
+        assert_eq!(num_files, 6);
+
+        // Create a physical plan from the insert plan
+        let plan = session_ctx
+            .state()
+            .create_physical_plan(&insert_into_table)
+            .await?;
+
+        // Again, execute the physical plan and collect the results
+        let res = collect(plan, session_ctx.task_ctx()).await?;
+        // Insert returns the number of rows written, in our case this would be 6.
+        let expected = vec![
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
+        ];
+
+        // Assert that the batches read from the file match the expected result.
+        assert_batches_eq!(expected, &res);
+
+        // Read the contents of the table
+        let batches = session_ctx
+            .sql("select count(*) from t")
+            .await?
+            .collect()
+            .await?;
+
+        // Define the expected result after the second append.
+        let expected = vec![
+            "+----------+",
+            "| COUNT(*) |",
+            "+----------+",
+            "| 12       |",
+            "+----------+",
+        ];
+
+        // Assert that the batches read from the file after the second append match the expected result.
+        assert_batches_eq!(expected, &batches);
+
+        // Assert that another 6 files were added to the table
+        let num_files = tmp_dir.path().read_dir()?.count();
+        assert_eq!(num_files, 12);
 
         // Return Ok if the function
         Ok(())
