@@ -513,7 +513,7 @@ select make_array(1, 2, NULL), make_array(make_array(NULL, 2), make_array(NULL, 
 query ???
 select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NULL, NULL), make_array(NULL, NULL));
 ----
-[] [] [[], []]
+[] [, , ] [[, ], [, ]]
 
 # make_array with 1 columns
 query ???
@@ -829,13 +829,15 @@ select array_slice(make_array(1, 2, 3, 4, 5), column2, column3), array_slice(col
 [5] [, 54, 55, 56, 57, 58, 59, 60] [55]
 
 # make_array with nulls
-query ????
+query ??????
 select make_array(make_array('a','b'), null),
        make_array(make_array('a','b'), null, make_array('c','d')),
        make_array(null, make_array('a','b'), null),
-       make_array(null, make_array('a','b'), null, null, make_array('c','d'));
+       make_array(null, make_array('a','b'), null, null, make_array('c','d')),
+       make_array(['a', 'bc', 'def'], null, make_array('rust')),
+       make_array([1,2,3], null, make_array(4,5,6,7));
 ----
-[[a, b], ] [[a, b], , [c, d]] [, [a, b], ] [, [a, b], , , [c, d]]
+[[a, b], ] [[a, b], , [c, d]] [, [a, b], ] [, [a, b], , , [c, d]] [[a, bc, def], , [rust]] [[1, 2, 3], , [4, 5, 6, 7]]
 
 query ?
 select make_array(column5, null, column5) from arrays_values_without_nulls;
@@ -1698,7 +1700,7 @@ select cardinality(make_array([1, 2], [3, 4], [5, 6])), cardinality(array_fill(3
 query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
-NULL 0
+1 1
 
 # cardinality with columns
 query III
@@ -1912,7 +1914,7 @@ select array_length(array_fill(3, [3, 2, 5]), 1), array_length(array_fill(3, [3,
 query III
 select array_length(make_array()), array_length(make_array(), 1), array_length(make_array(), 2)
 ----
-0 0 NULL
+1 1 NULL
 
 # list_length scalar function #6 (function alias `array_length`)
 query III
@@ -1964,7 +1966,7 @@ select array_dims(array_fill(2, [1, 2, 3])), array_dims(array_fill(3, [2, 5, 4])
 query ??
 select array_dims(make_array()), array_dims(make_array(make_array()))
 ----
-NULL [1, 0]
+[1] [1, 1]
 
 # list_dims scalar function #4 (function alias `array_dims`)
 query ???
@@ -2002,7 +2004,7 @@ select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-NULL 2
+1 2
 
 # list_ndims scalar function #4 (function alias `array_ndims`)
 query III
@@ -2013,7 +2015,7 @@ select list_ndims(make_array(1, 2, 3)), list_ndims(make_array([1, 2], [3, 4])), 
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-NULL 2
+1 2
 
 # array_ndims with columns
 query III

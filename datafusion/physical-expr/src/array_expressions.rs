@@ -363,21 +363,34 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         })
         .collect();
 
-    let mut data_type = DataType::Null;
+    let mut data_type = None;
     for arg in &arrays {
         let arg_data_type = arg.data_type();
         if !arg_data_type.equals_datatype(&DataType::Null) {
-            data_type = arg_data_type.clone();
+            data_type = Some(arg_data_type.clone());
             break;
+        } else {
+            data_type = Some(DataType::Null);
         }
     }
 
     match data_type {
-        DataType::Null => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
+        None => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
             Some(vec![]),
             DataType::Null,
         ))),
-        _ => Ok(ColumnarValue::Array(array_array(
+        Some(DataType::Null) => {
+            let nulls = arrays.len();
+            let null_arr = NullArray::new(nulls);
+            let field = Arc::new(Field::new("item", DataType::Null, true));
+            let offsets = OffsetBuffer::from_lengths([nulls]);
+            let values = Arc::new(null_arr) as ArrayRef;
+            let nulls = None;
+            Ok(ColumnarValue::Array(Arc::new(ListArray::new(
+                field, offsets, values, nulls,
+            ))))
+        }
+        Some(data_type) => Ok(ColumnarValue::Array(array_array(
             arrays.as_slice(),
             data_type,
         )?)),
