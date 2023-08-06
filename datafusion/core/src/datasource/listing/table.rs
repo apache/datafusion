@@ -1653,7 +1653,7 @@ mod tests {
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat {}),
             FileType::ARROW => Arc::new(ArrowFormat {}),
         };
 
