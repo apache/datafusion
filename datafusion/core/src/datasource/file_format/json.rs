@@ -19,25 +19,24 @@
 
 use std::any::Any;
 
-use std::io::BufReader;
 use bytes::Bytes;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use futures::StreamExt;
 use rand::distributions::Alphanumeric;
 use rand::distributions::DistString;
-use tokio::io::AsyncWrite;
-use tokio::io::AsyncWriteExt;
-use std::sync::Arc;
 use std::fmt;
 use std::fmt::Debug;
+use std::io::BufReader;
+use std::sync::Arc;
+use tokio::io::AsyncWrite;
+use tokio::io::AsyncWriteExt;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use arrow::json;
 use arrow::json::reader::infer_json_schema_from_iterator;
 use arrow::json::reader::ValueIter;
-use arrow::json::LineDelimitedWriter;
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
 use bytes::Buf;
@@ -47,9 +46,9 @@ use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use crate::datasource::physical_plan::FileGroupDisplay;
 use crate::datasource::physical_plan::FileMeta;
-use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::insert::DataSink;
 use crate::physical_plan::insert::InsertExec;
+use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
 use super::AbortMode;
@@ -187,16 +186,13 @@ impl FileFormat for JsonFormat {
             ));
         }
 
-        if self.file_compression_type != FileCompressionType::UNCOMPRESSED{
+        if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
             return Err(DataFusionError::NotImplemented(
-                "Inserting compressed JSON is not implemented yet.".into()
-            ))
+                "Inserting compressed JSON is not implemented yet.".into(),
+            ));
         }
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(JsonSink::new(
-            conf,
-            self.file_compression_type.clone(),
-        ));
+        let sink = Arc::new(JsonSink::new(conf, self.file_compression_type.clone()));
 
         Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
     }
@@ -207,7 +203,6 @@ impl Default for JsonSerializer {
         Self::new()
     }
 }
-
 
 /// Define a struct for serializing Json records to a stream
 pub struct JsonSerializer {
@@ -229,7 +224,7 @@ impl BatchSerializer for JsonSerializer {
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
         let mut writer = json::LineDelimitedWriter::new(&mut self.buffer);
         writer.write(&batch)?;
-        drop(writer);
+        //drop(writer);
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
     }
 }
@@ -288,10 +283,7 @@ impl DisplayAs for JsonSink {
 }
 
 impl JsonSink {
-    fn new(
-        config: FileSinkConfig,
-        file_compression_type: FileCompressionType,
-    ) -> Self {
+    fn new(config: FileSinkConfig, file_compression_type: FileCompressionType) -> Self {
         Self {
             config,
             file_compression_type,
@@ -392,7 +384,6 @@ impl DataSink for JsonSink {
                 //uniquely identify this batch of files with a random string, to prevent collisions overwriting files
                 let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
                 for part_idx in 0..num_partitions {
-                    let header = true;
                     let serializer = JsonSerializer::new();
                     serializers.push(serializer);
                     let file_path = base_path

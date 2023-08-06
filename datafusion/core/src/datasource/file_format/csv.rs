@@ -275,10 +275,10 @@ impl FileFormat for CsvFormat {
             ));
         }
 
-        if self.file_compression_type != FileCompressionType::UNCOMPRESSED{
+        if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
             return Err(DataFusionError::NotImplemented(
-                "Inserting compressed CSV is not implemented yet.".into()
-            ))
+                "Inserting compressed CSV is not implemented yet.".into(),
+            ));
         }
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(
