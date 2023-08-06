@@ -20,27 +20,53 @@
 use std::any::Any;
 
 use std::io::BufReader;
+use bytes::Bytes;
+use datafusion_common::DataFusionError;
+use datafusion_execution::TaskContext;
+use futures::StreamExt;
+use rand::distributions::Alphanumeric;
+use rand::distributions::DistString;
+use tokio::io::AsyncWrite;
+use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
+use std::fmt;
+use std::fmt::Debug;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use arrow::json;
 use arrow::json::reader::infer_json_schema_from_iterator;
 use arrow::json::reader::ValueIter;
+use arrow::json::LineDelimitedWriter;
+use arrow_array::RecordBatch;
 use async_trait::async_trait;
 use bytes::Buf;
 
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
+use crate::datasource::physical_plan::FileGroupDisplay;
+use crate::datasource::physical_plan::FileMeta;
+use crate::physical_plan::SendableRecordBatchStream;
+use crate::physical_plan::insert::DataSink;
+use crate::physical_plan::insert::InsertExec;
+use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
+
+use super::AbortMode;
+use super::AbortableWrite;
+use super::AsyncPutWriter;
+use super::BatchSerializer;
 use super::FileFormat;
 use super::FileScanConfig;
+use super::FileWriterMode;
+use super::MultiPart;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::physical_plan::NdJsonExec;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::Statistics;
 
 /// The default file extension of json files
 pub const DEFAULT_JSON_EXTENSION: &str = ".json";
@@ -147,6 +173,278 @@ impl FileFormat for JsonFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = NdJsonExec::new(conf, self.file_compression_type.to_owned());
         Ok(Arc::new(exec))
+    }
+
+    async fn create_writer_physical_plan(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        _state: &SessionState,
+        conf: FileSinkConfig,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if conf.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented yet for Json".into(),
+            ));
+        }
+
+        if self.file_compression_type != FileCompressionType::UNCOMPRESSED{
+            return Err(DataFusionError::NotImplemented(
+                "Inserting compressed JSON is not implemented yet.".into()
+            ))
+        }
+        let sink_schema = conf.output_schema().clone();
+        let sink = Arc::new(JsonSink::new(
+            conf,
+            self.file_compression_type.clone(),
+        ));
+
+        Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
+    }
+}
+
+impl Default for JsonSerializer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
+/// Define a struct for serializing Json records to a stream
+pub struct JsonSerializer {
+    // Inner buffer for avoiding reallocation
+    buffer: Vec<u8>,
+}
+
+impl JsonSerializer {
+    /// Constructor for the JsonSerializer object
+    pub fn new() -> Self {
+        Self {
+            buffer: Vec::with_capacity(4096),
+        }
+    }
+}
+
+#[async_trait]
+impl BatchSerializer for JsonSerializer {
+    async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes> {
+        let mut writer = json::LineDelimitedWriter::new(&mut self.buffer);
+        writer.write(&batch)?;
+        drop(writer);
+        Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
+    }
+}
+
+async fn check_for_errors<T, W: AsyncWrite + Unpin + Send>(
+    result: Result<T>,
+    writers: &mut [AbortableWrite<W>],
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(e) => {
+            // Abort all writers before returning the error:
+            for writer in writers {
+                let mut abort_future = writer.abort_writer();
+                if let Ok(abort_future) = &mut abort_future {
+                    let _ = abort_future.await;
+                }
+                // Ignore errors that occur during abortion,
+                // We do try to abort all writers before returning error.
+            }
+            // After aborting writers return original error.
+            Err(e)
+        }
+    }
+}
+
+/// Implements [`DataSink`] for writing to a Json file.
+struct JsonSink {
+    /// Config options for writing data
+    config: FileSinkConfig,
+    file_compression_type: FileCompressionType,
+}
+
+impl Debug for JsonSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsonSink")
+            .field("file_compression_type", &self.file_compression_type)
+            .finish()
+    }
+}
+
+impl DisplayAs for JsonSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "JsonSink(writer_mode={:?}, file_groups=",
+                    self.config.writer_mode
+                )?;
+                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+impl JsonSink {
+    fn new(
+        config: FileSinkConfig,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        Self {
+            config,
+            file_compression_type,
+        }
+    }
+
+    // Create a write for Json files
+    async fn create_writer(
+        &self,
+        file_meta: FileMeta,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>> {
+        let object = &file_meta.object_meta;
+        match self.config.writer_mode {
+            // If the mode is append, call the store's append method and return wrapped in
+            // a boxed trait object.
+            FileWriterMode::Append => {
+                let writer = object_store
+                    .append(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore)?;
+                let writer = AbortableWrite::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                    AbortMode::Append,
+                );
+                Ok(writer)
+            }
+            // If the mode is put, create a new AsyncPut writer and return it wrapped in
+            // a boxed trait object
+            FileWriterMode::Put => {
+                let writer = Box::new(AsyncPutWriter::new(object.clone(), object_store));
+                let writer = AbortableWrite::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                    AbortMode::Put,
+                );
+                Ok(writer)
+            }
+            // If the mode is put multipart, call the store's put_multipart method and
+            // return the writer wrapped in a boxed trait object.
+            FileWriterMode::PutMultipart => {
+                let (multipart_id, writer) = object_store
+                    .put_multipart(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore)?;
+                Ok(AbortableWrite::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                    AbortMode::MultiPart(MultiPart::new(
+                        object_store,
+                        multipart_id,
+                        object.location.clone(),
+                    )),
+                ))
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DataSink for JsonSink {
+    async fn write_all(
+        &self,
+        mut data: Vec<SendableRecordBatchStream>,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let num_partitions = data.len();
+
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.config.object_store_url)?;
+
+        // Construct serializer and writer for each file group
+        let mut serializers = vec![];
+        let mut writers = vec![];
+        match self.config.writer_mode {
+            FileWriterMode::Append => {
+                for file_group in &self.config.file_groups {
+                    let serializer = JsonSerializer::new();
+                    serializers.push(serializer);
+
+                    let file = file_group.clone();
+                    let writer = self
+                        .create_writer(
+                            file.object_meta.clone().into(),
+                            object_store.clone(),
+                        )
+                        .await?;
+                    writers.push(writer);
+                }
+            }
+            FileWriterMode::Put => {
+                return Err(DataFusionError::NotImplemented(
+                    "Put Mode is not implemented for Json Sink yet".into(),
+                ))
+            }
+            FileWriterMode::PutMultipart => {
+                //currently assuming only 1 partition path (i.e. not hive style partitioning on a column)
+                let base_path = &self.config.table_paths[0];
+                //uniquely identify this batch of files with a random string, to prevent collisions overwriting files
+                let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                for part_idx in 0..num_partitions {
+                    let header = true;
+                    let serializer = JsonSerializer::new();
+                    serializers.push(serializer);
+                    let file_path = base_path
+                        .prefix()
+                        .child(format!("/{}_{}.json", write_id, part_idx));
+                    let object_meta = ObjectMeta {
+                        location: file_path,
+                        last_modified: chrono::offset::Utc::now(),
+                        size: 0,
+                        e_tag: None,
+                    };
+                    let writer = self
+                        .create_writer(object_meta.into(), object_store.clone())
+                        .await?;
+                    writers.push(writer);
+                }
+            }
+        }
+
+        let mut row_count = 0;
+        // Map errors to DatafusionError.
+        let err_converter =
+            |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
+        // TODO parallelize serialization accross partitions and batches within partitions
+        // see: https://github.com/apache/arrow-datafusion/issues/7079
+        for idx in 0..num_partitions {
+            while let Some(maybe_batch) = data[idx].next().await {
+                // Write data to files in a round robin fashion:
+                let serializer = &mut serializers[idx];
+                let batch = check_for_errors(maybe_batch, &mut writers).await?;
+                row_count += batch.num_rows();
+                let bytes =
+                    check_for_errors(serializer.serialize(batch).await, &mut writers)
+                        .await?;
+                let writer = &mut writers[idx];
+                check_for_errors(
+                    writer.write_all(&bytes).await.map_err(err_converter),
+                    &mut writers,
+                )
+                .await?;
+            }
+        }
+        // Perform cleanup:
+        let n_writers = writers.len();
+        for idx in 0..n_writers {
+            check_for_errors(
+                writers[idx].shutdown().await.map_err(err_converter),
+                &mut writers,
+            )
+            .await?;
+        }
+        Ok(row_count as u64)
     }
 }
 
