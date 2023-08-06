@@ -1689,7 +1689,7 @@ select cardinality(make_array([1, 2], [3, 4], [5, 6])), cardinality(array_fill(3
 query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
-1 1
+NULL 0
 
 # cardinality with columns
 query III
@@ -1903,7 +1903,7 @@ select array_length(array_fill(3, [3, 2, 5]), 1), array_length(array_fill(3, [3,
 query III
 select array_length(make_array()), array_length(make_array(), 1), array_length(make_array(), 2)
 ----
-1 1 NULL
+0 0 NULL
 
 # list_length scalar function #6 (function alias `array_length`)
 query III
@@ -1955,7 +1955,7 @@ select array_dims(array_fill(2, [1, 2, 3])), array_dims(array_fill(3, [2, 5, 4])
 query ??
 select array_dims(make_array()), array_dims(make_array(make_array()))
 ----
-[1] [1, 1]
+NULL [1, 0]
 
 # list_dims scalar function #4 (function alias `array_dims`)
 query ???
@@ -1993,7 +1993,7 @@ select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-1 2
+NULL 2
 
 # list_ndims scalar function #4 (function alias `array_ndims`)
 query III
@@ -2004,7 +2004,7 @@ select list_ndims(make_array(1, 2, 3)), list_ndims(make_array([1, 2], [3, 4])), 
 query II
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-1 2
+NULL 2
 
 # array_ndims with columns
 query III

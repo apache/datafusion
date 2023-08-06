@@ -375,14 +375,16 @@ fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     match data_type {
+        // empty array
         None => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
             Some(vec![]),
             DataType::Null,
         ))),
+        // all nulls, set default data type as int32
         Some(DataType::Null) => {
             let nulls = arrays.len();
-            let null_arr = NullArray::new(nulls);
-            let field = Arc::new(Field::new("item", DataType::Null, true));
+            let null_arr = Int32Array::from(vec![None; nulls]);
+            let field = Arc::new(Field::new("item", DataType::Int32, true));
             let offsets = OffsetBuffer::from_lengths([nulls]);
             let values = Arc::new(null_arr) as ArrayRef;
             let nulls = None;
