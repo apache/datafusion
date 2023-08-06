@@ -22,7 +22,6 @@ use std::any::Any;
 use bytes::Bytes;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
-use futures::StreamExt;
 use rand::distributions::Alphanumeric;
 use rand::distributions::DistString;
 use std::fmt;
@@ -30,7 +29,6 @@ use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-use tokio::io::AsyncWriteExt;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
@@ -51,6 +49,7 @@ use crate::physical_plan::insert::InsertExec;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
+use super::stateless_serialize_and_write_files;
 use super::AbortMode;
 use super::AbortableWrite;
 use super::AsyncPutWriter;
@@ -229,28 +228,6 @@ impl BatchSerializer for JsonSerializer {
     }
 }
 
-async fn check_for_errors<T, W: AsyncWrite + Unpin + Send>(
-    result: Result<T>,
-    writers: &mut [AbortableWrite<W>],
-) -> Result<T> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(e) => {
-            // Abort all writers before returning the error:
-            for writer in writers {
-                let mut abort_future = writer.abort_writer();
-                if let Ok(abort_future) = &mut abort_future {
-                    let _ = abort_future.await;
-                }
-                // Ignore errors that occur during abortion,
-                // We do try to abort all writers before returning error.
-            }
-            // After aborting writers return original error.
-            Err(e)
-        }
-    }
-}
-
 /// Implements [`DataSink`] for writing to a Json file.
 struct JsonSink {
     /// Config options for writing data
@@ -345,7 +322,7 @@ impl JsonSink {
 impl DataSink for JsonSink {
     async fn write_all(
         &self,
-        mut data: Vec<SendableRecordBatchStream>,
+        data: Vec<SendableRecordBatchStream>,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         let num_partitions = data.len();
@@ -355,13 +332,13 @@ impl DataSink for JsonSink {
             .object_store(&self.config.object_store_url)?;
 
         // Construct serializer and writer for each file group
-        let mut serializers = vec![];
+        let mut serializers: Vec<Box<dyn BatchSerializer>> = vec![];
         let mut writers = vec![];
         match self.config.writer_mode {
             FileWriterMode::Append => {
                 for file_group in &self.config.file_groups {
                     let serializer = JsonSerializer::new();
-                    serializers.push(serializer);
+                    serializers.push(Box::new(serializer));
 
                     let file = file_group.clone();
                     let writer = self
@@ -385,7 +362,7 @@ impl DataSink for JsonSink {
                 let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
                 for part_idx in 0..num_partitions {
                     let serializer = JsonSerializer::new();
-                    serializers.push(serializer);
+                    serializers.push(Box::new(serializer));
                     let file_path = base_path
                         .prefix()
                         .child(format!("/{}_{}.json", write_id, part_idx));
@@ -403,39 +380,7 @@ impl DataSink for JsonSink {
             }
         }
 
-        let mut row_count = 0;
-        // Map errors to DatafusionError.
-        let err_converter =
-            |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
-        // TODO parallelize serialization accross partitions and batches within partitions
-        // see: https://github.com/apache/arrow-datafusion/issues/7079
-        for idx in 0..num_partitions {
-            while let Some(maybe_batch) = data[idx].next().await {
-                // Write data to files in a round robin fashion:
-                let serializer = &mut serializers[idx];
-                let batch = check_for_errors(maybe_batch, &mut writers).await?;
-                row_count += batch.num_rows();
-                let bytes =
-                    check_for_errors(serializer.serialize(batch).await, &mut writers)
-                        .await?;
-                let writer = &mut writers[idx];
-                check_for_errors(
-                    writer.write_all(&bytes).await.map_err(err_converter),
-                    &mut writers,
-                )
-                .await?;
-            }
-        }
-        // Perform cleanup:
-        let n_writers = writers.len();
-        for idx in 0..n_writers {
-            check_for_errors(
-                writers[idx].shutdown().await.map_err(err_converter),
-                &mut writers,
-            )
-            .await?;
-        }
-        Ok(row_count as u64)
+        stateless_serialize_and_write_files(data, serializers, writers).await
     }
 }
 
