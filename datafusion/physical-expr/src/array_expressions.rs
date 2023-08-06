@@ -826,84 +826,169 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     concat_internal(new_args.as_slice())
 }
 
-macro_rules! fill {
-    ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
+macro_rules! general_repeat {
+    ($ELEMENT:expr, $COUNT:expr, $ARRAY_TYPE:ident) => {{
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
 
-        let mut acc = ColumnarValue::Scalar($ELEMENT);
-        for value in arr.iter().rev() {
-            match value {
-                Some(value) => {
-                    let mut repeated = vec![];
-                    for _ in 0..value {
-                        repeated.push(acc.clone());
-                    }
-                    acc = array(repeated.as_slice()).unwrap();
+        let element_array = downcast_arg!($ELEMENT, $ARRAY_TYPE);
+        for (el, c) in element_array.iter().zip($COUNT.iter()) {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty"))
+            })?;
+            match el {
+                Some(el) => {
+                    let c = if c < Some(0) { 0 } else { c.unwrap() } as usize;
+                    let repeated_array =
+                        [Some(el.clone())].repeat(c).iter().collect::<$ARRAY_TYPE>();
+
+                    values = downcast_arg!(
+                        compute::concat(&[&values, &repeated_array])?.clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.push(last_offset + repeated_array.len() as i32);
                 }
-                _ => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Array_fill function requires non nullable array"
-                    )));
+                None => {
+                    offsets.push(last_offset);
                 }
             }
         }
 
-        acc
+        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
     }};
 }
 
-/// Array_fill SQL function
-pub fn array_fill(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
-            "Array_fill function requires two arguments, got {}",
-            args.len()
-        )));
-    }
+macro_rules! general_repeat_list {
+    ($ELEMENT:expr, $COUNT:expr, $ARRAY_TYPE:ident) => {{
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($ELEMENT.data_type()), ListArray).clone();
 
-    let element = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Array_fill function requires scalar element".to_string(),
-            ))
-        }
-    };
+        let element_array = downcast_arg!($ELEMENT, ListArray);
+        for (el, c) in element_array.iter().zip($COUNT.iter()) {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty"))
+            })?;
+            match el {
+                Some(el) => {
+                    let c = if c < Some(0) { 0 } else { c.unwrap() } as usize;
+                    let repeated_vec = vec![el; c];
 
-    let arr = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
+                    let mut i: i32 = 0;
+                    let mut repeated_offsets = vec![i];
+                    repeated_offsets.extend(
+                        repeated_vec
+                            .clone()
+                            .into_iter()
+                            .map(|a| {
+                                i += a.len() as i32;
+                                i
+                            })
+                            .collect::<Vec<_>>(),
+                    );
 
-    let res = match arr.data_type() {
-        DataType::List(..) => {
-            let arr = downcast_arg!(arr, ListArray);
-            let array_values = arr.values();
-            match arr.value_type() {
-                DataType::Int8 => fill!(array_values, element, Int8Array),
-                DataType::Int16 => fill!(array_values, element, Int16Array),
-                DataType::Int32 => fill!(array_values, element, Int32Array),
-                DataType::Int64 => fill!(array_values, element, Int64Array),
-                DataType::UInt8 => fill!(array_values, element, UInt8Array),
-                DataType::UInt16 => fill!(array_values, element, UInt16Array),
-                DataType::UInt32 => fill!(array_values, element, UInt32Array),
-                DataType::UInt64 => fill!(array_values, element, UInt64Array),
-                DataType::Null => {
-                    return Ok(datafusion_expr::ColumnarValue::Scalar(
-                        ScalarValue::new_list(Some(vec![]), DataType::Null),
-                    ))
+                    let mut repeated_values = downcast_arg!(
+                        new_empty_array(&element_array.value_type()),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    for repeated_list in repeated_vec {
+                        repeated_values = downcast_arg!(
+                            compute::concat(&[&repeated_values, &repeated_list])?,
+                            $ARRAY_TYPE
+                        )
+                        .clone();
+                    }
+
+                    let field = Arc::new(Field::new(
+                        "item",
+                        element_array.value_type().clone(),
+                        true,
+                    ));
+                    let repeated_array = ListArray::try_new(
+                        field,
+                        OffsetBuffer::new(repeated_offsets.clone().into()),
+                        Arc::new(repeated_values),
+                        None,
+                    )?;
+
+                    values = downcast_arg!(
+                        compute::concat(&[&values, &repeated_array,])?.clone(),
+                        ListArray
+                    )
+                    .clone();
+                    offsets.push(last_offset + repeated_array.len() as i32);
                 }
-                data_type => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Array_fill is not implemented for type '{data_type:?}'."
-                    )));
+                None => {
+                    offsets.push(last_offset);
                 }
             }
         }
+
+        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
+    }};
+}
+
+/// Array_repeat SQL function
+pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let element = &args[0];
+    let count = as_int64_array(&args[1])?;
+
+    let res = match element.data_type() {
+        DataType::List(field) => match field.data_type() {
+            DataType::List(_) => general_repeat_list!(element, count, ListArray),
+            DataType::Utf8 => general_repeat_list!(element, count, StringArray),
+            DataType::LargeUtf8 => general_repeat_list!(element, count, LargeStringArray),
+            DataType::Boolean => general_repeat_list!(element, count, BooleanArray),
+            DataType::Float32 => general_repeat_list!(element, count, Float32Array),
+            DataType::Float64 => general_repeat_list!(element, count, Float64Array),
+            DataType::Int8 => general_repeat_list!(element, count, Int8Array),
+            DataType::Int16 => general_repeat_list!(element, count, Int16Array),
+            DataType::Int32 => general_repeat_list!(element, count, Int32Array),
+            DataType::Int64 => general_repeat_list!(element, count, Int64Array),
+            DataType::UInt8 => general_repeat_list!(element, count, UInt8Array),
+            DataType::UInt16 => general_repeat_list!(element, count, UInt16Array),
+            DataType::UInt32 => general_repeat_list!(element, count, UInt32Array),
+            DataType::UInt64 => general_repeat_list!(element, count, UInt64Array),
+            data_type => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Array_repeat is not implemented for types 'List({data_type:?})'."
+                )))
+            }
+        },
+        DataType::Utf8 => general_repeat!(element, count, StringArray),
+        DataType::LargeUtf8 => general_repeat!(element, count, LargeStringArray),
+        DataType::Boolean => general_repeat!(element, count, BooleanArray),
+        DataType::Float32 => general_repeat!(element, count, Float32Array),
+        DataType::Float64 => general_repeat!(element, count, Float64Array),
+        DataType::Int8 => general_repeat!(element, count, Int8Array),
+        DataType::Int16 => general_repeat!(element, count, Int16Array),
+        DataType::Int32 => general_repeat!(element, count, Int32Array),
+        DataType::Int64 => general_repeat!(element, count, Int64Array),
+        DataType::UInt8 => general_repeat!(element, count, UInt8Array),
+        DataType::UInt16 => general_repeat!(element, count, UInt16Array),
+        DataType::UInt32 => general_repeat!(element, count, UInt32Array),
+        DataType::UInt64 => general_repeat!(element, count, UInt64Array),
         data_type => {
-            return Err(DataFusionError::Internal(format!(
-                "Array is not type '{data_type:?}'."
-            )));
+            return Err(DataFusionError::NotImplemented(format!(
+                "Array_repeat is not implemented for types '{data_type:?}'."
+            )))
         }
     };
 
@@ -964,31 +1049,24 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
         Int64Array::from_value(0, arr.len())
     };
 
-    let res = match arr.data_type() {
-        DataType::List(field) => match field.data_type() {
-            DataType::List(_) => position!(arr, element, index, ListArray),
-            DataType::Utf8 => position!(arr, element, index, StringArray),
-            DataType::LargeUtf8 => position!(arr, element, index, LargeStringArray),
-            DataType::Boolean => position!(arr, element, index, BooleanArray),
-            DataType::Float32 => position!(arr, element, index, Float32Array),
-            DataType::Float64 => position!(arr, element, index, Float64Array),
-            DataType::Int8 => position!(arr, element, index, Int8Array),
-            DataType::Int16 => position!(arr, element, index, Int16Array),
-            DataType::Int32 => position!(arr, element, index, Int32Array),
-            DataType::Int64 => position!(arr, element, index, Int64Array),
-            DataType::UInt8 => position!(arr, element, index, UInt8Array),
-            DataType::UInt16 => position!(arr, element, index, UInt16Array),
-            DataType::UInt32 => position!(arr, element, index, UInt32Array),
-            DataType::UInt64 => position!(arr, element, index, UInt64Array),
-            data_type => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Array_position is not implemented for types '{data_type:?}'."
-                )))
-            }
-        },
+    let res = match arr.value_type() {
+        DataType::List(_) => position!(arr, element, index, ListArray),
+        DataType::Utf8 => position!(arr, element, index, StringArray),
+        DataType::LargeUtf8 => position!(arr, element, index, LargeStringArray),
+        DataType::Boolean => position!(arr, element, index, BooleanArray),
+        DataType::Float32 => position!(arr, element, index, Float32Array),
+        DataType::Float64 => position!(arr, element, index, Float64Array),
+        DataType::Int8 => position!(arr, element, index, Int8Array),
+        DataType::Int16 => position!(arr, element, index, Int16Array),
+        DataType::Int32 => position!(arr, element, index, Int32Array),
+        DataType::Int64 => position!(arr, element, index, Int64Array),
+        DataType::UInt8 => position!(arr, element, index, UInt8Array),
+        DataType::UInt16 => position!(arr, element, index, UInt16Array),
+        DataType::UInt32 => position!(arr, element, index, UInt32Array),
+        DataType::UInt64 => position!(arr, element, index, UInt64Array),
         data_type => {
             return Err(DataFusionError::NotImplemented(format!(
-                "Array is not type '{data_type:?}'."
+                "Array_position is not implemented for types '{data_type:?}'."
             )))
         }
     };
@@ -1050,31 +1128,24 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
-    let res = match arr.data_type() {
-        DataType::List(field) => match field.data_type() {
-            DataType::List(_) => positions!(arr, element, ListArray),
-            DataType::Utf8 => positions!(arr, element, StringArray),
-            DataType::LargeUtf8 => positions!(arr, element, LargeStringArray),
-            DataType::Boolean => positions!(arr, element, BooleanArray),
-            DataType::Float32 => positions!(arr, element, Float32Array),
-            DataType::Float64 => positions!(arr, element, Float64Array),
-            DataType::Int8 => positions!(arr, element, Int8Array),
-            DataType::Int16 => positions!(arr, element, Int16Array),
-            DataType::Int32 => positions!(arr, element, Int32Array),
-            DataType::Int64 => positions!(arr, element, Int64Array),
-            DataType::UInt8 => positions!(arr, element, UInt8Array),
-            DataType::UInt16 => positions!(arr, element, UInt16Array),
-            DataType::UInt32 => positions!(arr, element, UInt32Array),
-            DataType::UInt64 => positions!(arr, element, UInt64Array),
-            data_type => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Array_positions is not implemented for types '{data_type:?}'."
-                )))
-            }
-        },
+    let res = match arr.value_type() {
+        DataType::List(_) => positions!(arr, element, ListArray),
+        DataType::Utf8 => positions!(arr, element, StringArray),
+        DataType::LargeUtf8 => positions!(arr, element, LargeStringArray),
+        DataType::Boolean => positions!(arr, element, BooleanArray),
+        DataType::Float32 => positions!(arr, element, Float32Array),
+        DataType::Float64 => positions!(arr, element, Float64Array),
+        DataType::Int8 => positions!(arr, element, Int8Array),
+        DataType::Int16 => positions!(arr, element, Int16Array),
+        DataType::Int32 => positions!(arr, element, Int32Array),
+        DataType::Int64 => positions!(arr, element, Int64Array),
+        DataType::UInt8 => positions!(arr, element, UInt8Array),
+        DataType::UInt16 => positions!(arr, element, UInt16Array),
+        DataType::UInt32 => positions!(arr, element, UInt32Array),
+        DataType::UInt64 => positions!(arr, element, UInt64Array),
         data_type => {
             return Err(DataFusionError::NotImplemented(format!(
-                "Array is not type '{data_type:?}'."
+                "Array_positions is not implemented for types '{data_type:?}'."
             )))
         }
     };
@@ -2586,35 +2657,6 @@ mod tests {
     }
 
     #[test]
-    fn test_array_fill() {
-        // array_fill(4, [5]) = [4, 4, 4, 4, 4]
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
-            ColumnarValue::Scalar(ScalarValue::List(
-                Some(vec![ScalarValue::Int64(Some(5))]),
-                Arc::new(Field::new("item", DataType::Int64, false)),
-            )),
-        ];
-
-        let array = array_fill(&args)
-            .expect("failed to initialize function array_fill")
-            .into_array(1);
-        let result =
-            as_list_array(&array).expect("failed to initialize function array_fill");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[4, 4, 4, 4, 4],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
     fn test_array_position() {
         // array_position([1, 2, 3, 4], 3) = 3
         let list_array = return_array().into_array(1);
@@ -3002,6 +3044,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_array_repeat() {
+        // array_repeat(3, 5) = [3, 3, 3, 3, 3]
+        let array = array_repeat(&[
+            Arc::new(Int64Array::from_value(3, 1)),
+            Arc::new(Int64Array::from_value(5, 1)),
+        ])
+        .expect("failed to initialize function array_repeat");
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_repeat");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[3, 3, 3, 3, 3],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_repeat() {
+        // array_repeat([1, 2, 3, 4], 3) = [[1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4]]
+        let element = return_array().into_array(1);
+        let array = array_repeat(&[element, Arc::new(Int64Array::from_value(3, 1))])
+            .expect("failed to initialize function array_repeat");
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_repeat");
+
+        assert_eq!(result.len(), 1);
+        let data = vec![
+            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
+            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
+            Some(vec![Some(1), Some(2), Some(3), Some(4)]),
+        ];
+        let expected = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        assert_eq!(
+            expected,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .clone()
+        );
+    }
     #[test]
     fn test_array_to_string() {
         // array_to_string([1, 2, 3, 4], ',') = 1,2,3,4

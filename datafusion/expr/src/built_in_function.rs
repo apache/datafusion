@@ -131,8 +131,6 @@ pub enum BuiltinScalarFunction {
     ArrayDims,
     /// array_element
     ArrayElement,
-    /// array_fill
-    ArrayFill,
     /// array_length
     ArrayLength,
     /// array_ndims
@@ -149,6 +147,8 @@ pub enum BuiltinScalarFunction {
     ArrayRemoveN,
     /// array_remove_all
     ArrayRemoveAll,
+    /// array_repeat
+    ArrayRepeat,
     /// array_replace
     ArrayReplace,
     /// array_replace_n
@@ -354,12 +354,12 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayRepeat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveAll => Volatility::Immutable,
@@ -536,11 +536,6 @@ impl BuiltinScalarFunction {
                     "The {self} function can only accept list as the first argument"
                 ))),
             },
-            BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
-                "item",
-                input_expr_types[1].clone(),
-                true,
-            )))),
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
@@ -548,6 +543,11 @@ impl BuiltinScalarFunction {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
             BuiltinScalarFunction::ArrayPrepend => Ok(input_expr_types[1].clone()),
+            BuiltinScalarFunction::ArrayRepeat => Ok(List(Arc::new(Field::new(
+                "item",
+                input_expr_types[0].clone(),
+                true,
+            )))),
             BuiltinScalarFunction::ArrayRemove => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayRemoveN => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayRemoveAll => Ok(input_expr_types[0].clone()),
@@ -822,7 +822,6 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::ArrayHas => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayFill => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
             }
@@ -832,6 +831,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayPrepend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayRepeat => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayRemoveAll => Signature::any(2, self.volatility()),
@@ -1310,7 +1310,6 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::ArrayHas => {
             &["array_has", "list_has", "array_contains", "list_contains"]
         }
-        BuiltinScalarFunction::ArrayFill => &["array_fill"],
         BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
         BuiltinScalarFunction::ArrayPosition => &[
@@ -1326,6 +1325,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "array_push_front",
             "list_push_front",
         ],
+        BuiltinScalarFunction::ArrayRepeat => &["array_repeat", "list_repeat"],
         BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
         BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
         BuiltinScalarFunction::ArrayRemoveAll => &["array_remove_all", "list_remove_all"],
