@@ -97,24 +97,27 @@ pub(crate) fn spawn_buffered(
     mut input: SendableRecordBatchStream,
     buffer: usize,
 ) -> SendableRecordBatchStream {
-    // Use tokio only if running from a tokio context (#2201)
-    if tokio::runtime::Handle::try_current().is_err() {
-        return input;
-    };
+    // Use tokio only if running from a multi-thread tokio context
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle)
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
+        {
+            let mut builder = RecordBatchReceiverStream::builder(input.schema(), buffer);
 
-    let mut builder = RecordBatchReceiverStream::builder(input.schema(), buffer);
+            let sender = builder.tx();
 
-    let sender = builder.tx();
+            builder.spawn(async move {
+                while let Some(item) = input.next().await {
+                    if sender.send(item).await.is_err() {
+                        return;
+                    }
+                }
+            });
 
-    builder.spawn(async move {
-        while let Some(item) = input.next().await {
-            if sender.send(item).await.is_err() {
-                return;
-            }
+            builder.build()
         }
-    });
-
-    builder.build()
+        _ => input,
+    }
 }
 
 /// Computes the statistics for an in-memory RecordBatch
