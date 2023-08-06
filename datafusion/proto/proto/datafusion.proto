@@ -557,7 +557,7 @@ enum ScalarFunction {
   ArrayAppend = 86;
   ArrayConcat = 87;
   ArrayDims = 88;
-  ArrayFill = 89;
+  ArrayRepeat = 89;
   ArrayLength = 90;
   ArrayNdims = 91;
   ArrayPosition = 92;
