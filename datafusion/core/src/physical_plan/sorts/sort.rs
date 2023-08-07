@@ -35,6 +35,7 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
+use arrow_schema::ArrowError;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
@@ -45,6 +46,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
 use std::any::Any;
+use std::ffi::OsString;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -52,7 +54,6 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-use tokio::sync::mpsc::Sender;
 use tokio::task;
 
 struct ExternalSorterMetrics {
@@ -316,8 +317,9 @@ impl ExternalSorter {
             }
 
             for spill in self.spills.drain(..) {
-                let stream = read_spill_as_stream(spill, self.schema.clone())?;
-                streams.push(stream);
+                let spill_streams =
+                    read_spill_as_streams(spill.path(), self.schema.clone())?;
+                streams.extend(spill_streams);
             }
 
             streaming_merge(
@@ -385,18 +387,7 @@ impl ExternalSorter {
     async fn in_mem_sort(&mut self) -> Result<()> {
         let batch_count = self.in_mem_batches.len();
         let all_batches_sorted = self.in_mem_batches.iter().all(|(sorted, _)| *sorted);
-        if batch_count == 0
-            || batch_count == 1 && all_batches_sorted
-            || all_batches_sorted && self.fetch.is_none()
-        {
-            // Do not sort if all the in-mem batches are sorted _and_ there was no `fetch` specified.
-            // If a `fetch` was specified we could hit a pathological case even if all the batches
-            // are sorted whereby we have ~100 in-mem batches with 1 row each (in case of `LIMIT 1`),
-            // and then if this gets spilled to disk it turns out this is a problem when reading
-            // a series of 1-row batches from the spill:
-            // `Failure while reading spill file: NamedTempFile("/var..."). Error: Execution error: channel closed`
-            // Even if a larger `fetch` was used we would likely benefit from merging the individual
-            // truncated batches together during sort.
+        if batch_count == 0 || all_batches_sorted {
             return Ok(());
         }
 
@@ -604,22 +595,6 @@ async fn spill_sorted_batches(
     }
 }
 
-fn read_spill_as_stream(
-    path: NamedTempFile,
-    schema: SchemaRef,
-) -> Result<SendableRecordBatchStream> {
-    let mut builder = RecordBatchReceiverStream::builder(schema, 2);
-    let sender = builder.tx();
-
-    builder.spawn_blocking(move || {
-        if let Err(e) = read_spill(sender, path.path()) {
-            error!("Failure while reading spill file: {:?}. Error: {}", path, e);
-        }
-    });
-
-    Ok(builder.build())
-}
-
 fn write_sorted(
     batches: Vec<RecordBatch>,
     path: PathBuf,
@@ -639,15 +614,47 @@ fn write_sorted(
     Ok(())
 }
 
-fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
+/// Stream batches from spill files.
+///
+/// Each spill file has one or more batches. Intra-batch order is guaranteed (each one is sorted),
+/// but the inter-batch ordering is not guaranteed, hence why we need to convert each batch from the
+/// spill to a separate input stream for the merge-sort procedure.
+fn read_spill_as_streams(
+    path: &Path,
+    schema: SchemaRef,
+) -> Result<Vec<SendableRecordBatchStream>> {
     let file = BufReader::new(File::open(path)?);
     let reader = FileReader::try_new(file, None)?;
+
+    let mut streams = vec![];
+    let file_path = path.as_os_str().to_os_string();
     for batch in reader {
-        sender
-            .blocking_send(batch.map_err(Into::into))
-            .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
+        let stream = build_receiver_stream(batch, schema.clone(), file_path.clone());
+        streams.push(stream);
     }
-    Ok(())
+    Ok(streams)
+}
+
+fn build_receiver_stream(
+    maybe_batch: Result<RecordBatch, ArrowError>,
+    schema: SchemaRef,
+    file_path: OsString,
+) -> SendableRecordBatchStream {
+    let mut builder = RecordBatchReceiverStream::builder(schema.clone(), 2);
+    let sender = builder.tx();
+
+    builder.spawn_blocking(move || {
+        if let Err(e) = sender
+            .blocking_send(maybe_batch.map_err(Into::into))
+            .map_err(|e| DataFusionError::Execution(format!("{e}")))
+        {
+            error!(
+                "Failure while reading spill file: {:?}. Error: {}",
+                file_path, e
+            );
+        }
+    });
+    builder.build()
 }
 
 /// Sort execution plan.
