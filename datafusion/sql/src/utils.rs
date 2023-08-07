@@ -377,15 +377,12 @@ where
             ))),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
-            Expr::GetIndexedField(GetIndexedField {
-                key,
-                extra_key,
-                expr,
-            }) => Ok(Expr::GetIndexedField(GetIndexedField::new(
-                Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
-                key.clone(),
-                extra_key.clone(),
-            ))),
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                Ok(Expr::GetIndexedField(GetIndexedField::new(
+                    Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
+                    field.clone(),
+                )))
+            }
             Expr::GroupingSet(set) => match set {
                 GroupingSet::Rollup(exprs) => Ok(Expr::GroupingSet(GroupingSet::Rollup(
                     exprs
