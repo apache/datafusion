@@ -1925,7 +1925,7 @@ mod roundtrip_tests {
             Field::new("id", DataType::Int64, true),
             Field::new_struct(
                 "arg",
-                Fields::from(vec![Field::new("item", DataType::Float64, true)]),
+                Fields::from(vec![Field::new("name", DataType::Float64, true)]),
                 true,
             ),
         ];
