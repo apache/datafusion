@@ -115,8 +115,8 @@ pub enum Expr {
     IsNotUnknown(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
-    /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-    ///
+    /// Returns the field of a [`arrow::array::ListArray`] or
+    /// [`arrow::array::StructArray`] by key or key range
     GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
     Between(Between),
@@ -359,19 +359,20 @@ impl ScalarUDF {
     }
 }
 
+/// Access a sub field of a nested type, such as `Field` or `List`
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GetFieldAccess {
-    /// returns the field `struct[field]`. For example `struct["name"]`
+    /// Named field, For example `struct["name"]`
     NamedStructField { name: ScalarValue },
-    /// single list index
-    // list[i]
+    /// Single list index, for example: `list[i]`
     ListIndex { key: Box<Expr> },
-    /// list range `list[i:j]`
+    /// List range, for example `list[i:j]`
     ListRange { start: Box<Expr>, stop: Box<Expr> },
 }
 
-/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by `key`.
-/// If `extra_key` is not `None`, returns the slice of a [`arrow::array::ListArray`] in the range from `key` to `extra_key`.
+/// Returns the field of a [`arrow::array::ListArray`] or
+/// [`arrow::array::StructArray`] by `key`. See [`GetFieldAccess`] for
+/// details.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct GetIndexedField {
     /// The expression to take the field from
@@ -923,6 +924,87 @@ impl Expr {
             Box::new(low),
             Box::new(high),
         ))
+    }
+
+    /// Return access to the named field. Example `expr["name"]`
+    ///
+    /// ## Access field "my_field" from column "c1"
+    ///
+    /// For example if column "c1" holds documents like this
+    ///
+    /// ```json
+    /// {
+    ///   "my_field": 123.34,
+    ///   "other_field": "Boston",
+    /// }
+    /// ```
+    ///
+    /// You can access column "my_field" with
+    ///
+    /// ```
+    /// # use datafusion_expr::{lit, col, Expr};
+    /// let expr = col("c1")
+    ///    .field("my_field");
+    /// ```
+    pub fn field(self, name: impl Into<String>) -> Self {
+        Expr::GetIndexedField(GetIndexedField {
+            expr: Box::new(self),
+            field: GetFieldAccess::NamedStructField {
+                name: ScalarValue::Utf8(Some(name.into())),
+            },
+        })
+    }
+
+    /// Return access to the element field. Example `expr["name"]`
+    ///
+    /// ## Example Access element 2 from column "c1"
+    ///
+    /// For example if column "c1" holds documents like this
+    ///
+    /// ```json
+    /// [10, 20, 30, 40]
+    /// ```
+    ///
+    /// You can access the value "30" with
+    ///
+    /// ```
+    /// # use datafusion_expr::{lit, col, Expr};
+    /// let expr = col("c1")
+    ///    .index(lit(3));
+    /// ```
+    pub fn index(self, key: Expr) -> Self {
+        Expr::GetIndexedField(GetIndexedField {
+            expr: Box::new(self),
+            field: GetFieldAccess::ListIndex { key: Box::new(key) },
+        })
+    }
+
+    /// Return element at `1` based index field. Example
+    /// `expr["name"]`
+    ///
+    /// ## Example: Access element 2 from column "c1"
+    ///
+    /// For example if column "c1" holds documents like this
+    ///
+    /// ```json
+    /// [10, 20, 30, 40]
+    /// ```
+    ///
+    /// You can access the value "[20, 30, 40]" with
+    ///
+    /// ```
+    /// # use datafusion_expr::{lit, col, Expr};
+    /// let expr = col("c1")
+    ///    .slice(lit(30));
+    /// ```
+    pub fn slice(self, start: Expr, stop: Expr) -> Self {
+        Expr::GetIndexedField(GetIndexedField {
+            expr: Box::new(self),
+            field: GetFieldAccess::ListRange {
+                start: Box::new(start),
+                stop: Box::new(stop),
+            },
+        })
     }
 
     pub fn try_into_col(&self) -> Result<Column> {
