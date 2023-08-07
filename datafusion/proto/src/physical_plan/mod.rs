@@ -1409,7 +1409,7 @@ mod roundtrip_tests {
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
-            datatypes::{DataType, Field, Schema},
+            datatypes::{DataType, Field, Fields, Schema},
         },
         datasource::{
             listing::PartitionedFile,
@@ -1923,8 +1923,11 @@ mod roundtrip_tests {
     fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
         let fields = vec![
             Field::new("id", DataType::Int64, true),
-            Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
-            Field::new("name", DataType::Utf8, true),
+            Field::new_struct(
+                "arg",
+                Fields::from(vec![Field::new("item", DataType::Float64, true)]),
+                true,
+            ),
         ];
 
         let schema = Schema::new(fields);

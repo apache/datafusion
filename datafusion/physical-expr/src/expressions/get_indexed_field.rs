@@ -350,7 +350,7 @@ mod tests {
         )?;
         let expr = Arc::new(GetIndexedFieldExpr::new(
             expr,
-            GetFieldAccessExpr::ListIndex { key: key },
+            GetFieldAccessExpr::ListIndex { key },
         ));
         let result = expr.evaluate(&batch)?.into_array(1);
         let result = as_string_array(&result).expect("failed to downcast to ListArray");
@@ -389,10 +389,7 @@ mod tests {
         )?;
         let expr = Arc::new(GetIndexedFieldExpr::new(
             expr,
-            GetFieldAccessExpr::ListRange {
-                start: start,
-                stop: stop,
-            },
+            GetFieldAccessExpr::ListRange { start, stop },
         ));
         let result = expr.evaluate(&batch)?.into_array(1);
         let result = as_list_array(&result).expect("failed to downcast to ListArray");
@@ -416,7 +413,7 @@ mod tests {
         )?;
         let expr = Arc::new(GetIndexedFieldExpr::new(
             expr,
-            GetFieldAccessExpr::ListIndex { key: key },
+            GetFieldAccessExpr::ListIndex { key },
         ));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         assert!(result.is_null(0));
@@ -440,7 +437,7 @@ mod tests {
         )?;
         let expr = Arc::new(GetIndexedFieldExpr::new(
             expr,
-            GetFieldAccessExpr::ListIndex { key: key },
+            GetFieldAccessExpr::ListIndex { key },
         ));
         let result = expr.evaluate(&batch)?.into_array(1);
         assert!(result.is_null(0));
