@@ -27,12 +27,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{cast::as_struct_array, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{
-    field_util::{
-        get_indexed_field as get_data_type_field, GetFieldAccessCharacteristic,
-    },
-    ColumnarValue,
-};
+use datafusion_expr::{field_util::GetFieldAccessSchema, ColumnarValue};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
@@ -96,6 +91,23 @@ impl GetIndexedFieldExpr {
     pub fn arg(&self) -> &Arc<dyn PhysicalExpr> {
         &self.arg
     }
+
+    fn schema_access(&self, input_schema: &Schema) -> Result<GetFieldAccessSchema> {
+        Ok(match &self.field {
+            GetFieldAccessExpr::NamedStructField { name } => {
+                GetFieldAccessSchema::NamedStructField { name: name.clone() }
+            }
+            GetFieldAccessExpr::ListIndex { key } => GetFieldAccessSchema::ListIndex {
+                key_dt: key.data_type(input_schema)?,
+            },
+            GetFieldAccessExpr::ListRange { start, stop } => {
+                GetFieldAccessSchema::ListRange {
+                    start_dt: start.data_type(input_schema)?,
+                    stop_dt: stop.data_type(input_schema)?,
+                }
+            }
+        })
+    }
 }
 
 impl std::fmt::Display for GetIndexedFieldExpr {
@@ -111,44 +123,16 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         let arg_dt = self.arg.data_type(input_schema)?;
-        let field_ch = match &self.field {
-            GetFieldAccessExpr::NamedStructField { name } => {
-                GetFieldAccessCharacteristic::NamedStructField { name: name.clone() }
-            }
-            GetFieldAccessExpr::ListIndex { key } => {
-                GetFieldAccessCharacteristic::ListIndex {
-                    key_dt: key.data_type(input_schema)?,
-                }
-            }
-            GetFieldAccessExpr::ListRange { start, stop } => {
-                GetFieldAccessCharacteristic::ListRange {
-                    start_dt: start.data_type(input_schema)?,
-                    stop_dt: stop.data_type(input_schema)?,
-                }
-            }
-        };
-        get_data_type_field(&arg_dt, &field_ch).map(|f| f.data_type().clone())
+        self.schema_access(input_schema)?
+            .get_accessed_field(&arg_dt)
+            .map(|f| f.data_type().clone())
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
         let arg_dt = self.arg.data_type(input_schema)?;
-        let field_ch = match &self.field {
-            GetFieldAccessExpr::NamedStructField { name } => {
-                GetFieldAccessCharacteristic::NamedStructField { name: name.clone() }
-            }
-            GetFieldAccessExpr::ListIndex { key } => {
-                GetFieldAccessCharacteristic::ListIndex {
-                    key_dt: key.data_type(input_schema)?,
-                }
-            }
-            GetFieldAccessExpr::ListRange { start, stop } => {
-                GetFieldAccessCharacteristic::ListRange {
-                    start_dt: start.data_type(input_schema)?,
-                    stop_dt: stop.data_type(input_schema)?,
-                }
-            }
-        };
-        get_data_type_field(&arg_dt, &field_ch).map(|f| f.is_nullable())
+        self.schema_access(input_schema)?
+            .get_accessed_field(&arg_dt)
+            .map(|f| f.is_nullable())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
