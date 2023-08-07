@@ -120,12 +120,12 @@ impl NestedLoopJoinExec {
         })
     }
 
-    /// left (build) side which gets hashed
+    /// left side
     pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
         &self.left
     }
 
-    /// right (probe) side which are filtered by the hash table
+    /// right side
     pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
         &self.right
     }
