@@ -942,9 +942,10 @@ impl Expr {
     /// You can access column "my_field" with
     ///
     /// ```
-    /// # use datafusion_expr::{lit, col, Expr};
+    /// # use datafusion_expr::{col};
     /// let expr = col("c1")
     ///    .field("my_field");
+    /// assert_eq!(expr.display_name().unwrap(), "c1[my_field]");
     /// ```
     pub fn field(self, name: impl Into<String>) -> Self {
         Expr::GetIndexedField(GetIndexedField {
@@ -971,6 +972,7 @@ impl Expr {
     /// # use datafusion_expr::{lit, col, Expr};
     /// let expr = col("c1")
     ///    .index(lit(3));
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(3)]");
     /// ```
     pub fn index(self, key: Expr) -> Self {
         Expr::GetIndexedField(GetIndexedField {
@@ -979,10 +981,10 @@ impl Expr {
         })
     }
 
-    /// Return element at `1` based index field. Example
-    /// `expr["name"]`
+    /// Return elements between `1` based `start` and `stop`, for
+    /// example `expr[1:3]`
     ///
-    /// ## Example: Access element 2 from column "c1"
+    /// ## Example: Access element 2, 3, 4 from column "c1"
     ///
     /// For example if column "c1" holds documents like this
     ///
@@ -990,14 +992,15 @@ impl Expr {
     /// [10, 20, 30, 40]
     /// ```
     ///
-    /// You can access the value "[20, 30, 40]" with
+    /// You can access the value `[20, 30, 40]` with
     ///
     /// ```
-    /// # use datafusion_expr::{lit, col, Expr};
+    /// # use datafusion_expr::{lit, col};
     /// let expr = col("c1")
-    ///    .slice(lit(30));
+    ///    .range(lit(2), lit(4));
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4)]");
     /// ```
-    pub fn slice(self, start: Expr, stop: Expr) -> Self {
+    pub fn range(self, start: Expr, stop: Expr) -> Self {
         Expr::GetIndexedField(GetIndexedField {
             expr: Box::new(self),
             field: GetFieldAccess::ListRange {
