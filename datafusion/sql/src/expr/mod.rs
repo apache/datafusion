@@ -36,7 +36,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
-    Expr, ExprSchemable, GetIndexedField, GetIndexedFieldKey, Like, Operator, TryCast,
+    Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
 use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
@@ -511,39 +511,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         expr: SQLExpr,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Box<GetIndexedFieldKey>, Option<Box<Expr>>)> {
-        let (key, extra_key) = match expr.clone() {
+    ) -> Result<GetFieldAccess> {
+        let field = match expr.clone() {
+            SQLExpr::Value(
+                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            ) => GetFieldAccess::NamedStructField {
+                name: ScalarValue::Utf8(Some(s)),
+            },
             SQLExpr::JsonAccess {
                 left,
                 operator: JsonOperator::Colon,
                 right,
             } => {
-                let left =
-                    self.sql_expr_to_logical_expr(*left, schema, planner_context)?;
-                let right =
-                    self.sql_expr_to_logical_expr(*right, schema, planner_context)?;
+                let start = Box::new(self.sql_expr_to_logical_expr(
+                    *left,
+                    schema,
+                    planner_context,
+                )?);
+                let stop = Box::new(self.sql_expr_to_logical_expr(
+                    *right,
+                    schema,
+                    planner_context,
+                )?);
 
-                (
-                    GetIndexedFieldKey::new(Some(left), None),
-                    Some(Box::new(right)),
-                )
+                GetFieldAccess::ListRange { start, stop }
             }
-            SQLExpr::Value(
-                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-            ) => (
-                GetIndexedFieldKey::new(None, Some(ScalarValue::Utf8(Some(s)))),
-                None,
-            ),
-            _ => (
-                GetIndexedFieldKey::new(
-                    Some(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
-                    None,
-                ),
-                None,
-            ),
+            _ => GetFieldAccess::ListIndex {
+                key: Box::new(self.sql_expr_to_logical_expr(
+                    expr,
+                    schema,
+                    planner_context,
+                )?),
+            },
         };
 
-        Ok((Box::new(key), extra_key))
+        Ok(field)
     }
 
     fn plan_indexed(
@@ -563,11 +565,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             expr
         };
 
-        let (key, extra_key) = self.plan_indices(indices, schema, planner_context)?;
         Ok(Expr::GetIndexedField(GetIndexedField::new(
             Box::new(expr),
-            key,
-            extra_key,
+            self.plan_indices(indices, schema, planner_context)?,
         )))
     }
 }
