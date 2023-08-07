@@ -988,6 +988,7 @@ mod tests {
     };
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::{displayable, Statistics};
+    use crate::physical_optimizer::dist_enforcement_v2::EnforceDistributionV2;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
@@ -1162,8 +1163,11 @@ mod tests {
             let mut config = ConfigOptions::new();
             config.execution.target_partitions = 10;
 
-            // run optimizer
-            let optimizer = EnforceDistribution {};
+            // // run optimizer
+            // let optimizer = EnforceDistribution {};
+            // Run enforce distribution rule
+            let optimizer = EnforceDistributionV2::new();
+
             let optimized = optimizer.optimize($PLAN, &config)?;
             // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
             //       because they were written prior to the separation of `BasicEnforcement` into
