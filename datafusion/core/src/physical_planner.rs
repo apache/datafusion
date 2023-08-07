@@ -65,7 +65,8 @@ use async_trait::async_trait;
 use datafusion_common::{plan_err, DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
-    GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
+    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -181,28 +182,22 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField {
-            key,
-            extra_key,
-            expr,
-        }) => {
+        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
             let expr = create_physical_name(expr, false)?;
+            let name = match field {
+                GetFieldAccess::NamedStructField { name } => format!("{expr}[{name}]"),
+                GetFieldAccess::ListIndex { key } => {
+                    let key = create_physical_name(key, false)?;
+                    format!("{expr}[{key}]")
+                }
+                GetFieldAccess::ListRange { start, stop } => {
+                    let start = create_physical_name(start, false)?;
+                    let stop = create_physical_name(stop, false)?;
+                    format!("{expr}[{start}:{stop}]")
+                }
+            };
 
-            if let (Some(list_key), Some(extra_key)) = (&key.list_key, extra_key) {
-                let key = create_physical_name(list_key, false)?;
-                let extra_key = create_physical_name(extra_key, false)?;
-                Ok(format!("{expr}[{key}:{extra_key}]"))
-            } else {
-                let key = if let Some(list_key) = &key.list_key {
-                    create_physical_name(list_key, false)?
-                } else if let Some(ScalarValue::Utf8(Some(struct_key))) = &key.struct_key
-                {
-                    struct_key.to_string()
-                } else {
-                    String::from("")
-                };
-                Ok(format!("{expr}[{key}]"))
-            }
+            Ok(name)
         }
         Expr::ScalarFunction(func) => {
             create_function_physical_name(&func.fun.to_string(), false, &func.args)

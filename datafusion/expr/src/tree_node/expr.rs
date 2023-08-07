@@ -342,15 +342,12 @@ impl TreeNode for Expr {
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }
             }
-            Expr::GetIndexedField(GetIndexedField {
-                key,
-                extra_key,
-                expr,
-            }) => Expr::GetIndexedField(GetIndexedField::new(
-                transform_boxed(expr, &mut transform)?,
-                key,
-                extra_key,
-            )),
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                Expr::GetIndexedField(GetIndexedField::new(
+                    transform_boxed(expr, &mut transform)?,
+                    field,
+                ))
+            }
             Expr::Placeholder(Placeholder { id, data_type }) => {
                 Expr::Placeholder(Placeholder { id, data_type })
             }

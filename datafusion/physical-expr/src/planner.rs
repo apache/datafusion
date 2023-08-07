@@ -19,8 +19,8 @@ use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
-        self, binary, date_time_interval_expr, like, Column, GetIndexedFieldExpr,
-        GetIndexedFieldExprKey, Literal,
+        self, binary, date_time_interval_expr, like, Column, GetFieldAccessExpr,
+        GetIndexedFieldExpr, Literal,
     },
     functions, udf,
     var_provider::VarType,
@@ -31,7 +31,8 @@ use datafusion_common::plan_err;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
-    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
+    binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
+    Operator, TryCast,
 };
 use std::sync::Arc;
 
@@ -339,33 +340,35 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField {
-            key,
-            extra_key,
-            expr,
-        }) => {
-            let extra_key_expr = if let Some(extra_key) = extra_key {
-                Some(create_physical_expr(
-                    extra_key,
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?)
-            } else {
-                None
-            };
-            let key_expr = if let Some(list_key) = &key.list_key {
-                GetIndexedFieldExprKey::new(
-                    Some(create_physical_expr(
-                        list_key,
+        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+            let field = match field {
+                GetFieldAccess::NamedStructField { name } => {
+                    GetFieldAccessExpr::NamedStructField { name: name.clone() }
+                }
+                GetFieldAccess::ListIndex { key } => GetFieldAccessExpr::ListIndex {
+                    key: create_physical_expr(
+                        key,
                         input_dfschema,
                         input_schema,
                         execution_props,
-                    )?),
-                    None,
-                )
-            } else {
-                GetIndexedFieldExprKey::new(None, Some(key.struct_key.clone().unwrap()))
+                    )?,
+                },
+                GetFieldAccess::ListRange { start, stop } => {
+                    GetFieldAccessExpr::ListRange {
+                        start: create_physical_expr(
+                            start,
+                            input_dfschema,
+                            input_schema,
+                            execution_props,
+                        )?,
+                        stop: create_physical_expr(
+                            stop,
+                            input_dfschema,
+                            input_schema,
+                            execution_props,
+                        )?,
+                    }
+                }
             };
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(
@@ -374,8 +377,7 @@ pub fn create_physical_expr(
                     input_schema,
                     execution_props,
                 )?,
-                key_expr,
-                extra_key_expr,
+                field,
             )))
         }
 
