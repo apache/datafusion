@@ -805,6 +805,7 @@ impl TableProvider for ListingTable {
             );
         }
 
+        // TODO support inserts to sorted tables which preserve sort_order
         // Inserts currently make no effort to preserve sort_order. This could lead to
         // incorrect query results on the table after inserting incorrectly sorted data.
         let unsorted: Vec<Vec<Expr>> = vec![];
@@ -1620,16 +1621,14 @@ mod tests {
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
             "column1",
-            DataType::Float64,
+            DataType::Int32,
             false,
         )]));
 
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Float64Array::from(vec![
-                1.0, 2.0, 3.0,
-            ]))],
+            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         // Filename with extension
@@ -1696,6 +1695,7 @@ mod tests {
 
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &res);
+
         // Read the records in the table
         let batches = session_ctx.sql("select * from t").await?.collect().await?;
 
@@ -1704,17 +1704,21 @@ mod tests {
             "+---------+",
             "| column1 |",
             "+---------+",
-            "| 1.0     |",
-            "| 2.0     |",
-            "| 3.0     |",
-            "| 1.0     |",
-            "| 2.0     |",
-            "| 3.0     |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
             "+---------+",
         ];
 
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &batches);
+
+        // Assert that only 1 file was added to the table
+        let num_files = tmp_dir.path().read_dir()?.count();
+        assert_eq!(num_files, 1);
 
         // Create a physical plan from the insert plan
         let plan = session_ctx
@@ -1744,23 +1748,27 @@ mod tests {
             "+---------+",
             "| column1 |",
             "+---------+",
-            "| 1.0     |",
-            "| 2.0     |",
-            "| 3.0     |",
-            "| 1.0     |",
-            "| 2.0     |",
-            "| 3.0     |",
-            "| 1.0     |",
-            "| 2.0     |",
-            "| 3.0     |",
-            "| 1.0     |",
-            "| 2.0     |",
-            "| 3.0     |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
             "+---------+",
         ];
 
         // Assert that the batches read from the file after the second append match the expected result.
         assert_batches_eq!(expected, &batches);
+
+        // Assert that no additional files were added to the table
+        let num_files = tmp_dir.path().read_dir()?.count();
+        assert_eq!(num_files, 1);
 
         // Return Ok if the function
         Ok(())
@@ -1775,16 +1783,14 @@ mod tests {
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
             "column1",
-            DataType::Float64,
+            DataType::Int32,
             false,
         )]));
 
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Float64Array::from(vec![
-                1.0, 2.0, 3.0,
-            ]))],
+            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         // Register appropriate table depending on file_type we want to test
@@ -1903,7 +1909,7 @@ mod tests {
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &batches);
 
-        //asert that 6 files were added to the table
+        // Assert that 6 files were added to the table
         let num_files = tmp_dir.path().read_dir()?.count();
         assert_eq!(num_files, 6);
 

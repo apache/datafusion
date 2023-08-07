@@ -313,6 +313,8 @@ pub trait BatchSerializer: Unpin + Send {
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
 }
 
+/// Checks if any of the passed writers have encountered an error
+/// and if so, all writers are aborted.
 async fn check_for_errors<T, W: AsyncWrite + Unpin + Send>(
     result: Result<T>,
     writers: &mut [AbortableWrite<W>],
