@@ -471,7 +471,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::Gt => "gt",
         Operator::GtEq => "gte",
         Operator::Plus => "add",
-        Operator::Minus => "substract",
+        Operator::Minus => "subtract",
         Operator::Multiply => "multiply",
         Operator::Divide => "divide",
         Operator::Modulo => "mod",
