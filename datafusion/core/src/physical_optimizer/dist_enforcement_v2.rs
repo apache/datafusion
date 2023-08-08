@@ -215,9 +215,9 @@ fn ensure_distribution(
     }
     // Don't need to apply when the returned row count is not greater than 1
     let stats = repartition_context.plan.statistics();
-    let mut should_repartition = true;
+    let mut repartition_beneficial_stat = true;
     if stats.is_exact {
-        should_repartition = stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
+        repartition_beneficial_stat = stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
     }
 
     let mut is_updated = false;
@@ -270,19 +270,12 @@ fn ensure_distribution(
             let mut new_child = child.clone();
             let mut is_changed = false;
 
-            // // We can reorder a child if:
-            // //   - It has no ordering to preserve, or
-            // //   - Its parent has no required input ordering and does not
-            // //     maintain input ordering.
-            // //   - input partition is 1, in this case repartition preservers ordering.
-            // // Check if this condition holds:
-            // let can_reorder = child.output_ordering().is_none()
-            //     || (!required_input_ordering.is_some() && !maintains);
-            //     // || child.output_partitioning().partition_count() == 1;
-
             if enable_round_robin
-                && (would_benefit && should_repartition)
+                && (would_benefit && repartition_beneficial_stat)
+                // Unless partitioning doesn't increase partition number, it is not beneficial.
                 && child.output_partitioning().partition_count() < target_partitions
+                // Either doesn't require ordering, or at the input there is no ordering
+                // In this case, adding repartition is not harmful for ordering propagation.
                 && (required_input_ordering.is_none()
                     || child.output_ordering().is_none())
             {
