@@ -37,7 +37,7 @@ use std::sync::Arc;
 /// Example:
 /// ```
 /// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
-/// use datafusion::physical_plan::project_schema;
+/// use datafusion_common::project_schema;
 ///
 /// // Schema with columns 'a', 'b', and 'c'
 /// let schema = SchemaRef::new(Schema::new(vec![
