@@ -54,6 +54,10 @@ use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 #[case::mem_100k_5_rows_fetch_10000(102400, 5, Some(10000), false)]
 #[case::mem_100k_20k_rows_fetch_10000(102400, 20000, Some(10000), false)]
 #[case::mem_100k_1m_rows_fetch_10000(102400, 1000000, Some(10000), false)]
+// Test with mem > 1MB to exercise the intermediate streaming-merge on spills
+// (i.e. skip the <1MB concatenation heuristic)
+#[case::mem_2m_1m_rows(2097152, 500000, None, true)]
+#[case::mem_2m_10m_rows_fetch_10(2097152, 10000000, Some(10), false)]
 #[case::mem_inf_5_rows(usize::MAX, 5, None, false)]
 #[case::mem_inf_20k_rows(usize::MAX, 20000, None, false)]
 #[case::mem_inf_1m_rows(usize::MAX, 1000000, None, false)]
