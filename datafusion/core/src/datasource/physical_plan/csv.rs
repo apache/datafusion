@@ -27,13 +27,15 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayAs, DisplayFormatType, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+use datafusion_physical_expr::{
+    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+};
 use tokio::io::AsyncWriteExt;
 
 use super::FileScanConfig;
@@ -438,7 +440,7 @@ impl FileOpener for CsvOpener {
     /// Consider the following partitions enclosed by braces `{}`:
     ///
     /// {A,1,2,3,4,5,6,7,8,9\n
-    ///  A,1,2,3,4,5,6,7,8,9\n}                           
+    ///  A,1,2,3,4,5,6,7,8,9\n}
     ///  A,1,2,3,4,5,6,7,8,9\n
     ///  The lines read would be: [0, 1]
     ///

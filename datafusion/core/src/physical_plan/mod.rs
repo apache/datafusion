@@ -36,7 +36,6 @@ pub use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use futures::stream::{Stream, TryStreamExt};
-use std::fmt;
 use std::fmt::Debug;
 use tokio::task::JoinSet;
 
@@ -489,10 +488,8 @@ pub fn execute_stream_partitioned(
 
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
-use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, LexOrdering,
-};
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
+pub use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
@@ -564,7 +561,9 @@ pub mod windows;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_execution::TaskContext;
-pub use datafusion_physical_expr::{expressions, functions, hash_utils, udf};
+pub use datafusion_physical_expr::{
+    expressions, functions, hash_utils, ordering_equivalence_properties_helper, udf,
+};
 
 #[cfg(test)]
 mod tests {
