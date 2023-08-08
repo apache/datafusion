@@ -49,7 +49,7 @@ pub mod build_in;
 pub(crate) mod groups_accumulator;
 mod hyperloglog;
 pub mod moving_min_max;
-pub(crate) mod regr_slope;
+pub(crate) mod regr;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod sum;

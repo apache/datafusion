@@ -2651,6 +2651,14 @@ pub enum AggregateFunction {
     FirstValueAgg = 24,
     LastValueAgg = 25,
     RegrSlope = 26,
+    RegrIntercept = 27,
+    RegrCount = 28,
+    RegrR2 = 29,
+    RegrAvgx = 30,
+    RegrAvgy = 31,
+    RegrSxx = 32,
+    RegrSyy = 33,
+    RegrSxy = 34,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2688,6 +2696,14 @@ impl AggregateFunction {
             AggregateFunction::FirstValueAgg => "FIRST_VALUE_AGG",
             AggregateFunction::LastValueAgg => "LAST_VALUE_AGG",
             AggregateFunction::RegrSlope => "REGR_SLOPE",
+            AggregateFunction::RegrIntercept => "REGR_INTERCEPT",
+            AggregateFunction::RegrCount => "REGR_COUNT",
+            AggregateFunction::RegrR2 => "REGR_R2",
+            AggregateFunction::RegrAvgx => "REGR_AVGX",
+            AggregateFunction::RegrAvgy => "REGR_AVGY",
+            AggregateFunction::RegrSxx => "REGR_SXX",
+            AggregateFunction::RegrSyy => "REGR_SYY",
+            AggregateFunction::RegrSxy => "REGR_SXY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2722,6 +2738,14 @@ impl AggregateFunction {
             "FIRST_VALUE_AGG" => Some(Self::FirstValueAgg),
             "LAST_VALUE_AGG" => Some(Self::LastValueAgg),
             "REGR_SLOPE" => Some(Self::RegrSlope),
+            "REGR_INTERCEPT" => Some(Self::RegrIntercept),
+            "REGR_COUNT" => Some(Self::RegrCount),
+            "REGR_R2" => Some(Self::RegrR2),
+            "REGR_AVGX" => Some(Self::RegrAvgx),
+            "REGR_AVGY" => Some(Self::RegrAvgy),
+            "REGR_SXX" => Some(Self::RegrSxx),
+            "REGR_SYY" => Some(Self::RegrSyy),
+            "REGR_SXY" => Some(Self::RegrSxy),
             _ => None,
         }
     }
