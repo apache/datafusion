@@ -805,8 +805,7 @@ mod tests {
             Field::new("c13", DataType::Utf8, true),
         ]);
 
-        let compressed_csv =
-            csv.with_file_compression_type(file_compression_type.clone());
+        let compressed_csv = csv.with_file_compression_type(file_compression_type);
 
         //convert compressed_stream to decoded_stream
         let decoded_stream = compressed_csv

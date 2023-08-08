@@ -1636,7 +1636,7 @@ mod tests {
             "path{}",
             file_type
                 .to_owned()
-                .get_ext_with_compression(file_compression_type.clone())
+                .get_ext_with_compression(file_compression_type)
                 .unwrap()
         );
 
