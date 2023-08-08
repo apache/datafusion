@@ -186,7 +186,7 @@ impl FileFormat for JsonFormat {
             ));
         }
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(JsonSink::new(conf, self.file_compression_type.clone()));
+        let sink = Arc::new(JsonSink::new(conf, self.file_compression_type));
 
         Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
     }

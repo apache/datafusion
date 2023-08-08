@@ -281,7 +281,7 @@ impl FileFormat for CsvFormat {
             conf,
             self.has_header,
             self.delimiter,
-            self.file_compression_type.clone(),
+            self.file_compression_type,
         ));
 
         Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
