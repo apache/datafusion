@@ -26,8 +26,8 @@ use datafusion::logical_expr::{
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
-    ColumnStatistics, DisplayAs, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use datafusion::scalar::ScalarValue;
 use datafusion::{

@@ -25,9 +25,8 @@ use datafusion::{
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        expressions::PhysicalSortExpr, ColumnStatistics, DisplayAs,
-        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-        Statistics,
+        expressions::PhysicalSortExpr, ColumnStatistics, DisplayAs, DisplayFormatType,
+        ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     scalar::ScalarValue,

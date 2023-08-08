@@ -21,7 +21,7 @@ use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::compute;
 use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
-use arrow::datatypes::{UInt32Type, SchemaRef};
+use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -70,7 +70,6 @@ pub fn project_schema(
     };
     Ok(schema)
 }
-
 
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {

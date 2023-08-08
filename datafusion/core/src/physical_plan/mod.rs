@@ -660,7 +660,6 @@ use datafusion_physical_expr::{
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
-
 pub mod aggregates;
 pub mod analyze;
 pub mod coalesce_batches;
@@ -689,9 +688,9 @@ pub mod windows;
 
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+pub use datafusion_common::utils::project_schema;
 use datafusion_execution::TaskContext;
 pub use datafusion_physical_expr::{expressions, functions, hash_utils, udf};
-pub use datafusion_common::utils::project_schema;
 
 #[cfg(test)]
 mod tests {

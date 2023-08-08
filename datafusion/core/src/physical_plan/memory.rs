@@ -19,13 +19,13 @@
 
 use super::expressions::PhysicalSortExpr;
 use super::{
-    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use core::fmt;
-use datafusion_common::{Result, project_schema};
+use datafusion_common::{project_schema, Result};
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
