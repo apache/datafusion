@@ -106,26 +106,20 @@ fn add_roundrobin_on_top(
     input: Arc<dyn ExecutionPlan>,
     n_target: usize,
     repartition_onward: &mut Option<ExecTree>,
-) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
-    Ok(
-        if input.output_partitioning().partition_count() < n_target {
-            let new_plan = Arc::new(RepartitionExec::try_new(
-                input,
-                Partitioning::RoundRobinBatch(n_target),
-            )?) as Arc<dyn ExecutionPlan>;
-            if let Some(exec_tree) = repartition_onward {
-                panic!(
-                    "exectree should have been empty, exec tree:{:?} ",
-                    exec_tree
-                );
-            }
-            // Initialize new onward
-            *repartition_onward = Some(ExecTree::new(new_plan.clone(), 0, vec![]));
-            (new_plan, true)
-        } else {
-            (input, false)
-        },
-    )
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let new_plan = Arc::new(RepartitionExec::try_new(
+        input,
+        Partitioning::RoundRobinBatch(n_target),
+    )?) as Arc<dyn ExecutionPlan>;
+    if let Some(exec_tree) = repartition_onward {
+        panic!(
+            "exectree should have been empty, exec tree:{:?} ",
+            exec_tree
+        );
+    }
+    // Initialize new onward
+    *repartition_onward = Some(ExecTree::new(new_plan.clone(), 0, vec![]));
+    Ok(new_plan)
 }
 
 fn add_hash_on_top(
@@ -217,7 +211,8 @@ fn ensure_distribution(
     let stats = repartition_context.plan.statistics();
     let mut repartition_beneficial_stat = true;
     if stats.is_exact {
-        repartition_beneficial_stat = stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
+        repartition_beneficial_stat =
+            stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
     }
 
     let mut is_updated = false;
@@ -300,17 +295,17 @@ fn ensure_distribution(
                         ) {
                             new_child = Arc::new(csv_exec) as _;
                             is_changed = true;
-                            // return Ok((plan, true));
                         }
                     }
                 }
-                let mut is_changed_new = false;
-                (new_child, is_changed_new) = add_roundrobin_on_top(
-                    new_child,
-                    target_partitions,
-                    repartition_onward,
-                )?;
-                is_changed = is_changed || is_changed_new;
+                if new_child.output_partitioning().partition_count() < target_partitions {
+                    new_child = add_roundrobin_on_top(
+                        new_child,
+                        target_partitions,
+                        repartition_onward,
+                    )?;
+                    is_changed = true;
+                }
             }
             if new_child
                 .output_partitioning()
