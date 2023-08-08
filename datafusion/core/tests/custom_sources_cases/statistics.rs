@@ -25,7 +25,7 @@ use datafusion::{
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        expressions::PhysicalSortExpr, project_schema, ColumnStatistics, DisplayAs,
+        expressions::PhysicalSortExpr, ColumnStatistics, DisplayAs,
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
         Statistics,
     },
@@ -35,6 +35,7 @@ use datafusion::{
 
 use async_trait::async_trait;
 use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion_common::project_schema;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
