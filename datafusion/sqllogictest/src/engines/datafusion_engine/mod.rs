@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod conversion;
-pub mod datafusion;
-mod output;
-pub mod postgres;
+/// DataFusion engine implementation for sqllogictest.
+mod error;
+mod normalize;
+mod runner;
+
+pub use error::*;
+pub use normalize::*;
+pub use runner::*;

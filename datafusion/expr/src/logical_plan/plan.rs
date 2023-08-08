@@ -528,23 +528,23 @@ impl LogicalPlan {
             LogicalPlan::Prepare(prepare_lp) => {
                 // Verify if the number of params matches the number of values
                 if prepare_lp.data_types.len() != param_values.len() {
-                    return Err(DataFusionError::Plan(format!(
+                    return plan_err!(
                         "Expected {} parameters, got {}",
                         prepare_lp.data_types.len(),
                         param_values.len()
-                    )));
+                    );
                 }
 
                 // Verify if the types of the params matches the types of the values
                 let iter = prepare_lp.data_types.iter().zip(param_values.iter());
                 for (i, (param_type, value)) in iter.enumerate() {
                     if *param_type != value.get_datatype() {
-                        return Err(DataFusionError::Plan(format!(
+                        return plan_err!(
                             "Expected parameter of type {:?}, got {:?} at index {}",
                             param_type,
                             value.get_datatype(),
                             i
-                        )));
+                        );
                     }
                 }
 
@@ -737,9 +737,7 @@ impl LogicalPlan {
                         match (prev, data_type) {
                             (Some(Some(prev)), Some(dt)) => {
                                 if prev != dt {
-                                    Err(DataFusionError::Plan(format!(
-                                        "Conflicting types for {id}"
-                                    )))?;
+                                    plan_err!("Conflicting types for {id}")?;
                                 }
                             }
                             (_, Some(dt)) => {
@@ -768,9 +766,7 @@ impl LogicalPlan {
             match &expr {
                 Expr::Placeholder(Placeholder { id, data_type }) => {
                     if id.is_empty() || id == "$0" {
-                        return Err(DataFusionError::Plan(
-                            "Empty placeholder id".to_string(),
-                        ));
+                        return plan_err!("Empty placeholder id");
                     }
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
                     let idx = id[1..].parse::<usize>().map_err(|e| {
@@ -1300,7 +1296,7 @@ impl Projection {
         schema: DFSchemaRef,
     ) -> Result<Self> {
         if expr.len() != schema.fields().len() {
-            return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
+            return plan_err!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len());
         }
         // Update functional dependencies of `input` according to projection
         // expressions:
@@ -1394,19 +1390,19 @@ impl Filter {
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
             if predicate_type != DataType::Boolean {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
-                )));
+                );
             }
         }
 
         // filter predicates should not be aliased
         if let Expr::Alias(Alias { expr, name, .. }) = predicate {
-            return Err(DataFusionError::Plan(format!(
+            return plan_err!(
                 "Attempted to create Filter predicate with \
                 expression `{expr}` aliased as '{name}'. Filter predicates should not be \
                 aliased."
-            )));
+            );
         }
 
         Ok(Self { predicate, input })
@@ -1651,18 +1647,17 @@ impl Aggregate {
         schema: DFSchemaRef,
     ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "Aggregate requires at least one grouping or aggregate expression"
-                    .to_string(),
-            ));
+            );
         }
         let group_expr_count = grouping_set_expr_count(&group_expr)?;
         if schema.fields().len() != group_expr_count + aggr_expr.len() {
-            return Err(DataFusionError::Plan(format!(
+            return plan_err!(
                 "Aggregate schema has wrong number of fields. Expected {} got {}",
                 group_expr_count + aggr_expr.len(),
                 schema.fields().len()
-            )));
+            );
         }
 
         let aggregate_func_dependencies =

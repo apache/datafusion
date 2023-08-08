@@ -259,6 +259,53 @@ pub fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// Nanvl SQL function
+pub fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::Float64 => {
+            let compute_nanvl = |x: f64, y: f64| {
+                if x.is_nan() {
+                    y
+                } else {
+                    x
+                }
+            };
+
+            Ok(Arc::new(make_function_inputs2!(
+                &args[0],
+                &args[1],
+                "x",
+                "y",
+                Float64Array,
+                { compute_nanvl }
+            )) as ArrayRef)
+        }
+
+        DataType::Float32 => {
+            let compute_nanvl = |x: f32, y: f32| {
+                if x.is_nan() {
+                    y
+                } else {
+                    x
+                }
+            };
+
+            Ok(Arc::new(make_function_inputs2!(
+                &args[0],
+                &args[1],
+                "x",
+                "y",
+                Float32Array,
+                { compute_nanvl }
+            )) as ArrayRef)
+        }
+
+        other => Err(DataFusionError::Internal(format!(
+            "Unsupported data type {other:?} for function nanvl"
+        ))),
+    }
+}
+
 /// Pi SQL function
 pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if !matches!(&args[0], ColumnarValue::Array(_)) {
@@ -957,5 +1004,41 @@ mod tests {
         assert_eq!(floats.value(2), 123.0);
         assert_eq!(floats.value(3), 123.0);
         assert_eq!(floats.value(4), -321.0);
+    }
+
+    #[test]
+    fn test_nanvl_f64() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![1.0, f64::NAN, 3.0, f64::NAN])), // y
+            Arc::new(Float64Array::from(vec![5.0, 6.0, f64::NAN, f64::NAN])), // x
+        ];
+
+        let result = nanvl(&args).expect("failed to initialize function atan2");
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function atan2");
+
+        assert_eq!(floats.len(), 4);
+        assert_eq!(floats.value(0), 1.0);
+        assert_eq!(floats.value(1), 6.0);
+        assert_eq!(floats.value(2), 3.0);
+        assert!(floats.value(3).is_nan());
+    }
+
+    #[test]
+    fn test_nanvl_f32() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float32Array::from(vec![1.0, f32::NAN, 3.0, f32::NAN])), // y
+            Arc::new(Float32Array::from(vec![5.0, 6.0, f32::NAN, f32::NAN])), // x
+        ];
+
+        let result = nanvl(&args).expect("failed to initialize function atan2");
+        let floats =
+            as_float32_array(&result).expect("failed to initialize function atan2");
+
+        assert_eq!(floats.len(), 4);
+        assert_eq!(floats.value(0), 1.0);
+        assert_eq!(floats.value(1), 6.0);
+        assert_eq!(floats.value(2), 3.0);
+        assert!(floats.value(3).is_nan());
     }
 }

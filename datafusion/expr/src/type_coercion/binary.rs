@@ -23,8 +23,8 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{plan_err, DataFusionError};
 
 use crate::type_coercion::is_numeric;
 use crate::Operator;
@@ -82,9 +82,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             | (DataType::Null, DataType::Null)
             | (DataType::Boolean, DataType::Null)
             | (DataType::Null, DataType::Boolean) => Ok(Signature::uniform(DataType::Boolean)),
-            _ => Err(DataFusionError::Plan(format!(
+            _ => plan_err!(
                 "Cannot infer common argument type for logical boolean operation {lhs} {op} {rhs}"
-            ))),
+            ),
         },
         Operator::RegexMatch |
         Operator::RegexIMatch |
@@ -164,9 +164,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else {
-                Err(DataFusionError::Plan(format!(
+                plan_err!(
                     "Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types"
-                )))
+                )
             }
         }
     }

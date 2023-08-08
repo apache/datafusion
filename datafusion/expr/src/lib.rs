@@ -60,7 +60,8 @@ pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GetIndexedField, GroupingSet, Like, TryCast,
+    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GetIndexedField, GroupingSet,
+    Like, TryCast,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;

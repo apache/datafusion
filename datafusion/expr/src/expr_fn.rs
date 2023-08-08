@@ -136,6 +136,17 @@ pub fn sum(expr: Expr) -> Expr {
     ))
 }
 
+/// Create an expression to represent the array_agg() aggregate function
+pub fn array_agg(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::ArrayAgg,
+        vec![expr],
+        false,
+        None,
+        None,
+    ))
+}
+
 /// Create an expression to represent the avg() aggregate function
 pub fn avg(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -560,10 +571,10 @@ scalar_expr!(
     "returns an array of the array's dimensions."
 );
 scalar_expr!(
-    ArrayFill,
-    array_fill,
-    element array,
-    "returns an array filled with copies of the given value."
+    ArrayElement,
+    array_element,
+    array element,
+    "extracts the element with the index n from the array."
 );
 scalar_expr!(
     ArrayLength,
@@ -594,6 +605,12 @@ scalar_expr!(
     array_prepend,
     array element,
     "prepends an element to the beginning of an array."
+);
+scalar_expr!(
+    ArrayRepeat,
+    array_repeat,
+    element count,
+    "returns an array containing element `count` times."
 );
 scalar_expr!(
     ArrayRemove,
@@ -632,6 +649,12 @@ scalar_expr!(
     "replaces all occurrences of the specified element with another specified element."
 );
 scalar_expr!(
+    ArraySlice,
+    array_slice,
+    array offset length,
+    "returns a slice of the array."
+);
+scalar_expr!(
     ArrayToString,
     array_to_string,
     array delimeter,
@@ -647,12 +670,6 @@ nary_scalar_expr!(
     MakeArray,
     array,
     "returns an Arrow array using the specified input expressions."
-);
-scalar_expr!(
-    TrimArray,
-    trim_array,
-    array n,
-    "removes the last n elements from the array."
 );
 
 // string functions
@@ -787,6 +804,7 @@ scalar_expr!(
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
+scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 
@@ -978,6 +996,7 @@ mod test {
         test_unary_scalar_expr!(Log10, log10);
         test_unary_scalar_expr!(Ln, ln);
         test_scalar_expr!(Atan2, atan2, y, x);
+        test_scalar_expr!(Nanvl, nanvl, x, y);
 
         test_scalar_expr!(Ascii, ascii, input);
         test_scalar_expr!(BitLength, bit_length, string);
@@ -1043,12 +1062,12 @@ mod test {
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
         test_unary_scalar_expr!(ArrayDims, array_dims);
-        test_scalar_expr!(ArrayFill, array_fill, element, array);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
+        test_scalar_expr!(ArrayRepeat, array_repeat, element, count);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
         test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
         test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);
@@ -1058,7 +1077,6 @@ mod test {
         test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
         test_unary_scalar_expr!(Cardinality, cardinality);
         test_nary_scalar_expr!(MakeArray, array, input);
-        test_scalar_expr!(TrimArray, trim_array, array, n);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
     }

@@ -86,6 +86,7 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::plan_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::{
@@ -1124,9 +1125,9 @@ pub fn binary(
     if (is_utf8_or_large_utf8(lhs_type) && is_timestamp(rhs_type))
         || (is_timestamp(lhs_type) && is_utf8_or_large_utf8(rhs_type))
     {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
-        )));
+        );
     }
     if !lhs_type.eq(rhs_type) && (!is_decimal(lhs_type) && !is_decimal(rhs_type)) {
         return Err(DataFusionError::Internal(format!(

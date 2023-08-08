@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use datafusion_common::{
-    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
-    ScalarValue, TableReference,
+    plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -60,10 +60,9 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
         if group_expr.len() > 1 {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "Invalid group by expressions, GroupingSet must be the only expression"
-                    .to_string(),
-            ));
+            );
         }
         Ok(grouping_set.distinct_expr().len())
     } else {
@@ -114,7 +113,7 @@ fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
 fn check_grouping_set_size_limit(size: usize) -> Result<()> {
     let max_grouping_set_size = 65535;
     if size > max_grouping_set_size {
-        return Err(DataFusionError::Plan(format!("The number of group_expression in grouping_set exceeds the maximum limit {max_grouping_set_size}, found {size}")));
+        return plan_err!("The number of group_expression in grouping_set exceeds the maximum limit {max_grouping_set_size}, found {size}");
     }
 
     Ok(())
@@ -124,7 +123,7 @@ fn check_grouping_set_size_limit(size: usize) -> Result<()> {
 fn check_grouping_sets_size_limit(size: usize) -> Result<()> {
     let max_grouping_sets_size = 4096;
     if size > max_grouping_sets_size {
-        return Err(DataFusionError::Plan(format!("The number of grouping_set in grouping_sets exceeds the maximum limit {max_grouping_sets_size}, found {size}")));
+        return plan_err!("The number of grouping_set in grouping_sets exceeds the maximum limit {max_grouping_sets_size}, found {size}");
     }
 
     Ok(())
@@ -252,10 +251,9 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
 pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
     if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
         if group_expr.len() > 1 {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "Invalid group by expressions, GroupingSet must be the only expression"
-                    .to_string(),
-            ));
+            );
         }
         Ok(grouping_set.distinct_expr())
     } else {
@@ -340,9 +338,7 @@ fn get_excluded_columns(
     // if HashSet size, and vector length are different, this means that some of the excluded columns
     // are not unique. In this case return error.
     if n_elem != unique_idents.len() {
-        return Err(DataFusionError::Plan(
-            "EXCLUDE or EXCEPT contains duplicate column names".to_string(),
-        ));
+        return plan_err!("EXCLUDE or EXCEPT contains duplicate column names");
     }
 
     let mut result = vec![];
@@ -441,9 +437,7 @@ pub fn expand_qualified_wildcard(
         .cloned()
         .collect();
     if qualified_fields.is_empty() {
-        return Err(DataFusionError::Plan(format!(
-            "Invalid qualifier {qualifier}"
-        )));
+        return plan_err!("Invalid qualifier {qualifier}");
     }
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
@@ -480,9 +474,7 @@ pub fn generate_sort_key(
             Expr::Sort(Sort { expr, .. }) => {
                 Ok(Expr::Sort(Sort::new(expr.clone(), true, false)))
             }
-            _ => Err(DataFusionError::Plan(
-                "Order by only accepts sort expressions".to_string(),
-            )),
+            _ => plan_err!("Order by only accepts sort expressions"),
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -964,15 +956,11 @@ pub fn from_plan(
             // If this check cannot pass it means some optimizer pass is
             // trying to optimize Explain directly
             if expr.is_empty() {
-                return Err(DataFusionError::Plan(
-                    "Invalid EXPLAIN command. Expression is empty".to_string(),
-                ));
+                return plan_err!("Invalid EXPLAIN command. Expression is empty");
             }
 
             if inputs.is_empty() {
-                return Err(DataFusionError::Plan(
-                    "Invalid EXPLAIN command. Inputs are empty".to_string(),
-                ));
+                return plan_err!("Invalid EXPLAIN command. Inputs are empty");
             }
 
             Ok(plan.clone())

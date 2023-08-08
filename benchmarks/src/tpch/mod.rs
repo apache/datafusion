@@ -20,10 +20,10 @@
 use arrow::datatypes::SchemaBuilder;
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
+    common::plan_err,
     error::{DataFusionError, Result},
 };
 use std::fs;
-
 mod run;
 pub use run::RunOpt;
 
@@ -158,13 +158,9 @@ pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
                 Err(e) => errors.push(format!("{filename}: {e}")),
             };
         }
-        Err(DataFusionError::Plan(format!(
-            "invalid query. Could not find query: {errors:?}"
-        )))
+        plan_err!("invalid query. Could not find query: {:?}", errors)
     } else {
-        Err(DataFusionError::Plan(
-            "invalid query. Expected value between 1 and 22".to_owned(),
-        ))
+        plan_err!("invalid query. Expected value between 1 and 22")
     }
 }
 

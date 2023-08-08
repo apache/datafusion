@@ -455,7 +455,7 @@ mod test {
     #[test]
     fn roundtrip_deeply_nested() {
         // we need more stack space so this doesn't overflow in dev builds
-        std::thread::Builder::new().stack_size(10_000_000).spawn(|| {
+        std::thread::Builder::new().stack_size(20_000_000).spawn(|| {
             // don't know what "too much" is, so let's slowly try to increase complexity
             let n_max = 100;
 

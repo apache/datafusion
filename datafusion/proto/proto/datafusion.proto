@@ -400,11 +400,26 @@ message RollupNode {
   repeated LogicalExprNode expr = 1;
 }
 
+message NamedStructField {
+  ScalarValue name = 1;
+}
 
+message ListIndex {
+  LogicalExprNode key = 1;
+}
+
+message ListRange {
+  LogicalExprNode start = 1;
+  LogicalExprNode stop = 2;
+}
 
 message GetIndexedField {
   LogicalExprNode expr = 1;
-  ScalarValue key = 2;
+  oneof field {
+    NamedStructField named_struct_field = 2;
+    ListIndex list_index = 3;
+    ListRange list_range = 4;
+  }
 }
 
 message IsNull {
@@ -556,7 +571,7 @@ enum ScalarFunction {
   ArrayAppend = 86;
   ArrayConcat = 87;
   ArrayDims = 88;
-  ArrayFill = 89;
+  ArrayRepeat = 89;
   ArrayLength = 90;
   ArrayNdims = 91;
   ArrayPosition = 92;
@@ -566,7 +581,8 @@ enum ScalarFunction {
   ArrayReplace = 96;
   ArrayToString = 97;
   Cardinality = 98;
-  TrimArray = 99;
+  ArrayElement = 99;
+  ArraySlice = 100;
   Encode = 101;
   Decode = 102;
   Cot = 103;
@@ -577,6 +593,7 @@ enum ScalarFunction {
   ArrayReplaceN = 108;
   ArrayRemoveAll = 109;
   ArrayReplaceAll = 110;
+  Nanvl = 111;
 }
 
 message ScalarFunctionNode {
@@ -613,6 +630,15 @@ enum AggregateFunction {
   // we append "_AGG" to obey name scoping rules.
   FIRST_VALUE_AGG = 24;
   LAST_VALUE_AGG = 25;
+  REGR_SLOPE = 26;
+  REGR_INTERCEPT = 27;
+  REGR_COUNT = 28;
+  REGR_R2 = 29;
+  REGR_AVGX = 30;
+  REGR_AVGY = 31;
+  REGR_SXX = 32;
+  REGR_SYY = 33;
+  REGR_SXY = 34;
 }
 
 message AggregateExprNode {
@@ -1485,7 +1511,24 @@ message ColumnStats {
   uint32 distinct_count = 4;
 }
 
+message NamedStructFieldExpr {
+  ScalarValue name = 1;
+}
+
+message ListIndexExpr {
+  PhysicalExprNode key = 1;
+}
+
+message ListRangeExpr {
+  PhysicalExprNode start = 1;
+  PhysicalExprNode stop = 2;
+}
+
 message PhysicalGetIndexedFieldExprNode {
   PhysicalExprNode arg = 1;
-  ScalarValue key = 2;
+  oneof field {
+    NamedStructFieldExpr named_struct_field_expr = 2;
+    ListIndexExpr list_index_expr = 3;
+    ListRangeExpr list_range_expr = 4;
+  }
 }

@@ -39,8 +39,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{plan_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 use futures::stream::Stream;
@@ -176,10 +176,9 @@ impl ExecutionPlan for WindowAggExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            Err(DataFusionError::Plan(
+            plan_err!(
                 "Window Error: Windowing is not currently support for unbounded inputs."
-                    .to_string(),
-            ))
+            )
         } else {
             Ok(false)
         }

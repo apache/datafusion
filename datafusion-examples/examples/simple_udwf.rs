@@ -26,7 +26,7 @@ use datafusion::datasource::file_format::options::CsvReadOptions;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, ScalarValue};
 use datafusion_expr::{
     PartitionEvaluator, Signature, Volatility, WindowFrame, WindowUDF,
 };
@@ -140,11 +140,11 @@ fn smooth_it() -> WindowUDF {
 /// arguments of `arg_types`.
 fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
     if arg_types.len() != 1 {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "my_udwf expects 1 argument, got {}: {:?}",
             arg_types.len(),
             arg_types
-        )));
+        );
     }
     Ok(Arc::new(arg_types[0].clone()))
 }

@@ -68,13 +68,23 @@ impl DisplayAs for MemoryExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let partitions: Vec<_> =
+                let partition_sizes: Vec<_> =
                     self.partitions.iter().map(|b| b.len()).collect();
+
+                let output_ordering = self
+                    .sort_information
+                    .as_ref()
+                    .map(|output_ordering| {
+                        let order_strings: Vec<_> =
+                            output_ordering.iter().map(|e| e.to_string()).collect();
+                        format!(", output_ordering={}", order_strings.join(","))
+                    })
+                    .unwrap_or_else(|| "".to_string());
+
                 write!(
                     f,
-                    "MemoryExec: partitions={}, partition_sizes={:?}",
-                    partitions.len(),
-                    partitions
+                    "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
+                    partition_sizes.len(),
                 )
             }
         }
