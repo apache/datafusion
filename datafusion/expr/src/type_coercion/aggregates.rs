@@ -192,7 +192,15 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::RegrSlope => {
+        AggregateFunction::RegrSlope
+        | AggregateFunction::RegrIntercept
+        | AggregateFunction::RegrCount
+        | AggregateFunction::RegrR2
+        | AggregateFunction::RegrAvgx
+        | AggregateFunction::RegrAvgy
+        | AggregateFunction::RegrSXX
+        | AggregateFunction::RegrSYY
+        | AggregateFunction::RegrSXY => {
             let valid_types = [NUMERICS.to_vec(), vec![DataType::Null]].concat();
             let input_types_valid = // number of input already checked before
                 valid_types.contains(&input_types[0]) && valid_types.contains(&input_types[1]);
