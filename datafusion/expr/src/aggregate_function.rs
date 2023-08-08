@@ -25,6 +25,8 @@ use std::{fmt, str::FromStr};
 use strum_macros::EnumIter;
 
 /// Enum of all built-in aggregate functions
+// Contributor's guide for adding new aggregate functions
+// https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
     /// count
