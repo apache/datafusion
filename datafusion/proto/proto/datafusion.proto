@@ -631,6 +631,14 @@ enum AggregateFunction {
   FIRST_VALUE_AGG = 24;
   LAST_VALUE_AGG = 25;
   REGR_SLOPE = 26;
+  REGR_INTERCEPT = 27;
+  REGR_COUNT = 28;
+  REGR_R2 = 29;
+  REGR_AVGX = 30;
+  REGR_AVGY = 31;
+  REGR_SXX = 32;
+  REGR_SYY = 33;
+  REGR_SXY = 34;
 }
 
 message AggregateExprNode {
