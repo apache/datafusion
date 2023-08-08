@@ -36,9 +36,9 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
-    Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
+    Expr, ExprSchemable, GetFieldAccess, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, JsonOperator, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -183,7 +183,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
-                    plan_indexed(col(self.normalizer.normalize(id)), keys)
+                    self.plan_indexed(col(self.normalizer.normalize(id)), keys, schema, planner_context)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {column} instead"
@@ -193,7 +193,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::ArrayIndex { obj, indexes } => {
                 let expr = self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
-                plan_indexed(expr, indexes)
+                self.plan_indexed(expr, indexes, schema, planner_context)
             }
 
             SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema, planner_context),
@@ -505,6 +505,71 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
         }
     }
+
+    fn plan_indices(
+        &self,
+        expr: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<GetFieldAccess> {
+        let field = match expr.clone() {
+            SQLExpr::Value(
+                Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+            ) => GetFieldAccess::NamedStructField {
+                name: ScalarValue::Utf8(Some(s)),
+            },
+            SQLExpr::JsonAccess {
+                left,
+                operator: JsonOperator::Colon,
+                right,
+            } => {
+                let start = Box::new(self.sql_expr_to_logical_expr(
+                    *left,
+                    schema,
+                    planner_context,
+                )?);
+                let stop = Box::new(self.sql_expr_to_logical_expr(
+                    *right,
+                    schema,
+                    planner_context,
+                )?);
+
+                GetFieldAccess::ListRange { start, stop }
+            }
+            _ => GetFieldAccess::ListIndex {
+                key: Box::new(self.sql_expr_to_logical_expr(
+                    expr,
+                    schema,
+                    planner_context,
+                )?),
+            },
+        };
+
+        Ok(field)
+    }
+
+    fn plan_indexed(
+        &self,
+        expr: Expr,
+        mut keys: Vec<SQLExpr>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let indices = keys.pop().ok_or_else(|| {
+            ParserError("Internal error: Missing index key expression".to_string())
+        })?;
+
+        let expr = if !keys.is_empty() {
+            self.plan_indexed(expr, keys, schema, planner_context)?
+        } else {
+            expr
+        };
+
+        Ok(Expr::GetIndexedField(GetIndexedField::new(
+            Box::new(expr),
+            self.plan_indices(indices, schema, planner_context)?,
+        )))
+    }
 }
 
 // modifies expr if it is a placeholder with datatype of right
@@ -538,42 +603,6 @@ fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
         };
         Ok(Transformed::Yes(expr))
     })
-}
-
-fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
-    let scalar = match key {
-        SQLExpr::Value(Value::Number(s, _)) => ScalarValue::Int64(Some(
-            s.parse()
-                .map_err(|_| ParserError(format!("Cannot parse {s} as i64.")))?,
-        )),
-        SQLExpr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) => {
-            ScalarValue::Utf8(Some(s))
-        }
-        _ => {
-            return Err(DataFusionError::SQL(ParserError(format!(
-                "Unsupported index key expression: {key:?}"
-            ))));
-        }
-    };
-
-    Ok(scalar)
-}
-
-fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
-    let key = keys.pop().ok_or_else(|| {
-        ParserError("Internal error: Missing index key expression".to_string())
-    })?;
-
-    let expr = if !keys.is_empty() {
-        plan_indexed(expr, keys)?
-    } else {
-        expr
-    };
-
-    Ok(Expr::GetIndexedField(GetIndexedField::new(
-        Box::new(expr),
-        plan_key(key)?,
-    )))
 }
 
 #[cfg(test)]

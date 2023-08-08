@@ -65,7 +65,8 @@ use async_trait::async_trait;
 use datafusion_common::{plan_err, DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
-    GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
+    GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -181,9 +182,22 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{expr}[{key}]"))
+            let name = match field {
+                GetFieldAccess::NamedStructField { name } => format!("{expr}[{name}]"),
+                GetFieldAccess::ListIndex { key } => {
+                    let key = create_physical_name(key, false)?;
+                    format!("{expr}[{key}]")
+                }
+                GetFieldAccess::ListRange { start, stop } => {
+                    let start = create_physical_name(start, false)?;
+                    let stop = create_physical_name(stop, false)?;
+                    format!("{expr}[{start}:{stop}]")
+                }
+            };
+
+            Ok(name)
         }
         Expr::ScalarFunction(func) => {
             create_function_physical_name(&func.fun.to_string(), false, &func.args)
@@ -532,7 +546,7 @@ impl DefaultPhysicalPlanner {
                 }
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
-                    op: WriteOp::Insert,
+                    op: WriteOp::InsertInto,
                     input,
                     ..
                 }) => {
@@ -540,7 +554,24 @@ impl DefaultPhysicalPlanner {
                     let schema = session_state.schema_for_ref(table_name)?;
                     if let Some(provider) = schema.table(name).await {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
-                        provider.insert_into(session_state, input_exec).await
+                        provider.insert_into(session_state, input_exec, false).await
+                    } else {
+                        return Err(DataFusionError::Execution(format!(
+                            "Table '{table_name}' does not exist"
+                        )));
+                    }
+                }
+                LogicalPlan::Dml(DmlStatement {
+                    table_name,
+                    op: WriteOp::InsertOverwrite,
+                    input,
+                    ..
+                }) => {
+                    let name = table_name.table();
+                    let schema = session_state.schema_for_ref(table_name)?;
+                    if let Some(provider) = schema.table(name).await {
+                        let input_exec = self.create_initial_plan(input, session_state).await?;
+                        provider.insert_into(session_state, input_exec, true).await
                     } else {
                         return Err(DataFusionError::Execution(format!(
                             "Table '{table_name}' does not exist"

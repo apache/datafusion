@@ -39,7 +39,7 @@ use crate::arrow::datatypes::SchemaRef;
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::{ExecutionPlan, Statistics};
+use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream, Statistics};
 
 use arrow_array::RecordBatch;
 use datafusion_common::DataFusionError;
@@ -48,11 +48,11 @@ use datafusion_physical_expr::PhysicalExpr;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::ready;
 use futures::FutureExt;
+use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
 /// providers that support the the same file formats.
@@ -311,6 +311,75 @@ pub enum FileWriterMode {
 pub trait BatchSerializer: Unpin + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
+}
+
+/// Checks if any of the passed writers have encountered an error
+/// and if so, all writers are aborted.
+async fn check_for_errors<T, W: AsyncWrite + Unpin + Send>(
+    result: Result<T>,
+    writers: &mut [AbortableWrite<W>],
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(e) => {
+            // Abort all writers before returning the error:
+            for writer in writers {
+                let mut abort_future = writer.abort_writer();
+                if let Ok(abort_future) = &mut abort_future {
+                    let _ = abort_future.await;
+                }
+                // Ignore errors that occur during abortion,
+                // We do try to abort all writers before returning error.
+            }
+            // After aborting writers return original error.
+            Err(e)
+        }
+    }
+}
+
+/// Contains the common logic for serializing RecordBatches and
+/// writing the resulting bytes to an ObjectStore.
+/// Serialization is assumed to be stateless, i.e.
+/// each RecordBatch can be serialized without any
+/// dependency on the RecordBatches before or after.
+async fn stateless_serialize_and_write_files(
+    mut data: Vec<SendableRecordBatchStream>,
+    mut serializers: Vec<Box<dyn BatchSerializer>>,
+    mut writers: Vec<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>>,
+) -> Result<u64> {
+    let num_partitions = data.len();
+    let mut row_count = 0;
+    // Map errors to DatafusionError.
+    let err_converter =
+        |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
+    // TODO parallelize serialization accross partitions and batches within partitions
+    // see: https://github.com/apache/arrow-datafusion/issues/7079
+    for idx in 0..num_partitions {
+        while let Some(maybe_batch) = data[idx].next().await {
+            // Write data to files in a round robin fashion:
+            let serializer = &mut serializers[idx];
+            let batch = check_for_errors(maybe_batch, &mut writers).await?;
+            row_count += batch.num_rows();
+            let bytes =
+                check_for_errors(serializer.serialize(batch).await, &mut writers).await?;
+            let writer = &mut writers[idx];
+            check_for_errors(
+                writer.write_all(&bytes).await.map_err(err_converter),
+                &mut writers,
+            )
+            .await?;
+        }
+    }
+    // Perform cleanup:
+    let n_writers = writers.len();
+    for idx in 0..n_writers {
+        check_for_errors(
+            writers[idx].shutdown().await.map_err(err_converter),
+            &mut writers,
+        )
+        .await?;
+    }
+    Ok(row_count as u64)
 }
 
 #[cfg(test)]

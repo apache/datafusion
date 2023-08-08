@@ -17,14 +17,15 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetIndexedField, InList,
-    InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
+    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
+    TryCast, WindowFunction,
 };
-use crate::field_util::get_indexed_field;
+use crate::field_util::GetFieldAccessSchema;
 use crate::type_coercion::binary::get_result_type;
 use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema, Result,
 };
@@ -155,10 +156,8 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(schema)?;
-
-                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                field_for_index(expr, field, schema).map(|x| x.data_type().clone())
             }
         }
     }
@@ -266,9 +265,8 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(input_schema)?;
-                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
@@ -335,6 +333,28 @@ impl ExprSchemable for Expr {
             plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
         }
     }
+}
+
+/// return the schema [`Field`] for the type referenced by `get_indexed_field`
+fn field_for_index<S: ExprSchema>(
+    expr: &Expr,
+    field: &GetFieldAccess,
+    schema: &S,
+) -> Result<Field> {
+    let expr_dt = expr.get_type(schema)?;
+    match field {
+        GetFieldAccess::NamedStructField { name } => {
+            GetFieldAccessSchema::NamedStructField { name: name.clone() }
+        }
+        GetFieldAccess::ListIndex { key } => GetFieldAccessSchema::ListIndex {
+            key_dt: key.get_type(schema)?,
+        },
+        GetFieldAccess::ListRange { start, stop } => GetFieldAccessSchema::ListRange {
+            start_dt: start.get_type(schema)?,
+            stop_dt: stop.get_type(schema)?,
+        },
+    }
+    .get_accessed_field(&expr_dt)
 }
 
 /// cast subquery in InSubquery/ScalarSubquery to a given type.

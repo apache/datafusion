@@ -377,10 +377,10 @@ where
             ))),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 Ok(Expr::GetIndexedField(GetIndexedField::new(
                     Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
-                    key.clone(),
+                    field.clone(),
                 )))
             }
             Expr::GroupingSet(set) => match set {

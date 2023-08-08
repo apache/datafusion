@@ -272,24 +272,6 @@ SUBCOMMANDS:
 
 ```
 
-## NYC Taxi Benchmark
-
-These benchmarks are based on the [New York Taxi and Limousine Commission][2] data set.
-
-```bash
-cargo run --release --bin nyctaxi -- --iterations 3 --path /mnt/nyctaxi/csv --format csv --batch-size 4096
-```
-
-Example output:
-
-```bash
-Running benchmarks with the following options: Opt { debug: false, iterations: 3, batch_size: 4096, path: "/mnt/nyctaxi/csv", file_format: "csv" }
-Executing 'fare_amt_by_passenger'
-Query 'fare_amt_by_passenger' iteration 0 took 7138 ms
-Query 'fare_amt_by_passenger' iteration 1 took 7599 ms
-Query 'fare_amt_by_passenger' iteration 2 took 7969 ms
-```
-
 ## h2o benchmarks
 
 ```bash

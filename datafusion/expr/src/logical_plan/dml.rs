@@ -40,7 +40,8 @@ pub struct DmlStatement {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum WriteOp {
-    Insert,
+    InsertOverwrite,
+    InsertInto,
     Delete,
     Update,
     Ctas,
@@ -49,7 +50,8 @@ pub enum WriteOp {
 impl Display for WriteOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WriteOp::Insert => write!(f, "Insert"),
+            WriteOp::InsertOverwrite => write!(f, "Insert Overwrite"),
+            WriteOp::InsertInto => write!(f, "Insert Into"),
             WriteOp::Delete => write!(f, "Delete"),
             WriteOp::Update => write!(f, "Update"),
             WriteOp::Ctas => write!(f, "Ctas"),
