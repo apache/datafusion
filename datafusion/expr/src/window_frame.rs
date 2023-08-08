@@ -23,7 +23,7 @@
 //! - An ending frame boundary,
 //! - An EXCLUDE clause.
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
 use sqlparser::ast;
 use sqlparser::parser::ParserError::ParserError;
 use std::convert::{From, TryFrom};
@@ -68,14 +68,14 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
 
         if let WindowFrameBound::Following(val) = &start_bound {
             if val.is_null() {
-                plan_error(
-                    "Invalid window frame: start bound cannot be UNBOUNDED FOLLOWING",
+                plan_err!(
+                    "Invalid window frame: start bound cannot be UNBOUNDED FOLLOWING"
                 )?
             }
         } else if let WindowFrameBound::Preceding(val) = &end_bound {
             if val.is_null() {
-                plan_error(
-                    "Invalid window frame: end bound cannot be UNBOUNDED PRECEDING",
+                plan_err!(
+                    "Invalid window frame: end bound cannot be UNBOUNDED PRECEDING"
                 )?
             }
         };
@@ -161,10 +161,10 @@ pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFram
                 frame.end_bound = WindowFrameBound::Following(ScalarValue::UInt64(None));
             }
         } else {
-            plan_error("RANGE requires exactly one ORDER BY column")?
+            plan_err!("RANGE requires exactly one ORDER BY column")?
         }
     } else if frame.units == WindowFrameUnits::Groups && order_bys == 0 {
-        plan_error("GROUPS requires an ORDER BY clause")?
+        plan_err!("GROUPS requires an ORDER BY clause")?
     };
     Ok(frame)
 }
@@ -252,14 +252,10 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
                 result
             }
         }
-        _ => plan_error(
-            "Invalid window frame: frame offsets must be non negative integers",
+        _ => plan_err!(
+            "Invalid window frame: frame offsets must be non negative integers"
         )?,
     })))
-}
-
-fn plan_error<T>(err_message: &str) -> Result<T> {
-    Err(DataFusionError::Plan(err_message.to_string()))
 }
 
 impl fmt::Display for WindowFrameBound {

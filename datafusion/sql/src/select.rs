@@ -24,6 +24,7 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs,
 };
 
+use datafusion_common::plan_err;
 use datafusion_common::{
     get_target_functional_dependencies, DFSchemaRef, DataFusionError, Result,
 };
@@ -170,8 +171,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?
         } else {
             match having_expr_opt {
-                Some(having_expr) => return Err(DataFusionError::Plan(
-                    format!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"))),
+                Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
                 None => (plan, select_exprs, having_expr_opt)
             }
         };
@@ -358,9 +358,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Self::check_wildcard_options(&options)?;
 
                 if empty_from {
-                    return Err(DataFusionError::Plan(
-                        "SELECT * with no tables specified is not valid".to_string(),
-                    ));
+                    return plan_err!("SELECT * with no tables specified is not valid");
                 }
                 // do not expand from outer schema
                 expand_wildcard(plan.schema().as_ref(), plan, Some(options))
@@ -521,10 +519,10 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
     for (i, window_def_i) in window_defs.iter().enumerate() {
         for window_def_j in window_defs.iter().skip(i + 1) {
             if window_def_i.0 == window_def_j.0 {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "The window {} is defined multiple times!",
                     window_def_i.0
-                )));
+                );
             }
         }
     }
@@ -553,9 +551,7 @@ fn match_window_definitions(
             }
             // All named windows must be defined with a WindowSpec.
             if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                return Err(DataFusionError::Plan(format!(
-                    "The window {ident} is not defined!"
-                )));
+                return plan_err!("The window {ident} is not defined!");
             }
         }
     }

@@ -116,6 +116,7 @@ pub enum Expr {
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
     /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
+    ///
     GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
     Between(Between),
@@ -358,19 +359,31 @@ impl ScalarUDF {
     }
 }
 
-/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum GetFieldAccess {
+    /// returns the field `struct[field]`. For example `struct["name"]`
+    NamedStructField { name: ScalarValue },
+    /// single list index
+    // list[i]
+    ListIndex { key: Box<Expr> },
+    /// list range `list[i:j]`
+    ListRange { start: Box<Expr>, stop: Box<Expr> },
+}
+
+/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by `key`.
+/// If `extra_key` is not `None`, returns the slice of a [`arrow::array::ListArray`] in the range from `key` to `extra_key`.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct GetIndexedField {
-    /// the expression to take the field from
+    /// The expression to take the field from
     pub expr: Box<Expr>,
     /// The name of the field to take
-    pub key: ScalarValue,
+    pub field: GetFieldAccess,
 }
 
 impl GetIndexedField {
     /// Create a new GetIndexedField expression
-    pub fn new(expr: Box<Expr>, key: ScalarValue) -> Self {
-        Self { expr, key }
+    pub fn new(expr: Box<Expr>, field: GetFieldAccess) -> Self {
+        Self { expr, field }
     }
 }
 
@@ -915,7 +928,7 @@ impl Expr {
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
             Expr::Column(it) => Ok(it.clone()),
-            _ => plan_err!(format!("Could not coerce '{self}' into Column!")),
+            _ => plan_err!("Could not coerce '{self}' into Column!"),
         }
     }
 
@@ -1139,9 +1152,15 @@ impl fmt::Display for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{qualifier}.*"),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                write!(f, "({expr})[{key}]")
-            }
+            Expr::GetIndexedField(GetIndexedField { field, expr }) => match field {
+                GetFieldAccess::NamedStructField { name } => {
+                    write!(f, "({expr})[{name}]")
+                }
+                GetFieldAccess::ListIndex { key } => write!(f, "({expr})[{key}]"),
+                GetFieldAccess::ListRange { start, stop } => {
+                    write!(f, "({expr})[{start}:{stop}]")
+                }
+            },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)
@@ -1330,9 +1349,22 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
             let expr = create_name(expr)?;
-            Ok(format!("{expr}[{key}]"))
+            match field {
+                GetFieldAccess::NamedStructField { name } => {
+                    Ok(format!("{expr}[{name}]"))
+                }
+                GetFieldAccess::ListIndex { key } => {
+                    let key = create_name(key)?;
+                    Ok(format!("{expr}[{key}]"))
+                }
+                GetFieldAccess::ListRange { start, stop } => {
+                    let start = create_name(start)?;
+                    let stop = create_name(stop)?;
+                    Ok(format!("{expr}[{start}:{stop}]"))
+                }
+            }
         }
         Expr::ScalarFunction(func) => {
             create_function_name(&func.fun.to_string(), false, &func.args)

@@ -17,15 +17,18 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetIndexedField, InList,
-    InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
+    GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
+    TryCast, WindowFunction,
 };
-use crate::field_util::get_indexed_field;
+use crate::field_util::{get_indexed_field, GetFieldAccessCharacteristic};
 use crate::type_coercion::binary::get_result_type;
 use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
-use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use datafusion_common::{
+    plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema, Result,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -153,10 +156,27 @@ impl ExprSchemable for Expr {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(schema)?;
-
-                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                let expr_dt = expr.get_type(schema)?;
+                let field_ch = match field {
+                    GetFieldAccess::NamedStructField { name } => {
+                        GetFieldAccessCharacteristic::NamedStructField {
+                            name: name.clone(),
+                        }
+                    }
+                    GetFieldAccess::ListIndex { key } => {
+                        GetFieldAccessCharacteristic::ListIndex {
+                            key_dt: key.get_type(schema)?,
+                        }
+                    }
+                    GetFieldAccess::ListRange { start, stop } => {
+                        GetFieldAccessCharacteristic::ListRange {
+                            start_dt: start.get_type(schema)?,
+                            stop_dt: stop.get_type(schema)?,
+                        }
+                    }
+                };
+                get_indexed_field(&expr_dt, &field_ch).map(|x| x.data_type().clone())
             }
         }
     }
@@ -264,9 +284,27 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type(input_schema)?;
-                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+                let expr_dt = expr.get_type(input_schema)?;
+                let field_ch = match field {
+                    GetFieldAccess::NamedStructField { name } => {
+                        GetFieldAccessCharacteristic::NamedStructField {
+                            name: name.clone(),
+                        }
+                    }
+                    GetFieldAccess::ListIndex { key } => {
+                        GetFieldAccessCharacteristic::ListIndex {
+                            key_dt: key.get_type(input_schema)?,
+                        }
+                    }
+                    GetFieldAccess::ListRange { start, stop } => {
+                        GetFieldAccessCharacteristic::ListRange {
+                            start_dt: start.get_type(input_schema)?,
+                            stop_dt: stop.get_type(input_schema)?,
+                        }
+                    }
+                };
+                get_indexed_field(&expr_dt, &field_ch).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have the concept of nullable and do not appear
@@ -330,9 +368,7 @@ impl ExprSchemable for Expr {
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
-            Err(DataFusionError::Plan(format!(
-                "Cannot automatically convert {this_type:?} to {cast_to_type:?}"
-            )))
+            plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
         }
     }
 }

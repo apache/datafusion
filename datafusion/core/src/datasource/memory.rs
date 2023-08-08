@@ -26,13 +26,13 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{Constraints, SchemaExt};
+use datafusion_common::{plan_err, Constraints, DataFusionError, SchemaExt};
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 
 use crate::datasource::{TableProvider, TableType};
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::insert::{DataSink, InsertExec};
@@ -65,9 +65,7 @@ impl MemTable {
                     "mem table schema does not contain batches schema. \
                         Target_schema: {schema:?}. Batches Schema: {batches_schema:?}"
                 );
-                return Err(DataFusionError::Plan(
-                    "Mismatch between schema and batches".to_string(),
-                ));
+                return plan_err!("Mismatch between schema and batches");
             }
         }
 
@@ -206,12 +204,18 @@ impl TableProvider for MemTable {
         &self,
         _state: &SessionState,
         input: Arc<dyn ExecutionPlan>,
+        overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
         if !self.schema().equivalent_names_and_types(&input.schema()) {
-            return Err(DataFusionError::Plan(
-                "Inserting query must have the same schema with the table.".to_string(),
+            return plan_err!(
+                "Inserting query must have the same schema with the table."
+            );
+        }
+        if overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrite not implemented for MemoryTable yet".into(),
             ));
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
@@ -254,7 +258,7 @@ impl MemSink {
 impl DataSink for MemSink {
     async fn write_all(
         &self,
-        mut data: SendableRecordBatchStream,
+        mut data: Vec<SendableRecordBatchStream>,
         _context: &Arc<TaskContext>,
     ) -> Result<u64> {
         let num_partitions = self.batches.len();
@@ -264,10 +268,14 @@ impl DataSink for MemSink {
         let mut new_batches = vec![vec![]; num_partitions];
         let mut i = 0;
         let mut row_count = 0;
-        while let Some(batch) = data.next().await.transpose()? {
-            row_count += batch.num_rows();
-            new_batches[i].push(batch);
-            i = (i + 1) % num_partitions;
+        let num_parts = data.len();
+        // TODO parallelize outer and inner loops
+        for data_part in data.iter_mut().take(num_parts) {
+            while let Some(batch) = data_part.next().await.transpose()? {
+                row_count += batch.num_rows();
+                new_batches[i].push(batch);
+                i = (i + 1) % num_partitions;
+            }
         }
 
         // write the outputs into the batches
@@ -544,7 +552,7 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

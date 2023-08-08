@@ -30,8 +30,11 @@ digraph G {
 	datafusion_physical_expr -> datafusion_common
 	datafusion_physical_expr -> datafusion_expr
 
+        datafusion_execution -> datafusion_common
+        datafusion_execution -> datafusion_expr
 
 	datafusion -> datafusion_common
+        datafusion -> datafusion_execution
 	datafusion -> datafusion_expr
 	datafusion -> datafusion_optimizer
 	datafusion -> datafusion_physical_expr

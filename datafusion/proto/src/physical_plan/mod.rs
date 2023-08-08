@@ -1397,6 +1397,7 @@ mod roundtrip_tests {
     use datafusion::logical_expr::create_udf;
     use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
     use datafusion::physical_expr::expressions::in_list;
+    use datafusion::physical_expr::expressions::GetFieldAccessExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
     use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
@@ -1406,7 +1407,7 @@ mod roundtrip_tests {
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
-            datatypes::{DataType, Field, Schema},
+            datatypes::{DataType, Field, Fields, Schema},
         },
         datasource::{
             listing::PartitionedFile,
@@ -1917,18 +1918,83 @@ mod roundtrip_tests {
     }
 
     #[test]
-    fn roundtrip_get_indexed_field() -> Result<()> {
+    fn roundtrip_get_indexed_field_named_struct_field() -> Result<()> {
         let fields = vec![
             Field::new("id", DataType::Int64, true),
-            Field::new_list("a", Field::new("item", DataType::Float64, true), true),
+            Field::new_struct(
+                "arg",
+                Fields::from(vec![Field::new("name", DataType::Float64, true)]),
+                true,
+            ),
         ];
 
         let schema = Schema::new(fields);
         let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
 
-        let col_a = col("a", &schema)?;
-        let key = ScalarValue::Int64(Some(1));
-        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(col_a, key));
+        let col_arg = col("arg", &schema)?;
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
+            col_arg,
+            GetFieldAccessExpr::NamedStructField {
+                name: ScalarValue::Utf8(Some(String::from("name"))),
+            },
+        ));
+
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(get_indexed_field_expr, "result".to_string())],
+            input,
+        )?);
+
+        roundtrip_test(plan)
+    }
+
+    #[test]
+    fn roundtrip_get_indexed_field_list_index() -> Result<()> {
+        let fields = vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
+            Field::new("key", DataType::Int64, true),
+        ];
+
+        let schema = Schema::new(fields);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+
+        let col_arg = col("arg", &schema)?;
+        let col_key = col("key", &schema)?;
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
+            col_arg,
+            GetFieldAccessExpr::ListIndex { key: col_key },
+        ));
+
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(get_indexed_field_expr, "result".to_string())],
+            input,
+        )?);
+
+        roundtrip_test(plan)
+    }
+
+    #[test]
+    fn roundtrip_get_indexed_field_list_range() -> Result<()> {
+        let fields = vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new_list("arg", Field::new("item", DataType::Float64, true), true),
+            Field::new("start", DataType::Int64, true),
+            Field::new("stop", DataType::Int64, true),
+        ];
+
+        let schema = Schema::new(fields);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+
+        let col_arg = col("arg", &schema)?;
+        let col_start = col("start", &schema)?;
+        let col_stop = col("stop", &schema)?;
+        let get_indexed_field_expr = Arc::new(GetIndexedFieldExpr::new(
+            col_arg,
+            GetFieldAccessExpr::ListRange {
+                start: col_start,
+                stop: col_stop,
+            },
+        ));
 
         let plan = Arc::new(ProjectionExec::try_new(
             vec![(get_indexed_field_expr, "result".to_string())],
