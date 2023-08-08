@@ -133,27 +133,17 @@ fn add_hash_on_top(
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
     repartition_onward: &mut Option<ExecTree>,
-) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
-    if n_target == 1 {
-        return Ok((input, false));
-    }
-    if let Partitioning::Hash(exprs, n_partition) = input.output_partitioning() {
-        // ln!("exprs: {:?}, hash_exprs:{:?}", exprs, hash_exprs);
-        if are_exprs_equal(&exprs, &hash_exprs) && n_partition == n_target {
-            return Ok((input, false));
-        }
-    }
+) -> Result<Arc<dyn ExecutionPlan>> {
     let new_plan = Arc::new(RepartitionExec::try_new(
         input,
         Partitioning::Hash(hash_exprs, n_target),
     )?) as Arc<dyn ExecutionPlan>;
+
+    // Update exec tree, if there is branch connected to repartition roundrobin
     if let Some(exec_tree) = repartition_onward {
         *exec_tree = ExecTree::new(new_plan.clone(), 0, vec![exec_tree.clone()]);
-    } else {
-        // Initialize new onward
-        *repartition_onward = Some(ExecTree::new(new_plan.clone(), 0, vec![]));
     }
-    Ok((new_plan, true))
+    Ok(new_plan)
 }
 
 fn update_repartition_from_context(
@@ -343,14 +333,13 @@ fn ensure_distribution(
                         }
                     }
                     Distribution::HashPartitioned(exprs) => {
-                        let mut is_changed_new = false;
-                        (new_child, is_changed_new) = add_hash_on_top(
+                        new_child = add_hash_on_top(
                             new_child,
                             exprs.to_vec(),
                             target_partitions,
                             repartition_onward,
                         )?;
-                        is_changed = is_changed || is_changed_new;
+                        is_changed = true;
                     }
                     Distribution::UnspecifiedDistribution => {}
                 };
