@@ -28,7 +28,6 @@ use std::fmt;
 use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
-use tokio::io::AsyncWrite;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
@@ -43,21 +42,17 @@ use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use crate::datasource::physical_plan::FileGroupDisplay;
-use crate::datasource::physical_plan::FileMeta;
 use crate::physical_plan::insert::DataSink;
 use crate::physical_plan::insert::InsertExec;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
+use super::create_writer;
 use super::stateless_serialize_and_write_files;
-use super::AbortMode;
-use super::AbortableWrite;
-use super::AsyncPutWriter;
 use super::BatchSerializer;
 use super::FileFormat;
 use super::FileScanConfig;
 use super::FileWriterMode;
-use super::MultiPart;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::FileSinkConfig;
@@ -266,56 +261,6 @@ impl JsonSink {
             file_compression_type,
         }
     }
-
-    // Create a write for Json files
-    async fn create_writer(
-        &self,
-        file_meta: FileMeta,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Result<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>> {
-        let object = &file_meta.object_meta;
-        match self.config.writer_mode {
-            // If the mode is append, call the store's append method and return wrapped in
-            // a boxed trait object.
-            FileWriterMode::Append => {
-                let writer = object_store
-                    .append(&object.location)
-                    .await
-                    .map_err(DataFusionError::ObjectStore)?;
-                let writer = AbortableWrite::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                    AbortMode::Append,
-                );
-                Ok(writer)
-            }
-            // If the mode is put, create a new AsyncPut writer and return it wrapped in
-            // a boxed trait object
-            FileWriterMode::Put => {
-                let writer = Box::new(AsyncPutWriter::new(object.clone(), object_store));
-                let writer = AbortableWrite::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                    AbortMode::Put,
-                );
-                Ok(writer)
-            }
-            // If the mode is put multipart, call the store's put_multipart method and
-            // return the writer wrapped in a boxed trait object.
-            FileWriterMode::PutMultipart => {
-                let (multipart_id, writer) = object_store
-                    .put_multipart(&object.location)
-                    .await
-                    .map_err(DataFusionError::ObjectStore)?;
-                Ok(AbortableWrite::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                    AbortMode::MultiPart(MultiPart::new(
-                        object_store,
-                        multipart_id,
-                        object.location.clone(),
-                    )),
-                ))
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -341,12 +286,13 @@ impl DataSink for JsonSink {
                     serializers.push(Box::new(serializer));
 
                     let file = file_group.clone();
-                    let writer = self
-                        .create_writer(
-                            file.object_meta.clone().into(),
-                            object_store.clone(),
-                        )
-                        .await?;
+                    let writer = create_writer(
+                        self.config.writer_mode,
+                        self.file_compression_type,
+                        file.object_meta.clone().into(),
+                        object_store.clone(),
+                    )
+                    .await?;
                     writers.push(writer);
                 }
             }
@@ -372,9 +318,13 @@ impl DataSink for JsonSink {
                         size: 0,
                         e_tag: None,
                     };
-                    let writer = self
-                        .create_writer(object_meta.into(), object_store.clone())
-                        .await?;
+                    let writer = create_writer(
+                        self.config.writer_mode,
+                        self.file_compression_type,
+                        object_meta.into(),
+                        object_store.clone(),
+                    )
+                    .await?;
                     writers.push(writer);
                 }
             }

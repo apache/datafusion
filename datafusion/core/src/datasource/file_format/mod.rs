@@ -53,6 +53,10 @@ use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+
+use self::file_type::FileCompressionType;
+
+use super::physical_plan::FileMeta;
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
 /// providers that support the the same file formats.
@@ -235,7 +239,7 @@ pub(crate) enum AbortMode {
 }
 
 /// A wrapper struct with abort method and writer
-struct AbortableWrite<W: AsyncWrite + Unpin + Send> {
+pub(crate) struct AbortableWrite<W: AsyncWrite + Unpin + Send> {
     writer: W,
     mode: AbortMode,
 }
@@ -306,6 +310,59 @@ pub enum FileWriterMode {
     /// Data is written to a new file in multiple parts.
     PutMultipart,
 }
+
+/// return an [`AbortableWrite`] that writes to the specified object
+/// store location and compression
+pub(crate) async fn create_writer(
+    writer_mode: FileWriterMode,
+    file_compression_type: FileCompressionType,
+    file_meta: FileMeta,
+    object_store: Arc<dyn ObjectStore>,
+) -> Result<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>> {
+    let object = &file_meta.object_meta;
+    match writer_mode {
+        // If the mode is append, call the store's append method and return wrapped in
+        // a boxed trait object.
+        FileWriterMode::Append => {
+            let writer = object_store
+                .append(&object.location)
+                .await
+                .map_err(DataFusionError::ObjectStore)?;
+            let writer = AbortableWrite::new(
+                file_compression_type.convert_async_writer(writer)?,
+                AbortMode::Append,
+            );
+            Ok(writer)
+        }
+        // If the mode is put, create a new AsyncPut writer and return it wrapped in
+        // a boxed trait object
+        FileWriterMode::Put => {
+            let writer = Box::new(AsyncPutWriter::new(object.clone(), object_store));
+            let writer = AbortableWrite::new(
+                file_compression_type.convert_async_writer(writer)?,
+                AbortMode::Put,
+            );
+            Ok(writer)
+        }
+        // If the mode is put multipart, call the store's put_multipart method and
+        // return the writer wrapped in a boxed trait object.
+        FileWriterMode::PutMultipart => {
+            let (multipart_id, writer) = object_store
+                .put_multipart(&object.location)
+                .await
+                .map_err(DataFusionError::ObjectStore)?;
+            Ok(AbortableWrite::new(
+                file_compression_type.convert_async_writer(writer)?,
+                AbortMode::MultiPart(MultiPart::new(
+                    object_store,
+                    multipart_id,
+                    object.location.clone(),
+                )),
+            ))
+        }
+    }
+}
+
 /// A trait that defines the methods required for a RecordBatch serializer.
 #[async_trait]
 pub trait BatchSerializer: Unpin + Send {
