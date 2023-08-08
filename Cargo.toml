@@ -57,3 +57,6 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
+
+[patch.crates-io]
+zerocopy = { git = "https://github.com/alamb/zerocopy.git", branch = "alamb/v0.6.3-test" }
