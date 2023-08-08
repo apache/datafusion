@@ -31,6 +31,7 @@ pub mod functions;
 pub mod hash_utils;
 pub mod intervals;
 pub mod math_expressions;
+mod partitioning;
 mod physical_expr;
 pub mod planner;
 #[cfg(feature = "regex_expressions")]
@@ -58,6 +59,7 @@ pub use equivalence::{
     EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
+pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
