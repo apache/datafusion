@@ -3459,3 +3459,14 @@ AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(foo.x)]
 --CoalescePartitionsExec
 ----AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(foo.x)]
 ------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+
+
+query TT
+EXPLAIN SELECT c
+FROM multiple_ordered_table
+ORDER BY c ASC;
+----
+logical_plan
+Sort: multiple_ordered_table.c ASC NULLS LAST
+--TableScan: multiple_ordered_table projection=[c]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], has_header=true
