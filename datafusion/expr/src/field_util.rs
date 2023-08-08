@@ -40,8 +40,7 @@ impl GetFieldAccessSchema {
     /// # Error
     /// Errors if
     /// * the `data_type` is not a Struct or a List,
-    /// * the `data_type` of extra key does not match with `data_type` of key
-    /// * there is no field key is not of the required index type
+    /// * the `data_type` of the name/index/start-stop do not match a supported index type
     pub fn get_accessed_field(&self, data_type: &DataType) -> Result<Field> {
         match self {
             Self::NamedStructField{ name } => {
