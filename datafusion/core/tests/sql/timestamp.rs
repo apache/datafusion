@@ -576,8 +576,8 @@ async fn timestamp_add_interval_months() -> Result<()> {
     let res2 = actual[0][1].as_str();
 
     let format = "%Y-%m-%dT%H:%M:%S%.6fZ";
-    let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
-    let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
+    let t1_naive = NaiveDateTime::parse_from_str(res1, format).unwrap();
+    let t2_naive = NaiveDateTime::parse_from_str(res2, format).unwrap();
 
     let year = t1_naive.year() + (t1_naive.month0() as i32 + 17) / 12;
     let month = (t1_naive.month0() + 17) % 12 + 1;
@@ -1035,13 +1035,13 @@ async fn timestamp_sub_with_tz() -> Result<()> {
     let sql = "SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----+---------------------------------------------------+",
-        "| val | ts_diff                                           |",
-        "+-----+---------------------------------------------------+",
-        "| 3   | 0 years 0 mons 0 days 10 hours 0 mins 30.000 secs |",
-        "| 1   | 0 years 0 mons 0 days 10 hours 0 mins 20.000 secs |",
-        "| 2   | 0 years 0 mons 0 days 10 hours 0 mins 10.000 secs |",
-        "+-----+---------------------------------------------------+",
+        "+-----+-----------------------------------+",
+        "| val | ts_diff                           |",
+        "+-----+-----------------------------------+",
+        "| 3   | 0 days 0 hours 0 mins 30.000 secs |",
+        "| 1   | 0 days 0 hours 0 mins 20.000 secs |",
+        "| 2   | 0 days 0 hours 0 mins 10.000 secs |",
+        "+-----+-----------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 

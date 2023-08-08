@@ -1182,10 +1182,10 @@ create table bar (val int, i1 interval, i2 interval) as values
 query I?
 SELECT val, ts1 - ts2 FROM foo ORDER BY ts2 - ts1;
 ----
-4 0 years 0 mons -15250 days -13 hours -28 mins -44.999876545 secs
-3 0 years 0 mons 15952 days 23 hours 22 mins 12.667123455 secs
-2 0 years 0 mons 8406 days 1 hours 1 mins 54.877123455 secs
-1 0 years 0 mons 53 days 16 hours 0 mins 20.000000024 secs
+3 15952 days 23 hours 22 mins 12.667123455 secs
+2 8406 days 1 hours 1 mins 54.877123455 secs
+1 53 days 16 hours 0 mins 20.000000024 secs
+4 -15250 days -13 hours -28 mins -44.999876545 secs
 
 # Interval - Interval
 query ?
@@ -1233,7 +1233,7 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-query error DataFusion error: Arrow error: Cast error: Cannot perform arithmetic operation between array of type Timestamp\(Nanosecond, None\) and array of type Timestamp\(Nanosecond, None\)
+query error DataFusion error: Error during planning: Cannot get result type for temporal operation Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\): Invalid argument error: Invalid timestamp arithmetic operation: Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\)
 SELECT ts1 + ts2
 FROM foo;
 
@@ -1241,16 +1241,16 @@ FROM foo;
 query ?
 SELECT '2000-01-01T00:00:00'::timestamp - '2000-01-01T00:00:00'::timestamp;
 ----
-0 years 0 mons 0 days 0 hours 0 mins 0.000000000 secs
+0 days 0 hours 0 mins 0.000000000 secs
 
 # large timestamp - small timestamp
 query ?
 SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 ----
-0 years 0 mons -3653 days 0 hours 0 mins 0.000000000 secs
+-3653 days 0 hours 0 mins 0.000000000 secs
 
 # Interval - Timestamp => error
-# statement error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
+# statement error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
 # TODO: This query should raise error
 # query P
 # SELECT i - ts1 from FOO;
