@@ -48,9 +48,7 @@ use crate::protobuf::{
     ScalarValue,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
-use datafusion::physical_expr::expressions::{
-    DateTimeIntervalExpr, GetFieldAccessExpr, GetIndexedFieldExpr,
-};
+use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
@@ -365,20 +363,6 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                     )),
                 })
             }
-        } else if let Some(expr) = expr.downcast_ref::<DateTimeIntervalExpr>() {
-            let dti_expr = Box::new(protobuf::PhysicalDateTimeIntervalExprNode {
-                l: Some(Box::new(expr.lhs().to_owned().try_into()?)),
-                r: Some(Box::new(expr.rhs().to_owned().try_into()?)),
-                op: format!("{:?}", expr.op()),
-            });
-
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(
-                    protobuf::physical_expr_node::ExprType::DateTimeIntervalExpr(
-                        dti_expr,
-                    ),
-                ),
-            })
         } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
             Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(

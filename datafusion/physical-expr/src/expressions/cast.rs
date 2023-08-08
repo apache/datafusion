@@ -28,17 +28,15 @@ use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
-/// provide DataFusion default cast options
-fn default_cast_options() -> CastOptions<'static> {
-    CastOptions {
-        safe: false,
-        format_options: Default::default(),
-    }
-}
+const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
+    safe: false,
+    format_options: DEFAULT_FORMAT_OPTIONS,
+};
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
 #[derive(Debug, Clone)]
@@ -61,7 +59,7 @@ impl CastExpr {
         Self {
             expr,
             cast_type,
-            cast_options: cast_options.unwrap_or_else(default_cast_options),
+            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
         }
     }
 
@@ -163,7 +161,7 @@ pub fn cast_column(
     cast_type: &DataType,
     cast_options: Option<&CastOptions<'static>>,
 ) -> Result<ColumnarValue> {
-    let cast_options = cast_options.cloned().unwrap_or_else(default_cast_options);
+    let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
     match value {
         ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
             kernels::cast::cast_with_options(array, cast_type, &cast_options)?,

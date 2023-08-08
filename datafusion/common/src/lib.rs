@@ -23,6 +23,7 @@ pub mod delta;
 mod dfschema;
 pub mod display;
 mod error;
+pub mod format;
 mod functional_dependencies;
 mod join_type;
 pub mod parsers;
