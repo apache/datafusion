@@ -66,7 +66,7 @@ async fn sort(#[case] expected_errors: Vec<&str>, #[case] memory_limit: usize) {
 #[rstest]
 #[case::cant_grow_reservation(vec!["Resources exhausted: Failed to allocate additional", "ExternalSorter"], 20_000)]
 #[case::cant_spill_to_disk(vec!["Memory Exhausted while Sorting (DiskManager is disabled)"], 40_000)]
-//#[case::no_oom(vec![], 80_000)]
+#[case::no_oom(vec![], 80_000)]
 #[tokio::test]
 async fn sort_with_limit(
     #[case] expected_errors: Vec<&str>,
