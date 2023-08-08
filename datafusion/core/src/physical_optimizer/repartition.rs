@@ -340,6 +340,7 @@ mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
+    use crate::physical_optimizer::dist_enforcement_v2::EnforceDistributionV2;
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -550,10 +551,12 @@ mod tests {
 
             // run optimizer
             let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-                Arc::new(Repartition::new()),
-                // EnforceDistribution is an essential rule to be applied.
-                // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
-                Arc::new(EnforceDistribution::new()),
+                // Arc::new(Repartition::new()),
+                // // EnforceDistribution is an essential rule to be applied.
+                // // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                // Arc::new(EnforceDistribution::new()),
+
+                Arc::new(EnforceDistributionV2::new()),
                 // EnforceSorting is an essential rule to be applied.
                 // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
                 Arc::new(EnforceSorting::new()),
@@ -661,14 +664,13 @@ mod tests {
 
     #[test]
     fn repartition_sorted_limit_with_filter() -> Result<()> {
-        let plan = limit_exec(filter_exec(sort_exec(parquet_exec(), false)));
+        let plan = sort_required_exec(filter_exec(sort_exec(parquet_exec(), false)));
 
         let expected = &[
-            "GlobalLimitExec: skip=0, fetch=100",
-            "LocalLimitExec: fetch=100",
+            "SortRequiredExec",
             "FilterExec: c1@0",
-            // data is sorted so can't repartition here even though
-            // filter would benefit from parallelism, the answers might be wrong
+            // Do not add repartition, even though filter benefits from it
+            // because subsequent executor requires this ordering.
             "SortExec: expr=[c1@0 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
@@ -1094,20 +1096,24 @@ mod tests {
 
         let expected_parquet = &[
             "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
-            // data is sorted so can't repartition here even though
-            // filter would benefit from parallelism, the answers might be wrong
+            // even though data is sorted, we can use repartition here. Since
+            // ordering is not used in subsequent stages anyway.
+            "RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
             "SortExec: expr=[c1@0 ASC]",
             // SortExec doesn't benefit from input partitioning
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
         let expected_csv = &[
             "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
-            // data is sorted so can't repartition here even though
-            // filter would benefit from parallelism, the answers might be wrong
+            // even though data is sorted, we can use repartition here. Since
+            // ordering is not used in subsequent stages anyway.
+            "RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
             "SortExec: expr=[c1@0 ASC]",
             // SortExec doesn't benefit from input partitioning
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], has_header=false",

@@ -20,6 +20,7 @@
 //! when necessary.
 use crate::config::ConfigOptions;
 use crate::error::Result;
+use crate::physical_optimizer::dist_enforcement_v2::print_plan;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -141,7 +142,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
 ///
-fn adjust_input_keys_ordering(
+pub(crate) fn adjust_input_keys_ordering(
     requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
     let parent_required = requirements.required_key_ordering.clone();
@@ -529,7 +530,7 @@ fn shift_right_required(
 /// The Bottom-Up approach will be useful in future if we plan to support storage partition-wised Joins.
 /// In that case, the datasources/tables might be pre-partitioned and we can't adjust the key ordering of the datasources
 /// and then can't apply the Top-Down reordering process.
-fn reorder_join_keys_to_inputs(
+pub(crate) fn reorder_join_keys_to_inputs(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
 ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
     let plan_any = plan.as_any();
@@ -880,8 +881,8 @@ struct JoinKeyPairs {
 }
 
 #[derive(Debug, Clone)]
-struct PlanWithKeyRequirements {
-    plan: Arc<dyn ExecutionPlan>,
+pub(crate) struct PlanWithKeyRequirements {
+    pub plan: Arc<dyn ExecutionPlan>,
     /// Parent required key ordering
     required_key_ordering: Vec<Arc<dyn PhysicalExpr>>,
     /// The request key ordering to children
@@ -978,6 +979,7 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
+    use crate::physical_optimizer::dist_enforcement_v2::EnforceDistributionV2;
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -988,7 +990,6 @@ mod tests {
     };
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::{displayable, Statistics};
-    use crate::physical_optimizer::dist_enforcement_v2::EnforceDistributionV2;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
@@ -1165,6 +1166,7 @@ mod tests {
 
             // // run optimizer
             // let optimizer = EnforceDistribution {};
+
             // Run enforce distribution rule
             let optimizer = EnforceDistributionV2::new();
 
@@ -1264,12 +1266,15 @@ mod tests {
                         JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![
                             top_join_plan.as_str(),
                             join_plan.as_str(),
-                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 4 RepartitionExecs
@@ -1277,12 +1282,15 @@ mod tests {
                             top_join_plan.as_str(),
                             "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
                             join_plan.as_str(),
-                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
@@ -1320,12 +1328,15 @@ mod tests {
                             vec![
                                 top_join_plan.as_str(),
                                 join_plan.as_str(),
-                                "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                                "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                                "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                                "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                                "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                                "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             ],
                         // Should include 4 RepartitionExecs
@@ -1334,12 +1345,15 @@ mod tests {
                                 top_join_plan.as_str(),
                                 "RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
                                 join_plan.as_str(),
-                                "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                                "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                                "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                                "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                                "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                                "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             ],
                     };
@@ -1389,11 +1403,14 @@ mod tests {
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, c@2)]",
             "ProjectionExec: expr=[a@0 as a1, a@0 as a2]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]",
-            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, top_join);
@@ -1411,11 +1428,14 @@ mod tests {
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a2@1, c@2)]",
             "ProjectionExec: expr=[a@0 as a1, a@0 as a2]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]",
-            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
@@ -1462,11 +1482,14 @@ mod tests {
             "ProjectionExec: expr=[c1@0 as a]",
             "ProjectionExec: expr=[c@2 as c1]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]",
-            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
@@ -1498,12 +1521,14 @@ mod tests {
         let expected = &[
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, a2@0)]",
             "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
-            "RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
             "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
-            "RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([a2@0], 10), input_partitions=10",
             "AggregateExec: mode=Partial, gby=[a@0 as a2], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
@@ -1547,12 +1572,14 @@ mod tests {
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b1@1, b@0), (a1@0, a@1)]",
             "ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
             "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
-            "RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
-            "RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
             "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
@@ -1654,15 +1681,19 @@ mod tests {
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(B@2, b1@6), (C@3, c@2), (AA@1, a1@5)]",
             "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)]",
-            "RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([b1@1, c1@2, a1@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b1@1, c1@2, a1@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)]",
-            "RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([b1@1, c1@2, a1@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b1@1, c1@2, a1@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
@@ -1971,14 +2002,17 @@ mod tests {
                         top_join_plan.as_str(),
                         join_plan.as_str(),
                         "SortExec: expr=[a@0 ASC]",
-                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: expr=[b1@1 ASC]",
-                        "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                        "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: expr=[c@2 ASC]",
-                        "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                        "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                     ],
                 // Should include 4 RepartitionExecs
@@ -1988,14 +2022,17 @@ mod tests {
                         "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
                         join_plan.as_str(),
                         "SortExec: expr=[a@0 ASC]",
-                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: expr=[b1@1 ASC]",
-                        "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                        "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: expr=[c@2 ASC]",
-                        "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                        "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 ],
             };
@@ -2024,14 +2061,17 @@ mod tests {
                             top_join_plan.as_str(),
                             join_plan.as_str(),
                             "SortExec: expr=[a@0 ASC]",
-                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: expr=[b1@1 ASC]",
-                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: expr=[c@2 ASC]",
-                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 4 RepartitionExecs and 4 SortExecs
@@ -2041,14 +2081,17 @@ mod tests {
                             "RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
                             join_plan.as_str(),
                             "SortExec: expr=[a@0 ASC]",
-                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: expr=[b1@1 ASC]",
-                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: expr=[c@2 ASC]",
-                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
@@ -2114,14 +2157,16 @@ mod tests {
             "ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
             "ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
             "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
-            "RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "SortExec: expr=[b2@1 ASC,a2@0 ASC]",
             "ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
             "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
-            "RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
             "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
@@ -2183,12 +2228,14 @@ mod tests {
             "AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[]",
             "InterleaveExec",
             "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
-            "RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
             "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
-            "RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=1",
+            "RepartitionExec: partitioning=Hash([a1@0], 10), input_partitions=10",
             "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, plan);
