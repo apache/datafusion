@@ -35,59 +35,19 @@ pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-use futures::stream::{Stream, TryStreamExt};
+use futures::stream::TryStreamExt;
 use std::fmt;
 use std::fmt::Debug;
 use tokio::task::JoinSet;
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
+use std::any::Any;
 use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::{any::Any, pin::Pin};
 
-/// Trait for types that stream [arrow::record_batch::RecordBatch]
-pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
-    /// Returns the schema of this `RecordBatchStream`.
-    ///
-    /// Implementation of this trait should guarantee that all `RecordBatch`'s returned by this
-    /// stream should have the same schema as returned from this method.
-    fn schema(&self) -> SchemaRef;
-}
-
-/// Trait for a [`Stream`](futures::stream::Stream) of [`RecordBatch`]es
-pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
-
-/// EmptyRecordBatchStream can be used to create a RecordBatchStream
-/// that will produce no results
-pub struct EmptyRecordBatchStream {
-    /// Schema wrapped by Arc
-    schema: SchemaRef,
-}
-
-impl EmptyRecordBatchStream {
-    /// Create an empty RecordBatchStream
-    pub fn new(schema: SchemaRef) -> Self {
-        Self { schema }
-    }
-}
-
-impl RecordBatchStream for EmptyRecordBatchStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
-impl Stream for EmptyRecordBatchStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        Poll::Ready(None)
-    }
-}
+// backwards compatibility
+pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+pub use stream::EmptyRecordBatchStream;
 
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
