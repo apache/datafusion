@@ -537,11 +537,11 @@ mod tests {
 
     /// Runs the repartition optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
-        ($EXPECTED_LINES: expr, $PLAN: expr) => {
-            assert_optimized!($EXPECTED_LINES, $PLAN, 10, false, 1024);
+        ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr) => {
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, 10, false, 1024);
         };
 
-        ($EXPECTED_LINES: expr, $PLAN: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr) => {
+        ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
@@ -549,21 +549,41 @@ mod tests {
             config.optimizer.repartition_file_scans = $REPARTITION_FILE_SCANS;
             config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
 
-            // run optimizer
-            let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-                // Arc::new(Repartition::new()),
-                // // EnforceDistribution is an essential rule to be applied.
-                // // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
-                // Arc::new(EnforceDistribution::new()),
+            let optimized = if $FIRST_ENFORCE_DIST{
+                // run optimizer
+                let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
+                    // EnforceDistribution is an essential rule to be applied.
+                    // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                    Arc::new(EnforceDistributionV2::new()),
+                    // re-run same rule. Rule should be idempotent
+                    Arc::new(EnforceDistributionV2::new()),
 
-                Arc::new(EnforceDistributionV2::new()),
-                // EnforceSorting is an essential rule to be applied.
-                // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
-                Arc::new(EnforceSorting::new()),
-            ];
-            let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
-                optimizer.optimize(plan, &config).unwrap()
-            });
+                    // EnforceSorting is an essential rule to be applied.
+                    // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                    Arc::new(EnforceSorting::new()),
+                ];
+                let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
+                    optimizer.optimize(plan, &config).unwrap()
+                });
+                optimized
+            } else {
+                // run optimizer
+                let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
+                    // EnforceSorting is an essential rule to be applied.
+                    // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                    Arc::new(EnforceSorting::new()),
+
+                    // EnforceDistribution is an essential rule to be applied.
+                    // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                    Arc::new(EnforceDistributionV2::new()),
+                    // // re-run same rule. Rule should be idempotent
+                    // Arc::new(EnforceDistributionV2::new()),
+                ];
+                let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
+                    optimizer.optimize(plan, &config).unwrap()
+                });
+                optimized
+            };
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent(true).to_string();
@@ -589,7 +609,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -606,7 +627,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -624,7 +646,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -642,7 +665,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -658,7 +682,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -675,7 +700,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -700,7 +726,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -727,7 +754,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -747,7 +775,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -764,7 +793,14 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+
+        // need repartiton and resort as the data was not sorted correctly
+        let expected_first_sort_enforcement = &[
+            "SortExec: expr=[c1@0 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+        ];
+        assert_optimized!(expected_first_sort_enforcement, plan, false);
         Ok(())
     }
 
@@ -779,7 +815,8 @@ mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -797,7 +834,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -814,7 +852,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -847,7 +886,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -865,7 +905,14 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+
+        let expected_first_sort_enforcement = &[
+            "SortExec: expr=[c1@0 ASC]",
+            "ProjectionExec: expr=[c1@0 as c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+        ];
+        assert_optimized!(expected_first_sort_enforcement, plan, false);
         Ok(())
     }
 
@@ -882,7 +929,8 @@ mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
@@ -897,14 +945,14 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 
     #[test]
     fn repartition_transitively_past_sort_with_filter() -> Result<()> {
-        let plan =
-            sort_preserving_merge_exec(sort_exec(filter_exec(parquet_exec()), true));
+        let plan = sort_exec(filter_exec(parquet_exec()), false);
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
@@ -915,16 +963,23 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+
+        let expected_first_sort_enforcement = &[
+            "SortExec: expr=[c1@0 ASC]",
+            "CoalescePartitionsExec",
+            "FilterExec: c1@0",
+            // Expect repartition on the input of the filter (as it can benefit from additional parallelism)
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+        ];
+        assert_optimized!(expected_first_sort_enforcement, plan, false);
         Ok(())
     }
 
     #[test]
     fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()> {
-        let plan = sort_preserving_merge_exec(sort_exec(
-            projection_exec(filter_exec(parquet_exec())),
-            true,
-        ));
+        let plan = sort_exec(projection_exec(filter_exec(parquet_exec())), false);
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
@@ -937,7 +992,17 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+
+        let expected_first_sort_enforcement = &[
+            "SortExec: expr=[c1@0 ASC]",
+            "CoalescePartitionsExec",
+            "ProjectionExec: expr=[c1@0 as c1]",
+            "FilterExec: c1@0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+        ];
+        assert_optimized!(expected_first_sort_enforcement, plan, false);
         Ok(())
     }
 
@@ -959,8 +1024,8 @@ mod tests {
             "CsvExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[c1], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1007,7 +1072,7 @@ mod tests {
                 compression_type,
             )));
 
-            assert_optimized!(expected, plan, 2, true, 10);
+            assert_optimized!(expected, plan, true, 2, true, 10);
         }
         Ok(())
     }
@@ -1032,8 +1097,8 @@ mod tests {
             "CsvExec: file_groups={2 groups: [[x], [y]]}, projection=[c1], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1057,8 +1122,8 @@ mod tests {
             "CsvExec: file_groups={4 groups: [[x:0..75], [x:75..100, y:0..50], [y:50..125], [y:125..200]]}, projection=[c1], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 4, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 4, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 4, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 4, true, 10);
         Ok(())
     }
 
@@ -1084,8 +1149,8 @@ mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1119,8 +1184,8 @@ mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1162,8 +1227,8 @@ mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1191,8 +1256,8 @@ mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1210,8 +1275,8 @@ mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1237,8 +1302,8 @@ mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1259,8 +1324,8 @@ mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 
@@ -1281,8 +1346,8 @@ mod tests {
             "CsvExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC], has_header=false",
         ];
 
-        assert_optimized!(expected_parquet, plan_parquet, 2, true, 10);
-        assert_optimized!(expected_csv, plan_csv, 2, true, 10);
+        assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
         Ok(())
     }
 

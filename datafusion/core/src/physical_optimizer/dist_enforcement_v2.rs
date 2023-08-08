@@ -8,6 +8,7 @@ use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::{
     with_new_children_if_necessary, Distribution, ExecutionPlan, Partitioning,
@@ -15,6 +16,9 @@ use crate::physical_plan::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_physical_expr::utils::{
+    ordering_satisfy, ordering_satisfy_concrete, ordering_satisfy_requirement_concrete,
+};
 use datafusion_physical_expr::PhysicalExpr;
 use itertools::izip;
 use std::sync::Arc;
@@ -127,11 +131,12 @@ fn add_hash_on_top(
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
     repartition_onward: &mut Option<ExecTree>,
+    should_preserve_order: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let new_plan = Arc::new(RepartitionExec::try_new(
-        input,
-        Partitioning::Hash(hash_exprs, n_target),
-    )?) as Arc<dyn ExecutionPlan>;
+    let new_plan = Arc::new(
+        RepartitionExec::try_new(input, Partitioning::Hash(hash_exprs, n_target))?
+            .with_preserve_order(should_preserve_order),
+    ) as Arc<dyn ExecutionPlan>;
 
     // Update exec tree, if there is branch connected to repartition roundrobin
     if let Some(exec_tree) = repartition_onward {
@@ -298,6 +303,8 @@ fn ensure_distribution(
                         }
                     }
                 }
+                // print_plan(&new_child);
+                // println!("new_child.output_partitioning().partition_count(): {:?}, target_partitions:{:?}", new_child.output_partitioning().partition_count(), target_partitions);
                 if new_child.output_partitioning().partition_count() < target_partitions {
                     new_child = add_roundrobin_on_top(
                         new_child,
@@ -306,6 +313,8 @@ fn ensure_distribution(
                     )?;
                     is_changed = true;
                 }
+                // println!("end");
+                // print_plan(&new_child);
             }
             if new_child
                 .output_partitioning()
@@ -313,10 +322,37 @@ fn ensure_distribution(
             {
                 Ok((new_child, is_changed))
             } else {
+                let should_preserve_ordering =
+                    match (new_child.output_ordering(), required_input_ordering) {
+                        (Some(existing_ordering), Some(required_ordering)) => {
+                            if new_child.output_partitioning().partition_count() > 1
+                                && ordering_satisfy_requirement_concrete(
+                                    existing_ordering,
+                                    required_ordering,
+                                    || new_child.equivalence_properties(),
+                                    || new_child.ordering_equivalence_properties(),
+                                )
+                            {
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        (_, _) => false,
+                    };
                 match requirement {
                     Distribution::SinglePartition => {
                         if child.output_partitioning().partition_count() > 1 {
-                            new_child = Arc::new(CoalescePartitionsExec::new(new_child));
+                            new_child = if should_preserve_ordering {
+                                let existing_ordering =
+                                    new_child.output_ordering().unwrap_or(&[]);
+                                Arc::new(SortPreservingMergeExec::new(
+                                    existing_ordering.to_vec(),
+                                    new_child,
+                                ))
+                            } else {
+                                Arc::new(CoalescePartitionsExec::new(new_child))
+                            };
                             is_changed = true;
                         }
                     }
@@ -326,6 +362,7 @@ fn ensure_distribution(
                             exprs.to_vec(),
                             target_partitions,
                             repartition_onward,
+                            should_preserve_ordering,
                         )?;
                         is_changed = true;
                     }
@@ -372,6 +409,8 @@ fn ensure_distribution(
         }
     }
 
+    // println!("before update");
+    // print_plan(&plan);
     if is_updated || changed_flags.iter().any(|item| *item) {
         let new_plan = plan.clone().with_new_children(new_children)?;
         let new_repartition_context = RepartitionContext {

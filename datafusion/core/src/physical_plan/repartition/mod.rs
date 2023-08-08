@@ -419,11 +419,9 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut repartition =
-            RepartitionExec::try_new(children[0].clone(), self.partitioning.clone())?;
-        if self.preserve_order {
-            repartition = repartition.with_preserve_order();
-        }
+        let repartition =
+            RepartitionExec::try_new(children[0].clone(), self.partitioning.clone())?
+                .with_preserve_order(self.preserve_order);
         Ok(Arc::new(repartition))
     }
 
@@ -432,6 +430,14 @@ impl ExecutionPlan for RepartitionExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        if let Partitioning::Hash(_, _) = self.partitioning {
+            vec![true]
+        } else {
+            vec![false]
+        }
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -625,8 +631,8 @@ impl RepartitionExec {
     }
 
     /// Set Order preserving flag
-    pub fn with_preserve_order(mut self) -> Self {
-        self.preserve_order = true;
+    pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
+        self.preserve_order = preserve_order;
         self
     }
 

@@ -1158,7 +1158,7 @@ mod tests {
 
     /// Runs the repartition optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
-        ($EXPECTED_LINES: expr, $PLAN: expr) => {
+        ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
@@ -1167,17 +1167,43 @@ mod tests {
             // // run optimizer
             // let optimizer = EnforceDistribution {};
 
-            // Run enforce distribution rule
-            let optimizer = EnforceDistributionV2::new();
+            let optimized = if $FIRST_ENFORCE_DIST{
+                // Run enforce distribution rule
+                let optimizer = EnforceDistributionV2::new();
+                let optimized = optimizer.optimize($PLAN.clone(), &config)?;
 
-            let optimized = optimizer.optimize($PLAN, &config)?;
-            // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
-            //       because they were written prior to the separation of `BasicEnforcement` into
-            //       `EnforceSorting` and `EnfoceDistribution`.
-            // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
-            //       new tests for the cascade.
-            let optimizer = EnforceSorting::new();
-            let optimized = optimizer.optimize(optimized, &config)?;
+                // The rule should be idempotent.
+                // Re-run same rule it shouldn't introduce unnecessary operators.
+                let optimizer = EnforceDistributionV2::new();
+                let optimized = optimizer.optimize(optimized, &config)?;
+
+                // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
+                //       because they were written prior to the separation of `BasicEnforcement` into
+                //       `EnforceSorting` and `EnforceDistribution`.
+                // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
+                //       new tests for the cascade.
+                let optimizer = EnforceSorting::new();
+                let optimized = optimizer.optimize(optimized, &config)?;
+                optimized
+            } else {
+                 // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
+                //       because they were written prior to the separation of `BasicEnforcement` into
+                //       `EnforceSorting` and `EnforceDistribution`.
+                // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
+                //       new tests for the cascade.
+                let optimizer = EnforceSorting::new();
+                let optimized = optimizer.optimize($PLAN.clone(), &config)?;
+
+                // Run enforce distribution rule
+                let optimizer = EnforceDistributionV2::new();
+                let optimized = optimizer.optimize(optimized, &config)?;
+
+                // The rule should be idempotent.
+                // Re-run same rule it shouldn't introduce unnecessary operators.
+                let optimizer = EnforceDistributionV2::new();
+                let optimized = optimizer.optimize(optimized, &config)?;
+                optimized
+            };
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent(true).to_string();
@@ -1294,7 +1320,8 @@ mod tests {
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
-                    assert_optimized!(expected, top_join);
+                    assert_optimized!(expected, top_join.clone(), true);
+                    assert_optimized!(expected, top_join, false);
                 }
                 JoinType::RightSemi | JoinType::RightAnti => {}
             }
@@ -1357,7 +1384,8 @@ mod tests {
                                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             ],
                     };
-                    assert_optimized!(expected, top_join);
+                    assert_optimized!(expected, top_join.clone(), true);
+                    assert_optimized!(expected, top_join, false);
                 }
                 JoinType::LeftSemi | JoinType::LeftAnti => {}
             }
@@ -1413,7 +1441,8 @@ mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected, top_join);
+        assert_optimized!(expected, top_join.clone(), true);
+        assert_optimized!(expected, top_join, false);
 
         // Join on (a2 == c)
         let top_join_on = vec![(
@@ -1439,7 +1468,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
-        assert_optimized!(expected, top_join);
+        assert_optimized!(expected, top_join.clone(), true);
+        assert_optimized!(expected, top_join, false);
         Ok(())
     }
 
@@ -1493,7 +1523,8 @@ mod tests {
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
-        assert_optimized!(expected, top_join);
+        assert_optimized!(expected, top_join.clone(), true);
+        assert_optimized!(expected, top_join, false);
         Ok(())
     }
 
@@ -1531,7 +1562,8 @@ mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected, join);
+        assert_optimized!(expected, join.clone(), true);
+        assert_optimized!(expected, join, false);
         Ok(())
     }
 
@@ -1582,7 +1614,8 @@ mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected, join);
+        assert_optimized!(expected, join.clone(), true);
+        assert_optimized!(expected, join, false);
         Ok(())
     }
 
@@ -1697,7 +1730,8 @@ mod tests {
             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected, filter_top_join);
+        assert_optimized!(expected, filter_top_join.clone(), true);
+        assert_optimized!(expected, filter_top_join, false);
         Ok(())
     }
 
@@ -2036,7 +2070,45 @@ mod tests {
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 ],
             };
-            assert_optimized!(expected, top_join);
+            assert_optimized!(expected, top_join.clone(), true);
+
+            let expected_first_sort_enforcement = match join_type {
+                // Should include 3 RepartitionExecs 3 SortExecs
+                JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti =>
+                    vec![
+                        top_join_plan.as_str(),
+                        join_plan.as_str(),
+                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                        "SortExec: expr=[a@0 ASC]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                        "SortExec: expr=[b1@1 ASC]",
+                        "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                        "SortExec: expr=[c@2 ASC]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                    ],
+                // Should include 4 RepartitionExecs
+                _ => vec![
+                    top_join_plan.as_str(),
+                    "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                    "SortExec: expr=[a@0 ASC]",
+                    "CoalescePartitionsExec",
+                    join_plan.as_str(),
+                    "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                    "SortExec: expr=[a@0 ASC]",
+                    "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                    "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                    "SortExec: expr=[b1@1 ASC]",
+                    "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                    "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                    "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                    "SortExec: expr=[c@2 ASC]",
+                    "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                ],
+            };
+            assert_optimized!(expected_first_sort_enforcement, top_join, false);
 
             match join_type {
                 JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
@@ -2095,7 +2167,44 @@ mod tests {
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
-                    assert_optimized!(expected, top_join);
+                    assert_optimized!(expected, top_join.clone(), true);
+
+                    let expected_first_sort_enforcement = match join_type {
+                        // Should include 3 RepartitionExecs and 3 SortExecs
+                        JoinType::Inner | JoinType::Right => vec![
+                            top_join_plan.as_str(),
+                            join_plan.as_str(),
+                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                            "SortExec: expr=[a@0 ASC]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                            "SortExec: expr=[b1@1 ASC]",
+                            "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                            "SortExec: expr=[c@2 ASC]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        ],
+                        // Should include 4 RepartitionExecs and 4 SortExecs
+                        _ => vec![
+                            top_join_plan.as_str(),
+                            "RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=1",
+                            "SortExec: expr=[b1@6 ASC]",
+                            "CoalescePartitionsExec",
+                            join_plan.as_str(),
+                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                            "SortExec: expr=[a@0 ASC]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                            "SortExec: expr=[b1@1 ASC]",
+                            "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                            "SortExec: expr=[c@2 ASC]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        ],
+                    };
+                    assert_optimized!(expected_first_sort_enforcement, top_join, false);
                 }
                 _ => {}
             }
@@ -2169,7 +2278,31 @@ mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected, join);
+        assert_optimized!(expected, join.clone(), true);
+
+        let expected_first_sort_enforcement = &[
+            "SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]",
+            "RepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=1",
+            "SortExec: expr=[b3@1 ASC,a3@0 ASC]",
+            "CoalescePartitionsExec",
+            "ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
+            "ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
+            "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
+            "RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "RepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=1",
+            "SortExec: expr=[b2@1 ASC,a2@0 ASC]",
+            "CoalescePartitionsExec",
+            "ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
+            "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        assert_optimized!(expected_first_sort_enforcement, join, false);
         Ok(())
     }
 
@@ -2198,7 +2331,8 @@ mod tests {
             "CoalesceBatchesExec: target_batch_size=4096",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
-        assert_optimized!(expected, exec);
+        assert_optimized!(expected, exec.clone(), true);
+        assert_optimized!(expected, exec, false);
         Ok(())
     }
 
@@ -2238,7 +2372,8 @@ mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected, plan);
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
         Ok(())
     }
 }
