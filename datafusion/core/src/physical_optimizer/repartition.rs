@@ -1386,6 +1386,10 @@ mod tests {
             self.input.output_partitioning()
         }
 
+        fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+            vec![false]
+        }
+
         fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
             self.input.output_ordering()
         }

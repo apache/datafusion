@@ -49,6 +49,8 @@ use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
 };
 use itertools::izip;
+use std::fmt;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 /// The EnforceDistribution rule ensures that distribution requirements are met
@@ -81,9 +83,6 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         let repartition_file_min_size = config.optimizer.repartition_file_min_size;
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
 
-        // println!("at the start");
-        // print_plan(&plan);
-
         let new_plan = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new(plan);
@@ -93,8 +92,6 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         } else {
             plan
         };
-        // println!("after top_down_join_key_reordering");
-        // print_plan(&new_plan);
 
         // Distribution enforcement needs to be applied bottom-up.
         let adjusted = new_plan.transform_up(&|plan| {
@@ -105,11 +102,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             }
         })?;
 
-        // println!("after reorder");
-        // print_plan(&adjusted);
-
         let repartition_context = RepartitionContext::new(adjusted);
-        // let res = repartition_context.transform_up(&|plan_with_pipeline_fixer| {ensure_distribution(repartition_context, target_partitions)})?;
 
         // Distribution enforcement needs to be applied bottom-up.
         let updated_plan = repartition_context.transform_up(&|repartition_context| {
@@ -877,13 +870,10 @@ fn update_repartition_from_context(
     repartition_context: &RepartitionContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut new_children = repartition_context.plan.children();
-    let benefits_from_partitioning =
-        repartition_context.plan.benefits_from_input_partitioning();
     let required_input_orderings = repartition_context.plan.required_input_ordering();
-    for (child, repartition_onwards, benefits, required_ordering) in izip!(
+    for (child, repartition_onwards, required_ordering) in izip!(
         new_children.iter_mut(),
         repartition_context.repartition_onwards.iter(),
-        benefits_from_partitioning.into_iter(),
         required_input_orderings.into_iter(),
     ) {
         // if repartition masses with ordering requirement
@@ -903,7 +893,7 @@ fn remove_parallelization(exec_tree: &ExecTree) -> Result<Arc<dyn ExecutionPlan>
     let mut updated_children = exec_tree.plan.children();
     for child in &exec_tree.children {
         let child_idx = child.idx;
-        let new_child = remove_parallelization(&child)?;
+        let new_child = remove_parallelization(child)?;
         updated_children[child_idx] = new_child;
     }
     if let Some(repartition) = exec_tree.plan.as_any().downcast_ref::<RepartitionExec>() {
@@ -916,9 +906,28 @@ fn remove_parallelization(exec_tree: &ExecTree) -> Result<Arc<dyn ExecutionPlan>
             }
         }
     }
+    if let Some(repartition) = exec_tree.plan.as_any().downcast_ref::<RepartitionExec>() {
+        // If
+        //  - repartition is `SortPreservingRepartitionExec`
+        //  - and input partition number is 1
+        // replace `SortPreservingRepartitionExec` with `RepartitionExec`
+        // When input is single partitioned, `RepartitionExec` preserves ordering also.
+        if repartition.preserve_order()
+            && updated_children[0].output_partitioning().partition_count() == 1
+        {
+            return Ok(Arc::new(RepartitionExec::try_new(
+                updated_children[0].clone(),
+                repartition.partitioning().clone(),
+            )?));
+        }
+    }
     exec_tree.plan.clone().with_new_children(updated_children)
 }
 
+/// This function checks whether we need to add additional data exchange
+/// operators to satisfy distribution requirements. Since this function
+/// takes care of such requirements, we should avoid manually adding data
+/// exchange operators in other places.
 fn ensure_distribution(
     repartition_context: RepartitionContext,
     target_partitions: usize,
@@ -942,25 +951,14 @@ fn ensure_distribution(
 
     let mut is_updated = false;
 
-    // println!("start");
-    // print_plan(&repartition_context.plan);
-    // println!("WOULD BENEFIT:{:?}", repartition_context.plan.benefits_from_input_partitioning());
-    // println!("plan required dist: {:?}", repartition_context.plan.required_input_distribution());
-    // println!("plan required ordering: {:?}", repartition_context.plan.required_input_ordering());
-
     let (plan, mut updated_repartition_onwards) = if repartition_context
         .plan
         .required_input_ordering()
         .iter()
         .any(|item| item.is_some())
     {
-        // println!("----------start--------------");
-        // print_plan(&repartition_context.plan);
-
         let new_plan = update_repartition_from_context(&repartition_context)?;
 
-        // print_plan(&new_plan);
-        // println!("----------end------------");
         let n_child = new_plan.children().len();
         is_updated = true;
         (new_plan, vec![None; n_child])
@@ -987,24 +985,24 @@ fn ensure_distribution(
             repartition_onward,
             would_benefit,
         )| {
-            let mut new_child = child.clone();
+            let mut child = child.clone();
             let mut is_changed = false;
 
             if enable_round_robin
+                    // executor benefits from partitioning (such as filter)
                     && (would_benefit && repartition_beneficial_stat)
                     // Unless partitioning doesn't increase partition number, it is not beneficial.
                     && child.output_partitioning().partition_count() < target_partitions
-                    // Either doesn't require ordering, or at the input there is no ordering
+                    // Either doesn't require ordering, or at the input there is no ordering, or
+                    // operator doesn't maintain ordering
                     // In this case, adding repartition is not harmful for ordering propagation.
                     && (required_input_ordering.is_none()
-                    || child.output_ordering().is_none())
+                    || child.output_ordering().is_none() || !maintains)
             {
                 // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
-                if let Some(parquet_exec) =
-                    new_child.as_any().downcast_ref::<ParquetExec>()
-                {
+                if let Some(parquet_exec) = child.as_any().downcast_ref::<ParquetExec>() {
                     if repartition_file_scans {
-                        new_child = Arc::new(parquet_exec.get_repartitioned(
+                        child = Arc::new(parquet_exec.get_repartitioned(
                             target_partitions,
                             repartition_file_min_size,
                         )) as _;
@@ -1012,73 +1010,70 @@ fn ensure_distribution(
                     }
                 }
 
-                if let Some(csv_exec) = new_child.as_any().downcast_ref::<CsvExec>() {
+                if let Some(csv_exec) = child.as_any().downcast_ref::<CsvExec>() {
                     if repartition_file_scans {
                         if let Some(csv_exec) = csv_exec.get_repartitioned(
                             target_partitions,
                             repartition_file_min_size,
                         ) {
-                            new_child = Arc::new(csv_exec) as _;
+                            child = Arc::new(csv_exec) as _;
                             is_changed = true;
                         }
                     }
                 }
-                // print_plan(&new_child);
-                // println!("new_child.output_partitioning().partition_count(): {:?}, target_partitions:{:?}", new_child.output_partitioning().partition_count(), target_partitions);
-                if new_child.output_partitioning().partition_count() < target_partitions {
-                    new_child = add_roundrobin_on_top(
-                        new_child,
+                if child.output_partitioning().partition_count() < target_partitions {
+                    child = add_roundrobin_on_top(
+                        child,
                         target_partitions,
                         repartition_onward,
                     )?;
                     is_changed = true;
                 }
-                // println!("end");
-                // print_plan(&new_child);
             }
-            if new_child
+            if child
                 .output_partitioning()
-                .satisfy(requirement.clone(), || new_child.equivalence_properties())
+                .satisfy(requirement.clone(), || child.equivalence_properties())
             {
-                Ok((new_child, is_changed))
+                Ok((child, is_changed))
             } else {
                 let should_preserve_ordering =
-                    match (new_child.output_ordering(), required_input_ordering) {
+                    match (child.output_ordering(), required_input_ordering) {
                         (Some(existing_ordering), Some(required_ordering)) => {
-                            if new_child.output_partitioning().partition_count() > 1
+                            // We have to preserve ordering, when adding repartition
+                            // if following conditions hold:
+                            // - existing ordering satisfies ordering requirement
+                            // - input partition count is larger than 1 (in this case
+                            //   adding naive repartition will invalidate existing ordering)
+                            child.output_partitioning().partition_count() > 1
                                 && ordering_satisfy_requirement_concrete(
                                     existing_ordering,
                                     required_ordering,
-                                    || new_child.equivalence_properties(),
-                                    || new_child.ordering_equivalence_properties(),
+                                    || child.equivalence_properties(),
+                                    || child.ordering_equivalence_properties(),
                                 )
-                            {
-                                true
-                            } else {
-                                false
-                            }
                         }
                         (_, _) => false,
                     };
+
                 match requirement {
                     Distribution::SinglePartition => {
                         if child.output_partitioning().partition_count() > 1 {
-                            new_child = if should_preserve_ordering {
+                            child = if should_preserve_ordering {
                                 let existing_ordering =
-                                    new_child.output_ordering().unwrap_or(&[]);
+                                    child.output_ordering().unwrap_or(&[]);
                                 Arc::new(SortPreservingMergeExec::new(
                                     existing_ordering.to_vec(),
-                                    new_child,
+                                    child,
                                 ))
                             } else {
-                                Arc::new(CoalescePartitionsExec::new(new_child))
+                                Arc::new(CoalescePartitionsExec::new(child))
                             };
                             is_changed = true;
                         }
                     }
                     Distribution::HashPartitioned(exprs) => {
-                        new_child = add_hash_on_top(
-                            new_child,
+                        child = add_hash_on_top(
+                            child,
                             exprs.to_vec(),
                             target_partitions,
                             repartition_onward,
@@ -1088,7 +1083,7 @@ fn ensure_distribution(
                     }
                     Distribution::UnspecifiedDistribution => {}
                 };
-                Ok((new_child, is_changed))
+                Ok((child, is_changed))
             }
         },
     )
@@ -1118,15 +1113,13 @@ fn ensure_distribution(
     //     - Agg:
     //         Repartition (hash):
     //           Data
-    if plan.as_any().is::<UnionExec>() {
-        if can_interleave(&new_children) {
-            let plan = Arc::new(InterleaveExec::try_new(new_children)?) as _;
-            let new_repartition_context = RepartitionContext {
-                plan,
-                repartition_onwards: updated_repartition_onwards,
-            };
-            return Ok(Transformed::Yes(new_repartition_context));
-        }
+    if plan.as_any().is::<UnionExec>() && can_interleave(&new_children) {
+        let plan = Arc::new(InterleaveExec::try_new(new_children)?) as _;
+        let new_repartition_context = RepartitionContext {
+            plan,
+            repartition_onwards: updated_repartition_onwards,
+        };
+        return Ok(Transformed::Yes(new_repartition_context));
     }
 
     if is_updated || changed_flags.iter().any(|item| *item) {
@@ -1141,10 +1134,35 @@ fn ensure_distribution(
     }
 }
 
+fn plan_str(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+    let formatted = crate::physical_plan::displayable(plan.as_ref())
+        .indent(true)
+        .to_string();
+    let actual: Vec<String> = formatted
+        .trim()
+        .lines()
+        .map(|item| item.to_string())
+        .collect();
+    actual
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RepartitionContext {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     repartition_onwards: Vec<Option<ExecTree>>,
+}
+
+impl fmt::Display for RepartitionContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let plan_string = plan_str(&self.plan);
+        write!(f, "plan: {:?}", plan_string)?;
+        for (idx, child) in self.repartition_onwards.iter().enumerate() {
+            if let Some(child) = child {
+                write!(f, "idx:{:?}, exec_tree:{}", idx, child)?;
+            }
+        }
+        write!(f, "")
+    }
 }
 
 impl RepartitionContext {
@@ -1249,80 +1267,6 @@ impl TreeNode for RepartitionContext {
         }
     }
 }
-
-// /// This function checks whether we need to add additional data exchange
-// /// operators to satisfy distribution requirements. Since this function
-// /// takes care of such requirements, we should avoid manually adding data
-// /// exchange operators in other places.
-// fn ensure_distribution(
-//     plan: Arc<dyn ExecutionPlan>,
-//     target_partitions: usize,
-// ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-//     if plan.children().is_empty() {
-//         return Ok(Transformed::No(plan));
-//     }
-//
-//     // special case for UnionExec: We want to "bubble up" hash-partitioned data. So instead of:
-//     //
-//     // Agg:
-//     //   Repartition (hash):
-//     //     Union:
-//     //       - Agg:
-//     //           Repartition (hash):
-//     //             Data
-//     //       - Agg:
-//     //           Repartition (hash):
-//     //             Data
-//     //
-//     // We can use:
-//     //
-//     // Agg:
-//     //   Interleave:
-//     //     - Agg:
-//     //         Repartition (hash):
-//     //           Data
-//     //     - Agg:
-//     //         Repartition (hash):
-//     //           Data
-//     if let Some(union_exec) = plan.as_any().downcast_ref::<UnionExec>() {
-//         if can_interleave(union_exec.inputs()) {
-//             let plan = InterleaveExec::try_new(union_exec.inputs().clone())?;
-//             return Ok(Transformed::Yes(Arc::new(plan)));
-//         }
-//     }
-//
-//     let required_input_distributions = plan.required_input_distribution();
-//     let children: Vec<Arc<dyn ExecutionPlan>> = plan.children();
-//     assert_eq!(children.len(), required_input_distributions.len());
-//
-//     // Add RepartitionExec to guarantee output partitioning
-//     let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
-//         .into_iter()
-//         .zip(required_input_distributions.into_iter())
-//         .map(|(child, required)| {
-//             if child
-//                 .output_partitioning()
-//                 .satisfy(required.clone(), || child.equivalence_properties())
-//             {
-//                 Ok(child)
-//             } else {
-//                 let new_child: Result<Arc<dyn ExecutionPlan>> = match required {
-//                     Distribution::SinglePartition
-//                         if child.output_partitioning().partition_count() > 1 =>
-//                     {
-//                         Ok(Arc::new(CoalescePartitionsExec::new(child.clone())))
-//                     }
-//                     _ => {
-//                         let partition = required.create_partitioning(target_partitions);
-//                         Ok(Arc::new(RepartitionExec::try_new(child, partition)?))
-//                     }
-//                 };
-//                 new_child
-//             }
-//         })
-//         .collect();
-//     with_new_children_if_necessary(plan, new_children?)
-// }
 
 #[derive(Debug, Clone)]
 struct JoinKeyPairs {

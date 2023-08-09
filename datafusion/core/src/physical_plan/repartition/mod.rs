@@ -370,6 +370,10 @@ impl RepartitionExec {
         &self.partitioning
     }
 
+    pub fn preserve_order(&self) -> bool {
+        self.preserve_order
+    }
+
     /// Get name of the Executor
     pub fn name(&self) -> &str {
         if self.preserve_order {

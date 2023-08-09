@@ -26,7 +26,6 @@ use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAgg
 use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
-use crate::physical_optimizer::repartition::Repartition;
 use crate::physical_optimizer::sort_enforcement::EnforceSorting;
 use crate::{error::Result, physical_plan::ExecutionPlan};
 
