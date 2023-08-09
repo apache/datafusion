@@ -2315,11 +2315,13 @@ select array_concat(column1, [7]) from arrays_values_v2;
 [7]
 
 # array_flatten
-query ??
-select array_flatten(make_array([1], [2, 3], [null], make_array(4, null, 5))),
+query ????
+select array_flatten(make_array(1, 2, 1, 3, 2)),
+       list_flatten(make_list(1, 10, 11)),
+       array_flatten(make_array([1], [2, 3], [null], make_array(4, null, 5))),
        array_flatten(make_array([[1.1]], [[2.2]], [[3.3], [4.4]]));
 ----
-[1, 2, 3, , 4, , 5] [1.1, 2.2, 3.3, 4.4]
+[1, 2, 1, 3, 2] [1, 10, 11] [1, 2, 3, , 4, , 5] [1.1, 2.2, 3.3, 4.4]
 
 query ????
 select column1, column2, column3, column4 from arrays_flatten_table;

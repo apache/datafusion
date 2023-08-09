@@ -1773,9 +1773,7 @@ fn flatten_internal(
                 let list_arr = ListArray::new(field, offsets, values, nulls);
                 Ok(list_arr)
             } else {
-                Err(DataFusionError::Internal(
-                    "Indexes should not be None".to_string(),
-                ))
+                Ok(list_arr.clone())
             }
         }
     }
