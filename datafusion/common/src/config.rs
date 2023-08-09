@@ -255,7 +255,7 @@ config_namespace! {
 }
 
 config_namespace! {
-    /// Options related to reading of parquet files
+    /// Options related to parquet files
     pub struct ParquetOptions {
         /// If true, reads the Parquet data page level metadata (the
         /// Page Index), if present, to reduce the I/O and number of
@@ -286,7 +286,48 @@ config_namespace! {
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
+
+        // The following map to parquet::file::properties::WriterProperties
+
+        /// Sets best effort maximum size of data page in bytes
+        pub data_pagesize_limit: usize, default = parquet::file::properties::DEFAULT_PAGE_SIZE
+        
+        /// Sets best effort maximum number of rows in data page
+        pub data_page_row_count_limit: usize, default = usize::MAX
+
+        /// Sets best effort maximum dictionary page size, in bytes
+        pub dictionary_page_size_limit: usize, default = parquet::file::properties::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
+
+        /// Sets maximum number of rows in a row group
+        pub max_row_group_size: usize, default = parquet::file::properties::DEFAULT_MAX_ROW_GROUP_SIZE
+
+        /// Sets "created by" property
+        pub created_by: String, default = parquet::file::properties::DEFAULT_CREATED_BY.into()
+
+        pub compression: Option<String>, default = None
+
+        /// Sets default encoding for any column
+        pub encoding: Option<String>, default = None
+
+        /// Sets if dictionary encoding is enabled
+        pub dictionary_enabled: Option<bool>, default = None
+
+        /// Sets if statistics are enabled for any column
+        pub statistics_enabled: Option<String>, default = None
+
+        /// Sets max statistics size for any column
+        pub max_statistics_size: Option<usize>, default = None
+
+        /// Sets if bloom filter is enabled for any column
+        pub bloom_filter_enabled: Option<bool>, default = None
     }
+        // TODO macro not working with Option<f64> or Option<u64> 
+        // Sets bloom filter false positive probability
+        //pub bloom_fiter_fpp: Option<f64>, default = None
+
+        // Sets bloom filter number of distinct values
+        //pub bloom_filter_ndv: Option<u64>, default = None
+    //}
 }
 
 config_namespace! {

@@ -1589,6 +1589,27 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_insert_into_append_new_parquet_files() -> Result<()> {
+        helper_test_append_new_files_to_table(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_to_parquet_file_fails() -> Result<()> {
+        let maybe_err = helper_test_insert_into_append_to_existing_files(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+        )
+        .await;
+        let _err = maybe_err.expect_err("Appending to existing parquet file did not fail!".into());
+        Ok(())
+    }
+
     fn load_empty_schema_table(
         schema: SchemaRef,
         temp_path: &str,
@@ -1825,9 +1846,9 @@ mod tests {
                     .register_parquet(
                         "t",
                         tmp_dir.path().to_str().unwrap(),
-                        ParquetReadOptions::default(), // TODO implement insert_mode for parquet
-                                                       //.insert_mode(ListingTableInsertMode::AppendNewFiles)
-                                                       //.schema(schema.as_ref()),
+                        ParquetReadOptions::default()
+                                    .insert_mode(ListingTableInsertMode::AppendNewFiles)
+                                    .schema(schema.as_ref()),
                     )
                     .await?;
             }
@@ -1894,16 +1915,16 @@ mod tests {
 
         // Read the records in the table
         let batches = session_ctx
-            .sql("select count(*) from t")
+            .sql("select count(*) as count from t")
             .await?
             .collect()
             .await?;
         let expected = vec![
-            "+----------+",
-            "| COUNT(*) |",
-            "+----------+",
-            "| 6        |",
-            "+----------+",
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
         ];
 
         // Assert that the batches read from the file match the expected result.
@@ -1935,18 +1956,18 @@ mod tests {
 
         // Read the contents of the table
         let batches = session_ctx
-            .sql("select count(*) from t")
+            .sql("select count(*) AS count from t")
             .await?
             .collect()
             .await?;
 
         // Define the expected result after the second append.
         let expected = vec![
-            "+----------+",
-            "| COUNT(*) |",
-            "+----------+",
-            "| 12       |",
-            "+----------+",
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 12    |",
+            "+-------+",
         ];
 
         // Assert that the batches read from the file after the second append match the expected result.
