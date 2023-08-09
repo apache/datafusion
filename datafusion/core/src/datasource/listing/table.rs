@@ -1606,7 +1606,8 @@ mod tests {
             FileCompressionType::UNCOMPRESSED,
         )
         .await;
-        let _err = maybe_err.expect_err("Appending to existing parquet file did not fail!".into());
+        let _err =
+            maybe_err.expect_err("Appending to existing parquet file did not fail!");
         Ok(())
     }
 
@@ -1847,8 +1848,8 @@ mod tests {
                         "t",
                         tmp_dir.path().to_str().unwrap(),
                         ParquetReadOptions::default()
-                                    .insert_mode(ListingTableInsertMode::AppendNewFiles)
-                                    .schema(schema.as_ref()),
+                            .insert_mode(ListingTableInsertMode::AppendNewFiles)
+                            .schema(schema.as_ref()),
                     )
                     .await?;
             }

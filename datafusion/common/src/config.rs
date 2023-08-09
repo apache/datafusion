@@ -291,7 +291,7 @@ config_namespace! {
 
         /// Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = parquet::file::properties::DEFAULT_PAGE_SIZE
-        
+
         /// Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = usize::MAX
 
@@ -321,7 +321,7 @@ config_namespace! {
         /// Sets if bloom filter is enabled for any column
         pub bloom_filter_enabled: Option<bool>, default = None
     }
-        // TODO macro not working with Option<f64> or Option<u64> 
+        // TODO macro not working with Option<f64> or Option<u64>
         // Sets bloom filter false positive probability
         //pub bloom_fiter_fpp: Option<f64>, default = None
 

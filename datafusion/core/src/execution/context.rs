@@ -1024,12 +1024,14 @@ impl SessionContext {
     ) -> Result<()> {
         let listing_options = options.to_listing_options(&self.state.read().config);
 
-        self.register_listing_table(name, 
-            table_path, 
-            listing_options, 
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
             options.schema.map(|s| Arc::new(s.to_owned())),
-            None)
-            .await?;
+            None,
+        )
+        .await?;
         Ok(())
     }
 

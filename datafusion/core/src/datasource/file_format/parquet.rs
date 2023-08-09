@@ -17,17 +17,17 @@
 
 //! Parquet format abstractions
 
+use rand::distributions::DistString;
 use std::any::Any;
-use std::sync::Arc;
 use std::fmt;
 use std::fmt::Debug;
-use rand::distributions::DistString;
+use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{DataFusionError, plan_err};
+use datafusion_common::{plan_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
@@ -36,27 +36,30 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
+use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use rand::distributions::Alphanumeric;
-use tokio::io::AsyncWrite;
 
-use super::{FileFormat, FileWriterMode, AbortableWrite};
 use super::FileScanConfig;
-use super::file_type::FileCompressionType;
+use super::{FileFormat, FileWriterMode};
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
-use crate::datasource::physical_plan::{ParquetExec, SchemaAdapter, FileSinkConfig, FileGroupDisplay, FileMeta};
+use crate::datasource::physical_plan::{
+    FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
+};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::insert::{DataSink, InsertExec};
-use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics, DisplayAs, DisplayFormatType, SendableRecordBatchStream};
+use crate::physical_plan::{
+    Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+    Statistics,
+};
 
 /// The default file extension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -578,8 +581,7 @@ struct ParquetSink {
 
 impl Debug for ParquetSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ParquetSink")
-            .finish()
+        f.debug_struct("ParquetSink").finish()
     }
 }
 
@@ -600,30 +602,30 @@ impl DisplayAs for ParquetSink {
 }
 
 impl ParquetSink {
-    fn new(
-        config: FileSinkConfig,
-    ) -> Self {
-        Self {
-            config,
-        }
+    fn new(config: FileSinkConfig) -> Self {
+        Self { config }
     }
 
     /// Builds a parquet WriterProperties struct, setting options as appropriate from TaskContext options
-    fn parquet_writer_props_from_context(&self, context: &Arc<TaskContext>) -> WriterProperties{
+    fn parquet_writer_props_from_context(
+        &self,
+        context: &Arc<TaskContext>,
+    ) -> WriterProperties {
         let parquet_context = &context.session_config().options().execution.parquet;
         let mut builder = WriterProperties::builder()
-        .set_created_by(parquet_context.created_by.clone())
-        .set_data_page_row_count_limit(parquet_context.data_page_row_count_limit)
-        .set_data_page_size_limit(parquet_context.data_pagesize_limit);
+            .set_created_by(parquet_context.created_by.clone())
+            .set_data_page_row_count_limit(parquet_context.data_page_row_count_limit)
+            .set_data_page_size_limit(parquet_context.data_pagesize_limit);
 
-        if parquet_context.bloom_filter_enabled.is_some(){   
-            builder = builder.set_bloom_filter_enabled(parquet_context.bloom_filter_enabled.unwrap())
+        if parquet_context.bloom_filter_enabled.is_some() {
+            builder = builder
+                .set_bloom_filter_enabled(parquet_context.bloom_filter_enabled.unwrap())
         }
 
         // TODO
         //.set_bloom_filter_fpp(parquet_context.bloom_filter_fpp)
         // TODO
-        //.set_bloom_filter_ndv(parquet_context.bloom_filter_ndv)   
+        //.set_bloom_filter_ndv(parquet_context.bloom_filter_ndv)
         //.set_compression(parquet::basic::Compression::try_from(parquet_context.compression))
         builder.build()
     }
@@ -634,15 +636,19 @@ impl ParquetSink {
         file_meta: FileMeta,
         object_store: Arc<dyn ObjectStore>,
         parquet_props: WriterProperties,
-    ) -> Result<AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>> {
+    ) -> Result<
+        AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
+    > {
         let object = &file_meta.object_meta;
         match self.config.writer_mode {
             FileWriterMode::Append => {
-                return plan_err!("Appending to Parquet files is not supported by the file format!")
+                plan_err!(
+                    "Appending to Parquet files is not supported by the file format!"
+                )
             }
-            FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented("FileWriterMode::Put is not implemented for ParquetSink".into()))
-            }
+            FileWriterMode::Put => Err(DataFusionError::NotImplemented(
+                "FileWriterMode::Put is not implemented for ParquetSink".into(),
+            )),
             FileWriterMode::PutMultipart => {
                 let (_, multipart_writer) = object_store
                     .put_multipart(&object.location)
@@ -650,11 +656,11 @@ impl ParquetSink {
                     .map_err(DataFusionError::ObjectStore)?;
                 let writer = AsyncArrowWriter::try_new(
                     multipart_writer,
-                    self.config.output_schema.clone(), 
+                    self.config.output_schema.clone(),
                     10485760,
                     Some(parquet_props),
                 )?;
-                return Ok(writer)
+                Ok(writer)
             }
         }
     }
@@ -678,7 +684,9 @@ impl DataSink for ParquetSink {
         let mut writers = vec![];
         match self.config.writer_mode {
             FileWriterMode::Append => {
-                return plan_err!("Parquet format does not support appending to existing file!")
+                return plan_err!(
+                    "Parquet format does not support appending to existing file!"
+                )
             }
             FileWriterMode::Put => {
                 return Err(DataFusionError::NotImplemented(
@@ -701,27 +709,30 @@ impl DataSink for ParquetSink {
                         e_tag: None,
                     };
                     let writer = self
-                        .create_writer(object_meta.into(), object_store.clone(), parquet_props.clone())
+                        .create_writer(
+                            object_meta.into(),
+                            object_store.clone(),
+                            parquet_props.clone(),
+                        )
                         .await?;
                     writers.push(writer);
                 }
             }
         }
 
-    
-    let mut row_count = 0;
-    // TODO parallelize serialization accross partitions and batches within partitions
-    // see: https://github.com/apache/arrow-datafusion/issues/7079
-    for idx in 0..num_partitions {
-        while let Some(batch) = data[idx].next().await.transpose()? {
-            row_count += batch.num_rows();
-            writers[idx].write(&batch).await?;
+        let mut row_count = 0;
+        // TODO parallelize serialization accross partitions and batches within partitions
+        // see: https://github.com/apache/arrow-datafusion/issues/7079
+        for idx in 0..num_partitions {
+            while let Some(batch) = data[idx].next().await.transpose()? {
+                row_count += batch.num_rows();
+                writers[idx].write(&batch).await?;
+            }
         }
-    }
 
-    for writer in writers{
-        writer.close().await?;
-    }    
+        for writer in writers {
+            writer.close().await?;
+        }
 
         Ok(row_count as u64)
     }
