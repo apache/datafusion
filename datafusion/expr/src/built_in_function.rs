@@ -503,8 +503,20 @@ impl BuiltinScalarFunction {
         // Some built-in functions' return type depends on the incoming type.
         match self {
             BuiltinScalarFunction::ArrayFlatten => {
-                // TODO: Need to check the type of element in the list
-                Ok(List(Arc::new(Field::new("item", DataType::Int64, true))))
+                fn get_base_type(data_type: &DataType) -> Result<DataType> {
+                    match data_type {
+                        DataType::List(field) => match field.data_type() {
+                            DataType::List(_) => get_base_type(field.data_type()),
+                            _ => Ok(data_type.to_owned()),
+                        },
+                        _ => Err(DataFusionError::Internal(
+                            "Not reachable, data_type should be List".to_string(),
+                        )),
+                    }
+                }
+
+                let data_type = get_base_type(&input_expr_types[0])?;
+                Ok(data_type)
             }
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {

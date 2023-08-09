@@ -115,8 +115,8 @@ AS VALUES
 statement ok
 CREATE TABLE arrays_flatten_table
 AS VALUES
-  (make_array([1], [2], [3]), make_array([[1, 2, 3]], [[4, 5]], [[6]]), make_array([[[1]]], [[[2, 3]]])),
-  (make_array([1, 2], [3, 4], [5, 6]), make_array([[8]]), make_array([[[1,2]]], [[[3]]]))
+  (make_array([1], [2], [3]), make_array([[1, 2, 3]], [[4, 5]], [[6]]), make_array([[[1]]], [[[2, 3]]]), make_array([1.0], [2.1, 2.2], [3.2, 3.3, 3.4])),
+  (make_array([1, 2], [3, 4], [5, 6]), make_array([[8]]), make_array([[[1,2]]], [[[3]]]), make_array([1.0, 2.0], [3.0, 4.0], [5.0, 6.0]))
 ;
 
 statement ok
@@ -2315,29 +2315,27 @@ select array_concat(column1, [7]) from arrays_values_v2;
 [7]
 
 # array_flatten
-query ???
-select column1, column2, column3 from arrays_flatten_table;
+query ??
+select array_flatten(make_array([1], [2, 3], [null], make_array(4, null, 5))),
+       array_flatten(make_array([[1.1]], [[2.2]], [[3.3], [4.4]]));
 ----
-[[1], [2], [3]] [[[1, 2, 3]], [[4, 5]], [[6]]] [[[[1]]], [[[2, 3]]]]
-[[1, 2], [3, 4], [5, 6]] [[[8]]] [[[[1, 2]]], [[[3]]]]
+[1, 2, 3, , 4, , 5] [1.1, 2.2, 3.3, 4.4]
 
-query ?
-select array_flatten(column1) from arrays_flatten_table;
+query ????
+select column1, column2, column3, column4 from arrays_flatten_table;
 ----
-[1, 2, 3]
-[1, 2, 3, 4, 5, 6]
+[[1], [2], [3]] [[[1, 2, 3]], [[4, 5]], [[6]]] [[[[1]]], [[[2, 3]]]] [[1.0], [2.1, 2.2], [3.2, 3.3, 3.4]]
+[[1, 2], [3, 4], [5, 6]] [[[8]]] [[[[1, 2]]], [[[3]]]] [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
 
-query ?
-select array_flatten(column2) from arrays_flatten_table;
+query ????
+select array_flatten(column1),
+       array_flatten(column2),
+       array_flatten(column3),
+       array_flatten(column4)
+from arrays_flatten_table;
 ----
-[1, 2, 3, 4, 5, 6]
-[8]
-
-query ?
-select array_flatten(column3) from arrays_flatten_table;
-----
-[1, 2, 3]
-[1, 2, 3]
+[1, 2, 3] [1, 2, 3, 4, 5, 6] [1, 2, 3] [1.0, 2.1, 2.2, 3.2, 3.3, 3.4]
+[1, 2, 3, 4, 5, 6] [8] [1, 2, 3] [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
 ### Delete tables
 
