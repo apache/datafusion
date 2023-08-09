@@ -24,7 +24,6 @@ use arrow_schema::SortOptions;
 use async_trait::async_trait;
 use datafusion::assert_batches_eq;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_plan::common::batch_byte_size;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion_expr::{Expr, TableType};
@@ -603,7 +602,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
     let batches: Vec<_> = gen.take(num_batches).collect();
 
     batches.iter().enumerate().for_each(|(i, batch)| {
-        println!("Dict batch[{i}] size is: {}", batch_byte_size(batch));
+        println!("Dict batch[{i}] size is: {}", batch.get_array_memory_size());
     });
 
     batches
@@ -611,7 +610,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
 // How many bytes does the memory from dict_batches consume?
 fn batches_byte_size(batches: &[RecordBatch]) -> usize {
-    batches.iter().map(batch_byte_size).sum()
+    batches.iter().map(|b| b.get_array_memory_size()).sum()
 }
 
 struct DummyStreamPartition {
