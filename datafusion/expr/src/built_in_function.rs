@@ -34,6 +34,8 @@ use strum_macros::EnumIter;
 use lazy_static::lazy_static;
 
 /// Enum of all built-in scalar functions
+// Contributor's guide for adding new scalar functions
+// https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-scalar-function
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions

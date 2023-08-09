@@ -22,12 +22,12 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 use async_trait::async_trait;
+use datafusion_common::project_schema;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::project_schema;
 use crate::physical_plan::{empty::EmptyExec, ExecutionPlan};
 
 /// An empty plan that is useful for testing and generating plans
