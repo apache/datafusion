@@ -23,6 +23,7 @@ pub mod delta;
 mod dfschema;
 pub mod display;
 mod error;
+pub mod format;
 mod functional_dependencies;
 mod join_type;
 pub mod parsers;
@@ -51,6 +52,7 @@ pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::{OwnedSchemaReference, SchemaReference};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
+pub use utils::project_schema;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.

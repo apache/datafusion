@@ -309,9 +309,11 @@ select arrow_cast('30 minutes', 'Interval(MonthDayNano)');
 
 ## Duration
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nThis feature is not implemented: Can't create a scalar from array of type "Duration\(Second\)"
+query ?
 ---
 select arrow_cast(interval '30 minutes', 'Duration(Second)');
+----
+0 days 0 hours 30 mins 0 secs
 
 query error DataFusion error: Error during planning: Cannot automatically convert Utf8 to Duration\(Second\)
 select arrow_cast('30 minutes', 'Duration(Second)');
