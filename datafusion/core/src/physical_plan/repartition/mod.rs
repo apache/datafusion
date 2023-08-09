@@ -574,14 +574,21 @@ impl ExecutionPlan for RepartitionExec {
 
             // Get existing ordering:
             let sort_exprs = self.input.output_ordering().unwrap_or(&[]);
-            // Merge streams (while preserving ordering) coming from input partitions to this partition:
+
+            // Merge streams (while preserving ordering) coming from
+            // input partitions to this partition:
+            let fetch = None;
+            let merge_reservation =
+                MemoryConsumer::new(format!("{}[Merge {partition}]", self.name()))
+                    .register(context.memory_pool());
             streaming_merge(
                 input_streams,
                 self.schema(),
                 sort_exprs,
                 BaselineMetrics::new(&self.metrics, partition),
                 context.session_config().batch_size(),
-                None,
+                fetch,
+                merge_reservation,
             )
         } else {
             Ok(Box::pin(RepartitionStream {

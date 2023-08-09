@@ -21,6 +21,7 @@ use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::{Row, Rows};
 use arrow_array::types::ByteArrayType;
 use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
+use datafusion_execution::memory_pool::MemoryReservation;
 use std::cmp::Ordering;
 
 /// A [`Cursor`] for [`Rows`]
@@ -29,6 +30,11 @@ pub struct RowCursor {
     num_rows: usize,
 
     rows: Rows,
+
+    /// Tracks for the memory used by in the `Rows` of this
+    /// cursor. Freed on drop
+    #[allow(dead_code)]
+    reservation: MemoryReservation,
 }
 
 impl std::fmt::Debug for RowCursor {
@@ -41,12 +47,22 @@ impl std::fmt::Debug for RowCursor {
 }
 
 impl RowCursor {
-    /// Create a new SortKeyCursor
-    pub fn new(rows: Rows) -> Self {
+    /// Create a new SortKeyCursor from `rows` and a `reservation`
+    /// that tracks its memory.
+    ///
+    /// Panic's if the reservation is not for exactly `rows.size()`
+    /// bytes
+    pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
+        assert_eq!(
+            rows.size(),
+            reservation.size(),
+            "memory reservation mismatch"
+        );
         Self {
             cur_row: 0,
             num_rows: rows.num_rows(),
             rows,
+            reservation,
         }
     }
 

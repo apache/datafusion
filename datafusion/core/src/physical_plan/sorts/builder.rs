@@ -19,6 +19,7 @@ use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_execution::memory_pool::MemoryReservation;
 
 #[derive(Debug, Copy, Clone, Default)]
 struct BatchCursor {
@@ -37,6 +38,9 @@ pub struct BatchBuilder {
     /// Maintain a list of [`RecordBatch`] and their corresponding stream
     batches: Vec<(usize, RecordBatch)>,
 
+    /// Accounts for memory used by buffered batches
+    reservation: MemoryReservation,
+
     /// The current [`BatchCursor`] for each stream
     cursors: Vec<BatchCursor>,
 
@@ -47,23 +51,31 @@ pub struct BatchBuilder {
 
 impl BatchBuilder {
     /// Create a new [`BatchBuilder`] with the provided `stream_count` and `batch_size`
-    pub fn new(schema: SchemaRef, stream_count: usize, batch_size: usize) -> Self {
+    pub fn new(
+        schema: SchemaRef,
+        stream_count: usize,
+        batch_size: usize,
+        reservation: MemoryReservation,
+    ) -> Self {
         Self {
             schema,
             batches: Vec::with_capacity(stream_count * 2),
             cursors: vec![BatchCursor::default(); stream_count],
             indices: Vec::with_capacity(batch_size),
+            reservation,
         }
     }
 
     /// Append a new batch in `stream_idx`
-    pub fn push_batch(&mut self, stream_idx: usize, batch: RecordBatch) {
+    pub fn push_batch(&mut self, stream_idx: usize, batch: RecordBatch) -> Result<()> {
+        self.reservation.try_grow(batch.get_array_memory_size())?;
         let batch_idx = self.batches.len();
         self.batches.push((stream_idx, batch));
         self.cursors[stream_idx] = BatchCursor {
             batch_idx,
             row_idx: 0,
-        }
+        };
+        Ok(())
     }
 
     /// Append the next row from `stream_idx`
@@ -119,7 +131,7 @@ impl BatchBuilder {
         // We can therefore drop all but the last batch for each stream
         let mut batch_idx = 0;
         let mut retained = 0;
-        self.batches.retain(|(stream_idx, _)| {
+        self.batches.retain(|(stream_idx, batch)| {
             let stream_cursor = &mut self.cursors[*stream_idx];
             let retain = stream_cursor.batch_idx == batch_idx;
             batch_idx += 1;
@@ -127,6 +139,8 @@ impl BatchBuilder {
             if retain {
                 stream_cursor.batch_idx = retained;
                 retained += 1;
+            } else {
+                self.reservation.shrink(batch.get_array_memory_size());
             }
             retain
         });
