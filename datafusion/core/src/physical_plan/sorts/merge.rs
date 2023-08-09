@@ -31,6 +31,7 @@ use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::*;
 use datafusion_common::Result;
+use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
@@ -42,7 +43,7 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident) => {{
         let streams = FieldCursorStream::<$t>::new($sort, $streams);
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
@@ -50,6 +51,7 @@ macro_rules! merge_helper {
             $tracking_metrics,
             $batch_size,
             $fetch,
+            $reservation,
         )));
     }};
 }
@@ -63,28 +65,36 @@ pub fn streaming_merge(
     metrics: BaselineMetrics,
     batch_size: usize,
     fetch: Option<usize>,
+    reservation: MemoryReservation,
 ) -> Result<SendableRecordBatchStream> {
     // Special case single column comparisons with optimized cursor implementations
     if expressions.len() == 1 {
         let sort = expressions[0].clone();
         let data_type = sort.expr.data_type(schema.as_ref())?;
         downcast_primitive! {
-            data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch),
-            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch)
-            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch)
-            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch)
-            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch)
+            data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation),
+            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
             _ => {}
         }
     }
 
-    let streams = RowCursorStream::try_new(schema.as_ref(), expressions, streams)?;
+    let streams = RowCursorStream::try_new(
+        schema.as_ref(),
+        expressions,
+        streams,
+        reservation.new_empty(),
+    )?;
+
     Ok(Box::pin(SortPreservingMergeStream::new(
         Box::new(streams),
         schema,
         metrics,
         batch_size,
         fetch,
+        reservation,
     )))
 }
 
@@ -162,11 +172,12 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         metrics: BaselineMetrics,
         batch_size: usize,
         fetch: Option<usize>,
+        reservation: MemoryReservation,
     ) -> Self {
         let stream_count = streams.partitions();
 
         Self {
-            in_progress: BatchBuilder::new(schema, stream_count, batch_size),
+            in_progress: BatchBuilder::new(schema, stream_count, batch_size, reservation),
             streams,
             metrics,
             aborted: false,
@@ -197,8 +208,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
                 self.cursors[idx] = Some(cursor);
-                self.in_progress.push_batch(idx, batch);
-                Poll::Ready(Ok(()))
+                Poll::Ready(self.in_progress.push_batch(idx, batch))
             }
         }
     }
