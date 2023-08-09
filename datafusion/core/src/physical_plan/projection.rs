@@ -283,13 +283,13 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> bool {
-        let all_column_expr = self
+        let all_simple_exprs = self
             .expr
             .iter()
             .all(|(e, _)| e.as_any().is::<Column>() || e.as_any().is::<Literal>());
         // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
-        !all_column_expr
+        !all_simple_exprs
     }
 
     fn execute(
