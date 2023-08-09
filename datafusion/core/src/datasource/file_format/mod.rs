@@ -311,7 +311,7 @@ pub enum FileWriterMode {
     PutMultipart,
 }
 
-/// Returns an [`AbortableWrite`] which writes to the given object store location 
+/// Returns an [`AbortableWrite`] which writes to the given object store location
 /// with the specified compression
 pub(crate) async fn create_writer(
     writer_mode: FileWriterMode,
