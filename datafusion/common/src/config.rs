@@ -290,19 +290,19 @@ config_namespace! {
         // The following map to parquet::file::properties::WriterProperties
 
         /// Sets best effort maximum size of data page in bytes
-        pub data_pagesize_limit: usize, default = parquet::file::properties::DEFAULT_PAGE_SIZE
+        pub data_pagesize_limit: usize, default = 1024 * 1024
 
         /// Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = usize::MAX
 
         /// Sets best effort maximum dictionary page size, in bytes
-        pub dictionary_page_size_limit: usize, default = parquet::file::properties::DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT
+        pub dictionary_page_size_limit: usize, default = 1024 * 1024
 
         /// Sets maximum number of rows in a row group
-        pub max_row_group_size: usize, default = parquet::file::properties::DEFAULT_MAX_ROW_GROUP_SIZE
+        pub max_row_group_size: usize, default = 1024 * 1024
 
         /// Sets "created by" property
-        pub created_by: String, default = parquet::file::properties::DEFAULT_CREATED_BY.into()
+        pub created_by: String, default = concat!("parquet-rs version ", env!("CARGO_PKG_VERSION")).into()
 
         pub compression: Option<String>, default = None
 
