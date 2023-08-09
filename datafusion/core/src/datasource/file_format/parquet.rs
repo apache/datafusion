@@ -41,7 +41,8 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 use rand::distributions::Alphanumeric;
 
 use super::FileScanConfig;
-use super::{FileFormat, FileWriterMode};
+use super::FileFormat;
+use super::write::FileWriterMode;
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
@@ -726,6 +727,7 @@ impl DataSink for ParquetSink {
         for idx in 0..num_partitions {
             while let Some(batch) = data[idx].next().await.transpose()? {
                 row_count += batch.num_rows();
+                // TODO cleanup all multipart writes when any encounters an error
                 writers[idx].write(&batch).await?;
             }
         }

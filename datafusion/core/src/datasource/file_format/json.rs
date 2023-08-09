@@ -47,9 +47,10 @@ use crate::physical_plan::insert::InsertExec;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
-use super::create_writer;
-use super::stateless_serialize_and_write_files;
-use super::BatchSerializer;
+use crate::datasource::file_format::write::{
+    AbortMode, AbortableWrite, AsyncPutWriter, BatchSerializer, MultiPart,
+    stateless_serialize_and_write_files, FileWriterMode, create_writer
+};
 use super::FileFormat;
 use super::FileScanConfig;
 use super::FileWriterMode;

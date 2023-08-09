@@ -845,10 +845,10 @@ impl TableProvider for ListingTable {
                         file_groups.len()
                     )));
                 }
-                writer_mode = crate::datasource::file_format::FileWriterMode::Append;
+                writer_mode = crate::datasource::file_format::write::FileWriterMode::Append;
             }
             ListingTableInsertMode::AppendNewFiles => {
-                writer_mode = crate::datasource::file_format::FileWriterMode::PutMultipart
+                writer_mode = crate::datasource::file_format::write::FileWriterMode::PutMultipart
             }
             ListingTableInsertMode::Error => {
                 return plan_err!(
