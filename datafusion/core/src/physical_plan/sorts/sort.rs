@@ -19,7 +19,7 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use crate::physical_plan::common::{batch_byte_size, spawn_buffered, IPCWriter};
+use crate::physical_plan::common::{spawn_buffered, IPCWriter};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -279,7 +279,7 @@ impl ExternalSorter {
         }
         self.reserve_memory_for_merge()?;
 
-        let size = batch_byte_size(&input);
+        let size = input.get_array_memory_size();
         if self.reservation.try_grow(size).is_err() {
             let before = self.reservation.size();
             self.in_mem_sort().await?;
