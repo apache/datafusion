@@ -287,8 +287,7 @@ impl ExecutionPlan for ProjectionExec {
             .expr
             .iter()
             .all(|(e, _)| e.as_any().is::<Column>() || e.as_any().is::<Literal>());
-        // println!("self.expr:{:?}", self.expr);
-        // If expressions are all column_expr, then all computations in this projection are reorder or rename,
+        // If expressions are all either column_expr or Literal expr, then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
         vec![!all_column_expr]
     }

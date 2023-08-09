@@ -168,8 +168,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         vec![false; self.children().len()]
     }
 
-    /// Returns `true` if this operator would benefit from
-    /// partitioning its input (and thus from more parallelism). For
+    /// Returns `true` for the children if this operator would benefit from
+    /// partitioning at its input (and thus from more parallelism). For
     /// operators that do very little work the overhead of extra
     /// parallelism may outweigh any benefits
     ///
@@ -178,10 +178,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         // By default try to maximize parallelism with more CPUs if
         // possible
-        // !self
-        //     .required_input_distribution()
-        //     .into_iter()
-        //     .any(|dist| matches!(dist, Distribution::SinglePartition))
         self.required_input_distribution()
             .into_iter()
             .map(|dist| !matches!(dist, Distribution::SinglePartition))

@@ -1886,11 +1886,6 @@ impl SessionState {
         &self.config
     }
 
-    /// Return the [`SessionConfig`]
-    pub fn config_mut(&mut self) -> &mut SessionConfig {
-        &mut self.config
-    }
-
     /// Return the physical optimizers
     pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         &self.physical_optimizers.rules
