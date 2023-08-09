@@ -25,7 +25,6 @@ pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
 pub mod dist_enforcement;
-pub mod dist_enforcement_v2;
 pub mod join_selection;
 pub mod optimizer;
 pub mod pipeline_checker;

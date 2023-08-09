@@ -24,7 +24,6 @@ use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
-use crate::physical_optimizer::dist_enforcement_v2::EnforceDistributionV2;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::repartition::Repartition;
@@ -76,18 +75,11 @@ impl PhysicalOptimizer {
             // repartitioning and local sorting steps to meet distribution and ordering requirements.
             // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
-            // // In order to increase the parallelism, the Repartition rule will change the
-            // // output partitioning of some operators in the plan tree, which will influence
-            // // other rules. Therefore, it should run as soon as possible. It is optional because:
-            // // - It's not used for the distributed engine, Ballista.
-            // // - It's conflicted with some parts of the EnforceDistribution, since it will
-            // //   introduce additional repartitioning while EnforceDistribution aims to
-            // //   reduce unnecessary repartitioning.
-            // Arc::new(Repartition::new()),
-            // // The EnforceDistribution rule is for adding essential repartition to satisfy the required
-            // // distribution. Please make sure that the whole plan tree is determined before this rule.
-            // Arc::new(EnforceDistribution::new()),
-            Arc::new(EnforceDistributionV2::new()),
+            // The EnforceDistribution rule is for adding essential repartition to satisfy the required
+            // distribution. Please make sure that the whole plan tree is determined before this rule.
+            // This rule increases parallelism, if doing so is beneficial for the operator in the physical plan
+            // It is enough at least one of the operators in the plan benefits from increased parallelism
+            Arc::new(EnforceDistribution::new()),
             // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
             Arc::new(CombinePartialFinalAggregate::new()),
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required

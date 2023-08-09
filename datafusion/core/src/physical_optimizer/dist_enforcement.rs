@@ -21,7 +21,6 @@
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::Result;
-use crate::physical_optimizer::dist_enforcement_v2::print_plan;
 use crate::physical_optimizer::sort_enforcement::ExecTree;
 use crate::physical_optimizer::utils::is_repartition;
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -1130,16 +1129,8 @@ fn ensure_distribution(
         }
     }
 
-    // println!("before update");
-    // print_plan(&plan);
     if is_updated || changed_flags.iter().any(|item| *item) {
-        println!("first child");
-        print_plan(&new_children[0]);
-        println!("first child");
-        print_plan(&plan);
         let new_plan = plan.clone().with_new_children(new_children)?;
-        println!("new_plan");
-        print_plan(&new_plan);
         let new_repartition_context = RepartitionContext {
             plan: new_plan,
             repartition_onwards: updated_repartition_onwards,

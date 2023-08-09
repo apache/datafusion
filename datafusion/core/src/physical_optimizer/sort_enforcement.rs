@@ -1008,7 +1008,6 @@ mod tests {
     use datafusion_physical_expr::expressions::{col, NotExpr};
     use datafusion_physical_expr::PhysicalSortExpr;
     use std::sync::Arc;
-    use crate::physical_optimizer::dist_enforcement_v2::print_plan;
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
