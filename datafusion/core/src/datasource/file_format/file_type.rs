@@ -62,7 +62,7 @@ pub trait GetExt {
 }
 
 /// Readable file compression type
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileCompressionType {
     variant: CompressionTypeVariant,
 }

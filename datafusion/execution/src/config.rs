@@ -287,6 +287,32 @@ impl SessionConfig {
         self.options.optimizer.enable_round_robin_repartition
     }
 
+    /// Set the size of [`sort_spill_reservation_bytes`] to control
+    /// memory pre-reservation
+    ///
+    /// [`sort_spill_reservation_bytes`]: datafusion_common::config::ExecutionOptions::sort_spill_reservation_bytes
+    pub fn with_sort_spill_reservation_bytes(
+        mut self,
+        sort_spill_reservation_bytes: usize,
+    ) -> Self {
+        self.options.execution.sort_spill_reservation_bytes =
+            sort_spill_reservation_bytes;
+        self
+    }
+
+    /// Set the size of [`sort_in_place_threshold_bytes`] to control
+    /// how sort does things.
+    ///
+    /// [`sort_in_place_threshold_bytes`]: datafusion_common::config::ExecutionOptions::sort_in_place_threshold_bytes
+    pub fn with_sort_in_place_threshold_bytes(
+        mut self,
+        sort_in_place_threshold_bytes: usize,
+    ) -> Self {
+        self.options.execution.sort_in_place_threshold_bytes =
+            sort_in_place_threshold_bytes;
+        self
+    }
+
     /// Convert configuration options to name-value pairs with values
     /// converted to strings.
     ///

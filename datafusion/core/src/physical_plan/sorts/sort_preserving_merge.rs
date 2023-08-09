@@ -30,6 +30,7 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion_execution::memory_pool::MemoryConsumer;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
@@ -213,6 +214,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         );
         let schema = self.schema();
 
+        let reservation =
+            MemoryConsumer::new(format!("SortPreservingMergeExec[{partition}]"))
+                .register(&context.runtime_env().memory_pool);
+
         match input_partitions {
             0 => Err(DataFusionError::Internal(
                 "SortPreservingMergeExec requires at least one input partition"
@@ -241,6 +246,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     BaselineMetrics::new(&self.metrics, partition),
                     context.session_config().batch_size(),
                     self.fetch,
+                    reservation,
                 )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -836,14 +842,18 @@ mod tests {
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
+        let reservation =
+            MemoryConsumer::new("test").register(&task_ctx.runtime_env().memory_pool);
 
+        let fetch = None;
         let merge_stream = streaming_merge(
             streams,
             batches.schema(),
             sort.as_slice(),
             BaselineMetrics::new(&metrics, 0),
             task_ctx.session_config().batch_size(),
-            None,
+            fetch,
+            reservation,
         )
         .unwrap();
 
