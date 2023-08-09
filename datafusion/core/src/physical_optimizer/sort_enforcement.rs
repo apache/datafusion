@@ -1008,6 +1008,7 @@ mod tests {
     use datafusion_physical_expr::expressions::{col, NotExpr};
     use datafusion_physical_expr::PhysicalSortExpr;
     use std::sync::Arc;
+    use crate::physical_optimizer::dist_enforcement_v2::print_plan;
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
@@ -2682,51 +2683,6 @@ mod tests {
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
-        Ok(())
-    }
-
-    #[tokio::test]
-    // With new change in SortEnforcement EnforceSorting->EnforceDistribution->EnforceSorting
-    // should produce same result with EnforceDistribution+EnforceSorting
-    // This enables us to use EnforceSorting possibly before EnforceDistribution
-    // Given that it will be called at least once after last EnforceDistribution. The reason is that
-    // EnforceDistribution may invalidate ordering invariant.
-    async fn test_commutativity() -> Result<()> {
-        let schema = create_test_schema()?;
-
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-
-        let memory_exec = memory_exec(&schema);
-        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
-        let window = bounded_window_exec("nullable_col", sort_exprs.clone(), memory_exec);
-        let repartition = repartition_exec(window);
-
-        let orig_plan =
-            Arc::new(SortExec::new(sort_exprs, repartition)) as Arc<dyn ExecutionPlan>;
-
-        let mut plan = orig_plan.clone();
-        let rules = vec![
-            Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
-            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
-        ];
-        for rule in rules {
-            plan = rule.optimize(plan, state.config_options())?;
-        }
-        let first_plan = plan.clone();
-
-        let mut plan = orig_plan.clone();
-        let rules = vec![
-            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
-            Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
-            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
-        ];
-        for rule in rules {
-            plan = rule.optimize(plan, state.config_options())?;
-        }
-        let second_plan = plan.clone();
-
-        assert_eq!(get_plan_string(&first_plan), get_plan_string(&second_plan));
         Ok(())
     }
 

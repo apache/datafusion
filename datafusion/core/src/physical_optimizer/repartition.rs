@@ -340,7 +340,6 @@ mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
-    use crate::physical_optimizer::dist_enforcement_v2::EnforceDistributionV2;
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -554,9 +553,9 @@ mod tests {
                 let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
                     // EnforceDistribution is an essential rule to be applied.
                     // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
-                    Arc::new(EnforceDistributionV2::new()),
+                    Arc::new(EnforceDistribution::new()),
                     // re-run same rule. Rule should be idempotent
-                    Arc::new(EnforceDistributionV2::new()),
+                    Arc::new(EnforceDistribution::new()),
 
                     // EnforceSorting is an essential rule to be applied.
                     // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
@@ -575,9 +574,9 @@ mod tests {
 
                     // EnforceDistribution is an essential rule to be applied.
                     // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
-                    Arc::new(EnforceDistributionV2::new()),
-                    // // re-run same rule. Rule should be idempotent
-                    // Arc::new(EnforceDistributionV2::new()),
+                    Arc::new(EnforceDistribution::new()),
+                    // re-run same rule. Rule should be idempotent
+                    Arc::new(EnforceDistribution::new()),
                 ];
                 let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
                     optimizer.optimize(plan, &config).unwrap()
