@@ -681,6 +681,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -688,6 +689,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -745,6 +747,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -752,6 +755,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -809,6 +813,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -816,6 +821,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -873,6 +879,7 @@ mod tests {
         let file_schema = aggr_test_schema_with_missing_col();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -880,6 +887,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -925,6 +933,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -932,6 +941,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -1019,7 +1029,7 @@ mod tests {
     async fn test_additional_stores(
         file_compression_type: FileCompressionType,
         store: Arc<dyn ObjectStore>,
-    ) {
+    ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
         ctx.runtime_env().register_object_store(&url, store.clone());
@@ -1029,6 +1039,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -1036,6 +1047,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )
         .unwrap();
 
@@ -1055,6 +1067,7 @@ mod tests {
         let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
         assert_eq!(total_rows, 100);
+        Ok(())
     }
 
     #[rstest(
@@ -1070,7 +1083,7 @@ mod tests {
     async fn test_chunked_csv(
         file_compression_type: FileCompressionType,
         #[values(10, 20, 30, 40)] chunk_size: usize,
-    ) {
+    ) -> Result<()> {
         test_additional_stores(
             file_compression_type,
             Arc::new(ChunkedStore::new(
@@ -1078,7 +1091,8 @@ mod tests {
                 chunk_size,
             )),
         )
-        .await;
+        .await?;
+        Ok(())
     }
 
     #[tokio::test]
