@@ -1521,7 +1521,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1567,10 +1567,6 @@ pub mod physical_expr_node {
         WindowExpr(::prost::alloc::boxed::Box<super::PhysicalWindowExprNode>),
         #[prost(message, tag = "16")]
         ScalarUdf(super::PhysicalScalarUdfNode),
-        #[prost(message, tag = "17")]
-        DateTimeIntervalExpr(
-            ::prost::alloc::boxed::Box<super::PhysicalDateTimeIntervalExprNode>,
-        ),
         #[prost(message, tag = "18")]
         LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
         #[prost(message, tag = "19")]
@@ -1675,10 +1671,10 @@ pub struct PhysicalBinaryExprNode {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub l: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "2")]
-    pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub l: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "2")]
+    pub r: ::core::option::Option<PhysicalExprNode>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
 }
@@ -2378,6 +2374,7 @@ pub enum ScalarFunction {
     ArrayRemoveAll = 109,
     ArrayReplaceAll = 110,
     Nanvl = 111,
+    Flatten = 112,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2498,6 +2495,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
+            ScalarFunction::Flatten => "Flatten",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2615,6 +2613,7 @@ impl ScalarFunction {
             "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
+            "Flatten" => Some(Self::Flatten),
             _ => None,
         }
     }

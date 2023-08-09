@@ -15,18 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion execution configuration and runtime structures
+use arrow::util::display::{DurationFormat, FormatOptions};
 
-pub mod config;
-pub mod disk_manager;
-pub mod memory_pool;
-pub mod object_store;
-pub mod registry;
-pub mod runtime_env;
-mod stream;
-mod task;
-
-pub use disk_manager::DiskManager;
-pub use registry::FunctionRegistry;
-pub use stream::{RecordBatchStream, SendableRecordBatchStream};
-pub use task::TaskContext;
+/// The default [`FormatOptions`] to use within DataFusion
+pub const DEFAULT_FORMAT_OPTIONS: FormatOptions<'static> =
+    FormatOptions::new().with_duration_format(DurationFormat::Pretty);

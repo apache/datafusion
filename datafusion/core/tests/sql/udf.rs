@@ -16,7 +16,7 @@
 // under the License.
 
 use super::*;
-use arrow::compute::add;
+use arrow::compute::kernels::numeric::add;
 use datafusion::{
     execution::registry::FunctionRegistry,
     physical_plan::{expressions::AvgAccumulator, functions::make_scalar_function},

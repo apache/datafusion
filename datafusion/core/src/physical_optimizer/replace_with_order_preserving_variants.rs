@@ -178,7 +178,7 @@ fn get_updated_plan(
         let child = plan.children()[0].clone();
         plan = Arc::new(
             RepartitionExec::try_new(child, plan.output_partitioning())?
-                .with_preserve_order(),
+                .with_preserve_order(true),
         ) as _
     }
     // When the input of a `CoalescePartitionsExec` has an ordering, replace it

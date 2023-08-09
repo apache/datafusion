@@ -32,11 +32,13 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
-        Partitioning, SendableRecordBatchStream, Statistics,
+        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+        Statistics,
     },
 };
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{
+    ordering_equivalence_properties_helper, PhysicalSortExpr,
+};
 use fmt::Debug;
 use object_store::path::Path;
 use std::any::Any;
