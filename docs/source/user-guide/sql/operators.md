@@ -77,20 +77,106 @@ Modulo (remainder)
 - [>= (greater than or equal to)](#>=)
 - [IS DISTINCT FROM](#IS-DISTINCT-FROM)
 - [IS NOT DISTINCT FROM](#IS-NOT-DISTINCT-FROM)
+- [~ (regex match)](#~)
+- [~\* (regex case-insensitive match)](#~*)
+- [!~ (not regex match)](#!~)
+- [!~\* (not regex case-insensitive match)](#!~*)
 
+### `=`
 
-Eq
-NotEq
-Lt
-LtEq
-Gt
-GtEq
-IsDistinctFrom
-IsNotDistinctFrom
-RegexMatch
-RegexIMatch
-RegexNotMatch
-RegexNotIMatch
+Equal
+
+```sql
+SELECT 1 = 1;
+```
+
+### `!=`
+
+Not Equal
+
+```sql
+SELECT 1 != 2;
+```
+
+### `<`
+
+Less Than
+
+```sql
+SELECT 3 < 4;
+```
+
+### `<=`
+
+Less Than or Equal To
+
+```sql
+SELECT 3 <= 3;
+```
+
+### `>`
+
+Greater Than
+
+```sql
+SELECT 6 > 5;
+```
+
+### `>=`
+
+Greater Than or Equal To
+
+```sql
+SELECT 5 >= 5;
+```
+
+### `IS DISTINCT FROM`
+
+Guarantees the result of a comparison is `true` or `false` and not an empty set
+
+```sql
+SELECT 0 IS DISTINCT FROM NULL;
+```
+
+### `IS NOT DISTINCT FROM`
+
+The negation of `IS DISTINCT FROM`
+
+```sql
+SELECT NULL IS NOT DISTINCT FROM NULL;
+```
+
+### `~`
+
+Regex Match
+
+```sql
+SELECT 'datafusion' ~ '^datafusion(-cli)*';
+```
+
+### `~*`
+
+Regex Case-Insensitive Match
+
+```sql
+SELECT 'datafusion' ~* '^DATAFUSION(-CLI)*';
+```
+
+### `!~`
+
+Not Regex Match
+
+```sql
+SELECT 'datafusion' !~ '^datafusion(-cli)+';
+```
+
+### `!~*`
+
+Not Regex Case-Insensitive Match
+
+```sql
+SELECT 'datafusion' !~* '^DATAFUSION(-CLI)+';
+```
 
 ## Logical Operators
 
@@ -120,4 +206,6 @@ BitwiseXor => "#",
 BitwiseShiftRight => ">>",
 BitwiseShiftLeft => "<<",
 StringConcat => "||",
+AtArrow => "@>",
+ArrowAt => "<@",
 -->
