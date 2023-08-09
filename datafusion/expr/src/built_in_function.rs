@@ -163,6 +163,8 @@ pub enum BuiltinScalarFunction {
     Cardinality,
     /// construct an array from columns
     MakeArray,
+    /// array flatten
+    ArrayFlatten,
 
     // struct functions
     /// struct
@@ -366,6 +368,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayFlatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
@@ -499,6 +502,10 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
+            BuiltinScalarFunction::ArrayFlatten => {
+                // TODO: Need to check the type of element in the list
+                Ok(List(Arc::new(Field::new("item", DataType::Int64, true))))
+            }
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
@@ -817,11 +824,12 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
+            BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayFlatten => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
             | BuiltinScalarFunction::ArrayHas => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
             }
@@ -1305,6 +1313,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "list_element",
             "list_extract",
         ],
+        BuiltinScalarFunction::ArrayFlatten => &["array_flatten", "list_flatten"],
         BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
         BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
         BuiltinScalarFunction::ArrayHas => {
