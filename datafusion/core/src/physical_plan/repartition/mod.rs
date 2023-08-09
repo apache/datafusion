@@ -370,6 +370,8 @@ impl RepartitionExec {
         &self.partitioning
     }
 
+    /// Get preserve_order flag of the RepartitionExecutor
+    /// `true` means `SortPreservingRepartitionExec`, `false` means `RepartitionExec`
     pub fn preserve_order(&self) -> bool {
         self.preserve_order
     }

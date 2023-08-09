@@ -111,7 +111,7 @@ impl fmt::Display for ExecTree {
         for child in self.children.iter() {
             write!(f, "\nexec_tree:{}", child)?;
         }
-        write!(f, "\n")
+        writeln!(f)
     }
 }
 
