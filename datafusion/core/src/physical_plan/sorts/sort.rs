@@ -838,12 +838,10 @@ impl ExecutionPlan for SortExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution::context::SessionConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::collect;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
-    use crate::prelude::SessionContext;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -857,8 +855,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
         let csv = test::scan_partitioned_csv(partitions)?;
         let schema = csv.schema();
@@ -884,7 +881,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
 
-        let result = collect(sort_exec, task_ctx).await?;
+        let result = collect(sort_exec, task_ctx.clone()).await?;
 
         assert_eq!(result.len(), 1);
 
@@ -903,7 +900,7 @@ mod tests {
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
         assert_eq!(
-            session_ctx.runtime_env().memory_pool.reserved(),
+            task_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );
@@ -916,7 +913,7 @@ mod tests {
         // trigger spill there will be 4 batches with 5.5KB for each
         let config = RuntimeConfig::new().with_memory_limit(12288, 1.0);
         let runtime = Arc::new(RuntimeEnv::new(config)?);
-        let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
 
         let partitions = 4;
         let csv = test::scan_partitioned_csv(partitions)?;
@@ -943,8 +940,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
 
-        let task_ctx = session_ctx.task_ctx();
-        let result = collect(sort_exec.clone(), task_ctx).await?;
+        let result = collect(sort_exec.clone(), task_ctx.clone()).await?;
 
         assert_eq!(result.len(), 1);
 
@@ -971,7 +967,7 @@ mod tests {
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
         assert_eq!(
-            session_ctx.runtime_env().memory_pool.reserved(),
+            task_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );
@@ -999,8 +995,7 @@ mod tests {
             let config = RuntimeConfig::new()
                 .with_memory_limit(avg_batch_size * (partitions - 1), 1.0);
             let runtime = Arc::new(RuntimeEnv::new(config)?);
-            let session_ctx =
-                SessionContext::with_config_rt(SessionConfig::new(), runtime);
+            let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
 
             let csv = test::scan_partitioned_csv(partitions)?;
             let schema = csv.schema();
@@ -1029,7 +1024,6 @@ mod tests {
                 .with_fetch(fetch),
             );
 
-            let task_ctx = session_ctx.task_ctx();
             let result = collect(sort_exec.clone(), task_ctx).await?;
             assert_eq!(result.len(), 1);
 
@@ -1042,8 +1036,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort_metadata() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let field_metadata: HashMap<String, String> =
             vec![("foo".to_string(), "bar".to_string())]
                 .into_iter()
@@ -1092,8 +1085,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lex_sort_by_float() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float32, true),
             Field::new("b", DataType::Float64, true),
@@ -1198,8 +1190,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -1213,7 +1204,7 @@ mod tests {
             blocking_exec,
         ));
 
-        let fut = collect(sort_exec, task_ctx);
+        let fut = collect(sort_exec, task_ctx.clone());
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -1221,7 +1212,7 @@ mod tests {
         assert_strong_count_converges_to_zero(refs).await;
 
         assert_eq!(
-            session_ctx.runtime_env().memory_pool.reserved(),
+            task_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );

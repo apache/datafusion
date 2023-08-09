@@ -876,8 +876,6 @@ impl RecordBatchStream for PerPartitionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution::context::SessionConfig;
-    use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
     use crate::{
         assert_batches_sorted_eq,
@@ -991,8 +989,7 @@ mod tests {
         input_partitions: Vec<Vec<RecordBatch>>,
         partitioning: Partitioning,
     ) -> Result<Vec<Vec<RecordBatch>>> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
         let exec = MemoryExec::try_new(&input_partitions, schema.clone(), None)?;
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
@@ -1039,8 +1036,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_partitioning() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         // have to send at least one batch through to provoke error
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
@@ -1074,8 +1070,7 @@ mod tests {
         // This generates an error on a call to execute. The error
         // should be returned and no results produced.
 
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let input = ErrorExec::new();
         let partitioning = Partitioning::RoundRobinBatch(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
@@ -1097,8 +1092,7 @@ mod tests {
 
     #[tokio::test]
     async fn repartition_with_error_in_stream() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
             Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
@@ -1131,8 +1125,7 @@ mod tests {
 
     #[tokio::test]
     async fn repartition_with_delayed_stream() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
             Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
@@ -1177,8 +1170,7 @@ mod tests {
 
     #[tokio::test]
     async fn robin_repartition_with_dropping_output_stream() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let partitioning = Partitioning::RoundRobinBatch(2);
         // The barrier exec waits to be pinged
         // requires the input to wait at least once)
@@ -1221,8 +1213,7 @@ mod tests {
     // wiht different compilers, we will compare the same execution with
     // and without droping the output stream.
     async fn hash_repartition_with_dropping_output_stream() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let partitioning = Partitioning::Hash(
             vec![Arc::new(crate::physical_plan::expressions::Column::new(
                 "my_awesome_field",
@@ -1317,8 +1308,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -1341,8 +1331,7 @@ mod tests {
 
     #[tokio::test]
     async fn hash_repartition_avoid_empty_batch() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let batch = RecordBatch::try_from_iter(vec![(
             "a",
             Arc::new(StringArray::from(vec!["foo"])) as ArrayRef,
@@ -1378,14 +1367,12 @@ mod tests {
         let partitioning = Partitioning::RoundRobinBatch(4);
 
         // setup up context
-        let session_ctx = SessionContext::with_config_rt(
-            SessionConfig::default(),
-            Arc::new(
-                RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0))
-                    .unwrap(),
-            ),
+        let runtime = Arc::new(
+            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0)).unwrap(),
         );
-        let task_ctx = session_ctx.task_ctx();
+
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
         let exec = MemoryExec::try_new(&input_partitions, schema.clone(), None)?;
