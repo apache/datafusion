@@ -660,46 +660,6 @@ use datafusion_physical_expr::{
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
-/// Applies an optional projection to a [`SchemaRef`], returning the
-/// projected schema
-///
-/// Example:
-/// ```
-/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
-/// use datafusion::physical_plan::project_schema;
-///
-/// // Schema with columns 'a', 'b', and 'c'
-/// let schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("a", DataType::Int32, true),
-///   Field::new("b", DataType::Int64, true),
-///   Field::new("c", DataType::Utf8, true),
-/// ]));
-///
-/// // Pick columns 'c' and 'b'
-/// let projection = Some(vec![2,1]);
-/// let projected_schema = project_schema(
-///    &schema,
-///    projection.as_ref()
-///  ).unwrap();
-///
-/// let expected_schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("c", DataType::Utf8, true),
-///   Field::new("b", DataType::Int64, true),
-/// ]));
-///
-/// assert_eq!(projected_schema, expected_schema);
-/// ```
-pub fn project_schema(
-    schema: &SchemaRef,
-    projection: Option<&Vec<usize>>,
-) -> Result<SchemaRef> {
-    let schema = match projection {
-        Some(columns) => Arc::new(schema.project(columns)?),
-        None => Arc::clone(schema),
-    };
-    Ok(schema)
-}
-
 pub mod aggregates;
 pub mod analyze;
 pub mod coalesce_batches;
@@ -728,6 +688,7 @@ pub mod windows;
 
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+pub use datafusion_common::utils::project_schema;
 use datafusion_execution::TaskContext;
 pub use datafusion_physical_expr::{expressions, functions, hash_utils, udf};
 
