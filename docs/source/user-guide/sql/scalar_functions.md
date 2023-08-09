@@ -1686,10 +1686,11 @@ array_fill(element, array)
 - **element**: Element to copy to the array.
 
 ### `array_flatten`
+
 Converts an array of arrays to a flat array
 
-* Applies to any depth of nested arrays
-* Does not change arrays that are already flat
+- Applies to any depth of nested arrays
+- Does not change arrays that are already flat
 
 The flattened array contains all the elements from all source arrays.
 
