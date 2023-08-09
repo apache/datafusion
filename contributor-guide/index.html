@@ -650,12 +650,17 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <li><p>tests to the function.</p></li>
 </ul>
 </li>
-<li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql">core/tests/sql</a>, add a new test where the function is called through SQL against well known data and returns the expected result.</p></li>
+<li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/test_files">core/tests/sqllogictests/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
+<ul>
+<li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/README.md">here</a></p></li>
+</ul>
+</li>
 <li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/expr/src/expr_fn.rs">expr/src/expr_fn.rs</a>, add:</p>
 <ul>
 <li><p>a new entry of the <code class="docutils literal notranslate"><span class="pre">unary_scalar_expr!</span></code> macro for the new function.</p></li>
 </ul>
 </li>
+<li><p>Add SQL reference documentation <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md">here</a></p></li>
 </ul>
 </section>
 <section id="how-to-add-a-new-aggregate-function">
@@ -680,7 +685,12 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <li><p>tests to the function.</p></li>
 </ul>
 </li>
-<li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql">tests/sql</a>, add a new test where the function is called through SQL against well known data and returns the expected result.</p></li>
+<li><p>In <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/test_files">core/tests/sqllogictests/test_files</a>, add new <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called through SQL against well known data and returns the expected result.</p>
+<ul>
+<li><p>Documentation for <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/README.md">here</a></p></li>
+</ul>
+</li>
+<li><p>Add SQL reference documentation <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md">here</a></p></li>
 </ul>
 </section>
 <section id="how-to-display-plans-graphically">

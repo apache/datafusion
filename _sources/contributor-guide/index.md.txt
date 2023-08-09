@@ -221,9 +221,11 @@ Below is a checklist of what you need to do to add a new scalar function to Data
   - a new line in `signature` with the signature of the function (number and types of its arguments)
   - a new line in `create_physical_expr`/`create_physical_fun` mapping the built-in to the implementation
   - tests to the function.
-- In [core/tests/sql](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
+- In [core/tests/sqllogictests/test_files](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
+  - Documentation for `sqllogictest` [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/README.md)
 - In [expr/src/expr_fn.rs](https://github.com/apache/arrow-datafusion/blob/main/datafusion/expr/src/expr_fn.rs), add:
   - a new entry of the `unary_scalar_expr!` macro for the new function.
+- Add SQL reference documentation [here](https://github.com/apache/arrow-datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md)
 
 ### How to add a new aggregate function
 
@@ -241,7 +243,9 @@ Below is a checklist of what you need to do to add a new aggregate function to D
   - a new line in `signature` with the signature of the function (number and types of its arguments)
   - a new line in `create_aggregate_expr` mapping the built-in to the implementation
   - tests to the function.
-- In [tests/sql](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql), add a new test where the function is called through SQL against well known data and returns the expected result.
+- In [core/tests/sqllogictests/test_files](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/test_files), add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
+  - Documentation for `sqllogictest` [here](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sqllogictests/README.md)
+- Add SQL reference documentation [here](https://github.com/apache/arrow-datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md)
 
 ### How to display plans graphically
 
