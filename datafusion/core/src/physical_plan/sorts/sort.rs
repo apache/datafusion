@@ -214,7 +214,7 @@ struct ExternalSorter {
     reservation: MemoryReservation,
     /// Reservation for the merging of in-memory batches. If the sort
     /// might spill, `sort_spill_reservation_bytes` will be
-    /// pre-reserved to ensure there is some space for this sort/merg.
+    /// pre-reserved to ensure there is some space for this sort/merge.
     merge_reservation: MemoryReservation,
     /// A handle to the runtime to get spill files
     runtime: Arc<RuntimeEnv>,
