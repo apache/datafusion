@@ -26,6 +26,7 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
+use crate::aggregate::regr::RegrType;
 use crate::{expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, Result};
@@ -248,16 +249,85 @@ pub fn create_aggregate_expr(
                 "CORR(DISTINCT) aggregations are not available".to_string(),
             ));
         }
-        (AggregateFunction::RegrSlope, false) => Arc::new(expressions::RegrSlope::new(
+        (AggregateFunction::RegrSlope, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
+            RegrType::Slope,
             rt_type,
         )),
-        (AggregateFunction::RegrSlope, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "REGR_SLOPE(DISTINCT) aggregations are not available".to_string(),
-            ));
+        (AggregateFunction::RegrIntercept, false) => Arc::new(expressions::Regr::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            RegrType::Intercept,
+            rt_type,
+        )),
+        (AggregateFunction::RegrCount, false) => Arc::new(expressions::Regr::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            RegrType::Count,
+            rt_type,
+        )),
+        (AggregateFunction::RegrR2, false) => Arc::new(expressions::Regr::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            RegrType::R2,
+            rt_type,
+        )),
+        (AggregateFunction::RegrAvgx, false) => Arc::new(expressions::Regr::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            RegrType::AvgX,
+            rt_type,
+        )),
+        (AggregateFunction::RegrAvgy, false) => Arc::new(expressions::Regr::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            RegrType::AvgY,
+            rt_type,
+        )),
+        (AggregateFunction::RegrSXX, false) => Arc::new(expressions::Regr::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            RegrType::SXX,
+            rt_type,
+        )),
+        (AggregateFunction::RegrSYY, false) => Arc::new(expressions::Regr::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            RegrType::SYY,
+            rt_type,
+        )),
+        (AggregateFunction::RegrSXY, false) => Arc::new(expressions::Regr::new(
+            input_phy_exprs[0].clone(),
+            input_phy_exprs[1].clone(),
+            name,
+            RegrType::SXY,
+            rt_type,
+        )),
+        (
+            AggregateFunction::RegrSlope
+            | AggregateFunction::RegrIntercept
+            | AggregateFunction::RegrCount
+            | AggregateFunction::RegrR2
+            | AggregateFunction::RegrAvgx
+            | AggregateFunction::RegrAvgy
+            | AggregateFunction::RegrSXX
+            | AggregateFunction::RegrSYY
+            | AggregateFunction::RegrSXY,
+            true,
+        ) => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "{}(DISTINCT) aggregations are not available",
+                fun
+            )));
         }
         (AggregateFunction::ApproxPercentileCont, false) => {
             if input_phy_exprs.len() == 2 {
@@ -344,6 +414,7 @@ mod tests {
         DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
     };
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::plan_err;
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::aggregates::NUMERICS;
     use datafusion_expr::{type_coercion, Signature};
@@ -1224,9 +1295,9 @@ mod tests {
         let coerced_phy_exprs =
             coerce_exprs_for_test(fun, input_phy_exprs, input_schema, &fun.signature())?;
         if coerced_phy_exprs.is_empty() {
-            return Err(DataFusionError::Plan(format!(
-                "Invalid or wrong number of arguments passed to aggregate: '{name}'",
-            )));
+            return plan_err!(
+                "Invalid or wrong number of arguments passed to aggregate: '{name}'"
+            );
         }
         create_aggregate_expr(fun, distinct, &coerced_phy_exprs, &[], input_schema, name)
     }

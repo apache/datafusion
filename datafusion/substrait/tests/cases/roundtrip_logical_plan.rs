@@ -411,6 +411,21 @@ async fn roundtrip_outer_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_arithmetic_ops() -> Result<()> {
+    roundtrip("SELECT a - a FROM data").await?;
+    roundtrip("SELECT a + a FROM data").await?;
+    roundtrip("SELECT a * a FROM data").await?;
+    roundtrip("SELECT a / a FROM data").await?;
+    roundtrip("SELECT a = a FROM data").await?;
+    roundtrip("SELECT a != a FROM data").await?;
+    roundtrip("SELECT a > a FROM data").await?;
+    roundtrip("SELECT a >= a FROM data").await?;
+    roundtrip("SELECT a < a FROM data").await?;
+    roundtrip("SELECT a <= a FROM data").await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_like() -> Result<()> {
     roundtrip("SELECT f FROM data WHERE f LIKE 'a%b'").await
 }

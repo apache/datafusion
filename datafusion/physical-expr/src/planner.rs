@@ -15,21 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expressions::GetFieldAccessExpr;
 use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
-    expressions::{
-        self, binary, date_time_interval_expr, like, Column, GetIndexedFieldExpr, Literal,
-    },
+    expressions::{self, binary, like, Column, GetIndexedFieldExpr, Literal},
     functions, udf,
     var_provider::VarType,
     PhysicalExpr,
 };
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::Schema;
+use datafusion_common::plan_err;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
-    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
+    binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
+    Operator, TryCast,
 };
 use std::sync::Arc;
 
@@ -75,9 +76,7 @@ pub fn create_physical_expr(
                         let scalar_value = provider.get_value(variable_names.clone())?;
                         Ok(Arc::new(Literal::new(scalar_value)))
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "No system variable provider found".to_string(),
-                    )),
+                    _ => plan_err!("No system variable provider found"),
                 }
             } else {
                 match execution_props.get_var_provider(VarType::UserDefined) {
@@ -85,9 +84,7 @@ pub fn create_physical_expr(
                         let scalar_value = provider.get_value(variable_names.clone())?;
                         Ok(Arc::new(Literal::new(scalar_value)))
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "No user defined variable provider found".to_string(),
-                    )),
+                    _ => plan_err!("No user defined variable provider found"),
                 }
             }
         }
@@ -183,45 +180,14 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
-            // Match the data types and operator to determine the appropriate expression, if
-            // they are supported temporal types and operations, create DateTimeIntervalExpr,
-            // else create BinaryExpr.
-            match (
-                lhs.data_type(input_schema)?,
-                op,
-                rhs.data_type(input_schema)?,
-            ) {
-                (
-                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Interval(_),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                (
-                    DataType::Interval(_),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                ) => Ok(date_time_interval_expr(rhs, *op, lhs, input_schema)?),
-                (
-                    DataType::Timestamp(_, _),
-                    Operator::Minus,
-                    DataType::Timestamp(_, _),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                (
-                    DataType::Interval(_),
-                    Operator::Plus | Operator::Minus,
-                    DataType::Interval(_),
-                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
-                _ => {
-                    // Note that the logical planner is responsible
-                    // for type coercion on the arguments (e.g. if one
-                    // argument was originally Int32 and one was
-                    // Int64 they will both be coerced to Int64).
-                    //
-                    // There should be no coercion during physical
-                    // planning.
-                    binary(lhs, *op, rhs, input_schema)
-                }
-            }
+            // Note that the logical planner is responsible
+            // for type coercion on the arguments (e.g. if one
+            // argument was originally Int32 and one was
+            // Int64 they will both be coerced to Int64).
+            //
+            // There should be no coercion during physical
+            // planning.
+            binary(lhs, *op, rhs, input_schema)
         }
         Expr::Like(Like {
             negated,
@@ -341,7 +307,36 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
+            let field = match field {
+                GetFieldAccess::NamedStructField { name } => {
+                    GetFieldAccessExpr::NamedStructField { name: name.clone() }
+                }
+                GetFieldAccess::ListIndex { key } => GetFieldAccessExpr::ListIndex {
+                    key: create_physical_expr(
+                        key,
+                        input_dfschema,
+                        input_schema,
+                        execution_props,
+                    )?,
+                },
+                GetFieldAccess::ListRange { start, stop } => {
+                    GetFieldAccessExpr::ListRange {
+                        start: create_physical_expr(
+                            start,
+                            input_dfschema,
+                            input_schema,
+                            execution_props,
+                        )?,
+                        stop: create_physical_expr(
+                            stop,
+                            input_dfschema,
+                            input_schema,
+                            execution_props,
+                        )?,
+                    }
+                }
+            };
             Ok(Arc::new(GetIndexedFieldExpr::new(
                 create_physical_expr(
                     expr,
@@ -349,7 +344,7 @@ pub fn create_physical_expr(
                     input_schema,
                     execution_props,
                 )?,
-                key.clone(),
+                field,
             )))
         }
 

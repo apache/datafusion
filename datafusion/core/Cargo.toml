@@ -52,7 +52,7 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusi
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-apache-avro = { version = "0.14", optional = true }
+apache-avro = { version = "0.15", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
@@ -102,6 +102,7 @@ bigdecimal = "0.4.1"
 criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
 ctor = "0.2.0"
+datafusion-sqllogictest = { path = "../sqllogictest", version = "28.0.0", features = ["postgres"] }
 doc-comment = "0.3"
 env_logger = "0.10"
 half = "2.2.1"

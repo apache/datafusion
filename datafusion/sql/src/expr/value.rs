@@ -18,7 +18,7 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow_schema::DataType;
-use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
@@ -44,14 +44,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Some(v) = try_decode_hex_literal(&s) {
                     Ok(lit(v))
                 } else {
-                    Err(DataFusionError::Plan(format!(
-                        "Invalid HexStringLiteral '{s}'"
-                    )))
+                    plan_err!("Invalid HexStringLiteral '{s}'")
                 }
             }
-            _ => Err(DataFusionError::Plan(format!(
-                "Unsupported Value '{value:?}'",
-            ))),
+            _ => plan_err!("Unsupported Value '{value:?}'"),
         }
     }
 
@@ -104,15 +100,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let index = param[1..].parse::<usize>();
         let idx = match index {
             Ok(0) => {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "Invalid placeholder, zero is not a valid index: {param}"
-                )));
+                );
             }
             Ok(index) => index - 1,
             Err(_) => {
-                return Err(DataFusionError::Plan(format!(
-                    "Invalid placeholder, not a number: {param}"
-                )));
+                return plan_err!("Invalid placeholder, not a number: {param}");
             }
         };
         // Check if the placeholder is in the parameter list

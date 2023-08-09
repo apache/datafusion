@@ -30,7 +30,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -555,10 +555,9 @@ fn calc_required_input_ordering(
                         *aggr_expr = reverse;
                         *ob_expr = ob_expr.as_ref().map(|obs| reverse_order_bys(obs));
                     } else {
-                        return Err(DataFusionError::Plan(
+                        return plan_err!(
                             "Aggregate expression should have a reverse expression"
-                                .to_string(),
-                        ));
+                        );
                     }
                 }
                 Ok(())
@@ -848,9 +847,9 @@ impl ExecutionPlan for AggregateExec {
         if children[0] {
             if self.aggregation_ordering.is_none() {
                 // Cannot run without breaking pipeline.
-                Err(DataFusionError::Plan(
-                    "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs.".to_string(),
-                ))
+                plan_err!(
+                    "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs."
+                )
             } else {
                 Ok(true)
             }

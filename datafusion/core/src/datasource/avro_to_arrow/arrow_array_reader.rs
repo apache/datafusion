@@ -35,6 +35,7 @@ use crate::arrow::error::ArrowError;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::bit_util;
 use crate::error::{DataFusionError, Result};
+use apache_avro::schema::RecordSchema;
 use apache_avro::{
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
@@ -77,10 +78,10 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
 
     pub fn schema_lookup(schema: AvroSchema) -> Result<BTreeMap<String, usize>> {
         match schema {
-            AvroSchema::Record {
+            AvroSchema::Record(RecordSchema {
                 lookup: ref schema_lookup,
                 ..
-            } => Ok(schema_lookup.clone()),
+            }) => Ok(schema_lookup.clone()),
             _ => Err(DataFusionError::ArrowError(SchemaError(
                 "expected avro schema to be a record".to_string(),
             ))),

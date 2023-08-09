@@ -404,6 +404,7 @@ mod tests {
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TreeNode};
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
@@ -966,9 +967,9 @@ mod tests {
         let coerce_type =
             get_case_common_type(&when_thens, else_expr.clone(), input_schema);
         let (when_thens, else_expr) = match coerce_type {
-            None => Err(DataFusionError::Plan(format!(
+            None => plan_err!(
                 "Can't get a common type for then {when_thens:?} and else {else_expr:?} expression"
-            ))),
+            ),
             Some(data_type) => {
                 // cast then expr
                 let left = when_thens

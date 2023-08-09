@@ -17,9 +17,9 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    Column, DFField, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
+    Column, DFField, DFSchema, DataFusionError, Result, TableReference,
 };
-use datafusion_expr::{Case, Expr, GetIndexedField};
+use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -136,10 +136,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         )));
                     }
                     let nested_name = nested_names[0].to_string();
-                    Ok(Expr::GetIndexedField(GetIndexedField::new(
-                        Box::new(Expr::Column(field.qualified_column())),
-                        ScalarValue::Utf8(Some(nested_name)),
-                    )))
+                    Ok(Expr::Column(field.qualified_column()).field(nested_name))
                 }
                 // found matching field with no spare identifier(s)
                 Some((field, _nested_names)) => {

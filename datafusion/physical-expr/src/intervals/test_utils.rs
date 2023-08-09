@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::expressions::{date_time_interval_expr, BinaryExpr, Literal};
+use crate::expressions::{binary, BinaryExpr, Literal};
 use crate::PhysicalExpr;
 use arrow_schema::Schema;
 use datafusion_common::{DataFusionError, ScalarValue};
@@ -78,22 +78,10 @@ pub fn gen_conjunctive_temporal_expr(
     d: ScalarValue,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
-    let left_and_1 = date_time_interval_expr(
-        left_col.clone(),
-        op_1,
-        Arc::new(Literal::new(a)),
-        schema,
-    )?;
-    let left_and_2 = date_time_interval_expr(
-        right_col.clone(),
-        op_2,
-        Arc::new(Literal::new(b)),
-        schema,
-    )?;
-    let right_and_1 =
-        date_time_interval_expr(left_col, op_3, Arc::new(Literal::new(c)), schema)?;
-    let right_and_2 =
-        date_time_interval_expr(right_col, op_4, Arc::new(Literal::new(d)), schema)?;
+    let left_and_1 = binary(left_col.clone(), op_1, Arc::new(Literal::new(a)), schema)?;
+    let left_and_2 = binary(right_col.clone(), op_2, Arc::new(Literal::new(b)), schema)?;
+    let right_and_1 = binary(left_col, op_3, Arc::new(Literal::new(c)), schema)?;
+    let right_and_2 = binary(right_col, op_4, Arc::new(Literal::new(d)), schema)?;
     let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
     let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
     Ok(Arc::new(BinaryExpr::new(

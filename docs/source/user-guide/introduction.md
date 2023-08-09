@@ -102,6 +102,7 @@ Here are some active projects using DataFusion:
 - [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
+- [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform

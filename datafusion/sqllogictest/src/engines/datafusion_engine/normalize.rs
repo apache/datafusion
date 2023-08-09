@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
@@ -27,7 +29,7 @@ use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 
 /// Converts `batches` to a result as expected by sqllogicteset.
-pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
+pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
     if batches.is_empty() {
         Ok(vec![])
     } else {
@@ -113,13 +115,13 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
 
 /// normalize path references
 ///
-/// ```
+/// ```text
 /// CsvExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 ///
 /// into:
 ///
-/// ```
+/// ```text
 /// CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
@@ -223,14 +225,17 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Utf8 => {
                 Ok(varchar_to_str(get_row_value!(array::StringArray, col, row)))
             }
-            _ => arrow::util::display::array_value_to_string(col, row),
+            _ => {
+                let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
+                Ok(f.unwrap().value(row).to_string())
+            }
         }
         .map_err(DFSqlLogicTestError::Arrow)
     }
 }
 
 /// Converts columns to a result as expected by sqllogicteset.
-pub fn convert_schema_to_types(columns: &[DFField]) -> Vec<DFColumnType> {
+pub(crate) fn convert_schema_to_types(columns: &[DFField]) -> Vec<DFColumnType> {
     columns
         .iter()
         .map(|f| f.data_type())

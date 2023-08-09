@@ -18,31 +18,28 @@
 //! SQL Utility Functions
 
 use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use sqlparser::ast::Ident;
 
+use datafusion_common::plan_err;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{
-    AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, GetIndexedField,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, ScalarUDF,
-    WindowFunction,
-};
-use datafusion_expr::expr::{Cast, Sort};
+use datafusion_expr::expr::{Alias, GroupingSet, WindowFunction};
 use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
-use datafusion_expr::{Expr, LogicalPlan, TryCast};
+use datafusion_expr::{Expr, LogicalPlan};
 use std::collections::HashMap;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
-    clone_with_replacement(expr, &|nested_expr| {
+    expr.clone().transform_up(&|nested_expr| {
         match nested_expr {
             Expr::Column(col) => {
-                let field = plan.schema().field_from_column(col)?;
-                Ok(Some(Expr::Column(field.qualified_column())))
+                let field = plan.schema().field_from_column(&col)?;
+                Ok(Transformed::Yes(Expr::Column(field.qualified_column())))
             }
             _ => {
                 // keep recursing
-                Ok(None)
+                Ok(Transformed::No(nested_expr))
             }
         }
     })
@@ -67,11 +64,11 @@ pub(crate) fn rebase_expr(
     base_exprs: &[Expr],
     plan: &LogicalPlan,
 ) -> Result<Expr> {
-    clone_with_replacement(expr, &|nested_expr| {
-        if base_exprs.contains(nested_expr) {
-            Ok(Some(expr_as_column_expr(nested_expr, plan)?))
+    expr.clone().transform_up(&|nested_expr| {
+        if base_exprs.contains(&nested_expr) {
+            Ok(Transformed::Yes(expr_as_column_expr(&nested_expr, plan)?))
         } else {
-            Ok(None)
+            Ok(Transformed::No(nested_expr))
         }
     })
 }
@@ -121,300 +118,14 @@ fn check_column_satisfies_expr(
     message_prefix: &str,
 ) -> Result<()> {
     if !columns.contains(expr) {
-        return Err(DataFusionError::Plan(format!(
+        return plan_err!(
             "{}: Expression {} could not be resolved from available columns: {}",
             message_prefix,
             expr,
             expr_vec_fmt!(columns)
-        )));
+        );
     }
     Ok(())
-}
-
-/// Returns a cloned `Expr`, but any of the `Expr`'s in the tree may be
-/// replaced/customized by the replacement function.
-///
-/// The replacement function is called repeatedly with `Expr`, starting with
-/// the argument `expr`, then descending depth-first through its
-/// descendants. The function chooses to replace or keep (clone) each `Expr`.
-///
-/// The function's return type is `Result<Option<Expr>>>`, where:
-///
-/// * `Ok(Some(replacement_expr))`: A replacement `Expr` is provided; it is
-///       swapped in at the particular node in the tree. Any nested `Expr` are
-///       not subject to cloning/replacement.
-/// * `Ok(None)`: A replacement `Expr` is not provided. The `Expr` is
-///       recreated, with all of its nested `Expr`'s subject to
-///       cloning/replacement.
-/// * `Err(err)`: Any error returned by the function is returned as-is by
-///       `clone_with_replacement()`.
-fn clone_with_replacement<F>(expr: &Expr, replacement_fn: &F) -> Result<Expr>
-where
-    F: Fn(&Expr) -> Result<Option<Expr>>,
-{
-    let replacement_opt = replacement_fn(expr)?;
-
-    match replacement_opt {
-        // If we were provided a replacement, use the replacement. Do not
-        // descend further.
-        Some(replacement) => Ok(replacement),
-        // No replacement was provided, clone the node and recursively call
-        // clone_with_replacement() on any nested expressions.
-        None => match expr {
-            Expr::AggregateFunction(AggregateFunction {
-                fun,
-                args,
-                distinct,
-                filter,
-                order_by,
-            }) => Ok(Expr::AggregateFunction(AggregateFunction::new(
-                fun.clone(),
-                args.iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<Expr>>>()?,
-                *distinct,
-                filter.clone(),
-                order_by.clone(),
-            ))),
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-            }) => Ok(Expr::WindowFunction(WindowFunction::new(
-                fun.clone(),
-                args.iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<_>>>()?,
-                partition_by
-                    .iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<_>>>()?,
-                order_by
-                    .iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<_>>>()?,
-                window_frame.clone(),
-            ))),
-            Expr::AggregateUDF(AggregateUDF {
-                fun,
-                args,
-                filter,
-                order_by,
-            }) => Ok(Expr::AggregateUDF(AggregateUDF::new(
-                fun.clone(),
-                args.iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<Expr>>>()?,
-                filter.clone(),
-                order_by.clone(),
-            ))),
-            Expr::Alias(Alias { expr, name, .. }) => Ok(Expr::Alias(Alias::new(
-                clone_with_replacement(expr, replacement_fn)?,
-                name.clone(),
-            ))),
-            Expr::Between(Between {
-                expr,
-                negated,
-                low,
-                high,
-            }) => Ok(Expr::Between(Between::new(
-                Box::new(clone_with_replacement(expr, replacement_fn)?),
-                *negated,
-                Box::new(clone_with_replacement(low, replacement_fn)?),
-                Box::new(clone_with_replacement(high, replacement_fn)?),
-            ))),
-            Expr::InList(InList {
-                expr: nested_expr,
-                list,
-                negated,
-            }) => Ok(Expr::InList(InList::new(
-                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                list.iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<Expr>>>()?,
-                *negated,
-            ))),
-            Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
-                Ok(Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(clone_with_replacement(left, replacement_fn)?),
-                    *op,
-                    Box::new(clone_with_replacement(right, replacement_fn)?),
-                )))
-            }
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => Ok(Expr::Like(Like::new(
-                *negated,
-                Box::new(clone_with_replacement(expr, replacement_fn)?),
-                Box::new(clone_with_replacement(pattern, replacement_fn)?),
-                *escape_char,
-                *case_insensitive,
-            ))),
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => Ok(Expr::SimilarTo(Like::new(
-                *negated,
-                Box::new(clone_with_replacement(expr, replacement_fn)?),
-                Box::new(clone_with_replacement(pattern, replacement_fn)?),
-                *escape_char,
-                *case_insensitive,
-            ))),
-            Expr::Case(case) => Ok(Expr::Case(Case::new(
-                match &case.expr {
-                    Some(case_expr) => {
-                        Some(Box::new(clone_with_replacement(case_expr, replacement_fn)?))
-                    }
-                    None => None,
-                },
-                case.when_then_expr
-                    .iter()
-                    .map(|(a, b)| {
-                        Ok((
-                            Box::new(clone_with_replacement(a, replacement_fn)?),
-                            Box::new(clone_with_replacement(b, replacement_fn)?),
-                        ))
-                    })
-                    .collect::<Result<Vec<(_, _)>>>()?,
-                match &case.else_expr {
-                    Some(else_expr) => {
-                        Some(Box::new(clone_with_replacement(else_expr, replacement_fn)?))
-                    }
-                    None => None,
-                },
-            ))),
-            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                Ok(Expr::ScalarFunction(ScalarFunction::new(
-                    *fun,
-                    args.iter()
-                        .map(|e| clone_with_replacement(e, replacement_fn))
-                        .collect::<Result<Vec<Expr>>>()?,
-                )))
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                Ok(Expr::ScalarUDF(ScalarUDF::new(
-                    fun.clone(),
-                    args.iter()
-                        .map(|arg| clone_with_replacement(arg, replacement_fn))
-                        .collect::<Result<Vec<Expr>>>()?,
-                )))
-            }
-            Expr::Negative(nested_expr) => Ok(Expr::Negative(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::Not(nested_expr) => Ok(Expr::Not(Box::new(clone_with_replacement(
-                nested_expr,
-                replacement_fn,
-            )?))),
-            Expr::IsNotNull(nested_expr) => Ok(Expr::IsNotNull(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::IsNull(nested_expr) => Ok(Expr::IsNull(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::IsTrue(nested_expr) => Ok(Expr::IsTrue(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::IsFalse(nested_expr) => Ok(Expr::IsFalse(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::IsUnknown(nested_expr) => Ok(Expr::IsUnknown(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::IsNotTrue(nested_expr) => Ok(Expr::IsNotTrue(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::IsNotFalse(nested_expr) => Ok(Expr::IsNotFalse(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::IsNotUnknown(nested_expr) => Ok(Expr::IsNotUnknown(Box::new(
-                clone_with_replacement(nested_expr, replacement_fn)?,
-            ))),
-            Expr::Cast(Cast { expr, data_type }) => Ok(Expr::Cast(Cast::new(
-                Box::new(clone_with_replacement(expr, replacement_fn)?),
-                data_type.clone(),
-            ))),
-            Expr::TryCast(TryCast {
-                expr: nested_expr,
-                data_type,
-            }) => Ok(Expr::TryCast(TryCast::new(
-                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                data_type.clone(),
-            ))),
-            Expr::Sort(Sort {
-                expr: nested_expr,
-                asc,
-                nulls_first,
-            }) => Ok(Expr::Sort(Sort::new(
-                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                *asc,
-                *nulls_first,
-            ))),
-            Expr::Column { .. }
-            | Expr::OuterReferenceColumn(_, _)
-            | Expr::Literal(_)
-            | Expr::ScalarVariable(_, _)
-            | Expr::Exists { .. }
-            | Expr::ScalarSubquery(_) => Ok(expr.clone()),
-            Expr::InSubquery(InSubquery {
-                expr: nested_expr,
-                subquery,
-                negated,
-            }) => Ok(Expr::InSubquery(InSubquery::new(
-                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                subquery.clone(),
-                *negated,
-            ))),
-            Expr::Wildcard => Ok(Expr::Wildcard),
-            Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
-            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                Ok(Expr::GetIndexedField(GetIndexedField::new(
-                    Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
-                    key.clone(),
-                )))
-            }
-            Expr::GroupingSet(set) => match set {
-                GroupingSet::Rollup(exprs) => Ok(Expr::GroupingSet(GroupingSet::Rollup(
-                    exprs
-                        .iter()
-                        .map(|e| clone_with_replacement(e, replacement_fn))
-                        .collect::<Result<Vec<Expr>>>()?,
-                ))),
-                GroupingSet::Cube(exprs) => Ok(Expr::GroupingSet(GroupingSet::Cube(
-                    exprs
-                        .iter()
-                        .map(|e| clone_with_replacement(e, replacement_fn))
-                        .collect::<Result<Vec<Expr>>>()?,
-                ))),
-                GroupingSet::GroupingSets(lists_of_exprs) => {
-                    let mut new_lists_of_exprs = vec![];
-                    for exprs in lists_of_exprs {
-                        new_lists_of_exprs.push(
-                            exprs
-                                .iter()
-                                .map(|e| clone_with_replacement(e, replacement_fn))
-                                .collect::<Result<Vec<Expr>>>()?,
-                        );
-                    }
-                    Ok(Expr::GroupingSet(GroupingSet::GroupingSets(
-                        new_lists_of_exprs,
-                    )))
-                }
-            },
-            Expr::Placeholder(Placeholder { id, data_type }) => Ok(Expr::Placeholder(
-                Placeholder::new(id.clone(), data_type.clone()),
-            )),
-        },
-    }
 }
 
 /// Returns mapping of each alias (`String`) to the expression (`Expr`) it is
@@ -459,15 +170,15 @@ pub(crate) fn resolve_aliases_to_exprs(
     expr: &Expr,
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    clone_with_replacement(expr, &|nested_expr| match nested_expr {
+    expr.clone().transform_up(&|nested_expr| match nested_expr {
         Expr::Column(c) if c.relation.is_none() => {
             if let Some(aliased_expr) = aliases.get(&c.name) {
-                Ok(Some(aliased_expr.clone()))
+                Ok(Transformed::Yes(aliased_expr.clone()))
             } else {
-                Ok(None)
+                Ok(Transformed::No(Expr::Column(c)))
             }
         }
-        _ => Ok(None),
+        _ => Ok(Transformed::No(nested_expr)),
     })
 }
 
@@ -511,9 +222,7 @@ pub(crate) fn make_decimal_type(
         (Some(p), Some(s)) => (p as u8, s as i8),
         (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
-            return Err(DataFusionError::Plan(
-                "Cannot specify only scale for decimal data type".to_string(),
-            ))
+            return plan_err!("Cannot specify only scale for decimal data type")
         }
         (None, None) => (DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
     };
@@ -523,9 +232,9 @@ pub(crate) fn make_decimal_type(
         || precision > DECIMAL128_MAX_PRECISION
         || scale.unsigned_abs() > precision
     {
-        Err(DataFusionError::Plan(format!(
+        plan_err!(
             "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 38`, and `scale <= precision`."
-        )))
+        )
     } else {
         Ok(DataType::Decimal128(precision, scale))
     }

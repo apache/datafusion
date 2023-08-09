@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_common::plan_err;
 use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::function::suggest_valid_function;
@@ -65,9 +66,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // required ordering should be defined in OVER clause.
         let is_function_window = function.over.is_some();
         if !function.order_by.is_empty() && is_function_window {
-            return Err(DataFusionError::Plan(
-                "Aggregate ORDER BY is not implemented for window functions".to_string(),
-            ));
+            return plan_err!(
+                "Aggregate ORDER BY is not implemented for window functions"
+            );
         }
 
         // then, window function
@@ -160,9 +161,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Could not find the relevant function, so return an error
         let suggested_func_name = suggest_valid_function(&name, is_function_window);
-        Err(DataFusionError::Plan(format!(
-            "Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?"
-        )))
+        plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
     }
 
     pub(super) fn sql_named_function_to_expr(

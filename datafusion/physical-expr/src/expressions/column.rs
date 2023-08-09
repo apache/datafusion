@@ -28,6 +28,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::plan_err;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -175,9 +176,7 @@ impl PhysicalExpr for UnKnownColumn {
 
     /// Evaluate the expression
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        Err(DataFusionError::Plan(
-            "UnKnownColumn::evaluate() should not be called".to_owned(),
-        ))
+        plan_err!("UnKnownColumn::evaluate() should not be called")
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {

@@ -365,7 +365,7 @@ select c1*c5 from decimal_simple;
 query T
 select arrow_typeof(c1/cast(0.00001 as decimal(5,5))) from decimal_simple limit 1;
 ----
-Decimal128(21, 12)
+Decimal128(19, 10)
 
 
 query R rowsort
@@ -391,27 +391,27 @@ select c1/cast(0.00001 as decimal(5,5)) from decimal_simple;
 query T
 select arrow_typeof(c1/c5) from decimal_simple limit 1;
 ----
-Decimal128(30, 19)
+Decimal128(21, 10)
 
 
 query R rowsort
 select c1/c5 from decimal_simple;
 ----
 0.5
-0.641025641026
-0.714285714286
-0.735294117647
+0.641025641
+0.7142857142
+0.7352941176
 0.8
-0.857142857143
-0.909090909091
-0.909090909091
+0.8571428571
+0.909090909
+0.909090909
 0.9375
-0.961538461538
+0.9615384615
 1
 1
-1.052631578947
-1.515151515152
-2.727272727273
+1.0526315789
+1.5151515151
+2.7272727272
 
 
 query T
@@ -610,8 +610,10 @@ create table foo (a DECIMAL(38, 20), b DECIMAL(38, 0));
 statement ok
 insert into foo VALUES (1, 5);
 
-query error DataFusion error: Arrow error: Compute error: Overflow happened on: 100000000000000000000 \* 100000000000000000000000000000000000000
+query R
 select a / b from foo;
+----
+0.2
 
 statement ok
 create table t as values (arrow_cast(123, 'Decimal256(5,2)'));

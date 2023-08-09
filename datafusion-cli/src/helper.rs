@@ -54,9 +54,6 @@ impl CliHelper {
                 Ok(statements) if statements.is_empty() => Ok(ValidationResult::Invalid(
                     Some("  🤔 You entered an empty statement".to_string()),
                 )),
-                Ok(statements) if statements.len() > 1 => Ok(ValidationResult::Invalid(
-                    Some("  🤔 You entered more than one statement".to_string()),
-                )),
                 Ok(_statements) => Ok(ValidationResult::Valid(None)),
                 Err(err) => Ok(ValidationResult::Invalid(Some(format!(
                     "  🤔 Invalid statement: {err}",

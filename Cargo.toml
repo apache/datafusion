@@ -17,7 +17,7 @@
 
 [workspace]
 exclude = ["datafusion-cli"]
-members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/substrait", "datafusion-examples", "test-utils", "benchmarks",
+members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/execution", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/proto", "datafusion/proto/gen", "datafusion/sql", "datafusion/sqllogictest", "datafusion/substrait", "datafusion-examples", "test-utils", "benchmarks",
 ]
 resolver = "2"
 
@@ -32,12 +32,12 @@ rust-version = "1.70"
 version = "28.0.0"
 
 [workspace.dependencies]
-arrow = { version = "43.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
-arrow-array = { version = "43.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "43.0.0", default-features = false }
-arrow-flight = { version = "43.0.0", features = ["flight-sql-experimental"] }
-arrow-schema = { version = "43.0.0", default-features = false }
-parquet = { version = "43.0.0", features = ["arrow", "async", "object_store"] }
+arrow = { version = "45.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow-array = { version = "45.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-buffer = { version = "45.0.0", default-features = false }
+arrow-flight = { version = "45.0.0", features = ["flight-sql-experimental"] }
+arrow-schema = { version = "45.0.0", default-features = false }
+parquet = { version = "45.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.36.1", features = ["visitor"] }
 
 [profile.release]

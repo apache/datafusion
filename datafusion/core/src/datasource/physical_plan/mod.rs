@@ -61,7 +61,10 @@ use crate::{
     scalar::ScalarValue,
 };
 
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::{
+    plan_err,
+    tree_node::{TreeNode, VisitRecursion},
+};
 use datafusion_physical_expr::expressions::Column;
 
 use arrow::compute::cast;
@@ -79,7 +82,7 @@ use std::{
     vec,
 };
 
-use super::{ColumnStatistics, Statistics};
+use super::{listing::ListingTableUrl, ColumnStatistics, Statistics};
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
@@ -110,22 +113,12 @@ pub fn get_scan_files(
 ) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
     let mut collector: Vec<Vec<Vec<PartitionedFile>>> = vec![];
     plan.apply(&mut |plan| {
-        let plan_any = plan.as_any();
-        let file_groups =
-            if let Some(parquet_exec) = plan_any.downcast_ref::<ParquetExec>() {
-                parquet_exec.base_config().file_groups.clone()
-            } else if let Some(avro_exec) = plan_any.downcast_ref::<AvroExec>() {
-                avro_exec.base_config().file_groups.clone()
-            } else if let Some(json_exec) = plan_any.downcast_ref::<NdJsonExec>() {
-                json_exec.base_config().file_groups.clone()
-            } else if let Some(csv_exec) = plan_any.downcast_ref::<CsvExec>() {
-                csv_exec.base_config().file_groups.clone()
-            } else {
-                return Ok(VisitRecursion::Continue);
-            };
-
-        collector.push(file_groups);
-        Ok(VisitRecursion::Skip)
+        if let Some(file_scan_config) = plan.file_scan_config() {
+            collector.push(file_scan_config.file_groups.clone());
+            Ok(VisitRecursion::Skip)
+        } else {
+            Ok(VisitRecursion::Continue)
+        }
     })?;
     Ok(collector)
 }
@@ -330,6 +323,8 @@ pub struct FileSinkConfig {
     pub object_store_url: ObjectStoreUrl,
     /// A vector of [`PartitionedFile`] structs, each representing a file partition
     pub file_groups: Vec<PartitionedFile>,
+    /// Vector of partition paths
+    pub table_paths: Vec<ListingTableUrl>,
     /// The schema of the output file
     pub output_schema: SchemaRef,
     /// A vector of column names and their corresponding data types,
@@ -337,6 +332,8 @@ pub struct FileSinkConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// A writer mode that determines how data is written to the file
     pub writer_mode: FileWriterMode,
+    /// Controls whether existing data should be overwritten by this sink
+    pub overwrite: bool,
 }
 
 impl FileSinkConfig {
@@ -557,12 +554,12 @@ impl SchemaAdapter {
                         projection.push(file_idx);
                     }
                     false => {
-                        return Err(DataFusionError::Plan(format!(
+                        return plan_err!(
                             "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
                             file_field.name(),
                             file_field.data_type(),
                             table_field.data_type()
-                        )))
+                        )
                     }
                 }
             }
@@ -962,6 +959,8 @@ fn get_projected_output_ordering(
             // since rest of the orderings are violated
             break;
         }
+        // do not push empty entries
+        // otherwise we may have `Some(vec![])` at the output ordering.
         if !new_ordering.is_empty() {
             all_orderings.push(new_ordering);
         }
