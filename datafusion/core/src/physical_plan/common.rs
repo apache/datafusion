@@ -131,7 +131,11 @@ pub fn compute_record_batch_statistics(
 ) -> Statistics {
     let nb_rows = batches.iter().flatten().map(RecordBatch::num_rows).sum();
 
-    let total_byte_size = batches.iter().flatten().map(batch_byte_size).sum();
+    let total_byte_size = batches
+        .iter()
+        .flatten()
+        .map(|b| b.get_array_memory_size())
+        .sum();
 
     let projection = match projection {
         Some(p) => p,
@@ -340,7 +344,7 @@ impl IPCWriter {
         self.writer.write(batch)?;
         self.num_batches += 1;
         self.num_rows += batch.num_rows() as u64;
-        let num_bytes: usize = batch_byte_size(batch);
+        let num_bytes: usize = batch.get_array_memory_size();
         self.num_bytes += num_bytes as u64;
         Ok(())
     }
@@ -357,12 +361,9 @@ impl IPCWriter {
 }
 
 /// Returns the total number of bytes of memory occupied physically by this batch.
+#[deprecated(since = "28.0.0", note = "RecordBatch::get_array_memory_size")]
 pub fn batch_byte_size(batch: &RecordBatch) -> usize {
-    batch
-        .columns()
-        .iter()
-        .map(|array| array.get_array_memory_size())
-        .sum()
+    batch.get_array_memory_size()
 }
 
 #[cfg(test)]
