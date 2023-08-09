@@ -565,8 +565,8 @@ scalar_expr!(
 "Returns true if at least one element of the second array appears in the first array; otherwise, it returns false."
 );
 scalar_expr!(
-    ArrayFlatten,
-    array_flatten,
+    Flatten,
+    flatten,
     array,
     "flattens an array of arrays into a single array."
 );

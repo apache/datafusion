@@ -457,7 +457,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayHas => Self::ArrayHas,
             ScalarFunction::ArrayDims => Self::ArrayDims,
             ScalarFunction::ArrayElement => Self::ArrayElement,
-            ScalarFunction::ArrayFlatten => Self::ArrayFlatten,
+            ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,

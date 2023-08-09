@@ -1685,7 +1685,7 @@ array_fill(element, array)
   Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to copy to the array.
 
-### `array_flatten`
+### `flatten`
 
 Converts an array of arrays to a flat array
 
@@ -1700,12 +1700,8 @@ The flattened array contains all the elements from all source arrays.
   Can be a constant, column, or function, and any combination of array operators.
 
 ```
-array_flatten(array)
+flatten(array)
 ```
-
-#### Aliases
-
-- list_flatten
 
 ### `array_indexof`
 

@@ -163,8 +163,8 @@ pub enum BuiltinScalarFunction {
     Cardinality,
     /// construct an array from columns
     MakeArray,
-    /// array flatten
-    ArrayFlatten,
+    /// Flatten
+    Flatten,
 
     // struct functions
     /// struct
@@ -368,7 +368,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayFlatten => Volatility::Immutable,
+            BuiltinScalarFunction::Flatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
@@ -502,7 +502,7 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayFlatten => {
+            BuiltinScalarFunction::Flatten => {
                 fn get_base_type(data_type: &DataType) -> Result<DataType> {
                     match data_type {
                         DataType::List(field) => match field.data_type() {
@@ -838,7 +838,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayFlatten => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
             | BuiltinScalarFunction::ArrayHas => Signature::any(2, self.volatility()),
@@ -1325,7 +1325,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "list_element",
             "list_extract",
         ],
-        BuiltinScalarFunction::ArrayFlatten => &["array_flatten", "list_flatten"],
+        BuiltinScalarFunction::Flatten => &["flatten"],
         BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
         BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
         BuiltinScalarFunction::ArrayHas => {

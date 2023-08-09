@@ -437,8 +437,8 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayLength => {
             Arc::new(|args| make_scalar_function(array_expressions::array_length)(args))
         }
-        BuiltinScalarFunction::ArrayFlatten => {
-            Arc::new(|args| make_scalar_function(array_expressions::array_flatten)(args))
+        BuiltinScalarFunction::Flatten => {
+            Arc::new(|args| make_scalar_function(array_expressions::flatten)(args))
         }
 
         BuiltinScalarFunction::ArrayNdims => {

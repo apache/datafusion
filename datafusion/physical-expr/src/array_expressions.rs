@@ -1779,8 +1779,8 @@ fn flatten_internal(
     }
 }
 
-/// Array_Flatten SQL function
-pub fn array_flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
+/// Flatten SQL function
+pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
     let flattened_array = flatten_internal(&args[0], None)?;
     Ok(Arc::new(flattened_array) as ArrayRef)
 }
