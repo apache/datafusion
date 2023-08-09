@@ -895,6 +895,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_primitive_array, as_string_array};
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeConfig;
     use futures::FutureExt;
     use std::collections::HashMap;
