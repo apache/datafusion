@@ -41,8 +41,8 @@ use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::file_format::write::{
-    AbortMode, AbortableWrite, AsyncPutWriter, BatchSerializer, MultiPart,
-    DEFAULT_SCHEMA_INFER_MAX_RECORD, create_writer
+    stateless_serialize_and_write_files, AbortMode, AbortableWrite, AsyncPutWriter,
+    BatchSerializer, FileWriterMode, MultiPart,
 };
 use crate::datasource::physical_plan::{
     CsvExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,

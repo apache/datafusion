@@ -19,10 +19,10 @@
 //! write support for the various file formats
 
 use std::io::Error;
+use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::mem;
 
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
@@ -38,7 +38,6 @@ use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-
 
 /// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends

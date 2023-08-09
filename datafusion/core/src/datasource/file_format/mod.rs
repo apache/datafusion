@@ -31,8 +31,8 @@ pub mod parquet;
 pub mod write;
 
 use std::any::Any;
-use std::sync::Arc;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};

@@ -55,6 +55,10 @@ use super::FileFormat;
 use super::FileScanConfig;
 use super::FileWriterMode;
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::file_format::write::{
+    stateless_serialize_and_write_files, AbortMode, AbortableWrite, AsyncPutWriter,
+    BatchSerializer, FileWriterMode, MultiPart,
+};
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::physical_plan::NdJsonExec;

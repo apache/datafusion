@@ -40,9 +40,9 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use rand::distributions::Alphanumeric;
 
-use super::FileScanConfig;
-use super::FileFormat;
 use super::write::FileWriterMode;
+use super::FileFormat;
+use super::FileScanConfig;
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
