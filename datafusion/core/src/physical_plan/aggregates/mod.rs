@@ -1215,7 +1215,6 @@ fn evaluate_group_by(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution::context::SessionConfig;
     use crate::physical_plan::aggregates::GroupByOrderMode::{
         FullyOrdered, PartiallyOrdered,
     };
@@ -1231,7 +1230,6 @@ mod tests {
         DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
         SendableRecordBatchStream, Statistics,
     };
-    use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{assert_is_pending, csv_exec_sorted};
     use crate::{assert_batches_eq, assert_batches_sorted_eq, physical_plan::common};
@@ -1449,8 +1447,7 @@ mod tests {
             DataType::Int64,
         ))];
 
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -1556,8 +1553,7 @@ mod tests {
             DataType::Float64,
         ))];
 
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -1779,14 +1775,11 @@ mod tests {
             Arc::new(TestYieldingExec { yield_first: true });
         let input_schema = input.schema();
 
-        let session_ctx = SessionContext::with_config_rt(
-            SessionConfig::default(),
-            Arc::new(
-                RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0))
-                    .unwrap(),
-            ),
+        let runtime = Arc::new(
+            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0)).unwrap(),
         );
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
 
         let groups_none = PhysicalGroupBy::default();
         let groups_some = PhysicalGroupBy {
@@ -1864,8 +1857,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_without_groups() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -1901,8 +1893,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_with_groups() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float32, true),
             Field::new("b", DataType::Float32, true),
@@ -1970,8 +1961,7 @@ mod tests {
         use_coalesce_batches: bool,
         is_first_acc: bool,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let (schema, data) = some_data_v2();
         let partition1 = data[0].clone();
