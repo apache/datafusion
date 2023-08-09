@@ -17,6 +17,7 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
+mod topk;
 mod visitor;
 pub use self::metrics::Metric;
 use self::metrics::MetricsSet;
@@ -27,6 +28,7 @@ use crate::datasource::physical_plan::FileScanConfig;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use datafusion_common::Result;
 pub use datafusion_common::{ColumnStatistics, Statistics};
+pub use topk::TopK;
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 use arrow::datatypes::SchemaRef;
