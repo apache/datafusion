@@ -608,14 +608,12 @@ mod tests {
     use super::*;
     use crate::test;
 
-    use crate::prelude::SessionContext;
     use crate::{physical_plan::collect, scalar::ScalarValue};
     use arrow::record_batch::RecordBatch;
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         // Create csv's with different partitioning
         let csv = test::scan_partitioned_csv(4)?;
