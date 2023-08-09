@@ -22,14 +22,14 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayAs, DisplayFormatType, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
 };
 use arrow_schema::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
-    LexOrdering, OrderingEquivalenceProperties, PhysicalSortExpr,
+    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+    PhysicalSortExpr,
 };
 use futures::StreamExt;
 use object_store::{GetResult, ObjectStore};
