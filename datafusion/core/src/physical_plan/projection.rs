@@ -42,7 +42,7 @@ use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 
 use datafusion_physical_expr::equivalence::update_ordering_equivalence_with_cast;
-use datafusion_physical_expr::expressions::CastExpr;
+use datafusion_physical_expr::expressions::{CastExpr, Literal};
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, OrderingEquivalenceProperties,
@@ -286,8 +286,8 @@ impl ExecutionPlan for ProjectionExec {
         let all_column_expr = self
             .expr
             .iter()
-            .all(|(e, _)| e.as_any().downcast_ref::<Column>().is_some());
-        // If expressions are all column_expr, then all computations in this projection are reorder or rename,
+            .all(|(e, _)| e.as_any().is::<Column>() || e.as_any().is::<Literal>());
+        // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
         !all_column_expr
     }
