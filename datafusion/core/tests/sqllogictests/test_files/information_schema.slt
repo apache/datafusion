@@ -146,12 +146,23 @@ datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
+datafusion.execution.parquet.bloom_filter_enabled NULL
+datafusion.execution.parquet.compression NULL
+datafusion.execution.parquet.created_by parquet-rs version 45.0.0
+datafusion.execution.parquet.data_page_row_count_limit 18446744073709551615
+datafusion.execution.parquet.data_pagesize_limit 1048576
+datafusion.execution.parquet.dictionary_enabled NULL
+datafusion.execution.parquet.dictionary_page_size_limit 1048576
 datafusion.execution.parquet.enable_page_index true
+datafusion.execution.parquet.encoding NULL
+datafusion.execution.parquet.max_row_group_size 1048576
+datafusion.execution.parquet.max_statistics_size NULL
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
+datafusion.execution.parquet.statistics_enabled NULL
 datafusion.execution.planning_concurrency 13
 datafusion.execution.sort_in_place_threshold_bytes 1048576
 datafusion.execution.sort_spill_reservation_bytes 10485760
