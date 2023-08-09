@@ -135,13 +135,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// The default implementation returns `true` unless this operator
     /// has signalled it requires a single child input partition.
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         // By default try to maximize parallelism with more CPUs if
         // possible
-        !self
-            .required_input_distribution()
+        self.required_input_distribution()
             .into_iter()
-            .any(|dist| matches!(dist, Distribution::SinglePartition))
+            .map(|dist| !matches!(dist, Distribution::SinglePartition))
+            .collect()
     }
 
     /// Get the EquivalenceProperties within the plan

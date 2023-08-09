@@ -127,8 +127,8 @@ impl ExecutionPlan for GlobalLimitExec {
         vec![true]
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -303,8 +303,8 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_partitioning()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
     }
 
     // Local limit will not change the input plan's ordering

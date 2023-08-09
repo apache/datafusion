@@ -274,8 +274,8 @@ impl ExecutionPlan for UnionExec {
             .unwrap_or_default()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false; self.children().len()]
     }
 }
 
@@ -450,8 +450,8 @@ impl ExecutionPlan for InterleaveExec {
             .unwrap_or_default()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false; self.children().len()]
     }
 }
 

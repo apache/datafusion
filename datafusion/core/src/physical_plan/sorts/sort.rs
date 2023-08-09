@@ -769,8 +769,8 @@ impl ExecutionPlan for SortExec {
         vec![self.input.clone()]
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
