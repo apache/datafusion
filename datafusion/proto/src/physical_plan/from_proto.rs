@@ -29,10 +29,8 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::expressions::{
-    date_time_interval_expr, GetFieldAccessExpr, GetIndexedFieldExpr,
-};
 use datafusion::physical_plan::expressions::{in_list, LikeExpr};
+use datafusion::physical_plan::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
@@ -125,22 +123,6 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
         )),
-        ExprType::DateTimeIntervalExpr(expr) => date_time_interval_expr(
-            parse_required_physical_expr(
-                expr.l.as_deref(),
-                registry,
-                "left",
-                input_schema,
-            )?,
-            logical_plan::from_proto::from_proto_binary_op(&expr.op)?,
-            parse_required_physical_expr(
-                expr.r.as_deref(),
-                registry,
-                "right",
-                input_schema,
-            )?,
-            input_schema,
-        )?,
         ExprType::AggregateExpr(_) => {
             return Err(DataFusionError::NotImplemented(
                 "Cannot convert aggregate expr node to physical expression".to_owned(),

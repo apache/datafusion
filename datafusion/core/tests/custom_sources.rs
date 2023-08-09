@@ -26,8 +26,8 @@ use datafusion::logical_expr::{
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
-    project_schema, ColumnStatistics, DisplayAs, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use datafusion::scalar::ScalarValue;
 use datafusion::{
@@ -37,6 +37,7 @@ use datafusion::{
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
 use datafusion_common::cast::as_primitive_array;
+use datafusion_common::project_schema;
 use futures::stream::Stream;
 use std::any::Any;
 use std::pin::Pin;
