@@ -422,6 +422,14 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>0</p></td>
 <td><p>Fan-out during initial physical planning. This is mostly use to plan <code class="docutils literal notranslate"><span class="pre">UNION</span></code> children in parallel. Defaults to the number of CPU cores on the system</p></td>
 </tr>
+<tr class="row-even"><td><p>datafusion.execution.sort_spill_reservation_bytes</p></td>
+<td><p>10485760</p></td>
+<td><p>Specifies the reserved memory for each spillable sort operation to facilitate an in-memory merge. When a sort operation spills to disk, the in-memory data must be sorted and merged before being written to a file. This setting reserves a specific amount of memory for that in-memory sort/merge process. Note: This setting is irrelevant if the sort operation cannot spill (i.e., if there’s no <code class="docutils literal notranslate"><span class="pre">DiskManager</span></code> configured).</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.execution.sort_in_place_threshold_bytes</p></td>
+<td><p>1048576</p></td>
+<td><p>When sorting, below what size should data be concatenated and sorted in a single RecordBatch rather than sorted in batches and merged.</p></td>
+</tr>
 <tr class="row-even"><td><p>datafusion.optimizer.enable_round_robin_repartition</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, the physical plan optimizer will try to add round robin repartitioning to increase parallelism to leverage more CPU cores</p></td>
