@@ -85,8 +85,13 @@ pub struct RowCursorStream {
     column_expressions: Vec<Arc<dyn PhysicalExpr>>,
     /// Input streams
     streams: FusedStreams,
+<<<<<<< HEAD
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
+=======
+    /// Sort fields
+    sort_fields: Vec<SortField>,
+>>>>>>> 883109a51 (Flush out row converter)
 }
 
 impl RowCursorStream {
@@ -103,7 +108,7 @@ impl RowCursorStream {
                 Ok(SortField::new_with_options(data_type, expr.options))
             })
             .collect::<Result<Vec<_>>>()?;
-
+        
         let streams = streams.into_iter().map(|s| s.fuse()).collect();
         let converter = RowConverter::new(sort_fields)?;
         Ok(Self {
@@ -111,6 +116,7 @@ impl RowCursorStream {
             reservation,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             streams: FusedStreams(streams),
+            sort_fields: sort_fields,
         })
     }
 
@@ -146,7 +152,18 @@ impl PartitionedStream for RowCursorStream {
         Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
             r.and_then(|batch| {
                 let cursor = self.convert_batch(&batch)?;
-                println!("size of row converter: {:?}", self.converter.size());
+                if  self.converter.size() > 1000000 {
+                    let mut incomplete_streams = Vec::new();
+                    for (i, stream) in self.streams.0.iter().enumerate() {
+                        if stream.is_done() {
+                            continue;
+                        }
+                        incomplete_streams.push(i);
+                    }
+                    self.streams = incomplete_streams.into_iter().map(|s| s.fuse()).collect();
+                    self.converter = RowConverter::new(self.sort_fields.clone())?;
+
+                }
                 Ok((cursor, batch))
             })
         }))
