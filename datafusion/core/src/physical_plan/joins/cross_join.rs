@@ -460,7 +460,6 @@ mod tests {
     use crate::assert_batches_sorted_eq;
     use crate::common::assert_contains;
     use crate::physical_plan::common;
-    use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{build_table_scan_i32, columns};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
@@ -617,8 +616,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_join() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let left = build_table_scan_i32(
             ("a1", &vec![1, 2, 3]),
@@ -656,9 +654,8 @@ mod tests {
     async fn test_overallocation() -> Result<()> {
         let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-        let session_ctx =
-            SessionContext::with_config_rt(SessionConfig::default(), runtime);
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = TaskContext::default().with_runtime(runtime);
+        let task_ctx = Arc::new(task_ctx);
 
         let left = build_table_scan_i32(
             ("a1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),

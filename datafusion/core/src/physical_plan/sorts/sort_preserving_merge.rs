@@ -30,6 +30,7 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion_execution::memory_pool::MemoryConsumer;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
@@ -213,6 +214,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         );
         let schema = self.schema();
 
+        let reservation =
+            MemoryConsumer::new(format!("SortPreservingMergeExec[{partition}]"))
+                .register(&context.runtime_env().memory_pool);
+
         match input_partitions {
             0 => Err(DataFusionError::Internal(
                 "SortPreservingMergeExec requires at least one input partition"
@@ -241,6 +246,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     BaselineMetrics::new(&self.metrics, partition),
                     context.session_config().batch_size(),
                     self.fetch,
+                    reservation,
                 )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -267,6 +273,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, StreamExt};
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -276,7 +283,6 @@ mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::stream::RecordBatchReceiverStream;
     use crate::physical_plan::{collect, common};
-    use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::{assert_batches_eq, test_util};
@@ -286,8 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_interleave() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
@@ -335,8 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_some_overlap() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
@@ -384,8 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_no_overlap() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
@@ -433,8 +436,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_three_partitions() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
@@ -555,8 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
         let csv = test::scan_partitioned_csv(partitions).unwrap();
         let schema = csv.schema();
@@ -638,8 +639,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let sort = vec![
             // uint8
@@ -699,17 +699,18 @@ mod tests {
             },
         ];
 
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        // Test streaming with default batch size
+        let task_ctx = Arc::new(TaskContext::default());
         let input =
             sorted_partitioned_input(sort.clone(), &[10, 5, 13], task_ctx.clone()).await;
         let basic = basic_sort(input.clone(), sort.clone(), task_ctx).await;
 
-        let session_ctx_bs_23 =
-            SessionContext::with_config(SessionConfig::new().with_batch_size(23));
+        // batch size of 23
+        let task_ctx = TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(23));
+        let task_ctx = Arc::new(task_ctx);
 
         let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
-        let task_ctx = session_ctx_bs_23.task_ctx();
         let merged = collect(merge, task_ctx).await.unwrap();
 
         assert_eq!(merged.len(), 14);
@@ -729,8 +730,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_nulls() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             None,
@@ -811,8 +811,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let sort = vec![PhysicalSortExpr {
             expr: col("c12", &schema).unwrap(),
@@ -843,14 +842,18 @@ mod tests {
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
+        let reservation =
+            MemoryConsumer::new("test").register(&task_ctx.runtime_env().memory_pool);
 
+        let fetch = None;
         let merge_stream = streaming_merge(
             streams,
             batches.schema(),
             sort.as_slice(),
             BaselineMetrics::new(&metrics, 0),
             task_ctx.session_config().batch_size(),
-            None,
+            fetch,
+            reservation,
         )
         .unwrap();
 
@@ -875,8 +878,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_metrics() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"), Some("c")]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
@@ -932,8 +934,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -959,8 +960,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stable_sort() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         // Create record batches like:
         // batch_number |value

@@ -229,7 +229,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::FutureExt;
 
-    use crate::prelude::SessionContext;
     use crate::{
         physical_plan::collect,
         test::{
@@ -242,8 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
