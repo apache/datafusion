@@ -141,4 +141,6 @@ SYNNADA-NOTICE.txt
 datafusion/core/src/physical_optimizer/join_pipeline_selection.rs
 datafusion/core/src/physical_plan/joins/sliding_window_join_utils.rs
 datafusion/core/src/physical_plan/joins/sliding_nested_loop_join.rs
+datafusion/core/src/physical_plan/joins/sliding_hash_join.rs
+
 

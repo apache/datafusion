@@ -14,7 +14,7 @@ use arrow_array::{
     ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch, UInt32Array,
     UInt64Array,
 };
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow_schema::SortOptions;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, JoinType, ScalarValue};
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
@@ -101,32 +101,7 @@ pub fn check_if_sliding_window_condition_is_met(
     }
 }
 
-/// This function combines the two given batches, each of which may be absent,
-/// according to the given output schema.
-pub fn combine_two_batches(
-    output_schema: &SchemaRef,
-    left_batch: Option<RecordBatch>,
-    right_batch: Option<RecordBatch>,
-) -> datafusion_common::Result<Option<RecordBatch>> {
-    match (left_batch, right_batch) {
-        (Some(batch), None) | (None, Some(batch)) => {
-            // If only one of the batches are present, return it:
-            Ok(Some(batch))
-        }
-        (Some(left_batch), Some(right_batch)) => {
-            // If both batches are present, concatenate them:
-            arrow::compute::concat_batches(output_schema, &[left_batch, right_batch])
-                .map_err(DataFusionError::ArrowError)
-                .map(Some)
-        }
-        (None, None) => {
-            // If neither is present, return an empty batch:
-            Ok(None)
-        }
-    }
-}
-
-// This function combines batches into a probe batch.
+/// This function combines the given batches into a probe batch.
 pub fn get_probe_batch(
     mut batches: Vec<RecordBatch>,
 ) -> datafusion_common::Result<RecordBatch> {
@@ -449,9 +424,49 @@ pub(crate) fn update_filter_expr_bounds(
             IntervalBound::new(right_value, false),
         )
     };
-
-    // Set the calculated interval for the probe side sorted filter expression:
+    // Set the calculated interval for the sorted filter expression:
     probe_sorted_filter_expr.set_interval(interval);
-
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::physical_plan::joins::sliding_window_join_utils::append_probe_indices_in_order;
+    use arrow_array::{UInt32Array, UInt64Array};
+
+    #[test]
+    fn test_append_left_indices_in_order() {
+        let left_indices = UInt32Array::from(vec![Some(1), Some(1), Some(2), Some(4)]);
+        let right_indices =
+            UInt64Array::from(vec![Some(10), Some(20), Some(30), Some(40)]);
+        let left_len = 7;
+
+        let (new_right_indices, new_left_indices) =
+            append_probe_indices_in_order(right_indices, left_indices, left_len).unwrap();
+
+        // Expected results
+        let expected_left_indices = UInt32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+        ]);
+        let expected_right_indices = UInt64Array::from(vec![
+            None,
+            Some(10),
+            Some(20),
+            Some(30),
+            None,
+            Some(40),
+            None,
+            None,
+        ]);
+
+        assert_eq!(new_left_indices, expected_left_indices);
+        assert_eq!(new_right_indices, expected_right_indices);
+    }
 }
