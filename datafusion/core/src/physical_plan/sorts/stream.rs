@@ -144,6 +144,7 @@ impl RowCursorStream {
             let new_rows = new_converter.convert_columns(
                 &old_converter.convert_rows(&old_rows)?
             )?;
+            rows_reservation.try_resize(new_rows.size())?;
             old_rows = new_rows;
             println!("Swapped old converter of size: {0} with new converter of size {1}", old_converter.size(), new_converter.size());
             self.converter = new_converter;

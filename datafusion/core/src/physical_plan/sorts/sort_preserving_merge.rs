@@ -280,6 +280,7 @@ mod tests {
     use tempfile::TempDir;
     use futures::{FutureExt, StreamExt, stream::BoxStream};
 
+    use crate::execution::context::SessionContext;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
@@ -409,8 +410,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dict_merge() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let values = StringArray::from_iter_values(["a", "b", "c"]);
         let keys = Int32Array::from(vec![0, 0, 1, 2, 2, 1, 1, 0, 2]);
