@@ -46,7 +46,7 @@ pub struct MemoryExec {
     projected_schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
-    // Optional sort information
+    // Sort information, including order equivalence
     sort_information: Vec<LexOrdering>,
 }
 
