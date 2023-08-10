@@ -648,7 +648,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::Uuid => Ok(Utf8),
             BuiltinScalarFunction::RegexpReplace => {
-                utf8_to_str_type(&input_expr_types[0], "regex_replace")
+                utf8_to_str_type(&input_expr_types[0], "regexp_replace")
             }
             BuiltinScalarFunction::Repeat => {
                 utf8_to_str_type(&input_expr_types[0], "repeat")
