@@ -17,8 +17,8 @@
 
 use crate::expressions::{CastExpr, Column};
 use crate::{
-    normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
-    PhysicalSortExpr,
+    normalize_expr_with_equivalence_properties, LexOrdering, LexOrderingRef,
+    PhysicalExpr, PhysicalSortExpr,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -37,12 +37,12 @@ use std::sync::Arc;
 /// 1. Equality conditions (like `A=B`), when `T` = [`Column`]
 /// 2. Ordering (like `A ASC = B ASC`), when `T` = [`PhysicalSortExpr`]
 #[derive(Debug, Clone)]
-pub struct EquivalenceProperties<T = Column> {
-    classes: Vec<EquivalentClass<T>>,
+pub struct EquivalenceProperties {
+    classes: Vec<EquivalentClass<Column>>,
     schema: SchemaRef,
 }
 
-impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
+impl EquivalenceProperties {
     pub fn new(schema: SchemaRef) -> Self {
         EquivalenceProperties {
             classes: vec![],
@@ -51,7 +51,7 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
     }
 
     /// return the set of equivalences
-    pub fn classes(&self) -> &[EquivalentClass<T>] {
+    pub fn classes(&self) -> &[EquivalentClass<Column>] {
         &self.classes
     }
 
@@ -60,7 +60,7 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
     }
 
     /// Add the [`EquivalentClass`] from `iter` to this list
-    pub fn extend<I: IntoIterator<Item = EquivalentClass<T>>>(&mut self, iter: I) {
+    pub fn extend<I: IntoIterator<Item = EquivalentClass<Column>>>(&mut self, iter: I) {
         for ec in iter {
             self.classes.push(ec)
         }
@@ -68,7 +68,7 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
 
     /// Adds new equal conditions into the EquivalenceProperties. New equal
     /// conditions usually come from equality predicates in a join/filter.
-    pub fn add_equal_conditions(&mut self, new_conditions: (&T, &T)) {
+    pub fn add_equal_conditions(&mut self, new_conditions: (&Column, &Column)) {
         let mut idx1: Option<usize> = None;
         let mut idx2: Option<usize> = None;
         for (idx, class) in self.classes.iter_mut().enumerate() {
@@ -106,7 +106,7 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
             }
             (None, None) => {
                 // adding new pairs
-                self.classes.push(EquivalentClass::<T>::new(
+                self.classes.push(EquivalentClass::<Column>::new(
                     new_conditions.0.clone(),
                     vec![new_conditions.1.clone()],
                 ));
@@ -131,7 +131,54 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-pub type OrderingEquivalenceProperties = EquivalenceProperties<LexOrdering>;
+#[derive(Debug, Clone)]
+pub struct OrderingEquivalenceProperties {
+    oeq_class: Option<OrderingEquivalentClass>,
+    schema: SchemaRef,
+}
+
+impl OrderingEquivalenceProperties {
+    pub fn new(schema: SchemaRef) -> Self {
+        Self {
+            oeq_class: None,
+            schema,
+        }
+    }
+}
+
+impl OrderingEquivalenceProperties {
+    pub fn extend(&mut self, other: Option<OrderingEquivalentClass>) {
+        if let Some(other) = other {
+            if let Some(class) = &mut self.oeq_class {
+                class.others.insert(other.head);
+                class.others.extend(other.others);
+            } else {
+                self.oeq_class = Some(other);
+            }
+        }
+    }
+
+    pub fn oeq_class(&self) -> Option<&OrderingEquivalentClass> {
+        self.oeq_class.as_ref()
+    }
+
+    /// Adds new equal conditions into the EquivalenceProperties. New equal
+    /// conditions usually come from equality predicates in a join/filter.
+    pub fn add_equal_conditions(&mut self, new_conditions: (&LexOrdering, &LexOrdering)) {
+        if let Some(class) = &mut self.oeq_class {
+            class.insert(new_conditions.0.clone());
+            class.insert(new_conditions.1.clone());
+        } else {
+            let head = new_conditions.0.clone();
+            let others = vec![new_conditions.1.clone()];
+            self.oeq_class = Some(OrderingEquivalentClass::new(head, others))
+        }
+    }
+
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
 
 /// EquivalentClass is a set of [`Column`]s or [`PhysicalSortExpr`]s that are known
 /// to have the same value in all tuples in a relation. `EquivalentClass<Column>`
@@ -290,7 +337,7 @@ impl OrderingEquivalenceBuilder {
         new_ordering_eq_properties: OrderingEquivalenceProperties,
     ) -> Self {
         self.ordering_eq_properties
-            .extend(new_ordering_eq_properties.classes().iter().cloned());
+            .extend(new_ordering_eq_properties.oeq_class().cloned());
         self
     }
 
@@ -435,40 +482,41 @@ pub fn project_ordering_equivalence_properties(
     let schema = output_eq.schema();
     let fields = schema.fields();
 
-    let mut eq_classes = input_eq.classes().to_vec();
+    let oeq_class = input_eq.oeq_class();
+    let mut oeq_class = if let Some(oeq_class) = oeq_class {
+        oeq_class.clone()
+    } else {
+        return ();
+    };
     let mut oeq_alias_map = vec![];
     for (column, columns) in columns_map {
         if is_column_invalid_in_new_schema(column, fields) {
             oeq_alias_map.push((column.clone(), columns[0].clone()));
         }
     }
-    for class in eq_classes.iter_mut() {
-        class.update_with_aliases(&oeq_alias_map, fields);
-    }
+    oeq_class.update_with_aliases(&oeq_alias_map, fields);
 
     // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
-    for class in eq_classes.iter_mut() {
-        let sort_exprs_to_remove = class
-            .iter()
-            .filter(|sort_exprs| {
-                sort_exprs.iter().any(|sort_expr| {
-                    let cols_in_expr = collect_columns(&sort_expr.expr);
-                    // If any one of the columns, used in Expression is invalid, remove expression
-                    // from ordering equivalences
-                    cols_in_expr
-                        .iter()
-                        .any(|col| is_column_invalid_in_new_schema(col, fields))
-                })
+    let sort_exprs_to_remove = oeq_class
+        .iter()
+        .filter(|sort_exprs| {
+            sort_exprs.iter().any(|sort_expr| {
+                let cols_in_expr = collect_columns(&sort_expr.expr);
+                // If any one of the columns, used in Expression is invalid, remove expression
+                // from ordering equivalences
+                cols_in_expr
+                    .iter()
+                    .any(|col| is_column_invalid_in_new_schema(col, fields))
             })
-            .cloned()
-            .collect::<Vec<_>>();
-        for sort_exprs in sort_exprs_to_remove {
-            class.remove(&sort_exprs);
-        }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for sort_exprs in sort_exprs_to_remove {
+        oeq_class.remove(&sort_exprs);
     }
-    eq_classes.retain(|props| props.len() > 1);
-
-    output_eq.extend(eq_classes);
+    if oeq_class.len() > 1 {
+        output_eq.extend(Some(oeq_class));
+    }
 }
 
 /// Update `ordering` if it contains cast expression with target column
@@ -496,7 +544,7 @@ pub fn update_ordering_equivalence_with_cast(
     cast_exprs: &[(CastExpr, Column)],
     input_oeq: &mut OrderingEquivalenceProperties,
 ) {
-    for cls in input_oeq.classes.iter_mut() {
+    if let Some(cls) = &mut input_oeq.oeq_class {
         for ordering in
             std::iter::once(cls.head().clone()).chain(cls.others().clone().into_iter())
         {

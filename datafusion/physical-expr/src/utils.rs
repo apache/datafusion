@@ -313,13 +313,16 @@ pub fn ordering_satisfy_concrete<
     ordering_equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let ordering_eq_classes = oeq_properties.classes();
+    let ordering_eq_classes = oeq_properties
+        .oeq_class()
+        .map(|item| vec![item.clone()])
+        .unwrap_or(vec![]);
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
     let required_normalized =
-        normalize_sort_exprs(required, eq_classes, ordering_eq_classes);
+        normalize_sort_exprs(required, eq_classes, &ordering_eq_classes);
     let provided_normalized =
-        normalize_sort_exprs(provided, eq_classes, ordering_eq_classes);
+        normalize_sort_exprs(provided, eq_classes, &ordering_eq_classes);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -364,13 +367,16 @@ pub fn ordering_satisfy_requirement_concrete<
     ordering_equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let ordering_eq_classes = oeq_properties.classes();
+    let ordering_eq_classes = oeq_properties
+        .oeq_class()
+        .map(|item| vec![item.clone()])
+        .unwrap_or(vec![]);
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
     let required_normalized =
-        normalize_sort_requirements(required, eq_classes, ordering_eq_classes);
+        normalize_sort_requirements(required, eq_classes, &ordering_eq_classes);
     let provided_normalized =
-        normalize_sort_exprs(provided, eq_classes, ordering_eq_classes);
+        normalize_sort_exprs(provided, eq_classes, &ordering_eq_classes);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -415,14 +421,17 @@ fn requirements_compatible_concrete<
     equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let ordering_eq_classes = oeq_properties.classes();
+    let ordering_eq_classes = oeq_properties
+        .oeq_class()
+        .map(|item| vec![item.clone()])
+        .unwrap_or(vec![]);
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
 
     let required_normalized =
-        normalize_sort_requirements(required, eq_classes, ordering_eq_classes);
+        normalize_sort_requirements(required, eq_classes, &ordering_eq_classes);
     let provided_normalized =
-        normalize_sort_requirements(provided, eq_classes, ordering_eq_classes);
+        normalize_sort_requirements(provided, eq_classes, &ordering_eq_classes);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -1239,13 +1248,16 @@ mod tests {
         ];
         let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
         let eq_classes = eq_properties.classes();
-        let ordering_eq_classes = ordering_eq_properties.classes();
+        let ordering_eq_classes = ordering_eq_properties
+            .oeq_class()
+            .map(|item| vec![item.clone()])
+            .unwrap_or(vec![]);
         for (reqs, expected_normalized) in requirements.into_iter() {
             let req = convert_to_requirement(&reqs);
             let expected_normalized = convert_to_requirement(&expected_normalized);
 
             assert_eq!(
-                normalize_sort_requirements(&req, eq_classes, ordering_eq_classes),
+                normalize_sort_requirements(&req, eq_classes, &ordering_eq_classes),
                 expected_normalized
             );
         }
