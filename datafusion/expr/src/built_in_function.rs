@@ -664,7 +664,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
             BuiltinScalarFunction::Rtrim => {
-                utf8_to_str_type(&input_expr_types[0], "rtrimp")
+                utf8_to_str_type(&input_expr_types[0], "rtrim")
             }
             BuiltinScalarFunction::SHA224 => {
                 utf8_or_binary_to_binary_type(&input_expr_types[0], "sha224")
