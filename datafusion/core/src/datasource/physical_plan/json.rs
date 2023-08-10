@@ -342,6 +342,7 @@ mod tests {
     async fn prepare_store(
         state: &SessionState,
         file_compression_type: FileCompressionType,
+        work_dir: &Path,
     ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
         let store_url = ObjectStoreUrl::local_filesystem();
         let store = state.runtime_env().object_store(&store_url).unwrap();
@@ -353,6 +354,7 @@ mod tests {
             1,
             FileType::JSON,
             file_compression_type.to_owned(),
+            work_dir,
         )
         .unwrap();
         let meta = file_groups
@@ -374,17 +376,19 @@ mod tests {
     async fn test_additional_stores(
         file_compression_type: FileCompressionType,
         store: Arc<dyn ObjectStore>,
-    ) {
+    ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
         ctx.runtime_env().register_object_store(&url, store.clone());
         let filename = "1.json";
+        let tmp_dir = TempDir::new()?;
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
             filename,
             1,
             FileType::JSON,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )
         .unwrap();
         let path = file_groups
@@ -424,6 +428,7 @@ mod tests {
             ],
             &results
         );
+        Ok(())
     }
 
     #[rstest(
@@ -444,8 +449,9 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
 
+        let tmp_dir = TempDir::new()?;
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&state, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -515,8 +521,10 @@ mod tests {
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
+
+        let tmp_dir = TempDir::new()?;
         let (object_store_url, file_groups, actual_schema) =
-            prepare_store(&state, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let mut builder = SchemaBuilder::from(actual_schema.fields());
         builder.push(Field::new("missing_col", DataType::Int32, true));
@@ -568,8 +576,9 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
+        let tmp_dir = TempDir::new()?;
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&state, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -620,8 +629,9 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
+        let tmp_dir = TempDir::new()?;
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&state, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -729,7 +739,7 @@ mod tests {
     async fn test_chunked_json(
         file_compression_type: FileCompressionType,
         #[values(10, 20, 30, 40)] chunk_size: usize,
-    ) {
+    ) -> Result<()> {
         test_additional_stores(
             file_compression_type,
             Arc::new(ChunkedStore::new(
@@ -737,7 +747,8 @@ mod tests {
                 chunk_size,
             )),
         )
-        .await;
+        .await?;
+        Ok(())
     }
 
     #[tokio::test]

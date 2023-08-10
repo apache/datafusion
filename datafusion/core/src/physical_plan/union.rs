@@ -610,14 +610,17 @@ mod tests {
 
     use crate::{physical_plan::collect, scalar::ScalarValue};
     use arrow::record_batch::RecordBatch;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
+        let tmp_dir = TempDir::new()?;
+
         // Create csv's with different partitioning
-        let csv = test::scan_partitioned_csv(4)?;
-        let csv2 = test::scan_partitioned_csv(5)?;
+        let csv = test::scan_partitioned_csv(4, tmp_dir.path())?;
+        let csv2 = test::scan_partitioned_csv(5, tmp_dir.path())?;
 
         let union_exec = Arc::new(UnionExec::new(vec![csv, csv2]));
 

@@ -433,6 +433,7 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::binary;
     use futures::future;
+    use tempfile::TempDir;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -451,7 +452,8 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         // pick column c1 and name it column c1 in the output schema
         let projection =
@@ -488,7 +490,8 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         // pick column c1 and name it column c1 in the output schema
         let projection =
@@ -502,7 +505,8 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         let c1 = col("c2", &schema).unwrap();
         let c2 = col("c9", &schema).unwrap();
@@ -519,7 +523,8 @@ mod tests {
     async fn project_no_column() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
-        let csv = test::scan_partitioned_csv(1)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(1, tmp_dir.path())?;
         let expected = collect(csv.execute(0, task_ctx.clone())?).await.unwrap();
 
         let projection = ProjectionExec::try_new(vec![], csv)?;

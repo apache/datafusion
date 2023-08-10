@@ -173,6 +173,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::FutureExt;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::physical_plan::{collect, common};
@@ -186,7 +187,8 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
-        let csv = test::scan_partitioned_csv(num_partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
