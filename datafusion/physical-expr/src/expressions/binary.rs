@@ -48,8 +48,8 @@ use arrow::record_batch::RecordBatch;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 
-use arrow_schema::SortOptions;
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow_schema::SortOptions;
 
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,

@@ -475,6 +475,27 @@ pub fn project_ordering_equivalence_properties(
     output_eq.extend(eq_classes);
 }
 
+/// Retrieves the ordering equivalence properties for a given schema and output ordering.
+pub fn ordering_equivalence_properties_helper(
+    schema: SchemaRef,
+    eq_orderings: &[LexOrdering],
+) -> OrderingEquivalenceProperties {
+    let mut oep = OrderingEquivalenceProperties::new(schema);
+    let first_ordering = if let Some(first) = eq_orderings.first() {
+        first
+    } else {
+        // Return an empty OrderingEquivalenceProperties:
+        return oep;
+    };
+    // First entry among eq_orderings is the head, skip it:
+    for ordering in eq_orderings.iter().skip(1) {
+        if !ordering.is_empty() {
+            oep.add_equal_conditions((first_ordering, ordering))
+        }
+    }
+    oep
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

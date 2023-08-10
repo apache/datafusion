@@ -60,8 +60,8 @@ pub use equivalence::{
     OrderingEquivalenceProperties, OrderingEquivalentClass,
 };
 
-pub use physical_expr::{ExtendedSortOptions, PhysicalExpr, PhysicalExprRef};
 pub use partitioning::{Distribution, Partitioning};
+pub use physical_expr::{ExtendedSortOptions, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
