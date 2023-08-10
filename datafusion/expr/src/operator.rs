@@ -69,7 +69,7 @@ pub enum Operator {
     BitwiseAnd,
     /// Bitwise or, like `|`
     BitwiseOr,
-    /// Bitwise xor, like `#`
+    /// Bitwise xor, such as `^` or `#` in PostgreSQL
     BitwiseXor,
     /// Bitwise right, like `>>`
     BitwiseShiftRight,
@@ -253,7 +253,7 @@ impl fmt::Display for Operator {
             Operator::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
             Operator::BitwiseAnd => "&",
             Operator::BitwiseOr => "|",
-            Operator::BitwiseXor => "#",
+            Operator::BitwiseXor => "BIT_XOR",
             Operator::BitwiseShiftRight => ">>",
             Operator::BitwiseShiftLeft => "<<",
             Operator::StringConcat => "||",
@@ -443,7 +443,7 @@ mod tests {
         // BitXor
         assert_eq!(
             format!("{}", lit(1u32) ^ lit(2u32)),
-            "UInt32(1) # UInt32(2)"
+            "UInt32(1) BIT_XOR UInt32(2)"
         );
         // Shl
         assert_eq!(
