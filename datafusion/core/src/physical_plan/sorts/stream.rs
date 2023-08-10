@@ -85,13 +85,10 @@ pub struct RowCursorStream {
     column_expressions: Vec<Arc<dyn PhysicalExpr>>,
     /// Input streams
     streams: FusedStreams,
-<<<<<<< HEAD
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
-=======
     /// Sort fields
     sort_fields: Vec<SortField>,
->>>>>>> 883109a51 (Flush out row converter)
 }
 
 impl RowCursorStream {
