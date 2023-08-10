@@ -899,12 +899,14 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeConfig;
     use futures::FutureExt;
     use std::collections::HashMap;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
         let schema = csv.schema();
 
         let sort_exec = Arc::new(SortExec::new(
@@ -973,7 +975,8 @@ mod tests {
         );
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
         let schema = csv.schema();
 
         let sort_exec = Arc::new(SortExec::new(
@@ -1066,7 +1069,8 @@ mod tests {
                     .with_session_config(session_config),
             );
 
-            let csv = test::scan_partitioned_csv(partitions)?;
+            let tmp_dir = TempDir::new()?;
+            let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
             let schema = csv.schema();
 
             let sort_exec = Arc::new(
