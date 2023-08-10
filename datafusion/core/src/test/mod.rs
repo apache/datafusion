@@ -50,7 +50,6 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use tempfile::TempDir;
 #[cfg(feature = "compression")]
 use xz2::write::XzEncoder;
 #[cfg(feature = "compression")]
@@ -74,18 +73,17 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 }
 
 /// Returns a [`CsvExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
-pub fn scan_partitioned_csv(partitions: usize) -> Result<Arc<CsvExec>> {
+pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<CsvExec>> {
     let schema = aggr_test_schema();
     let filename = "aggregate_test_100.csv";
     let path = format!("{}/csv", arrow_test_data());
-    let tmp_dir = TempDir::new()?;
     let file_groups = partitioned_file_groups(
         path.as_str(),
         filename,
         partitions,
         FileType::CSV,
         FileCompressionType::UNCOMPRESSED,
-        tmp_dir.path(),
+        work_dir,
     )?;
     let config = partitioned_csv_config(schema, file_groups)?;
     Ok(Arc::new(CsvExec::new(

@@ -391,6 +391,7 @@ mod tests {
     use datafusion_expr::Operator;
     use std::iter::Iterator;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn simple_predicate() -> Result<()> {
@@ -398,7 +399,8 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         let predicate: Arc<dyn PhysicalExpr> = binary(
             binary(col("c2", &schema)?, Operator::Gt, lit(1u32), &schema)?,
@@ -425,7 +427,8 @@ mod tests {
     async fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
-        let input = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let input = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         let predicate: Arc<dyn PhysicalExpr> =
             binary(col("c2", &schema)?, Operator::Gt, lit(1u32), &schema)?;
