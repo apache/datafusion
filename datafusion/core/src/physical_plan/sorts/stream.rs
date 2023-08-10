@@ -17,7 +17,7 @@
 
 use crate::physical_plan::sorts::cursor::{FieldArray, FieldCursor, RowCursor};
 use crate::physical_plan::SendableRecordBatchStream;
-use crate::physical_plan::{PhysicalExpr, PhysicalSortExpr};
+use crate::physical_plan::PhysicalSortExpr;
 use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
@@ -26,7 +26,6 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 /// A [`Stream`](futures::Stream) that has multiple partitions that can
@@ -82,11 +81,13 @@ pub struct RowCursorStream {
     /// Converter to convert output of physical expressions
     converter: RowConverter,
     /// The physical expressions to sort by
-    column_expressions: Vec<Arc<dyn PhysicalExpr>>,
+    expressions: Vec<PhysicalSortExpr>,
     /// Input streams
     streams: FusedStreams,
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
+    /// The schema of the input streams
+    schema: Schema,
 }
 
 impl RowCursorStream {
@@ -108,26 +109,46 @@ impl RowCursorStream {
         let converter = RowConverter::new(sort_fields)?;
         Ok(Self {
             converter,
-            reservation,
-            column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
+            expressions: expressions.to_vec(),
             streams: FusedStreams(streams),
+            reservation,
+            schema: schema.clone(),
         })
     }
 
     fn convert_batch(&mut self, batch: &RecordBatch) -> Result<RowCursor> {
-        let cols = self
-            .column_expressions
+        let column_expressions: Vec<_> = self.expressions.iter().map(|x| x.expr.clone()).collect();
+        let cols = column_expressions
             .iter()
             .map(|expr| Ok(expr.evaluate(batch)?.into_array(batch.num_rows())))
             .collect::<Result<Vec<_>>>()?;
 
-        let rows = self.converter.convert_columns(&cols)?;
-        self.reservation.try_resize(self.converter.size())?;
+        let sort_fields = self
+            .expressions
+            .iter()
+            .map(|expr| {
+                let data_type = expr.expr.data_type(&self.schema)?;
+                Ok(SortField::new_with_options(data_type, expr.options))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        // track the memory in the newly created Rows.
+        let old_converter: &mut RowConverter = &mut self.converter;
+        let mut old_rows = old_converter.convert_columns(&cols)?;
+        self.reservation.try_resize(old_converter.size())?;
         let mut rows_reservation = self.reservation.new_empty();
-        rows_reservation.try_grow(rows.size())?;
-        Ok(RowCursor::new(rows, rows_reservation))
+        rows_reservation.try_grow(old_rows.size())?;
+
+        println!("Old converter size: {0}", old_converter.size());
+        if old_converter.size() > 50*1024*1024 {
+            let mut new_converter = RowConverter::new(sort_fields)?;
+            let new_rows = new_converter.convert_columns(
+                &old_converter.convert_rows(&old_rows)?
+            )?;
+            old_rows = new_rows;
+            println!("Swapped old converter of size: {0} with new converter of size {1}", old_converter.size(), new_converter.size());
+            self.converter = new_converter;
+        }
+        Ok(RowCursor::new(old_rows, rows_reservation))
     }
 }
 
