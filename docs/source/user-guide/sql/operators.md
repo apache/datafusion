@@ -69,18 +69,18 @@ Modulo (remainder)
 
 ## Comparison Operators
 
-- [= (equal)](#=)
-- [!= (not equal)](#!=)
-- [< (less than)](#<)
-- [<= (less than or equal to)](#<=)
-- [> (greater than)]($>)
-- [>= (greater than or equal to)](#>=)
-- [IS DISTINCT FROM](#IS-DISTINCT-FROM)
-- [IS NOT DISTINCT FROM](#IS-NOT-DISTINCT-FROM)
-- [~ (regex match)](#~)
-- [~\* (regex case-insensitive match)](#~*)
-- [!~ (not regex match)](#!~)
-- [!~\* (not regex case-insensitive match)](#!~*)
+- [= (equal)](#id6)
+- [!= (not equal)](#id7)
+- [< (less than)](#id8)
+- [<= (less than or equal to)](#id9)
+- [> (greater than)](#id10)
+- [>= (greater than or equal to)](#id11)
+- [IS DISTINCT FROM](#is-distinct-from)
+- [IS NOT DISTINCT FROM](#is-not-distinct-from)
+- [~ (regex match)](#id12)
+- [~\* (regex case-insensitive match)](#id13)
+- [!~ (not regex match)](#id14)
+- [!~\* (not regex case-insensitive match)](#id15)
 
 ### `=`
 
@@ -179,6 +179,75 @@ SELECT 'datafusion' !~* '^DATAFUSION(-CLI)+';
 ```
 
 ## Logical Operators
+
+- [AND](#and)
+- [OR](#or)
+
+### `AND`
+
+Logical And
+
+```sql
+SELECT true AND true;
+```
+
+### `OR`
+
+Logical Or
+
+```sql
+SELECT false OR true;
+```
+
+## Bitwise Operators
+
+- [& (bitwise and)](#id16)
+- [| (bitwise or)](#id17)
+- [# (bitwise xor)](#id18)
+- [>> (bitwise shift right)](#id19)
+- [<< (bitwise shift left)](#id20)
+
+### `&`
+
+Bitwise And
+
+```sql
+SELECT 5 & 3;
+```
+
+### `|`
+
+Bitwise Or
+
+```sql
+SELECT 5 | 3;
+```
+
+### `#`
+
+Bitwise Xor
+
+```sql
+SELECT 5 # 3;
+```
+
+### `>>`
+
+Bitwise Shift Right
+
+```sql
+SELECT 5 >> 3;
+```
+
+### `<<`
+
+Bitwise Shift Left
+
+```sql
+SELECT 5 << 3;
+```
+
+## Other Operators
 
 <!--- All Operators to document (TODO REMOVE)
 Eq => "=",
