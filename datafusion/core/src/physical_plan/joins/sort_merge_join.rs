@@ -1389,6 +1389,8 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::TaskContext;
 
     use crate::common::assert_contains;
     use crate::physical_plan::expressions::Column;
@@ -1396,7 +1398,6 @@ mod tests {
     use crate::physical_plan::joins::SortMergeJoinExec;
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::{common, ExecutionPlan};
-    use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{build_table_i32, columns};
     use crate::{assert_batches_eq, assert_batches_sorted_eq};
     use datafusion_common::JoinType;
@@ -1537,8 +1538,7 @@ mod tests {
         sort_options: Vec<SortOptions>,
         null_equals_null: bool,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let join = join_with_options(
             left,
             right,
@@ -1560,9 +1560,9 @@ mod tests {
         on: JoinOn,
         join_type: JoinType,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        let session_ctx =
-            SessionContext::with_config(SessionConfig::new().with_batch_size(2));
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(2));
+        let task_ctx = Arc::new(task_ctx);
         let join = join(left, right, on, join_type)?;
         let columns = columns(&join.schema());
 
@@ -2321,8 +2321,12 @@ mod tests {
             let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
             let session_config = SessionConfig::default().with_batch_size(50);
-            let session_ctx = SessionContext::with_config_rt(session_config, runtime);
-            let task_ctx = session_ctx.task_ctx();
+
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
+
             let join = join_with_options(
                 left.clone(),
                 right.clone(),
@@ -2397,8 +2401,10 @@ mod tests {
             let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
             let session_config = SessionConfig::default().with_batch_size(50);
-            let session_ctx = SessionContext::with_config_rt(session_config, runtime);
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
             let join = join_with_options(
                 left.clone(),
                 right.clone(),

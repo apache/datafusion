@@ -959,6 +959,8 @@ fn get_projected_output_ordering(
             // since rest of the orderings are violated
             break;
         }
+        // do not push empty entries
+        // otherwise we may have `Some(vec![])` at the output ordering.
         if !new_ordering.is_empty() {
             all_orderings.push(new_ordering);
         }

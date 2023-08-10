@@ -125,7 +125,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
         let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
-            (0, Ok(scalar_fun)) if scalar_fun.supports_zero_argument() => {
+            // MakeArray support zero argument but has the different behavior from the array with one null.
+            (0, Ok(scalar_fun))
+                if scalar_fun.supports_zero_argument()
+                    && scalar_fun != BuiltinScalarFunction::MakeArray =>
+            {
                 vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self

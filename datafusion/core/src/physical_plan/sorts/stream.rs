@@ -23,6 +23,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::Result;
+use datafusion_execution::memory_pool::MemoryReservation;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -84,6 +85,8 @@ pub struct RowCursorStream {
     column_expressions: Vec<Arc<dyn PhysicalExpr>>,
     /// Input streams
     streams: FusedStreams,
+    /// Tracks the memory used by `converter`
+    reservation: MemoryReservation,
 }
 
 impl RowCursorStream {
@@ -91,6 +94,7 @@ impl RowCursorStream {
         schema: &Schema,
         expressions: &[PhysicalSortExpr],
         streams: Vec<SendableRecordBatchStream>,
+        reservation: MemoryReservation,
     ) -> Result<Self> {
         let sort_fields = expressions
             .iter()
@@ -104,6 +108,7 @@ impl RowCursorStream {
         let converter = RowConverter::new(sort_fields)?;
         Ok(Self {
             converter,
+            reservation,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             streams: FusedStreams(streams),
         })
@@ -117,7 +122,12 @@ impl RowCursorStream {
             .collect::<Result<Vec<_>>>()?;
 
         let rows = self.converter.convert_columns(&cols)?;
-        Ok(RowCursor::new(rows))
+        self.reservation.try_resize(self.converter.size())?;
+
+        // track the memory in the newly created Rows.
+        let mut rows_reservation = self.reservation.new_empty();
+        rows_reservation.try_grow(rows.size())?;
+        Ok(RowCursor::new(rows, rows_reservation))
     }
 }
 

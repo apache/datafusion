@@ -381,7 +381,6 @@ mod tests {
     use crate::physical_plan::expressions::*;
     use crate::physical_plan::ExecutionPlan;
     use crate::physical_plan::{collect, with_new_children_if_necessary};
-    use crate::prelude::SessionContext;
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use crate::test_util;
@@ -395,8 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn simple_predicate() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;

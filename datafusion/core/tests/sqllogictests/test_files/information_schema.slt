@@ -153,6 +153,8 @@ datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
 datafusion.execution.planning_concurrency 13
+datafusion.execution.sort_in_place_threshold_bytes 1048576
+datafusion.execution.sort_spill_reservation_bytes 10485760
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false

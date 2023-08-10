@@ -532,13 +532,11 @@ mod tests {
     use super::*;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
-    use crate::prelude::SessionContext;
     use crate::test;
 
     #[tokio::test]
     async fn limit() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
         let csv = test::scan_partitioned_csv(num_partitions)?;
@@ -654,8 +652,7 @@ mod tests {
 
     // test cases for "skip"
     async fn skip_and_fetch(skip: usize, fetch: Option<usize>) -> Result<usize> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
         let csv = test::scan_partitioned_csv(num_partitions)?;

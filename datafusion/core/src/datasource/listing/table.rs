@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::{plan_err, SchemaExt, ToDFSchema};
+use datafusion_common::{plan_err, project_schema, SchemaExt, ToDFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
@@ -50,7 +50,7 @@ use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
     logical_expr::Expr,
-    physical_plan::{empty::EmptyExec, project_schema, ExecutionPlan, Statistics},
+    physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
 
 use super::PartitionedFile;
@@ -1636,7 +1636,7 @@ mod tests {
             "path{}",
             file_type
                 .to_owned()
-                .get_ext_with_compression(file_compression_type.clone())
+                .get_ext_with_compression(file_compression_type)
                 .unwrap()
         );
 

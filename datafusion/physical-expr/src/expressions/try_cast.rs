@@ -23,10 +23,11 @@ use std::sync::Arc;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
-use arrow::compute::kernels;
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -79,14 +80,18 @@ impl PhysicalExpr for TryCastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
+        let options = CastOptions {
+            safe: true,
+            format_options: DEFAULT_FORMAT_OPTIONS,
+        };
         match value {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(kernels::cast::cast(
-                &array,
-                &self.cast_type,
-            )?)),
+            ColumnarValue::Array(array) => {
+                let cast = cast_with_options(&array, &self.cast_type, &options)?;
+                Ok(ColumnarValue::Array(cast))
+            }
             ColumnarValue::Scalar(scalar) => {
-                let scalar_array = scalar.to_array();
-                let cast_array = kernels::cast::cast(&scalar_array, &self.cast_type)?;
+                let array = scalar.to_array();
+                let cast_array = cast_with_options(&array, &self.cast_type, &options)?;
                 let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
                 Ok(ColumnarValue::Scalar(cast_scalar))
             }

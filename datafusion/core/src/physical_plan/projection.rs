@@ -646,7 +646,6 @@ mod tests {
     use super::*;
     use crate::physical_plan::common::collect;
     use crate::physical_plan::expressions::{self, col};
-    use crate::prelude::SessionContext;
     use crate::test::{self};
     use crate::test_util;
     use datafusion_common::ScalarValue;
@@ -667,8 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn project_first_column() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
@@ -738,8 +736,7 @@ mod tests {
 
     #[tokio::test]
     async fn project_no_column() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let csv = test::scan_partitioned_csv(1)?;
         let expected = collect(csv.execute(0, task_ctx.clone())?).await.unwrap();
