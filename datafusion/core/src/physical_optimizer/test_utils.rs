@@ -33,7 +33,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::create_window_expr;
-use crate::physical_plan::{displayable, ExecutionPlan, Partitioning};
+use crate::physical_plan::{ExecutionPlan, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use async_trait::async_trait;
@@ -249,13 +249,6 @@ pub fn filter_exec(
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
-}
-
-// Util function to get string representation of a physical plan
-pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-    let formatted = displayable(plan.as_ref()).indent(true).to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    actual.iter().map(|elem| elem.to_string()).collect()
 }
 
 pub fn sort_preserving_merge_exec(

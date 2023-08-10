@@ -23,6 +23,7 @@ use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::Result;
 use crate::physical_optimizer::sort_enforcement::ExecTree;
+use crate::physical_optimizer::utils::get_plan_string;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -156,6 +157,13 @@ use std::sync::Arc;
 ///      Input                 Input
 ///        A                     B
 /// ```
+///
+/// `EnforceDistribution` rule
+/// - is idempotent, e.g it can be applied multiple times, each producing same result.
+/// - produces a valid plan in terms of distribution requirements.
+///   (Its input plan can be either valid or invalid according to distribution requirements.)
+/// - produces a valid plan in terms of ordering requirements, if its input is valid in
+///   terms of ordering requirements (If its input plan is invalid, there is no guarantee).
 #[derive(Default)]
 pub struct EnforceDistribution {}
 
@@ -258,7 +266,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
 ///
-pub(crate) fn adjust_input_keys_ordering(
+fn adjust_input_keys_ordering(
     requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
     let parent_required = requirements.required_key_ordering.clone();
@@ -1268,19 +1276,6 @@ fn should_preserve_ordering(
     }
 }
 
-/// Get physical plan as string to display
-fn plan_str(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-    let formatted = crate::physical_plan::displayable(plan.as_ref())
-        .indent(true)
-        .to_string();
-    let actual: Vec<String> = formatted
-        .trim()
-        .lines()
-        .map(|item| item.to_string())
-        .collect();
-    actual
-}
-
 /// A struct to keep track of repartition, an its associated parents
 /// inside `plan`. If necessary, we can remove repartition from the plan.
 #[derive(Debug, Clone)]
@@ -1416,7 +1411,7 @@ impl TreeNode for RepartitionContext {
 /// implement Display method for RepartitionContext struct.
 impl fmt::Display for RepartitionContext {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let plan_string = plan_str(&self.plan);
+        let plan_string = get_plan_string(&self.plan);
         write!(f, "plan: {:?}", plan_string)?;
         for (idx, child) in self.repartition_onwards.iter().enumerate() {
             if let Some(child) = child {
@@ -1434,7 +1429,7 @@ struct JoinKeyPairs {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PlanWithKeyRequirements {
+struct PlanWithKeyRequirements {
     pub plan: Arc<dyn ExecutionPlan>,
     /// Parent required key ordering
     required_key_ordering: Vec<Arc<dyn PhysicalExpr>>,

@@ -41,8 +41,8 @@ use crate::physical_optimizer::replace_with_order_preserving_variants::{
 };
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
-    is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
+    add_sort_above, find_indices, get_plan_string, is_coalesce_partitions, is_limit,
+    is_repartition, is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
     merge_and_order_indices, set_difference,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -91,21 +91,9 @@ pub(crate) struct ExecTree {
     pub children: Vec<ExecTree>,
 }
 
-fn plan_str(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-    let formatted = crate::physical_plan::displayable(plan.as_ref())
-        .indent(true)
-        .to_string();
-    let actual: Vec<String> = formatted
-        .trim()
-        .lines()
-        .map(|item| item.to_string())
-        .collect();
-    actual
-}
-
 impl fmt::Display for ExecTree {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let plan_string = plan_str(&self.plan);
+        let plan_string = get_plan_string(&self.plan);
         write!(f, "\nidx: {:?}", self.idx)?;
         write!(f, "\nplan: {:?}", plan_string)?;
         for child in self.children.iter() {
@@ -1009,10 +997,10 @@ mod tests {
     use super::*;
     use crate::physical_optimizer::test_utils::{
         aggregate_exec, bounded_window_exec, coalesce_batches_exec,
-        coalesce_partitions_exec, filter_exec, get_plan_string, global_limit_exec,
-        hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
-        parquet_exec_sorted, repartition_exec, sort_exec, sort_expr, sort_expr_options,
-        sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
+        coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,
+        limit_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_sorted,
+        repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
+        sort_preserving_merge_exec, union_exec,
     };
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::windows::PartitionSearchMode::{
