@@ -291,9 +291,13 @@ impl Optimizer {
                 let result = self.optimize_recursively(rule, &new_plan, config);
 
                 match result {
-                    Ok(Some(plan)) => {
-                        assert_schema_is_the_same(rule.name(), &new_plan, &plan)?;
-                        new_plan = plan;
+                    Ok(Some(optimized_plan)) => {
+                        assert_schema_is_the_same(
+                            rule.name(),
+                            &new_plan,
+                            &optimized_plan,
+                        )?;
+                        new_plan = optimized_plan;
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
                     }

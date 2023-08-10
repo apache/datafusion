@@ -35,6 +35,7 @@ use datafusion_expr::{
     utils::{expr_to_columns, exprlist_to_columns},
     Expr, LogicalPlanBuilder, SubqueryAlias,
 };
+use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -64,6 +65,7 @@ impl OptimizerRule for PushDownProjection {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        println!("The plan is {plan:?}");
         let projection = match plan {
             LogicalPlan::Projection(projection) => projection,
             LogicalPlan::Aggregate(agg) => {
@@ -72,13 +74,22 @@ impl OptimizerRule for PushDownProjection {
                     expr_to_columns(e, &mut required_columns)?
                 }
                 let new_expr = get_expr(&required_columns, agg.input.schema())?;
+            
+                let is_projection_empty = new_expr.is_empty();
                 let projection = LogicalPlan::Projection(Projection::try_new(
                     new_expr,
                     agg.input.clone(),
                 )?);
-                let optimized_child = self
-                    .try_optimize(&projection, _config)?
-                    .unwrap_or(projection);
+                let optimized_child = self.try_optimize(&projection, _config)?.unwrap_or(projection);
+
+                // let optimized_child = match optimized_child {
+                //     // Some(LogicalPlan::Projection(p)) if  p.expr.is_empty() => {
+                //     //         p.input.as_ref().clone()
+                //     // },
+                //     Some(p) => p,
+                //     None if is_projection_empty => return Ok(None),
+                //     None => projection
+                // };
                 return Ok(Some(plan.with_new_inputs(&[optimized_child])?));
             }
             LogicalPlan::TableScan(scan) if scan.projection.is_none() => {
@@ -154,7 +165,9 @@ impl OptimizerRule for PushDownProjection {
                 if projection_is_empty {
                     used_columns
                         .insert(scan.projected_schema.fields()[0].qualified_column());
-                    push_down_scan(&used_columns, scan, true)?
+                    let new_scan = push_down_scan(&used_columns, scan, true)?;
+                    plan.with_new_inputs(&[new_scan])?
+                    //push_down_scan(&used_columns, scan, true)?
                 } else {
                     for expr in projection.expr.iter() {
                         expr_to_columns(expr, &mut used_columns)?;
@@ -337,7 +350,7 @@ impl OptimizerRule for PushDownProjection {
                     )?);
                     let new_filter = child_plan.with_new_inputs(&[new_projection])?;
 
-                    generate_plan!(projection_is_empty, plan, new_filter)
+                    plan.with_new_inputs(&[new_filter])?
                 }
             }
             LogicalPlan::Sort(sort) => {
@@ -1096,6 +1109,34 @@ mod tests {
         \n    Projection: test.b, MAX(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
         \n      WindowAggr: windowExpr=[[MAX(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n        TableScan: test projection=[a, b]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn empty_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(Vec::<Expr>::new())?
+            .build()?;
+        let expected = "Projection: \
+        \n  TableScan: test projection=[a]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn empty_projection_with_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("b").eq(lit("test")))?
+            .project(Vec::<Expr>::new())?
+            .build()?;
+        let expected = "Projection: \
+        \n  Filter: test.b = Utf8(\"test\")\
+        \n    TableScan: test projection=[b]";
 
         assert_optimized_plan_eq(&plan, expected)
     }
