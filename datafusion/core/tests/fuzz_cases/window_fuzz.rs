@@ -432,7 +432,7 @@ async fn run_window_test(
     ];
     let memory_exec =
         MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap();
-    let memory_exec = memory_exec.with_sort_information(source_sort_keys.clone());
+    let memory_exec = memory_exec.with_sort_information(vec![source_sort_keys.clone()]);
     let mut exec1 = Arc::new(memory_exec) as Arc<dyn ExecutionPlan>;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
@@ -460,7 +460,7 @@ async fn run_window_test(
     let exec2 = Arc::new(
         MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
-            .with_sort_information(source_sort_keys.clone()),
+            .with_sort_information(vec![source_sort_keys.clone()]),
     );
     let running_window_exec = Arc::new(
         BoundedWindowAggExec::try_new(

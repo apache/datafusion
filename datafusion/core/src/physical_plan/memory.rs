@@ -30,8 +30,10 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::physical_plan::ordering_equivalence_properties_helper;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
@@ -45,7 +47,7 @@ pub struct MemoryExec {
     /// Optional projection
     projection: Option<Vec<usize>>,
     // Optional sort information
-    sort_information: Option<Vec<PhysicalSortExpr>>,
+    sort_information: Vec<LexOrdering>,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -53,7 +55,7 @@ impl fmt::Debug for MemoryExec {
         write!(f, "partitions: [...]")?;
         write!(f, "schema: {:?}", self.projected_schema)?;
         write!(f, "projection: {:?}", self.projection)?;
-        if let Some(sort_info) = &self.sort_information {
+        if let Some(sort_info) = &self.sort_information.get(0) {
             write!(f, ", output_ordering: {:?}", sort_info)?;
         }
         Ok(())
@@ -73,7 +75,7 @@ impl DisplayAs for MemoryExec {
 
                 let output_ordering = self
                     .sort_information
-                    .as_ref()
+                    .first()
                     .map(|output_ordering| {
                         let order_strings: Vec<_> =
                             output_ordering.iter().map(|e| e.to_string()).collect();
@@ -113,7 +115,13 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.sort_information.as_deref()
+        self.sort_information
+            .first()
+            .map(|ordering| ordering.as_slice())
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        ordering_equivalence_properties_helper(self.schema(), &self.sort_information)
     }
 
     fn with_new_children(
@@ -161,16 +169,13 @@ impl MemoryExec {
             schema,
             projected_schema,
             projection,
-            sort_information: None,
+            sort_information: vec![],
         })
     }
 
     /// Set sort information
-    pub fn with_sort_information(
-        mut self,
-        sort_information: Vec<PhysicalSortExpr>,
-    ) -> Self {
-        self.sort_information = Some(sort_information);
+    pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
+        self.sort_information = sort_information;
         self
     }
 }
