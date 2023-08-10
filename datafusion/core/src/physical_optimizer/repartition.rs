@@ -15,313 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Repartition optimizer that introduces repartition nodes to increase the level of parallelism available
-use datafusion_common::tree_node::Transformed;
-use std::sync::Arc;
-
-use super::optimizer::PhysicalOptimizerRule;
-use crate::config::ConfigOptions;
-use crate::datasource::physical_plan::{CsvExec, ParquetExec};
-use crate::error::Result;
-use crate::physical_plan::Partitioning::*;
-use crate::physical_plan::{
-    repartition::RepartitionExec, with_new_children_if_necessary, ExecutionPlan,
-};
-
-/// Optimizer that introduces repartition to introduce more
-/// parallelism in the plan
-///
-/// For example, given an input such as:
-///
-///
-/// ```text
-/// ┌─────────────────────────────────┐
-/// │                                 │
-/// │          ExecutionPlan          │
-/// │                                 │
-/// └─────────────────────────────────┘
-///             ▲         ▲
-///             │         │
-///       ┌─────┘         └─────┐
-///       │                     │
-///       │                     │
-///       │                     │
-/// ┌───────────┐         ┌───────────┐
-/// │           │         │           │
-/// │ batch A1  │         │ batch B1  │
-/// │           │         │           │
-/// ├───────────┤         ├───────────┤
-/// │           │         │           │
-/// │ batch A2  │         │ batch B2  │
-/// │           │         │           │
-/// ├───────────┤         ├───────────┤
-/// │           │         │           │
-/// │ batch A3  │         │ batch B3  │
-/// │           │         │           │
-/// └───────────┘         └───────────┘
-///
-///      Input                 Input
-///        A                     B
-/// ```
-///
-/// This optimizer will attempt to add a `RepartitionExec` to increase
-/// the parallelism (to 3 in this case)
-///
-/// ```text
-///     ┌─────────────────────────────────┐
-///     │                                 │
-///     │          ExecutionPlan          │
-///     │                                 │
-///     └─────────────────────────────────┘
-///               ▲      ▲       ▲            Input now has 3
-///               │      │       │             partitions
-///       ┌───────┘      │       └───────┐
-///       │              │               │
-///       │              │               │
-/// ┌───────────┐  ┌───────────┐   ┌───────────┐
-/// │           │  │           │   │           │
-/// │ batch A1  │  │ batch A3  │   │ batch B3  │
-/// │           │  │           │   │           │
-/// ├───────────┤  ├───────────┤   ├───────────┤
-/// │           │  │           │   │           │
-/// │ batch B2  │  │ batch B1  │   │ batch A2  │
-/// │           │  │           │   │           │
-/// └───────────┘  └───────────┘   └───────────┘
-///       ▲              ▲               ▲
-///       │              │               │
-///       └─────────┐    │    ┌──────────┘
-///                 │    │    │
-///                 │    │    │
-///     ┌─────────────────────────────────┐   batches are
-///     │       RepartitionExec(3)        │   repartitioned
-///     │           RoundRobin            │
-///     │                                 │
-///     └─────────────────────────────────┘
-///                 ▲         ▲
-///                 │         │
-///           ┌─────┘         └─────┐
-///           │                     │
-///           │                     │
-///           │                     │
-///     ┌───────────┐         ┌───────────┐
-///     │           │         │           │
-///     │ batch A1  │         │ batch B1  │
-///     │           │         │           │
-///     ├───────────┤         ├───────────┤
-///     │           │         │           │
-///     │ batch A2  │         │ batch B2  │
-///     │           │         │           │
-///     ├───────────┤         ├───────────┤
-///     │           │         │           │
-///     │ batch A3  │         │ batch B3  │
-///     │           │         │           │
-///     └───────────┘         └───────────┘
-///
-///
-///      Input                 Input
-///        A                     B
-/// ```
-#[derive(Default)]
-pub struct Repartition {}
-
-impl Repartition {
-    #[allow(missing_docs)]
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-/// Recursively attempts to increase the overall parallelism of the
-/// plan, while respecting ordering, by adding a `RepartitionExec` at
-/// the output of `plan` if it would help parallelism and not destroy
-/// any possibly useful ordering.
-///
-/// It does so using a depth first scan of the tree, and repartitions
-/// any plan that:
-///
-/// 1. Has fewer partitions than `target_partitions`
-///
-/// 2. Has a direct parent that `benefits_from_input_partitioning`
-///
-/// 3. Does not destroy any existing sort order if the parent is
-/// relying on it.
-///
-/// if `can_reorder` is false, it means the parent node of `plan` is
-/// trying to take advantage of the output sort order of plan, so it
-/// should not be repartitioned if doing so would destroy the output
-/// sort order.
-///
-/// (Parent)   - If can_reorder is false, means this parent node is
-///              trying to use the sort ouder order this plan. If true
-///              means parent doesn't care about sort order
-///
-/// (plan)     - We are deciding to add a partition above here
-///
-/// (children) - Recursively visit all children first
-///
-/// If 'would_benefit` is true, the upstream operator would benefit
-/// from additional partitions and thus repatitioning is considered.
-///
-/// if `is_root` is true, no repartition is added.
-fn optimize_partitions(
-    target_partitions: usize,
-    plan: Arc<dyn ExecutionPlan>,
-    is_root: bool,
-    can_reorder: bool,
-    would_benefit: bool,
-    repartition_file_scans: bool,
-    repartition_file_min_size: usize,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    // Recurse into children bottom-up (attempt to repartition as
-    // early as possible)
-    let new_plan = if plan.children().is_empty() {
-        // leaf node - don't replace children
-        Transformed::No(plan)
-    } else {
-        let children = plan
-            .children()
-            .iter()
-            .enumerate()
-            .map(|(idx, child)| {
-                // Does plan itself (not its parent) require its input to
-                // be sorted in some way?
-                let required_input_ordering =
-                    plan_has_required_input_ordering(plan.as_ref());
-
-                // We can reorder a child if:
-                //   - It has no ordering to preserve, or
-                //   - Its parent has no required input ordering and does not
-                //     maintain input ordering.
-                // Check if this condition holds:
-                let can_reorder_child = child.output_ordering().is_none()
-                    || (!required_input_ordering
-                        && (can_reorder || !plan.maintains_input_order()[idx]));
-
-                optimize_partitions(
-                    target_partitions,
-                    child.clone(),
-                    false, // child is not root
-                    can_reorder_child,
-                    plan.benefits_from_input_partitioning()
-                        .iter()
-                        .any(|item| *item),
-                    repartition_file_scans,
-                    repartition_file_min_size,
-                )
-                .map(Transformed::into)
-            })
-            .collect::<Result<_>>()?;
-        with_new_children_if_necessary(plan, children)?
-    };
-
-    let (new_plan, transformed) = new_plan.into_pair();
-
-    // decide if we should bother trying to repartition the output of this plan
-    let mut could_repartition = match new_plan.output_partitioning() {
-        // Apply when underlying node has less than `self.target_partitions` amount of concurrency
-        RoundRobinBatch(x) => x < target_partitions,
-        UnknownPartitioning(x) => x < target_partitions,
-        // we don't want to introduce partitioning after hash partitioning
-        // as the plan will likely depend on this
-        Hash(_, _) => false,
-    };
-
-    // Don't need to apply when the returned row count is not greater than 1
-    let stats = new_plan.statistics();
-    if stats.is_exact {
-        could_repartition = could_repartition
-            && stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
-    }
-
-    // don't repartition root of the plan
-    if is_root {
-        could_repartition = false;
-    }
-
-    let repartition_allowed = would_benefit && could_repartition && can_reorder;
-
-    // If repartition is not allowed - return plan as it is
-    if !repartition_allowed {
-        return Ok(if transformed {
-            Transformed::Yes(new_plan)
-        } else {
-            Transformed::No(new_plan)
-        });
-    }
-
-    // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
-    if let Some(parquet_exec) = new_plan.as_any().downcast_ref::<ParquetExec>() {
-        if repartition_file_scans {
-            return Ok(Transformed::Yes(Arc::new(
-                parquet_exec
-                    .get_repartitioned(target_partitions, repartition_file_min_size),
-            )));
-        }
-    }
-
-    if let Some(csv_exec) = new_plan.as_any().downcast_ref::<CsvExec>() {
-        if repartition_file_scans {
-            let repartitioned_exec_option =
-                csv_exec.get_repartitioned(target_partitions, repartition_file_min_size);
-            if let Some(repartitioned_exec) = repartitioned_exec_option {
-                return Ok(Transformed::Yes(Arc::new(repartitioned_exec)));
-            }
-        }
-    }
-
-    // Otherwise - return plan wrapped up in RepartitionExec
-    Ok(Transformed::Yes(Arc::new(RepartitionExec::try_new(
-        new_plan,
-        RoundRobinBatch(target_partitions),
-    )?)))
-}
-
-/// Returns true if `plan` requires any of inputs to be sorted in some
-/// way for correctness. If this is true, its output should not be
-/// repartitioned if it would destroy the required order.
-fn plan_has_required_input_ordering(plan: &dyn ExecutionPlan) -> bool {
-    // NB: checking `is_empty()` is not the right check!
-    plan.required_input_ordering().iter().any(Option::is_some)
-}
-
-impl PhysicalOptimizerRule for Repartition {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.execution.target_partitions;
-        let enabled = config.optimizer.enable_round_robin_repartition;
-        let repartition_file_scans = config.optimizer.repartition_file_scans;
-        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        // Don't run optimizer if target_partitions == 1
-        if !enabled || target_partitions == 1 {
-            Ok(plan)
-        } else {
-            let is_root = true;
-            let can_reorder = plan.output_ordering().is_none();
-            let would_benefit = false;
-            optimize_partitions(
-                target_partitions,
-                plan.clone(),
-                is_root,
-                can_reorder,
-                would_benefit,
-                repartition_file_scans,
-                repartition_file_min_size,
-            )
-            .map(Transformed::into)
-        }
-    }
-
-    fn name(&self) -> &str {
-        "repartition"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
+//! Tests to check whether parallelism can be increased as desired
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -334,13 +28,16 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
-    use super::*;
+    use std::sync::Arc;
+
     use crate::datasource::file_format::file_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
+    use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
+    use crate::error::Result;
     use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
+    use crate::physical_optimizer::PhysicalOptimizerRule;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -351,7 +48,9 @@ mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
+    use crate::physical_plan::ExecutionPlan;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_physical_expr::PhysicalSortRequirement;
 
     fn schema() -> SchemaRef {
