@@ -55,6 +55,7 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
+use arrow_schema::SortOptions;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -82,7 +83,7 @@ use crate::array_expressions::{
 use crate::expressions::cast_column;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
-use crate::physical_expr::down_cast_any_ref;
+use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
 use crate::PhysicalExpr;
 
 use datafusion_common::cast::as_boolean_array;
@@ -801,6 +802,104 @@ impl PhysicalExpr for BinaryExpr {
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.hash(&mut s);
+    }
+
+    /// [`BinaryExpr`] has its own rules for each operator.
+    /// TODO: There may me rules specific to some data types (such as division and multiplication on unsigned integers)
+    fn get_ordering(&self, children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
+        let (left_child, right_child) =
+            if let (Some(&left), Some(&right)) = (children.get(0), children.get(1)) {
+                (left, right)
+            } else {
+                return ExtendedSortOptions::Unordered;
+            };
+        match self.op() {
+            Operator::Plus => left_child.add(right_child),
+            Operator::Minus => left_child.sub(right_child),
+            Operator::Gt | Operator::GtEq => left_child.gt_or_gteq(right_child),
+            Operator::Lt | Operator::LtEq => right_child.gt_or_gteq(left_child),
+            Operator::And => left_child.and(right_child),
+            _ => ExtendedSortOptions::Unordered,
+        }
+    }
+}
+
+impl ExtendedSortOptions {
+    fn add(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Singleton, _) => *rhs,
+            (_, Self::Singleton) => *self,
+            (
+                Self::Ordered(SortOptions {
+                    descending: left_descending,
+                    nulls_first: left_nulls_first,
+                }),
+                Self::Ordered(SortOptions {
+                    descending: right_descending,
+                    nulls_first: right_nulls_first,
+                }),
+            ) if left_descending == right_descending => Self::Ordered(SortOptions {
+                descending: *left_descending,
+                nulls_first: *left_nulls_first || *right_nulls_first,
+            }),
+            _ => Self::Unordered,
+        }
+    }
+
+    fn sub(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Singleton, Self::Singleton) => Self::Singleton,
+            (Self::Singleton, Self::Ordered(rhs_opts)) => Self::Ordered(SortOptions {
+                descending: !rhs_opts.descending,
+                nulls_first: rhs_opts.nulls_first,
+            }),
+            (_, Self::Singleton) => *self,
+            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
+                if lhs_opts.descending != rhs_opts.descending =>
+            {
+                Self::Ordered(SortOptions {
+                    descending: lhs_opts.descending,
+                    nulls_first: lhs_opts.nulls_first || rhs_opts.nulls_first,
+                })
+            }
+            _ => Self::Unordered,
+        }
+    }
+
+    fn gt_or_gteq(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Singleton, Self::Ordered(rhs_opts)) => Self::Ordered(SortOptions {
+                descending: !rhs_opts.descending,
+                nulls_first: rhs_opts.nulls_first,
+            }),
+            (_, Self::Singleton) => *self,
+            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
+                if lhs_opts.descending != rhs_opts.descending =>
+            {
+                *self
+            }
+            _ => Self::Unordered,
+        }
+    }
+
+    fn and(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
+                if lhs_opts.descending == rhs_opts.descending =>
+            {
+                Self::Ordered(SortOptions {
+                    descending: lhs_opts.descending,
+                    nulls_first: lhs_opts.nulls_first || rhs_opts.nulls_first,
+                })
+            }
+            (Self::Ordered(opt), Self::Singleton)
+            | (Self::Singleton, Self::Ordered(opt)) => Self::Ordered(SortOptions {
+                descending: opt.descending,
+                nulls_first: opt.nulls_first,
+            }),
+            (Self::Singleton, Self::Singleton) => Self::Singleton,
+            _ => Self::Unordered,
+        }
     }
 }
 

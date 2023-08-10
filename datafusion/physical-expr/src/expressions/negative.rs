@@ -32,7 +32,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::physical_expr::down_cast_any_ref;
+use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
 use crate::PhysicalExpr;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
@@ -133,6 +133,15 @@ impl PhysicalExpr for NegativeExpr {
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.hash(&mut s);
+    }
+
+    /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
+    fn get_ordering(&self, children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
+        if let Some(&&child) = children.first() {
+            -child
+        } else {
+            ExtendedSortOptions::Unordered
+        }
     }
 }
 

@@ -32,8 +32,11 @@ use crate::physical_plan::{
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow_schema::SortOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::utils::get_indices_of_matching_sort_exprs_with_order_eq;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -41,11 +44,11 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 
-use datafusion_physical_expr::equivalence::update_ordering_equivalence_with_cast;
-use datafusion_physical_expr::expressions::CastExpr;
+use datafusion_physical_expr::expressions::UnKnownColumn;
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
-    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
+    project_ordering_equivalence_properties, ExtendedSortOptions,
+    OrderingEquivalenceProperties,
 };
 
 /// Execution plan for a projection
@@ -64,6 +67,9 @@ pub struct ProjectionExec {
     columns_map: HashMap<Column, Vec<Column>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Expressions' orderings calculated by output ordering and equivalence classes of input plan.
+    /// The projected expressions are mapped by their indices to this vector.
+    orderings: Vec<Option<PhysicalSortExpr>>,
 }
 
 impl ProjectionExec {
@@ -114,6 +120,8 @@ impl ProjectionExec {
             };
         }
 
+        let orderings = find_orderings_of_exprs(&expr, &input)?;
+
         // Output Ordering need to respect the alias
         let child_output_ordering = input.output_ordering();
         let output_ordering = match child_output_ordering {
@@ -136,13 +144,17 @@ impl ProjectionExec {
             None => None,
         };
 
+        let output_ordering =
+            validate_output_ordering(output_ordering, &orderings, &expr);
+
         Ok(Self {
             expr,
             schema,
-            input: input.clone(),
+            input,
             output_ordering,
             columns_map,
             metrics: ExecutionPlanMetricsSet::new(),
+            orderings,
         })
     }
 
@@ -251,23 +263,37 @@ impl ExecutionPlan for ProjectionExec {
             return new_properties;
         }
 
-        let mut input_oeq = self.input().ordering_equivalence_properties();
-        // Stores cast expression and its `Column` version in the output:
-        let mut cast_exprs: Vec<(CastExpr, Column)> = vec![];
-        for (idx, (expr, name)) in self.expr.iter().enumerate() {
-            if let Some(cast_expr) = expr.as_any().downcast_ref::<CastExpr>() {
-                let target_col = Column::new(name, idx);
-                cast_exprs.push((cast_expr.clone(), target_col));
-            }
-        }
-
-        update_ordering_equivalence_with_cast(&cast_exprs, &mut input_oeq);
+        let input_oeq = self.input().ordering_equivalence_properties();
 
         project_ordering_equivalence_properties(
             input_oeq,
             &self.columns_map,
             &mut new_properties,
         );
+
+        if let Some(output_ordering) =
+            self.output_ordering.as_ref().and_then(|o| o.get(0))
+        {
+            for order in self.orderings.iter().flatten() {
+                if order.eq(output_ordering) {
+                    continue;
+                }
+
+                let add_new_oeq =
+                    if let Some(first_class) = new_properties.classes().get(0) {
+                        !first_class.others().iter().any(|v| &v[0] == order)
+                    } else {
+                        true
+                    };
+
+                if add_new_oeq {
+                    new_properties.add_equal_conditions((
+                        &vec![output_ordering.clone()],
+                        &vec![order.clone()],
+                    ));
+                }
+            }
+        }
 
         new_properties
     }
@@ -315,6 +341,199 @@ impl ExecutionPlan for ProjectionExec {
             self.input.statistics(),
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
         )
+    }
+}
+
+fn find_orderings_of_exprs(
+    expr: &[(Arc<dyn PhysicalExpr>, String)],
+    input: &Arc<dyn ExecutionPlan>,
+) -> Result<Vec<Option<PhysicalSortExpr>>> {
+    let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
+    if let Some(input_output_ordering) = input.output_ordering().unwrap_or(&[]).get(0) {
+        for (index, (expression, name)) in expr.iter().enumerate() {
+            let initial_expr = ExprOrdering::new(expression.clone());
+            let transformed = initial_expr.transform_up(&|expr| {
+                update_ordering(
+                    expr,
+                    input_output_ordering,
+                    || input.equivalence_properties().clone(),
+                    || input.ordering_equivalence_properties().clone(),
+                )
+            })?;
+            if let Some(ExtendedSortOptions::Ordered(sort_options)) = transformed.state {
+                orderings.push(Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new(name, index)),
+                    options: sort_options,
+                }));
+            } else {
+                orderings.push(None);
+            }
+        }
+    }
+    Ok(orderings)
+}
+
+// If the output ordering corresponds to an UnKnownColumn, it means that the column
+// having the input output ordering is not found in any of the projected expressions.
+// In that case, we set the new output ordering to be the column constructed by
+// the expression residing at the leftmost side of the expressions that have an ordering.
+fn validate_output_ordering(
+    output_ordering: Option<Vec<PhysicalSortExpr>>,
+    orderings: &[Option<PhysicalSortExpr>],
+    expr: &[(Arc<dyn PhysicalExpr>, String)],
+) -> Option<Vec<PhysicalSortExpr>> {
+    output_ordering.and_then(|ordering| {
+        if ordering
+            .get(0)?
+            .expr
+            .clone()
+            .as_any()
+            .downcast_ref::<UnKnownColumn>()
+            .is_some()
+        {
+            orderings
+                .iter()
+                .position(|o| o.is_some())
+                .map(|index| {
+                    [PhysicalSortExpr {
+                        expr: Arc::new(Column::new(&expr[index].1, index)),
+                        options: orderings[index].clone().unwrap().options,
+                    }]
+                    .to_vec()
+                })
+                .or(None)
+        } else {
+            Some(ordering)
+        }
+    })
+}
+
+/// Each expression in a PhysicalExpr is stated with [`ExprOrdering`] struct.
+/// Parent expression's [`ExprOrdering`] is set according to [`ExprOrdering`] of its children.
+#[derive(Debug)]
+struct ExprOrdering {
+    expr: Arc<dyn PhysicalExpr>,
+    state: Option<ExtendedSortOptions>,
+    children_states: Option<Vec<ExtendedSortOptions>>,
+}
+
+impl ExprOrdering {
+    fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self {
+            expr,
+            state: None,
+            children_states: None,
+        }
+    }
+
+    fn children(&self) -> Vec<ExprOrdering> {
+        self.expr
+            .children()
+            .into_iter()
+            .map(|e| ExprOrdering::new(e))
+            .collect()
+    }
+
+    pub fn new_with_children(
+        children_states: Vec<ExtendedSortOptions>,
+        parent_expr: Arc<dyn PhysicalExpr>,
+    ) -> Self {
+        Self {
+            expr: parent_expr,
+            state: None,
+            children_states: Some(children_states),
+        }
+    }
+}
+
+/// Calculates the a [`PhysicalExpr`] node's [`ExprOrdering`] from its children.
+fn update_ordering<
+    F: Fn() -> EquivalenceProperties,
+    F2: Fn() -> OrderingEquivalenceProperties,
+>(
+    mut node: ExprOrdering,
+    sort_expr: &PhysicalSortExpr,
+    equal_properties: F,
+    ordering_equal_properties: F2,
+) -> Result<Transformed<ExprOrdering>> {
+    // if we can directly match a sort expr with the current node, we can set its state and return early.
+    // TODO: If there is a PhysicalExpr other than Column at the node (let's say a+b), and there is an
+    // ordering equivalence of it (let's say c+d), we actually can find it at this step.
+    if sort_expr.expr.eq(&node.expr) {
+        node.state = Some(ExtendedSortOptions::Ordered(sort_expr.options));
+        return Ok(Transformed::Yes(node));
+    }
+
+    // intermediate node calculation:
+    if let Some(children) = &node.children_states {
+        let children_sort_options = children.iter().collect::<Vec<_>>();
+        let parent_sort_options = node.expr.get_ordering(&children_sort_options);
+
+        node.state = Some(parent_sort_options);
+
+        Ok(Transformed::Yes(node))
+    }
+    // leaf node: (only Column and Literal do not have a child)
+    else {
+        // column leaf:
+        if let Some(column) = node.expr.as_any().downcast_ref::<Column>() {
+            node.state = get_indices_of_matching_sort_exprs_with_order_eq(
+                &[sort_expr.clone()],
+                &[column.clone()],
+                equal_properties,
+                ordering_equal_properties,
+            )
+            .map(|(sort_options, _)| {
+                ExtendedSortOptions::Ordered(SortOptions {
+                    descending: sort_options[0].descending,
+                    nulls_first: sort_options[0].nulls_first,
+                })
+            });
+            return Ok(Transformed::Yes(node));
+        }
+        // last opiton, literal leaf:
+        node.state = Some(node.expr.get_ordering(&[]));
+        Ok(Transformed::Yes(node))
+    }
+}
+
+impl TreeNode for ExprOrdering {
+    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
+    where
+        F: FnMut(&Self) -> Result<VisitRecursion>,
+    {
+        let children = self.children();
+        for child in children {
+            match op(&child)? {
+                VisitRecursion::Continue => {}
+                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
+                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
+    }
+
+    fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let children = self.children();
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            let children_nodes = children
+                .into_iter()
+                .map(transform)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(ExprOrdering::new_with_children(
+                children_nodes
+                    .iter()
+                    .map(|c| c.state.unwrap_or(ExtendedSortOptions::Unordered))
+                    .collect(),
+                self.expr,
+            ))
+        }
     }
 }
 

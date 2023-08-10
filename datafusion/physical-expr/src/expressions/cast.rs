@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::intervals::Interval;
-use crate::physical_expr::down_cast_any_ref;
+use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::{kernels, CastOptions};
@@ -140,6 +140,15 @@ impl PhysicalExpr for CastExpr {
         self.cast_type.hash(&mut s);
         // Add `self.cast_options` when hash is available
         // https://github.com/apache/arrow-rs/pull/4395
+    }
+
+    /// [`CastExpr`]'s are preserving the ordering of its child.
+    fn get_ordering(&self, children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
+        if let Some(&&child) = children.first() {
+            child
+        } else {
+            ExtendedSortOptions::Unordered
+        }
     }
 }
 

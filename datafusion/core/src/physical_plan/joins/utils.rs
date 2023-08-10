@@ -49,7 +49,9 @@ use datafusion_physical_expr::{
     OrderingEquivalentClass, PhysicalExpr, PhysicalSortExpr,
 };
 
-use datafusion_physical_expr::utils::normalize_sort_exprs;
+use datafusion_physical_expr::utils::{
+    normalize_sort_expr_with_equivalence_properties, normalize_sort_exprs,
+};
 
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
@@ -190,18 +192,9 @@ pub fn calculate_join_output_ordering(
         // In the case below, right ordering should be offseted with the left
         // side length, since we append the right table to the left table.
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            let updated_on_columns = on_columns
-                .iter()
-                .map(|(left, right)| {
-                    (
-                        left.clone(),
-                        Column::new(right.name(), right.index() + left_columns_len),
-                    )
-                })
-                .collect::<Vec<_>>();
             let updated_right_ordering =
                 add_offset_to_lex_ordering(right_ordering, left_columns_len)?;
-            (updated_right_ordering, updated_on_columns)
+            (updated_right_ordering, on_columns.to_vec())
         }
         _ => (right_ordering.to_vec(), on_columns.to_vec()),
     };
@@ -227,9 +220,14 @@ pub fn calculate_join_output_ordering(
         (false, true) => {
             // Special case, we can prefix ordering of left side with the ordering of right side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
+                replace_on_columns_of_right_ordering(
+                    &on_columns,
+                    &mut right_ordering,
+                    left_columns_len,
+                );
                 merge_vectors(&right_ordering, left_ordering)
             } else {
-                right_ordering
+                right_ordering.to_vec()
             }
         }
         // Doesn't maintain ordering, output ordering is None.
@@ -318,24 +316,32 @@ pub fn cross_join_equivalence_properties(
 }
 
 /// Update right table ordering equivalences so that they point to valid indices
-/// at the output of the join schema. To do so, we increment column indices by left table size
+/// at the output of the join schema, and also they are normalized with equivalence
+/// columns. To do so, we increment column indices by left table size
 /// when join schema consist of combination of left and right schema (Inner, Left, Full, Right joins).
+/// Then, we normalize the sort expressions of ordering equvalences one by one.
 fn get_updated_right_ordering_equivalence_properties(
     join_type: &JoinType,
     right_oeq_classes: &[OrderingEquivalentClass],
     left_columns_len: usize,
+    join_eq_properties: &EquivalenceProperties,
 ) -> Result<Vec<OrderingEquivalentClass>> {
-    match join_type {
+    let updated_indices = match join_type {
         // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
             add_offset_to_ordering_equivalence_classes(
                 right_oeq_classes,
                 left_columns_len,
-            )
+            )?
         }
-        _ => Ok(right_oeq_classes.to_vec()),
-    }
+        _ => right_oeq_classes.to_vec(),
+    };
+
+    Ok(normalize_ordering_equivalence_classes(
+        &updated_indices,
+        join_eq_properties,
+    ))
 }
 
 /// Merge left and right sort expressions, checking for duplicates.
@@ -356,18 +362,19 @@ fn prefix_ordering_equivalence_with_existing_ordering(
     oeq_classes: &[OrderingEquivalentClass],
     eq_classes: &[EquivalentClass],
 ) -> Vec<OrderingEquivalentClass> {
+    let existing_ordering = normalize_sort_exprs(existing_ordering, eq_classes, &[]);
     oeq_classes
         .iter()
         .map(|oeq_class| {
             let normalized_head = normalize_sort_exprs(oeq_class.head(), eq_classes, &[]);
-            let updated_head = merge_vectors(existing_ordering, &normalized_head);
+            let updated_head = merge_vectors(&existing_ordering, &normalized_head);
             let updated_others = oeq_class
                 .others()
                 .iter()
                 .map(|ordering| {
                     let normalized_ordering =
                         normalize_sort_exprs(ordering, eq_classes, &[]);
-                    merge_vectors(existing_ordering, &normalized_ordering)
+                    merge_vectors(&existing_ordering, &normalized_ordering)
                 })
                 .collect();
             OrderingEquivalentClass::new(updated_head, updated_others)
@@ -411,6 +418,7 @@ pub fn combine_join_ordering_equivalence_properties(
                         join_type,
                         right_oeq_properties.classes(),
                         left_columns_len,
+                        &join_eq_properties,
                     )?;
                 let left_output_ordering = left.output_ordering().unwrap_or(&[]);
                 // Right side ordering equivalence properties should be prepended with
@@ -435,6 +443,7 @@ pub fn combine_join_ordering_equivalence_properties(
                 join_type,
                 right_oeq_properties.classes(),
                 left_columns_len,
+                &join_eq_properties,
             )?;
             new_properties.extend(right_oeq_classes);
             // In this special case, left side ordering can be prefixed with right side ordering.
@@ -442,8 +451,10 @@ pub fn combine_join_ordering_equivalence_properties(
                 && left.output_ordering().is_some()
                 && *join_type == JoinType::Inner
             {
-                let left_oeq_classes = right_oeq_properties.classes();
+                let left_oeq_classes = left_oeq_properties.classes();
                 let right_output_ordering = right.output_ordering().unwrap_or(&[]);
+                let right_output_ordering =
+                    add_offset_to_lex_ordering(right_output_ordering, left_columns_len)?;
                 // Left side ordering equivalence properties should be prepended with
                 // those of the right side while constructing output ordering equivalence
                 // properties since stream side is the right side.
@@ -454,7 +465,7 @@ pub fn combine_join_ordering_equivalence_properties(
                 // to the ordering equivalences of the join.
                 let updated_left_oeq_classes =
                     prefix_ordering_equivalence_with_existing_ordering(
-                        right_output_ordering,
+                        &right_output_ordering,
                         left_oeq_classes,
                         join_eq_properties.classes(),
                     );
@@ -520,6 +531,45 @@ pub(crate) fn add_offset_to_ordering_equivalence_classes(
                 .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
                 .collect::<Result<Vec<_>>>()?;
             Ok(OrderingEquivalentClass::new(new_head, new_others))
+        })
+        .collect()
+}
+
+fn normalize_ordering_equivalence_classes(
+    updated_indices: &[OrderingEquivalentClass],
+    join_eq_properties: &EquivalenceProperties,
+) -> Vec<OrderingEquivalentClass> {
+    updated_indices
+        .iter()
+        .map(|class| {
+            let head = class
+                .head()
+                .iter()
+                .map(|expr| {
+                    normalize_sort_expr_with_equivalence_properties(
+                        expr.clone(),
+                        join_eq_properties.classes(),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let others = class
+                .others()
+                .iter()
+                .map(|other| {
+                    other
+                        .iter()
+                        .map(|expr| {
+                            normalize_sort_expr_with_equivalence_properties(
+                                expr.clone(),
+                                join_eq_properties.classes(),
+                            )
+                        })
+                        .collect()
+                })
+                .collect();
+
+            EquivalentClass::new(head, others)
         })
         .collect()
 }

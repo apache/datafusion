@@ -22,6 +22,7 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::SortOptions;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -29,6 +30,7 @@ use datafusion_expr::ColumnarValue;
 use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
+use std::ops::Neg;
 use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
@@ -126,11 +128,48 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// Note: [`PhysicalExpr`] is not constrained by [`Hash`]
     /// directly because it must remain object safe.
     fn dyn_hash(&self, _state: &mut dyn Hasher);
+
+    /// Providing children's [`ExtendedSortOptions`], returns the [`ExtendedSortOptions`] of a [`PhysicalExpr`].
+    fn get_ordering(&self, _children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
+        ExtendedSortOptions::Unordered
+    }
 }
 
 impl Hash for dyn PhysicalExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.dyn_hash(state);
+    }
+}
+
+/// To propagate [`SortOptions`] across the [`PhysicalExpr`], using the [`Option<SortOptions>`]
+/// structure is insufficient. There must be a differentiation between unordered columns
+/// and literal values since literals do not break the ordering when they are used as a child
+/// of a binary expression, if the other child has some ordering. On the other hand, unordered
+/// columns cannot maintain the ordering when they take part in such operations.
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum ExtendedSortOptions {
+    // For an ordered data, we use ordinary [`SortOptions`]
+    Ordered(SortOptions),
+    // Unordered data are represented as Unordered
+    Unordered,
+    // Singleton is used for single-valued literal numbers
+    Singleton,
+}
+
+impl Neg for ExtendedSortOptions {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        match self {
+            ExtendedSortOptions::Ordered(SortOptions {
+                descending,
+                nulls_first,
+            }) => ExtendedSortOptions::Ordered(SortOptions {
+                descending: !descending,
+                nulls_first,
+            }),
+            _ => self,
+        }
     }
 }
 
