@@ -242,3 +242,48 @@ impl RecordBatchStream for MemoryStream {
         self.schema.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::physical_plan::memory::MemoryExec;
+    use crate::physical_plan::ExecutionPlan;
+    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::PhysicalSortExpr;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_memory_order_eq() -> datafusion_common::Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+        let expected_output_order = vec![
+            PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("b", &schema)?,
+                options: SortOptions::default(),
+            },
+        ];
+        let expected_order_eq = vec![PhysicalSortExpr {
+            expr: col("c", &schema)?,
+            options: SortOptions::default(),
+        }];
+        let sort_information =
+            vec![expected_output_order.clone(), expected_order_eq.clone()];
+        let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
+            .with_sort_information(sort_information);
+
+        assert_eq!(mem_exec.output_ordering().unwrap(), expected_output_order);
+        let order_eq = mem_exec.ordering_equivalence_properties();
+        assert!(order_eq
+            .classes()
+            .iter()
+            .any(|class| class.contains(&expected_order_eq)));
+        Ok(())
+    }
+}
