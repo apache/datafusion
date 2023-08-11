@@ -33,6 +33,11 @@ Addition
 
 ```sql
 > SELECT 1 + 2;
++---------------------+
+| Int64(1) + Int64(2) |
++---------------------+
+| 3                   |
++---------------------+
 ```
 
 ### `-`
@@ -41,6 +46,11 @@ Subtraction
 
 ```sql
 > SELECT 4 - 3;
++---------------------+
+| Int64(4) - Int64(3) |
++---------------------+
+| 1                   |
++---------------------+
 ```
 
 ### `*`
@@ -49,6 +59,11 @@ Multiplication
 
 ```sql
 > SELECT 2 * 3;
++---------------------+
+| Int64(2) * Int64(3) |
++---------------------+
+| 6                   |
++---------------------+
 ```
 
 ### `/`
@@ -57,6 +72,11 @@ Division (integer division truncates toward zero)
 
 ```sql
 > SELECT 8 / 4;
++---------------------+
+| Int64(8) / Int64(4) |
++---------------------+
+| 2                   |
++---------------------+
 ```
 
 ### `%`
@@ -64,7 +84,12 @@ Division (integer division truncates toward zero)
 Modulo (remainder)
 
 ```sql
-> SELECT 8 % 3;
+> SELECT 7 % 3;
++---------------------+
+| Int64(7) % Int64(3) |
++---------------------+
+| 1                   |
++---------------------+
 ```
 
 ## Comparison Operators
@@ -87,7 +112,12 @@ Modulo (remainder)
 Equal
 
 ```sql
-SELECT 1 = 1;
+> SELECT 1 = 1;
++---------------------+
+| Int64(1) = Int64(1) |
++---------------------+
+| true                |
++---------------------+
 ```
 
 ### `!=`
@@ -95,7 +125,12 @@ SELECT 1 = 1;
 Not Equal
 
 ```sql
-SELECT 1 != 2;
+> SELECT 1 != 2;
++----------------------+
+| Int64(1) != Int64(2) |
++----------------------+
+| true                 |
++----------------------+
 ```
 
 ### `<`
@@ -103,7 +138,12 @@ SELECT 1 != 2;
 Less Than
 
 ```sql
-SELECT 3 < 4;
+> SELECT 3 < 4;
++---------------------+
+| Int64(3) < Int64(4) |
++---------------------+
+| true                |
++---------------------+
 ```
 
 ### `<=`
@@ -111,7 +151,12 @@ SELECT 3 < 4;
 Less Than or Equal To
 
 ```sql
-SELECT 3 <= 3;
+> SELECT 3 <= 3;
++----------------------+
+| Int64(3) <= Int64(3) |
++----------------------+
+| true                 |
++----------------------+
 ```
 
 ### `>`
@@ -119,7 +164,12 @@ SELECT 3 <= 3;
 Greater Than
 
 ```sql
-SELECT 6 > 5;
+> SELECT 6 > 5;
++---------------------+
+| Int64(6) > Int64(5) |
++---------------------+
+| true                |
++---------------------+
 ```
 
 ### `>=`
@@ -127,7 +177,12 @@ SELECT 6 > 5;
 Greater Than or Equal To
 
 ```sql
-SELECT 5 >= 5;
+> SELECT 5 >= 5;
++----------------------+
+| Int64(5) >= Int64(5) |
++----------------------+
+| true                 |
++----------------------+
 ```
 
 ### `IS DISTINCT FROM`
@@ -135,7 +190,12 @@ SELECT 5 >= 5;
 Guarantees the result of a comparison is `true` or `false` and not an empty set
 
 ```sql
-SELECT 0 IS DISTINCT FROM NULL;
+> SELECT 0 IS DISTINCT FROM NULL;
++--------------------------------+
+| Int64(0) IS DISTINCT FROM NULL |
++--------------------------------+
+| true                           |
++--------------------------------+
 ```
 
 ### `IS NOT DISTINCT FROM`
@@ -143,7 +203,12 @@ SELECT 0 IS DISTINCT FROM NULL;
 The negation of `IS DISTINCT FROM`
 
 ```sql
-SELECT NULL IS NOT DISTINCT FROM NULL;
+> SELECT NULL IS NOT DISTINCT FROM NULL;
++--------------------------------+
+| NULL IS NOT DISTINCT FROM NULL |
++--------------------------------+
+| true                           |
++--------------------------------+
 ```
 
 ### `~`
@@ -151,7 +216,12 @@ SELECT NULL IS NOT DISTINCT FROM NULL;
 Regex Match
 
 ```sql
-SELECT 'datafusion' ~ '^datafusion(-cli)*';
+> SELECT 'datafusion' ~ '^datafusion(-cli)*';
++-------------------------------------------------+
+| Utf8("datafusion") ~ Utf8("^datafusion(-cli)*") |
++-------------------------------------------------+
+| true                                            |
++-------------------------------------------------+
 ```
 
 ### `~*`
@@ -159,7 +229,12 @@ SELECT 'datafusion' ~ '^datafusion(-cli)*';
 Regex Case-Insensitive Match
 
 ```sql
-SELECT 'datafusion' ~* '^DATAFUSION(-CLI)*';
+> SELECT 'datafusion' ~* '^DATAFUSION(-cli)*';
++--------------------------------------------------+
+| Utf8("datafusion") ~* Utf8("^DATAFUSION(-cli)*") |
++--------------------------------------------------+
+| true                                             |
++--------------------------------------------------+
 ```
 
 ### `!~`
@@ -167,7 +242,12 @@ SELECT 'datafusion' ~* '^DATAFUSION(-CLI)*';
 Not Regex Match
 
 ```sql
-SELECT 'datafusion' !~ '^datafusion(-cli)+';
+> SELECT 'datafusion' !~ '^DATAFUSION(-cli)*';
++--------------------------------------------------+
+| Utf8("datafusion") !~ Utf8("^DATAFUSION(-cli)*") |
++--------------------------------------------------+
+| true                                             |
++--------------------------------------------------+
 ```
 
 ### `!~*`
@@ -175,7 +255,12 @@ SELECT 'datafusion' !~ '^datafusion(-cli)+';
 Not Regex Case-Insensitive Match
 
 ```sql
-SELECT 'datafusion' !~* '^DATAFUSION(-CLI)+';
+> SELECT 'datafusion' !~* '^DATAFUSION(-cli)+';
++---------------------------------------------------+
+| Utf8("datafusion") !~* Utf8("^DATAFUSION(-cli)+") |
++---------------------------------------------------+
+| true                                              |
++---------------------------------------------------+
 ```
 
 ## Logical Operators
@@ -188,7 +273,12 @@ SELECT 'datafusion' !~* '^DATAFUSION(-CLI)+';
 Logical And
 
 ```sql
-SELECT true AND true;
+> SELECT true AND true;
++---------------------------------+
+| Boolean(true) AND Boolean(true) |
++---------------------------------+
+| true                            |
++---------------------------------+
 ```
 
 ### `OR`
@@ -196,7 +286,12 @@ SELECT true AND true;
 Logical Or
 
 ```sql
-SELECT false OR true;
+> SELECT false OR true;
++---------------------------------+
+| Boolean(false) OR Boolean(true) |
++---------------------------------+
+| true                            |
++---------------------------------+
 ```
 
 ## Bitwise Operators
@@ -212,7 +307,12 @@ SELECT false OR true;
 Bitwise And
 
 ```sql
-SELECT 5 & 3;
+> SELECT 5 & 3;
++---------------------+
+| Int64(5) & Int64(3) |
++---------------------+
+| 1                   |
++---------------------+
 ```
 
 ### `|`
@@ -220,15 +320,25 @@ SELECT 5 & 3;
 Bitwise Or
 
 ```sql
-SELECT 5 | 3;
+> SELECT 5 | 3;
++---------------------+
+| Int64(5) | Int64(3) |
++---------------------+
+| 7                   |
++---------------------+
 ```
 
 ### `#`
 
-Bitwise Xor
+Bitwise Xor (interchangeable with `^`)
 
 ```sql
-SELECT 5 # 3;
+> SELECT 5 # 3;
++---------------------+
+| Int64(5) # Int64(3) |
++---------------------+
+| 6                   |
++---------------------+
 ```
 
 ### `>>`
@@ -236,7 +346,12 @@ SELECT 5 # 3;
 Bitwise Shift Right
 
 ```sql
-SELECT 5 >> 3;
+> SELECT 5 >> 3;
++----------------------+
+| Int64(5) >> Int64(3) |
++----------------------+
+| 0                    |
++----------------------+
 ```
 
 ### `<<`
@@ -244,7 +359,12 @@ SELECT 5 >> 3;
 Bitwise Shift Left
 
 ```sql
-SELECT 5 << 3;
+> SELECT 5 << 3;
++----------------------+
+| Int64(5) << Int64(3) |
++----------------------+
+| 40                   |
++----------------------+
 ```
 
 ## Other Operators
@@ -282,32 +402,3 @@ Array Is Contained By
 > SELECT make_array(1,3) <@ make_array(1,2,3);
 ```
 
-<!--- All Operators to document (TODO REMOVE)
-Eq => "=",
-NotEq => "!=",
-Lt => "<",
-LtEq => "<=",
-Gt => ">",
-GtEq => ">=",
-Plus => "+",
-Minus => "-",
-Multiply => "*",
-Divide => "/",
-Modulo => "%",
-And => "AND",
-Or => "OR",
-RegexMatch => "~",
-RegexIMatch => "~*",
-RegexNotMatch => "!~",
-RegexNotIMatch => "!~*",
-IsDistinctFrom => "IS DISTINCT FROM",
-IsNotDistinctFrom => "IS NOT DISTINCT FROM",
-BitwiseAnd => "&",
-BitwiseOr => "|",
-BitwiseXor => "#",
-BitwiseShiftRight => ">>",
-BitwiseShiftLeft => "<<",
-StringConcat => "||",
-AtArrow => "@>",
-ArrowAt => "<@",
--->
