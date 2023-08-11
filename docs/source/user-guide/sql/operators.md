@@ -401,4 +401,3 @@ Array Is Contained By
 ```sql
 > SELECT make_array(1,3) <@ make_array(1,2,3);
 ```
-
