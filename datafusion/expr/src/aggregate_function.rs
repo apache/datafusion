@@ -17,6 +17,7 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
+use crate::utils;
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, DataFusionError, Result};
@@ -197,7 +198,16 @@ impl AggregateFunction {
             self,
             input_expr_types,
             &self.signature(),
-        )?;
+        )
+        // original errors are all related to wrong function signature
+        // aggregate them for better error message
+        .map_err(|_| {
+            DataFusionError::Plan(utils::generate_signature_error_msg(
+                &format!("{self}"),
+                self.signature(),
+                input_expr_types,
+            ))
+        })?;
 
         match self {
             AggregateFunction::Count | AggregateFunction::ApproxDistinct => {

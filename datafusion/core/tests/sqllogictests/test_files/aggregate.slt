@@ -76,23 +76,23 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error Error during planning: The function ApproxPercentileContWithWeight does not support inputs of type Utf8.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Utf8, Int8, Float64\)'. You might need to add explicit type casts.
 SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
 
-statement error Error during planning: The weight argument for ApproxPercentileContWithWeight does not support inputs of type Utf8
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Int16, Utf8, Float64\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 
-statement error Error during planning: The percentile argument for ApproxPercentileContWithWeight must be Float64, not Utf8.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Int16, Int8, Utf8\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\).
 SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Utf8.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Utf8\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 
-statement error Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Float64\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
 # array agg can use order by
@@ -1644,10 +1644,10 @@ NULL NULL NULL NULL Row 2 Y
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
 
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
@@ -1688,10 +1688,10 @@ Y 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-0
 
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
 
@@ -1738,10 +1738,10 @@ NULL NULL Row 2 Y
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Date32\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Date32\)'\. You might need to add explicit type casts\.
 SELECT sum(date32), sum(date64) FROM t;
 
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Date32\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Date32\)'\. You might need to add explicit type casts\.
 SELECT tag, sum(date32), sum(date64) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
@@ -1782,10 +1782,10 @@ Y 2021-01-01 2021-01-01T00:00:00
 
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Date32\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
 SELECT avg(date32), avg(date64) FROM t
 
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Date32\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
 SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
 
 
@@ -1835,10 +1835,10 @@ select * from t;
 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3 B
 
 # aggregate_times_sum
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Time64\(Nanosecond\).
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
 
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Time64\(Nanosecond\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag
 
 # aggregate_times_count
@@ -1880,10 +1880,10 @@ B 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
 
 
 # aggregate_times_avg
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Time64\(Nanosecond\).
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Time64\(Nanosecond\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
 statement ok
