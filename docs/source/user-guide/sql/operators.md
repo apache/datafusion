@@ -249,6 +249,39 @@ SELECT 5 << 3;
 
 ## Other Operators
 
+- [|| (string concatenation)](#id21)
+- [@> (array contains)](#id22)
+- [<@ (array is contained by)](#id23)
+
+### `||`
+
+String Concatenation
+
+```sql
+> SELECT 'Hello, ' || 'DataFusion!';
++----------------------------------------+
+| Utf8("Hello, ") || Utf8("DataFusion!") |
++----------------------------------------+
+| Hello, DataFusion!                     |
++----------------------------------------+
+```
+
+### `@>`
+
+Array Contains
+
+```sql
+> SELECT make_array(1,2,3) @> make_array(1,3);
+```
+
+### `<@`
+
+Array Is Contained By
+
+```sql
+> SELECT make_array(1,3) <@ make_array(1,2,3);
+```
+
 <!--- All Operators to document (TODO REMOVE)
 Eq => "=",
 NotEq => "!=",
