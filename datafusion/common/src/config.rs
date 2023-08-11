@@ -344,7 +344,7 @@ config_namespace! {
         /// Sets bloom filter false positive probability
         pub bloom_filter_fpp: f64, default = 0.05
 
-        // Sets bloom filter number of distinct values
+        /// Sets bloom filter number of distinct values
         pub bloom_filter_ndv: u64, default = 1_000_000_u64
     }
 }
