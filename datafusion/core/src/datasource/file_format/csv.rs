@@ -39,10 +39,8 @@ use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore}
 
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::file_format::write::{
-    stateless_serialize_and_write_files, AbortMode, AbortableWrite, AsyncPutWriter,
-    BatchSerializer, FileWriterMode, MultiPart,
+    create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
 use crate::datasource::physical_plan::{
     CsvExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,

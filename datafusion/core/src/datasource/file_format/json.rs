@@ -47,17 +47,11 @@ use crate::physical_plan::insert::InsertExec;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
-use crate::datasource::file_format::write::{
-    AbortMode, AbortableWrite, AsyncPutWriter, BatchSerializer, MultiPart,
-    stateless_serialize_and_write_files, FileWriterMode, create_writer
-};
 use super::FileFormat;
 use super::FileScanConfig;
-use super::FileWriterMode;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::write::{
-    stateless_serialize_and_write_files, AbortMode, AbortableWrite, AsyncPutWriter,
-    BatchSerializer, FileWriterMode, MultiPart,
+    create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::FileSinkConfig;
