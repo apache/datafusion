@@ -173,7 +173,24 @@ impl MemoryExec {
         })
     }
 
-    /// Set sort information
+    /// A memory table can be ordered by multiple expressions simultaneously.
+    /// `OrderingEquivalenceProperties` keeps track of expressions that describe the
+    /// global ordering of the schema. These columns are not necessarily same; e.g.
+    /// ```text
+    /// ┌-------┐
+    /// | a | b |
+    /// |---|---|
+    /// | 1 | 9 |
+    /// | 2 | 8 |
+    /// | 3 | 7 |
+    /// | 5 | 5 |
+    /// └---┴---┘
+    /// ```
+    /// where both `a ASC` and `b DESC` can describe the table ordering. With
+    /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
+    /// and treat `a ASC` and `b DESC` as the same ordering requirement
+    /// by outputting the `a ASC` from output_ordering API
+    /// and add `b DESC` into `OrderingEquivalenceProperties`
     pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
         self.sort_information = sort_information;
         self
