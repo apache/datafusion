@@ -292,42 +292,61 @@ config_namespace! {
         /// Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// Sets best effort maximum number of rows in data page
-        pub data_page_row_count_limit: usize, default = usize::MAX
+        /// Sets write_batch_size in bytes
+        pub write_batch_size: usize, default = 1024
+
+        /// Sets parquet writer version
+        /// valid values are "1.0" and "2.0"
+        pub writer_version: String, default = "1.0".into()
+
+        /// Sets default parquet compression codec
+        /// Valid values are: uncompressed, snappy, gzip(level),
+        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// These values are not case sensitive.
+        pub compression: String, default = "snappy".into()
+
+        /// Sets if dictionary encoding is enabled
+        pub dictionary_enabled: bool, default = true
 
         /// Sets best effort maximum dictionary page size, in bytes
         pub dictionary_page_size_limit: usize, default = 1024 * 1024
+
+        /// Sets if statistics are enabled for any column
+        /// Valid values are: "none", "chunk", and "page"
+        /// These values are not case sensitive.
+        pub statistics_enabled: String, default = "page".into()
+
+        /// Sets max statistics size for any column
+        pub max_statistics_size: usize, default = 4096
 
         /// Sets maximum number of rows in a row group
         pub max_row_group_size: usize, default = 1024 * 1024
 
         /// Sets "created by" property
-        pub created_by: String, default = concat!("parquet-rs version ", env!("CARGO_PKG_VERSION")).into()
+        pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
 
-        pub compression: Option<String>, default = None
+        /// Sets column index trucate length
+        pub column_index_truncate_length: Option<usize>, default = None
+
+        /// Sets best effort maximum number of rows in data page
+        pub data_page_row_count_limit: usize, default = usize::MAX
 
         /// Sets default encoding for any column
-        pub encoding: Option<String>, default = None
-
-        /// Sets if dictionary encoding is enabled
-        pub dictionary_enabled: Option<bool>, default = None
-
-        /// Sets if statistics are enabled for any column
-        pub statistics_enabled: Option<String>, default = None
-
-        /// Sets max statistics size for any column
-        pub max_statistics_size: Option<usize>, default = None
+        /// Valid values are: plain, plain_dictionary, rle,
+        /// bit_packed, delta_binary_packed, delta_length_byte_array,
+        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// These values are not case sensitive.
+        pub encoding: String, default = "plain".into()
 
         /// Sets if bloom filter is enabled for any column
-        pub bloom_filter_enabled: Option<bool>, default = None
-    }
-        // TODO macro not working with Option<f64> or Option<u64>
-        // Sets bloom filter false positive probability
-        //pub bloom_fiter_fpp: Option<f64>, default = None
+        pub bloom_filter_enabled: bool, default = false
+
+        /// Sets bloom filter false positive probability
+        pub bloom_filter_fpp: f64, default = 0.05
 
         // Sets bloom filter number of distinct values
-        //pub bloom_filter_ndv: Option<u64>, default = None
-    //}
+        pub bloom_filter_ndv: u64, default = 1_000_000_u64
+    }
 }
 
 config_namespace! {
@@ -786,6 +805,8 @@ macro_rules! config_field {
 config_field!(String);
 config_field!(bool);
 config_field!(usize);
+config_field!(f64);
+config_field!(u64);
 
 /// An implementation trait used to recursively walk configuration
 trait Visit {
