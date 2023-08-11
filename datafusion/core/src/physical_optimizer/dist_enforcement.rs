@@ -961,8 +961,10 @@ fn add_hash_on_top(
     repartition_onward: &mut Option<ExecTree>,
     should_preserve_order: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let new_plan = Arc::new(
-        RepartitionExec::try_new(input, Partitioning::Hash(hash_exprs, n_target))?
+    // Since hash join benefits from partitioning add roundrobin repartition before it
+    let mut new_plan = add_roundrobin_on_top(input, n_target, repartition_onward)?;
+    new_plan = Arc::new(
+        RepartitionExec::try_new(new_plan, Partitioning::Hash(hash_exprs, n_target))?
             .with_preserve_order(should_preserve_order),
     ) as Arc<dyn ExecutionPlan>;
 
@@ -1006,18 +1008,31 @@ fn update_repartition_from_context(
         // - remove parallelization, this may re-introduce ordering lost during repartitioning.
         if let Some(required_ordering) = &required_ordering {
             if let Some(exec_tree) = repartition_onwards {
-                let new_child = remove_parallelization(exec_tree)?;
+                let new_child = &exec_tree.plan;
                 let existing_ordering = new_child.output_ordering().unwrap_or(&[]);
-                if ordering_satisfy_requirement_concrete(
+                // Existing ordering doesn't satisfy, requirement
+                // Removing parallelization may help with satisfying requirement.
+                if !ordering_satisfy_requirement_concrete(
                     existing_ordering,
                     required_ordering,
                     || new_child.equivalence_properties(),
                     || new_child.ordering_equivalence_properties(),
                 ) {
-                    // removing parallelization helps with satisfying ordering requirement
-                    *child = new_child;
-                    // reset repartition onwards, since it no longer contains any roundrobin RepartitonExec
-                    *repartition_onwards = None;
+                    let new_child = remove_parallelization(exec_tree)?;
+                    let existing_ordering = new_child.output_ordering().unwrap_or(&[]);
+                    // Update version (where parallelization is removed)
+                    // satisfies ordering requirement
+                    if ordering_satisfy_requirement_concrete(
+                        existing_ordering,
+                        required_ordering,
+                        || new_child.equivalence_properties(),
+                        || new_child.ordering_equivalence_properties(),
+                    ) {
+                        // removing parallelization helps with satisfying ordering requirement
+                        *child = new_child;
+                        // reset repartition onwards, since it no longer contains any roundrobin RepartitonExec
+                        *repartition_onwards = None;
+                    }
                 }
             }
         }
@@ -1260,17 +1275,14 @@ fn should_preserve_ordering(
     match (input.output_ordering(), required_input_ordering) {
         (Some(existing_ordering), Some(required_ordering)) => {
             // We have to preserve ordering, when adding repartition
-            // if following conditions hold:
+            // if following condition hold:
             // - existing ordering satisfies ordering requirement
-            // - input partition count is larger than 1 (in this case
-            //   adding naive repartition will invalidate existing ordering)
-            input.output_partitioning().partition_count() > 1
-                && ordering_satisfy_requirement_concrete(
-                    existing_ordering,
-                    required_ordering,
-                    || input.equivalence_properties(),
-                    || input.ordering_equivalence_properties(),
-                )
+            ordering_satisfy_requirement_concrete(
+                existing_ordering,
+                required_ordering,
+                || input.equivalence_properties(),
+                || input.ordering_equivalence_properties(),
+            )
         }
         (_, _) => false,
     }
@@ -2393,15 +2405,19 @@ mod tests {
                 top_join_plan.as_str(),
                 "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1), (c@2, c1@2)]",
-                "RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 10), input_partitions=1",
+                "RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 10), input_partitions=10",
+                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                "RepartitionExec: partitioning=Hash([a1@0, b1@1, c1@2], 10), input_partitions=1",
+                "RepartitionExec: partitioning=Hash([a1@0, b1@1, c1@2], 10), input_partitions=10",
+                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)]",
-                "RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=1",
+                "RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=10",
+                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                "RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=1",
+                "RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=10",
+                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             ];
@@ -2512,15 +2528,19 @@ mod tests {
                 top_join_plan.as_str(),
                 "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1)]",
-                "RepartitionExec: partitioning=Hash([a@0, b@1], 10), input_partitions=1",
+                "RepartitionExec: partitioning=Hash([a@0, b@1], 10), input_partitions=10",
+                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                "RepartitionExec: partitioning=Hash([a1@0, b1@1], 10), input_partitions=1",
+                "RepartitionExec: partitioning=Hash([a1@0, b1@1], 10), input_partitions=10",
+                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)]",
-                "RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=1",
+                "RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=10",
+                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                "RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=1",
+                "RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=10",
+                "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
                 "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             ];
@@ -2580,7 +2600,7 @@ mod tests {
                 format!("SortMergeJoin: join_type={join_type}, on=[(a@0, c@2)]");
 
             let expected = match join_type {
-                // Should include 3 RepartitionExecs 3 SortExecs
+                // Should include 6 RepartitionExecs 3 SortExecs
                 JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti =>
                     vec![
                         top_join_plan.as_str(),
@@ -2599,7 +2619,7 @@ mod tests {
                         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                     ],
-                // Should include 4 RepartitionExecs
+                // Should include 7 RepartitionExecs
                 _ => vec![
                         top_join_plan.as_str(),
                         "SortExec: expr=[a@0 ASC]",
@@ -2628,32 +2648,39 @@ mod tests {
                     vec![
                         top_join_plan.as_str(),
                         join_plan.as_str(),
-                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                        "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "SortExec: expr=[a@0 ASC]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                        "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "SortExec: expr=[b1@1 ASC]",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                        "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "SortExec: expr=[c@2 ASC]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                     ],
-                // Should include 4 RepartitionExecs
+                // Should include 8 RepartitionExecs (4 of them preserves ordering)
                 _ => vec![
                     top_join_plan.as_str(),
-                    "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                    "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                    "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[a@0 ASC]",
                     "CoalescePartitionsExec",
                     join_plan.as_str(),
-                    "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                    "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                    "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[a@0 ASC]",
                     "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                    "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                    "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                    "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[b1@1 ASC]",
                     "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                     "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                    "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                    "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                    "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                     "SortExec: expr=[c@2 ASC]",
                     "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 ],
@@ -2720,36 +2747,43 @@ mod tests {
                     assert_optimized!(expected, top_join.clone(), true);
 
                     let expected_first_sort_enforcement = match join_type {
-                        // Should include 3 RepartitionExecs and 3 SortExecs
+                        // Should include 6 RepartitionExecs (3 of them preserves order) and 3 SortExecs
                         JoinType::Inner | JoinType::Right => vec![
                             top_join_plan.as_str(),
                             join_plan.as_str(),
-                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                            "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[a@0 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[b1@1 ASC]",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                            "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
-                        // Should include 4 RepartitionExecs and 4 SortExecs
+                        // Should include 8 RepartitionExecs (4 of them preserves order) and 4 SortExecs
                         _ => vec![
                             top_join_plan.as_str(),
-                            "RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=1",
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[b1@6 ASC]",
                             "CoalescePartitionsExec",
                             join_plan.as_str(),
-                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1",
+                            "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[a@0 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1",
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[b1@1 ASC]",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1",
+                            "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
@@ -2832,7 +2866,8 @@ mod tests {
 
         let expected_first_sort_enforcement = &[
             "SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]",
-            "RepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=1",
+            "SortPreservingRepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "SortExec: expr=[b3@1 ASC,a3@0 ASC]",
             "CoalescePartitionsExec",
             "ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
@@ -2842,7 +2877,8 @@ mod tests {
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-            "RepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=1",
+            "SortPreservingRepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=10",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "SortExec: expr=[b2@1 ASC,a2@0 ASC]",
             "CoalescePartitionsExec",
             "ProjectionExec: expr=[a@1 as a2, b@0 as b2]",

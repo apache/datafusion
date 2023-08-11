@@ -392,8 +392,9 @@ mod tests {
         let expected = &[
             "SortRequiredExec",
             "FilterExec: c1@0",
-            // Do not add repartition, even though filter benefits from it
-            // because subsequent executor requires this ordering.
+            // We can use repartition here, ordering requirement by SortRequiredExec
+            // is still satisfied.
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "SortExec: expr=[c1@0 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
