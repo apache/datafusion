@@ -188,15 +188,13 @@ pub fn calculate_join_output_ordering(
     assert_eq!(maintains_input_order.len(), 2);
     let left_maintains = maintains_input_order[0];
     let right_maintains = maintains_input_order[1];
-    let (mut right_ordering, on_columns) = match join_type {
+    let mut right_ordering = match join_type {
         // In the case below, right ordering should be offseted with the left
         // side length, since we append the right table to the left table.
         JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-            let updated_right_ordering =
-                add_offset_to_lex_ordering(right_ordering, left_columns_len)?;
-            (updated_right_ordering, on_columns.to_vec())
+            add_offset_to_lex_ordering(right_ordering, left_columns_len)?
         }
-        _ => (right_ordering.to_vec(), on_columns.to_vec()),
+        _ => right_ordering.to_vec(),
     };
     let output_ordering = match (left_maintains, right_maintains) {
         (true, true) => {
@@ -208,7 +206,7 @@ pub fn calculate_join_output_ordering(
             // Special case, we can prefix ordering of right side with the ordering of left side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
-                    &on_columns,
+                    on_columns,
                     &mut right_ordering,
                     left_columns_len,
                 );
@@ -221,7 +219,7 @@ pub fn calculate_join_output_ordering(
             // Special case, we can prefix ordering of left side with the ordering of right side.
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
-                    &on_columns,
+                    on_columns,
                     &mut right_ordering,
                     left_columns_len,
                 );
@@ -319,14 +317,19 @@ pub fn cross_join_equivalence_properties(
 /// at the output of the join schema, and also they are normalized with equivalence
 /// columns. To do so, we increment column indices by left table size
 /// when join schema consist of combination of left and right schema (Inner, Left, Full, Right joins).
-/// Then, we normalize the sort expressions of ordering equvalences one by one.
+/// Then, we normalize the sort expressions of ordering equivalences one by one.
+/// We make sure that, each expression in the ordering equivalence is either
+/// - head of the one of the equivalent classes
+/// - or doesn't have an equivalent column
+/// by this way, once we normalize an expression according to equivalence properties
+/// then it can be safely used for ordering equivalence normalization.
 fn get_updated_right_ordering_equivalence_properties(
     join_type: &JoinType,
     right_oeq_classes: &[OrderingEquivalentClass],
     left_columns_len: usize,
     join_eq_properties: &EquivalenceProperties,
 ) -> Result<Vec<OrderingEquivalentClass>> {
-    let updated_indices = match join_type {
+    let updated_oeqs = match join_type {
         // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
@@ -339,7 +342,7 @@ fn get_updated_right_ordering_equivalence_properties(
     };
 
     Ok(normalize_ordering_equivalence_classes(
-        &updated_indices,
+        &updated_oeqs,
         join_eq_properties,
     ))
 }
