@@ -1685,6 +1685,24 @@ array_fill(element, array)
   Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to copy to the array.
 
+### `flatten`
+
+Converts an array of arrays to a flat array
+
+- Applies to any depth of nested arrays
+- Does not change arrays that are already flat
+
+The flattened array contains all the elements from all source arrays.
+
+#### Arguments
+
+- **array**: Array expression
+  Can be a constant, column, or function, and any combination of array operators.
+
+```
+flatten(array)
+```
+
 ### `array_indexof`
 
 _Alias of [array_position](#array_position)._

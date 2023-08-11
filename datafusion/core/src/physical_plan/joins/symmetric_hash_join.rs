@@ -1428,21 +1428,17 @@ impl SymmetricHashJoinStream {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-
+    use super::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use datafusion_execution::config::SessionConfig;
     use rstest::*;
-    use tempfile::TempDir;
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
     use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numerical_expr;
 
-    use crate::physical_plan::displayable;
     use crate::physical_plan::joins::hash_join_utils::tests::complicated_filter;
-    use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
-    use crate::test_util::register_unbounded_file_with_ordering;
 
     use crate::physical_plan::joins::test_utils::{
         build_sides_record_batches, compare_batches, create_memory_table,
@@ -1451,9 +1447,6 @@ mod tests {
         partitioned_sym_join_with_filter,
     };
     use datafusion_common::ScalarValue;
-    use std::iter::Iterator;
-
-    use super::*;
 
     const TABLE_SIZE: i32 = 100;
 
@@ -1506,8 +1499,7 @@ mod tests {
         cardinality: (i32, i32),
     ) -> Result<()> {
         // a + b > c + 10 AND a + b < c + 100
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -1587,8 +1579,7 @@ mod tests {
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -1662,8 +1653,7 @@ mod tests {
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -1715,8 +1705,7 @@ mod tests {
         )]
         join_type: JoinType,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let (left_batch, right_batch) = build_sides_record_batches(TABLE_SIZE, (11, 21))?;
         let left_schema = &left_batch.schema();
         let right_schema = &right_batch.schema();
@@ -1753,8 +1742,7 @@ mod tests {
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
     ) -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -1811,173 +1799,14 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn join_change_in_planner() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(8);
-        let ctx = SessionContext::with_config(config);
-        let tmp_dir = TempDir::new().unwrap();
-        let left_file_path = tmp_dir.path().join("left.csv");
-        File::create(left_file_path.clone()).unwrap();
-        // Create schema
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a1", DataType::UInt32, false),
-            Field::new("a2", DataType::UInt32, false),
-        ]));
-        // Specify the ordering:
-        let file_sort_order = vec![[datafusion_expr::col("a1")]
-            .into_iter()
-            .map(|e| {
-                let ascending = true;
-                let nulls_first = false;
-                e.sort(ascending, nulls_first)
-            })
-            .collect::<Vec<_>>()];
-        register_unbounded_file_with_ordering(
-            &ctx,
-            schema.clone(),
-            &left_file_path,
-            "left",
-            file_sort_order.clone(),
-            true,
-        )
-        .await?;
-        let right_file_path = tmp_dir.path().join("right.csv");
-        File::create(right_file_path.clone()).unwrap();
-        register_unbounded_file_with_ordering(
-            &ctx,
-            schema,
-            &right_file_path,
-            "right",
-            file_sort_order,
-            true,
-        )
-        .await?;
-        let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
-        let dataframe = ctx.sql(sql).await?;
-        let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-        let expected = {
-            [
-                "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
-                "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
-                // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
-                "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
-                // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
-            ]
-        };
-        let mut actual: Vec<&str> = formatted.trim().lines().collect();
-        // Remove CSV lines
-        actual.remove(3);
-        actual.remove(5);
-
-        assert_eq!(
-            expected,
-            actual[..],
-            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn join_change_in_planner_without_sort() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(8);
-        let ctx = SessionContext::with_config(config);
-        let tmp_dir = TempDir::new()?;
-        let left_file_path = tmp_dir.path().join("left.csv");
-        File::create(left_file_path.clone())?;
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a1", DataType::UInt32, false),
-            Field::new("a2", DataType::UInt32, false),
-        ]));
-        ctx.register_csv(
-            "left",
-            left_file_path.as_os_str().to_str().unwrap(),
-            CsvReadOptions::new().schema(&schema).mark_infinite(true),
-        )
-        .await?;
-        let right_file_path = tmp_dir.path().join("right.csv");
-        File::create(right_file_path.clone())?;
-        ctx.register_csv(
-            "right",
-            right_file_path.as_os_str().to_str().unwrap(),
-            CsvReadOptions::new().schema(&schema).mark_infinite(true),
-        )
-        .await?;
-        let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
-        let dataframe = ctx.sql(sql).await?;
-        let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
-        let expected = {
-            [
-                "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
-                "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
-                // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
-                "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
-                // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
-            ]
-        };
-        let mut actual: Vec<&str> = formatted.trim().lines().collect();
-        // Remove CSV lines
-        actual.remove(3);
-        actual.remove(5);
-
-        assert_eq!(
-            expected,
-            actual[..],
-            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
-        let config = SessionConfig::new()
-            .with_target_partitions(8)
-            .with_allow_symmetric_joins_without_pruning(false);
-        let ctx = SessionContext::with_config(config);
-        let tmp_dir = TempDir::new()?;
-        let left_file_path = tmp_dir.path().join("left.csv");
-        File::create(left_file_path.clone())?;
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a1", DataType::UInt32, false),
-            Field::new("a2", DataType::UInt32, false),
-        ]));
-        ctx.register_csv(
-            "left",
-            left_file_path.as_os_str().to_str().unwrap(),
-            CsvReadOptions::new().schema(&schema).mark_infinite(true),
-        )
-        .await?;
-        let right_file_path = tmp_dir.path().join("right.csv");
-        File::create(right_file_path.clone())?;
-        ctx.register_csv(
-            "right",
-            right_file_path.as_os_str().to_str().unwrap(),
-            CsvReadOptions::new().schema(&schema).mark_infinite(true),
-        )
-        .await?;
-        let df = ctx.sql("SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
-        match df.create_physical_plan().await {
-            Ok(_) => panic!("Expecting error."),
-            Err(e) => {
-                assert_eq!(e.to_string(), "PipelineChecker\ncaused by\nError during planning: Join operation cannot operate on a non-prunable stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag")
-            }
-        }
-        Ok(())
-    }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn build_null_columns_first() -> Result<()> {
         let join_type = JoinType::Full;
         let cardinality = (10, 11);
         let case_expr = 1;
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let session_config = SessionConfig::new().with_repartition_joins(false);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -2038,9 +1867,9 @@ mod tests {
         let join_type = JoinType::Full;
         let cardinality = (10, 11);
         let case_expr = 1;
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let session_config = SessionConfig::new().with_repartition_joins(false);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -2102,9 +1931,9 @@ mod tests {
         let join_type = JoinType::Full;
         let cardinality = (10, 11);
         let case_expr = 1;
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let session_config = SessionConfig::new().with_repartition_joins(false);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -2167,9 +1996,9 @@ mod tests {
         let join_type = JoinType::Full;
 
         // a + b > c + 10 AND a + b < c + 100
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let session_config = SessionConfig::new().with_repartition_joins(false);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -2241,9 +2070,9 @@ mod tests {
         let join_type = case.0;
         let should_be_empty = case.1;
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let session_config = SessionConfig::new().with_repartition_joins(false);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
         // Ensure there will be matching rows
         let (left_batch, right_batch) = build_sides_record_batches(20, (1, 1))?;
         let left_schema = left_batch.schema();
@@ -2369,9 +2198,9 @@ mod tests {
         cardinality: (i32, i32),
         #[values(0, 1)] case_expr: usize,
     ) -> Result<()> {
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let session_config = SessionConfig::new().with_repartition_joins(false);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -2453,9 +2282,9 @@ mod tests {
         )]
         cardinality: (i32, i32),
     ) -> Result<()> {
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let session_config = SessionConfig::new().with_repartition_joins(false);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
@@ -2532,9 +2361,9 @@ mod tests {
         cardinality: (i32, i32),
         #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
     ) -> Result<()> {
-        let config = SessionConfig::new().with_repartition_joins(false);
-        let session_ctx = SessionContext::with_config(config);
-        let task_ctx = session_ctx.task_ctx();
+        let session_config = SessionConfig::new().with_repartition_joins(false);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
