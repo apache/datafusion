@@ -843,6 +843,45 @@ statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT conta
 SELECT * EXCLUDE(a, a)
 FROM table1
 
+# run below query in multi partitions
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+# since query below contains computation
+# inside projection expr, increasing partitions
+# is beneficial
+query TT
+EXPLAIN SELECT a, a+b
+FROM annotated_data_finite2
+ORDER BY a ASC;
+----
+logical_plan
+Sort: annotated_data_finite2.a ASC NULLS LAST
+--Projection: annotated_data_finite2.a, annotated_data_finite2.a + annotated_data_finite2.b
+----TableScan: annotated_data_finite2 projection=[a, b]
+physical_plan
+SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
+----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+
+# since query below doesn't computation
+# inside projection expr, increasing partitions
+# is not beneficial. Hence plan doesn't contain
+# RepartitionExec
+query TT
+EXPLAIN SELECT a, b, 2
+FROM annotated_data_finite2
+ORDER BY a ASC;
+----
+logical_plan
+Sort: annotated_data_finite2.a ASC NULLS LAST
+--Projection: annotated_data_finite2.a, annotated_data_finite2.b, Int64(2)
+----TableScan: annotated_data_finite2 projection=[a, b]
+physical_plan
+ProjectionExec: expr=[a@0 as a, b@1 as b, 2 as Int64(2)]
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+
 statement ok
 drop table annotated_data_finite2;
 
