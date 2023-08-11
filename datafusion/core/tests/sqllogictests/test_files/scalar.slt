@@ -1032,12 +1032,21 @@ select a ^ b, c ^ d, e ^ f from signed_integers;
 -998 -133 -16
 NULL NULL NULL
 
+# bitwise xor with other operators
+query II rowsort
+select 2 * c - 1 ^ 856 + d + 3, d ^ 7 >> 4 from signed_integers;
+----
+-3328 128
+-822 64
+686 -16
+NULL -32
+
 statement ok
 set datafusion.sql_parser.dialect = postgresql;
 
 # postgresql bitwise xor with column and scalar
 query I rowsort
-select c#856 from signed_integers;
+select c # 856 from signed_integers;
 ----
 -138
 -367
@@ -1046,12 +1055,21 @@ NULL
 
 # postgresql bitwise xor with columns
 query III rowsort
-select a#b, c#d, e#f from signed_integers;
+select a # b, c # d, e # f from signed_integers;
 ----
 -10003 -3026 -10
 -101 -1591 -10
 -998 -133 -16
 NULL NULL NULL
+
+# postgresql bitwise xor with other operators
+query II rowsort
+select 2 * c - 1 # 856 + d + 3, d # 7 >> 4 from signed_integers;
+----
+-3328 128
+-822 64
+686 -16
+NULL -32
 
 statement ok
 set datafusion.sql_parser.dialect = generic;

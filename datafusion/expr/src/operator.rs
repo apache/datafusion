@@ -69,7 +69,7 @@ pub enum Operator {
     BitwiseAnd,
     /// Bitwise or, like `|`
     BitwiseOr,
-    /// Bitwise xor, such as `^` or `#` in PostgreSQL
+    /// Bitwise xor, such as `^` in MySQL or `#` in PostgreSQL
     BitwiseXor,
     /// Bitwise right, like `>>`
     BitwiseShiftRight,
