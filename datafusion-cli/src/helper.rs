@@ -95,7 +95,7 @@ impl CliHelper {
 
 impl Default for CliHelper {
     fn default() -> Self {
-        Self::new("dialect")
+        Self::new("generic")
     }
 }
 
@@ -259,7 +259,9 @@ mod tests {
         // shoule be invalid in generic dialect
         let result =
             readline_direct(Cursor::new(r"select 1 # 2;".as_bytes()), &validator)?;
-        assert!(matches!(result, ValidationResult::Invalid(Some(_))));
+        assert!(
+            matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("Invalid statement"))
+        );
 
         // valid in postgresql dialect
         validator.set_dialect("postgresql");
