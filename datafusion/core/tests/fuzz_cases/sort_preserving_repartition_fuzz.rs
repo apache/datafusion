@@ -107,7 +107,7 @@ mod sp_repartition_fuzz_tests {
         let running_source = Arc::new(
             MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
                 .unwrap()
-                .with_sort_information(sort_keys.clone()),
+                .with_sort_information(vec![sort_keys.clone()]),
         );
         let hash_exprs = vec![col("c", &schema).unwrap()];
 
