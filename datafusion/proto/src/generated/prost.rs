@@ -2375,6 +2375,7 @@ pub enum ScalarFunction {
     ArrayReplaceAll = 110,
     Nanvl = 111,
     Flatten = 112,
+    RegexpIsMatch = 113,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2405,6 +2406,7 @@ impl ScalarFunction {
             ScalarFunction::Trunc => "Trunc",
             ScalarFunction::Array => "Array",
             ScalarFunction::RegexpMatch => "RegexpMatch",
+            ScalarFunction::RegexpIsMatch => "RegexpIsMatch",
             ScalarFunction::BitLength => "BitLength",
             ScalarFunction::Btrim => "Btrim",
             ScalarFunction::CharacterLength => "CharacterLength",

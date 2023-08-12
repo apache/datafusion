@@ -213,6 +213,8 @@ pub enum BuiltinScalarFunction {
     Random,
     /// regexp_replace
     RegexpReplace,
+    /// regexp_matches
+    RegexpMatches,
     /// repeat
     Repeat,
     /// replace
@@ -419,6 +421,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Trim => Volatility::Immutable,
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
+            BuiltinScalarFunction::RegexpMatches => Volatility::Immutable,
             BuiltinScalarFunction::Struct => Volatility::Immutable,
             BuiltinScalarFunction::FromUnixtime => Volatility::Immutable,
             BuiltinScalarFunction::ArrowTypeof => Volatility::Immutable,
@@ -743,6 +746,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => {
                 utf8_to_str_type(&input_expr_types[0], "upper")
             }
+            BuiltinScalarFunction::RegexpMatches => Ok(Boolean),
             BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
                 LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
                 Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
@@ -1104,7 +1108,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::NullIf => {
                 Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), self.volatility())
             }
-            BuiltinScalarFunction::RegexpMatch => Signature::one_of(
+            BuiltinScalarFunction::RegexpMatch | BuiltinScalarFunction::RegexpMatches => Signature::one_of(
                 vec![
                     Exact(vec![Utf8, Utf8]),
                     Exact(vec![LargeUtf8, Utf8]),
@@ -1280,6 +1284,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
 
         // regex functions
         BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
+        BuiltinScalarFunction::RegexpMatches => &["regexp_matches"],
         BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
 
         // time/date functions

@@ -518,6 +518,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
+            ScalarFunction::RegexpIsMatch => Self::RegexpMatches,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,

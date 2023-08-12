@@ -33,6 +33,7 @@ use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::sync::Arc;
+use arrow_schema::DataType;
 
 use crate::functions::{make_scalar_function, make_scalar_function_with_hints, Hint};
 
@@ -50,6 +51,94 @@ macro_rules! fetch_string_arg {
         }
     }};
 }
+
+pub fn regexp_matches<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args.len() {
+        2 => {
+            let values = as_generic_string_array::<T>(&args[0])?;
+            let regex = as_generic_string_array::<T>(&args[1])?;
+            compute::regexp_is_match_utf8(values, regex, None).map_err(DataFusionError::ArrowError).map(|a| Arc::new(a) as ArrayRef)
+        }
+        3 => {
+            let values = as_generic_string_array::<T>(&args[0])?;
+            let regex = as_generic_string_array::<T>(&args[1])?;
+            let flags = Some(as_generic_string_array::<T>(&args[2])?);
+
+            match flags {
+                Some(f) if f.iter().any(|s| s == Some("g")) => {
+                    plan_err!("regex_is_match() does not support the \"global\" option")
+                },
+                _ => compute::regexp_is_match_utf8(values, regex, flags).map_err(DataFusionError::ArrowError).map(|a| Arc::new(a) as ArrayRef),
+            }
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "regex_is_match was called with {other} arguments. It requires 2."
+        ))),
+    }
+}
+
+fn _regexp_matches_scalar<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let pattern = fetch_string_arg!(&args[1], "pattern", T, _regexp_matches_early_abort);
+    let flags = match args.len() {
+        2 => None,
+        3 => Some(fetch_string_arg!(&args[2], "flags", T, _regexp_replace_early_abort)),
+        other => {
+            return Err(DataFusionError::Internal(format!(
+                "regexp_match was called with {other} arguments. It requires at least 3 and at most 4."
+            )))
+        }
+    };
+
+    compute::regexp_is_match_utf8_scalar(string_array, pattern, flags).map_err(DataFusionError::ArrowError).map(|a| Arc::new(a) as ArrayRef)
+}
+
+fn _regexp_matches_early_abort<T: OffsetSizeTrait>(
+    input_array: &GenericStringArray<T>,
+) -> Result<ArrayRef> {
+    // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
+    // are actuall null, then the result will be an array of the same size but with nulls.
+    //
+    // Also acts like an early abort mechanism when the input array is empty.
+    Ok(new_null_array(&DataType::Boolean, input_array.len()))
+}
+
+pub fn specialize_regexp_is_match<T: OffsetSizeTrait>(
+    args: &[ColumnarValue],
+) -> Result<ScalarFunctionImplementation> {
+    // This will serve as a dispatch table where we can
+    // leverage it in order to determine whether the scalarity
+    // of the given set of arguments fits a better specialized
+    // function.
+    let (is_source_scalar, is_pattern_scalar, is_flags_scalar) = (
+        matches!(args[0], ColumnarValue::Scalar(_)),
+        matches!(args[1], ColumnarValue::Scalar(_)),
+        // The third argument (flags) is optional; so in the event that
+        // it is not available, we'll claim that it is scalar.
+        matches!(args.get(2), Some(ColumnarValue::Scalar(_)) | None),
+    );
+
+    match (
+        is_source_scalar,
+        is_pattern_scalar,
+        is_flags_scalar,
+    ) {
+        (_, true, true) => Ok(make_scalar_function_with_hints(
+            _regexp_matches_scalar::<T>,
+            vec![
+                Hint::Pad,
+                Hint::AcceptsSingular,
+                Hint::AcceptsSingular,
+            ],
+        )),
+
+        // If there are no specialized implementations, we'll fall back to the
+        // generic implementation.
+        (_, _, _) => Ok(make_scalar_function(_regexp_matches_scalar::<T>)),
+    }
+}
+
+
 
 /// extract a specific group from a string column, using a regular expression
 pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -330,6 +419,28 @@ mod tests {
     use super::*;
     use arrow::array::*;
     use datafusion_common::ScalarValue;
+
+    #[test]
+    fn test_case_sensitive_regexp_is_match() {
+        let values = StringArray::from(vec!["abc"; 5]);
+        let patterns =
+            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+
+        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
+        let mut expected_builder = ListBuilder::new(elem_builder);
+        expected_builder.values().append_value("a");
+        expected_builder.append(true);
+        expected_builder.append(false);
+        expected_builder.values().append_value("b");
+        expected_builder.append(true);
+        expected_builder.append(false);
+        expected_builder.append(false);
+        let expected = expected_builder.finish();
+
+        let re = regexp_matches::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
 
     #[test]
     fn test_case_sensitive_regexp_match() {

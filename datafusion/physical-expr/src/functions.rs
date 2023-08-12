@@ -674,6 +674,31 @@ pub fn create_physical_fun(
                 ))),
             })
         }
+        BuiltinScalarFunction::RegexpMatches => {
+            Arc::new(|args| match args[0].data_type() {
+                DataType::Utf8 => {
+                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
+                        specialize_regexp_is_match,
+                        i32,
+                        "regexp_matches"
+                    );
+                    let func = specializer_func(args)?;
+                    func(args)
+                }
+                DataType::LargeUtf8 => {
+                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
+                        specialize_regexp_is_match,
+                        i64,
+                        "regexp_matches"
+                    );
+                    let func = specializer_func(args)?;
+                    func(args)
+                }
+                other => Err(DataFusionError::Internal(format!(
+                    "Unsupported data type {other:?} for function regexp_matches",
+                ))),
+            })
+        }
         BuiltinScalarFunction::RegexpReplace => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
