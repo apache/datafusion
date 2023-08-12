@@ -1663,13 +1663,13 @@ macro_rules! build_timestamp_list {
                         $SIZE
                     )
                 }
-                TimeUnit::Microsecond => build_values_list_tz!(
+                TimeUnit::Millisecond => build_values_list_tz!(
                     TimestampMillisecondBuilder,
                     TimestampMillisecond,
                     values,
                     $SIZE
                 ),
-                TimeUnit::Millisecond => build_values_list_tz!(
+                TimeUnit::Microsecond => build_values_list_tz!(
                     TimestampMicrosecondBuilder,
                     TimestampMicrosecond,
                     values,
@@ -6012,6 +6012,17 @@ mod tests {
         let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
         let array = concat(&arrays).unwrap();
         check_array(array);
+    }
+
+    #[test]
+    fn test_build_timestamp_millisecond_list() {
+        let values = vec![ScalarValue::TimestampMillisecond(Some(1), None)];
+        let ts_list = ScalarValue::new_list(
+            Some(values),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+        );
+        let list = ts_list.to_array_of_size(1);
+        assert_eq!(1, list.len());
     }
 
     fn get_random_timestamps(sample_size: u64) -> Vec<ScalarValue> {
