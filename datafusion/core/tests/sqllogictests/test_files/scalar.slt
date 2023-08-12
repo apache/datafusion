@@ -695,6 +695,52 @@ select round(nanvl(asin(f + a), 2), 5), round(nanvl(asin(b + c), 3), 5), round(n
 2 -1.11977 4
 NULL NULL NULL
 
+## isnan
+
+# isnan scalar function
+query BBB
+select isnan(10.0), isnan('NaN'::DOUBLE), isnan(-'NaN'::DOUBLE)
+----
+false true true
+
+# isnan scalar nulls
+query B
+select isnan(NULL)
+----
+NULL
+
+# isnan with columns
+query BBBB
+select isnan(asin(a + b + c)), isnan(-asin(a + b + c)), isnan(asin(d + e + f)), isnan(-asin(d + e + f)) from small_floats;
+----
+true true false false
+false false true true
+true true false false
+NULL NULL NULL NULL
+
+## iszero
+
+# iszero scalar function
+query BBB
+select iszero(10.0), iszero(0.0), iszero(-0.0)
+----
+false true true
+
+# iszero scalar nulls
+query B
+select iszero(NULL)
+----
+NULL
+
+# iszero with columns
+query BBBB
+select iszero(floor(a + b + c)), iszero(-floor(a + b + c)), iszero(floor(d + e + f)), iszero(-floor(d + e + f)) from small_floats;
+----
+false false false false
+true true false false
+false false true true
+NULL NULL NULL NULL
+
 ## pi
 
 # pi scalar function

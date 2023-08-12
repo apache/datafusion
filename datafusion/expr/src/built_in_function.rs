@@ -83,6 +83,10 @@ pub enum BuiltinScalarFunction {
     Gcd,
     /// lcm, Least common multiple
     Lcm,
+    /// isnan
+    Isnan,
+    /// iszero
+    Iszero,
     /// ln, Natural logarithm
     Ln,
     /// log, same as log10
@@ -333,6 +337,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
             BuiltinScalarFunction::Gcd => Volatility::Immutable,
+            BuiltinScalarFunction::Isnan => Volatility::Immutable,
+            BuiltinScalarFunction::Iszero => Volatility::Immutable,
             BuiltinScalarFunction::Lcm => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
             BuiltinScalarFunction::Log => Volatility::Immutable,
@@ -789,6 +795,8 @@ impl BuiltinScalarFunction {
                 _ => Ok(Float64),
             },
 
+            BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => Ok(Boolean),
+
             BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
             BuiltinScalarFunction::Abs
@@ -1186,7 +1194,9 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Sqrt
             | BuiltinScalarFunction::Tan
             | BuiltinScalarFunction::Tanh
-            | BuiltinScalarFunction::Cot => {
+            | BuiltinScalarFunction::Cot
+            | BuiltinScalarFunction::Isnan
+            | BuiltinScalarFunction::Iszero => {
                 // math expressions expect 1 argument of type f64 or f32
                 // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
                 // return the best approximation for it (in f64).
@@ -1223,6 +1233,8 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Factorial => &["factorial"],
         BuiltinScalarFunction::Floor => &["floor"],
         BuiltinScalarFunction::Gcd => &["gcd"],
+        BuiltinScalarFunction::Isnan => &["isnan"],
+        BuiltinScalarFunction::Iszero => &["iszero"],
         BuiltinScalarFunction::Lcm => &["lcm"],
         BuiltinScalarFunction::Ln => &["ln"],
         BuiltinScalarFunction::Log => &["log"],

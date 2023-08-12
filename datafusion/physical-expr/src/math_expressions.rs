@@ -18,7 +18,7 @@
 //! Math expressions
 
 use arrow::array::ArrayRef;
-use arrow::array::{Float32Array, Float64Array, Int64Array};
+use arrow::array::{BooleanArray, Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{Float32, Int64};
@@ -139,6 +139,19 @@ macro_rules! make_function_inputs2 {
                 _ => None,
             })
             .collect::<$ARRAY_TYPE1>()
+    }};
+}
+
+macro_rules! make_function_scalar_inputs_return_type {
+    ($ARG: expr, $NAME:expr, $ARGS_TYPE:ident, $RETURN_TYPE:ident, $FUNC: block) => {{
+        let arg = downcast_arg!($ARG, $NAME, $ARGS_TYPE);
+
+        arg.iter()
+            .map(|a| match a {
+                Some(a) => Some($FUNC(a)),
+                _ => None,
+            })
+            .collect::<$RETURN_TYPE>()
     }};
 }
 
@@ -302,6 +315,56 @@ pub fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
 
         other => Err(DataFusionError::Internal(format!(
             "Unsupported data type {other:?} for function nanvl"
+        ))),
+    }
+}
+
+/// Isnan SQL function
+pub fn isnan(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::Float64 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
+            &args[0],
+            "x",
+            Float64Array,
+            BooleanArray,
+            { f64::is_nan }
+        )) as ArrayRef),
+
+        DataType::Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
+            &args[0],
+            "x",
+            Float32Array,
+            BooleanArray,
+            { f32::is_nan }
+        )) as ArrayRef),
+
+        other => Err(DataFusionError::Internal(format!(
+            "Unsupported data type {other:?} for function isnan"
+        ))),
+    }
+}
+
+/// Iszero SQL function
+pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
+    match args[0].data_type() {
+        DataType::Float64 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
+            &args[0],
+            "x",
+            Float64Array,
+            BooleanArray,
+            { |x: f64| { x == 0_f64 } }
+        )) as ArrayRef),
+
+        DataType::Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
+            &args[0],
+            "x",
+            Float32Array,
+            BooleanArray,
+            { |x: f32| { x == 0_f32 } }
+        )) as ArrayRef),
+
+        other => Err(DataFusionError::Internal(format!(
+            "Unsupported data type {other:?} for function iszero"
         ))),
     }
 }
@@ -650,7 +713,9 @@ mod tests {
 
     use super::*;
     use arrow::array::{Float64Array, NullArray};
-    use datafusion_common::cast::{as_float32_array, as_float64_array, as_int64_array};
+    use datafusion_common::cast::{
+        as_boolean_array, as_float32_array, as_float64_array, as_int64_array,
+    };
 
     #[test]
     fn test_random_expression() {
@@ -1040,5 +1105,77 @@ mod tests {
         assert_eq!(floats.value(1), 6.0);
         assert_eq!(floats.value(2), 3.0);
         assert!(floats.value(3).is_nan());
+    }
+
+    #[test]
+    fn test_isnan_f64() {
+        let args: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
+            1.0,
+            f64::NAN,
+            3.0,
+            -f64::NAN,
+        ]))];
+
+        let result = isnan(&args).expect("failed to initialize function isnan");
+        let booleans =
+            as_boolean_array(&result).expect("failed to initialize function isnan");
+
+        assert_eq!(booleans.len(), 4);
+        assert!(!booleans.value(0));
+        assert!(booleans.value(1));
+        assert!(!booleans.value(2));
+        assert!(booleans.value(3));
+    }
+
+    #[test]
+    fn test_isnan_f32() {
+        let args: Vec<ArrayRef> = vec![Arc::new(Float32Array::from(vec![
+            1.0,
+            f32::NAN,
+            3.0,
+            f32::NAN,
+        ]))];
+
+        let result = isnan(&args).expect("failed to initialize function isnan");
+        let booleans =
+            as_boolean_array(&result).expect("failed to initialize function isnan");
+
+        assert_eq!(booleans.len(), 4);
+        assert!(!booleans.value(0));
+        assert!(booleans.value(1));
+        assert!(!booleans.value(2));
+        assert!(booleans.value(3));
+    }
+
+    #[test]
+    fn test_iszero_f64() {
+        let args: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![1.0, 0.0, 3.0, -0.0]))];
+
+        let result = iszero(&args).expect("failed to initialize function iszero");
+        let booleans =
+            as_boolean_array(&result).expect("failed to initialize function iszero");
+
+        assert_eq!(booleans.len(), 4);
+        assert!(!booleans.value(0));
+        assert!(booleans.value(1));
+        assert!(!booleans.value(2));
+        assert!(booleans.value(3));
+    }
+
+    #[test]
+    fn test_iszero_f32() {
+        let args: Vec<ArrayRef> =
+            vec![Arc::new(Float32Array::from(vec![1.0, 0.0, 3.0, -0.0]))];
+
+        let result = iszero(&args).expect("failed to initialize function iszero");
+        let booleans =
+            as_boolean_array(&result).expect("failed to initialize function iszero");
+
+        assert_eq!(booleans.len(), 4);
+        assert!(!booleans.value(0));
+        assert!(booleans.value(1));
+        assert!(!booleans.value(2));
+        assert!(booleans.value(3));
     }
 }
