@@ -994,7 +994,7 @@ mod test {
         ));
         let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();
         assert_eq!(
-            "Plan(\"The function Avg does not support inputs of type Utf8.\")",
+            "Plan(\"No function matches the given name and argument types 'AVG(Utf8)'. You might need to add explicit type casts.\\n\\tCandidate functions:\\n\\tAVG(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)\")",
             &format!("{err:?}")
         );
         Ok(())
