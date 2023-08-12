@@ -43,6 +43,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
             BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
             BinaryOperator::BitwiseXor => Ok(Operator::BitwiseXor),
+            BinaryOperator::PGBitwiseXor => Ok(Operator::BitwiseXor),
             BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
             BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
