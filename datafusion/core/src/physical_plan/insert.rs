@@ -183,12 +183,12 @@ impl ExecutionPlan for InsertExec {
         None
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         // Incoming number of partitions is taken to be the
         // number of files the query is required to write out.
         // The optimizer should not change this number.
         // Parrallelism is handled within the appropriate DataSink
-        false
+        vec![false]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
