@@ -212,6 +212,20 @@ fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>>
     }
 }
 
+fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
+    let data_type = args[0].data_type();
+    if !args
+        .iter()
+        .all(|arg| arg.data_type().equals_datatype(data_type))
+    {
+        return Err(DataFusionError::NotImplemented(format!(
+            "{name} is not implemented for type '{data_type:?}'."
+        )));
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 enum ListOrNull<'a> {
     List(&'a dyn Array),
@@ -637,16 +651,10 @@ macro_rules! append {
 
 /// Array_append SQL function
 pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
-            "Array_append function requires two arguments, got {}",
-            args.len()
-        )));
-    }
-
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
+    check_datatypes("array_append", &[arr.values(), &args[1]])?;
     let res = match (arr.value_type(), element.data_type()) {
                 (DataType::List(_), DataType::List(_)) => concat_internal(args)?,
                 (DataType::Utf8, DataType::Utf8) => append!(arr, element, StringArray),
@@ -662,7 +670,6 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
                 (DataType::UInt16, DataType::UInt16) => append!(arr, element, UInt16Array),
                 (DataType::UInt32, DataType::UInt32) => append!(arr, element, UInt32Array),
                 (DataType::UInt64, DataType::UInt64) => append!(arr, element, UInt64Array),
-                (DataType::Null, _) => return Ok(array(&[ColumnarValue::Array(args[1].clone())])?.into_array(1)),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Array_append is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
@@ -727,16 +734,10 @@ macro_rules! prepend {
 
 /// Array_prepend SQL function
 pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
-            "Array_prepend function requires two arguments, got {}",
-            args.len()
-        )));
-    }
-
     let element = &args[0];
     let arr = as_list_array(&args[1])?;
 
+    check_datatypes("array_prepend", &[&args[0], arr.values()])?;
     let res = match (arr.value_type(), element.data_type()) {
                 (DataType::List(_), DataType::List(_)) => concat_internal(args)?,
                 (DataType::Utf8, DataType::Utf8) => prepend!(arr, element, StringArray),
@@ -752,7 +753,6 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
                 (DataType::UInt16, DataType::UInt16) => prepend!(arr, element, UInt16Array),
                 (DataType::UInt32, DataType::UInt32) => prepend!(arr, element, UInt32Array),
                 (DataType::UInt64, DataType::UInt64) => prepend!(arr, element, UInt64Array),
-                (DataType::Null, _) => return Ok(array(&[ColumnarValue::Array(args[0].clone())])?.into_array(1)),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Array_prepend is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
@@ -1100,6 +1100,7 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
         Int64Array::from_value(0, arr.len())
     };
 
+    check_datatypes("array_position", &[arr.values(), &args[1]])?;
     let res = match arr.value_type() {
         DataType::List(_) => position!(arr, element, index, ListArray),
         DataType::Utf8 => position!(arr, element, index, StringArray),
@@ -1179,6 +1180,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
+    check_datatypes("array_positions", &[arr.values(), &args[1]])?;
     let res = match arr.value_type() {
         DataType::List(_) => positions!(arr, element, ListArray),
         DataType::Utf8 => positions!(arr, element, StringArray),
@@ -1264,6 +1266,7 @@ macro_rules! array_removement_function {
             let element = &args[1];
             let max = $MAX_FUNC(args)?;
 
+            check_datatypes(stringify!($FUNC), &[arr.values(), &args[1]])?;
             let res = match (arr.value_type(), element.data_type()) {
                         (DataType::List(_), DataType::List(_)) => general_remove!(arr, element, max, ListArray),
                         (DataType::Utf8, DataType::Utf8) => general_remove!(arr, element, max, StringArray),
@@ -1478,6 +1481,7 @@ macro_rules! array_replacement_function {
             let to = &args[2];
             let max = $MAX_FUNC(args)?;
 
+            check_datatypes(stringify!($FUNC), &[arr.values(), &args[1], &args[2]])?;
             let res = match (arr.value_type(), from.data_type(), to.data_type()) {
                         (DataType::List(afield), DataType::List(ffield), DataType::List(tfield)) => {
                             match (afield.data_type(), ffield.data_type(), tfield.data_type()) {
@@ -1897,13 +1901,14 @@ macro_rules! non_list_contains {
 
 /// Array_has SQL function
 pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
-    assert_eq!(args.len(), 2);
+    check_datatypes("array_has", &[&args[0], &args[1]])?;
 
-    let array = args[0].as_list::<i32>();
+    let array = as_list_array(&args[0])?;
+    let element = &args[1];
 
-    match args[1].data_type() {
+    match element.data_type() {
         DataType::List(_) => {
-            let sub_array = args[1].as_list::<i32>();
+            let sub_array = as_list_array(element)?;
             let mut boolean_builder = BooleanArray::builder(array.len());
 
             for (arr, elem) in array.iter().zip(sub_array.iter()) {
@@ -1919,44 +1924,44 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
         // Int64, Int32, Int16, Int8
         // UInt64, UInt32, UInt16, UInt8
         DataType::Int64 => {
-            non_list_contains!(array, args[1], Int64Array)
+            non_list_contains!(array, element, Int64Array)
         }
         DataType::Int32 => {
-            non_list_contains!(array, args[1], Int32Array)
+            non_list_contains!(array, element, Int32Array)
         }
         DataType::Int16 => {
-            non_list_contains!(array, args[1], Int16Array)
+            non_list_contains!(array, element, Int16Array)
         }
         DataType::Int8 => {
-            non_list_contains!(array, args[1], Int8Array)
+            non_list_contains!(array, element, Int8Array)
         }
         DataType::UInt64 => {
-            non_list_contains!(array, args[1], UInt64Array)
+            non_list_contains!(array, element, UInt64Array)
         }
         DataType::UInt32 => {
-            non_list_contains!(array, args[1], UInt32Array)
+            non_list_contains!(array, element, UInt32Array)
         }
         DataType::UInt16 => {
-            non_list_contains!(array, args[1], UInt16Array)
+            non_list_contains!(array, element, UInt16Array)
         }
         DataType::UInt8 => {
-            non_list_contains!(array, args[1], UInt8Array)
+            non_list_contains!(array, element, UInt8Array)
         }
 
         DataType::Float64 => {
-            non_list_contains!(array, args[1], Float64Array)
+            non_list_contains!(array, element, Float64Array)
         }
         DataType::Float32 => {
-            non_list_contains!(array, args[1], Float32Array)
+            non_list_contains!(array, element, Float32Array)
         }
         DataType::Utf8 => {
-            non_list_contains!(array, args[1], StringArray)
+            non_list_contains!(array, element, StringArray)
         }
         DataType::LargeUtf8 => {
-            non_list_contains!(array, args[1], LargeStringArray)
+            non_list_contains!(array, element, LargeStringArray)
         }
         DataType::Boolean => {
-            non_list_contains!(array, args[1], BooleanArray)
+            non_list_contains!(array, element, BooleanArray)
         }
         data_type => Err(DataFusionError::NotImplemented(format!(
             "Array_has is not implemented for '{data_type:?}'"
@@ -1985,10 +1990,10 @@ macro_rules! array_has_any_non_list_check {
 
 /// Array_has_any SQL function
 pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
-    assert_eq!(args.len(), 2);
+    check_datatypes("array_has_any", &[&args[0], &args[1]])?;
 
-    let array = args[0].as_list::<i32>();
-    let sub_array = args[1].as_list::<i32>();
+    let array = as_list_array(&args[0])?;
+    let sub_array = as_list_array(&args[1])?;
 
     let mut boolean_builder = BooleanArray::builder(array.len());
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
@@ -2079,10 +2084,10 @@ macro_rules! array_has_all_non_list_check {
 
 /// Array_has_all SQL function
 pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
-    assert_eq!(args.len(), 2);
+    check_datatypes("array_has_all", &[&args[0], &args[1]])?;
 
-    let array = args[0].as_list::<i32>();
-    let sub_array = args[1].as_list::<i32>();
+    let array = as_list_array(&args[0])?;
+    let sub_array = as_list_array(&args[1])?;
 
     let mut boolean_builder = BooleanArray::builder(array.len());
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
@@ -3341,6 +3346,20 @@ mod tests {
             as_uint64_array(&array).expect("failed to initialize function array_ndims");
 
         assert_eq!(result, &UInt64Array::from_value(2, 1));
+    }
+
+    #[test]
+    fn test_check_invalid_datatypes() {
+        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
+        let list_array =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
+        let int64_array = Arc::new(StringArray::from(vec![Some("string")])) as ArrayRef;
+
+        let args = [list_array, int64_array];
+
+        let array = array_append(&args);
+
+        assert!(array.is_err());
     }
 
     fn return_array() -> ColumnarValue {
