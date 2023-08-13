@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Operators &#8212; Arrow DataFusion  documentation</title>
+    
+    <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=51945fb5" />
+    
+    <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../../_static/doctools.js?v=888ff710"></script>
+    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Aggregate Functions" href="aggregate_functions.html" />
+    <link rel="prev" title="Information Schema" href="information_schema.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion">
+   Github and Issue Tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://crates.io/crates/datafusion">
+   crates.io
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
+   API Docs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../cli.html">
+   Command line SQL console
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../expressions.html">
+   Expression API
+  </a>
+ </li>
+ <li class="toctree-l1 current active has-children">
+  <a class="reference internal" href="index.html">
+   SQL Reference
+  </a>
+  <input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul class="current">
+   <li class="toctree-l2">
+    <a class="reference internal" href="data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
+     Operators
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="window_functions.html">
+     Window Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="sql_status.html">
+     Status
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../../contributor-guide/quarterly_roadmap.html">
+   Quarterly Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../../contributor-guide/specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+    
+  </div>
+
+  <a class="navbar-brand" href="../../index.html">
+    <img src="../../_static/images/DataFusion-Logo-Background-White.png" class="logo" alt="logo">
+  </a>
+</nav>
+
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#numerical-operators">
+   Numerical Operators
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id1">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       +
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id2">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       -
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id3">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       *
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id4">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       /
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id5">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       %
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#comparison-operators">
+   Comparison Operators
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id6">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       =
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id7">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       !=
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id8">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &lt;
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id9">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &lt;=
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id10">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &gt;
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id11">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &gt;=
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#is-distinct-from">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       IS
+      </span>
+      <span class="pre">
+       DISTINCT
+      </span>
+      <span class="pre">
+       FROM
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#is-not-distinct-from">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       IS
+      </span>
+      <span class="pre">
+       NOT
+      </span>
+      <span class="pre">
+       DISTINCT
+      </span>
+      <span class="pre">
+       FROM
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id12">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ~
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id13">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ~*
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id14">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       !~
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id15">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       !~*
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#logical-operators">
+   Logical Operators
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#and">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       AND
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#or">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       OR
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#bitwise-operators">
+   Bitwise Operators
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id16">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &amp;
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id17">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       |
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id18">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       #
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id19">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &gt;&gt;
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id20">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &lt;&lt;
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#other-operators">
+   Other Operators
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id21">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ||
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id22">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       @&gt;
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#id23">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &lt;@
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/operators.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="operators">
+<h1>Operators<a class="headerlink" href="#operators" title="Permalink to this heading">¶</a></h1>
+<section id="numerical-operators">
+<h2>Numerical Operators<a class="headerlink" href="#numerical-operators" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#id1"><span class="xref myst">+ (plus)</span></a></p></li>
+<li><p><a class="reference internal" href="#id2"><span class="xref myst">- (minus)</span></a></p></li>
+<li><p><a class="reference internal" href="#id3"><span class="xref myst">* (multiply)</span></a></p></li>
+<li><p><a class="reference internal" href="#id4"><span class="xref myst">/ (divide)</span></a></p></li>
+<li><p><a class="reference internal" href="#id5"><span class="xref myst">% (modulo)</span></a></p></li>
+</ul>
+<section id="id1">
+<h3><code class="docutils literal notranslate"><span class="pre">+</span></code><a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h3>
+<p>Addition</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id2">
+<h3><code class="docutils literal notranslate"><span class="pre">-</span></code><a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h3>
+<p>Subtraction</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id3">
+<h3><code class="docutils literal notranslate"><span class="pre">*</span></code><a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h3>
+<p>Multiplication</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id4">
+<h3><code class="docutils literal notranslate"><span class="pre">/</span></code><a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h3>
+<p>Division (integer division truncates toward zero)</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">8</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id5">
+<h3><code class="docutils literal notranslate"><span class="pre">%</span></code><a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h3>
+<p>Modulo (remainder)</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">7</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">7</span><span class="p">)</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="comparison-operators">
+<h2>Comparison Operators<a class="headerlink" href="#comparison-operators" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#id6"><span class="xref myst">= (equal)</span></a></p></li>
+<li><p><a class="reference internal" href="#id7"><span class="xref myst">!= (not equal)</span></a></p></li>
+<li><p><a class="reference internal" href="#id8"><span class="xref myst">&lt; (less than)</span></a></p></li>
+<li><p><a class="reference internal" href="#id9"><span class="xref myst">&lt;= (less than or equal to)</span></a></p></li>
+<li><p><a class="reference internal" href="#id10"><span class="xref myst">&gt; (greater than)</span></a></p></li>
+<li><p><a class="reference internal" href="#id11"><span class="xref myst">&gt;= (greater than or equal to)</span></a></p></li>
+<li><p><a class="reference internal" href="#is-distinct-from">IS DISTINCT FROM</a></p></li>
+<li><p><a class="reference internal" href="#is-not-distinct-from">IS NOT DISTINCT FROM</a></p></li>
+<li><p><a class="reference internal" href="#id12"><span class="xref myst">~ (regex match)</span></a></p></li>
+<li><p><a class="reference internal" href="#id13"><span class="xref myst">~* (regex case-insensitive match)</span></a></p></li>
+<li><p><a class="reference internal" href="#id14"><span class="xref myst">!~ (not regex match)</span></a></p></li>
+<li><p><a class="reference internal" href="#id15"><span class="xref myst">!~* (not regex case-insensitive match)</span></a></p></li>
+</ul>
+<section id="id6">
+<h3><code class="docutils literal notranslate"><span class="pre">=</span></code><a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h3>
+<p>Equal</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id7">
+<h3><code class="docutils literal notranslate"><span class="pre">!=</span></code><a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
+<p>Not Equal</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                 </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id8">
+<h3><code class="docutils literal notranslate"><span class="pre">&lt;</span></code><a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h3>
+<p>Less Than</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id9">
+<h3><code class="docutils literal notranslate"><span class="pre">&lt;=</span></code><a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h3>
+<p>Less Than or Equal To</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                 </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id10">
+<h3><code class="docutils literal notranslate"><span class="pre">&gt;</span></code><a class="headerlink" href="#id10" title="Permalink to this heading">¶</a></h3>
+<p>Greater Than</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">6</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id11">
+<h3><code class="docutils literal notranslate"><span class="pre">&gt;=</span></code><a class="headerlink" href="#id11" title="Permalink to this heading">¶</a></h3>
+<p>Greater Than or Equal To</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                 </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="is-distinct-from">
+<h3><code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">DISTINCT</span> <span class="pre">FROM</span></code><a class="headerlink" href="#is-distinct-from" title="Permalink to this heading">¶</a></h3>
+<p>Guarantees the result of a comparison is <code class="docutils literal notranslate"><span class="pre">true</span></code> or <code class="docutils literal notranslate"><span class="pre">false</span></code> and not an empty set</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">NULL</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="is-not-distinct-from">
+<h3><code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">NOT</span> <span class="pre">DISTINCT</span> <span class="pre">FROM</span></code><a class="headerlink" href="#is-not-distinct-from" title="Permalink to this heading">¶</a></h3>
+<p>The negation of <code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">DISTINCT</span> <span class="pre">FROM</span></code></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">NULL</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id12">
+<h3><code class="docutils literal notranslate"><span class="pre">~</span></code><a class="headerlink" href="#id12" title="Permalink to this heading">¶</a></h3>
+<p>Regex Match</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="s1">&#39;^datafusion(-cli)*&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;datafusion&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;^datafusion(-cli)*&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id13">
+<h3><code class="docutils literal notranslate"><span class="pre">~*</span></code><a class="headerlink" href="#id13" title="Permalink to this heading">¶</a></h3>
+<p>Regex Case-Insensitive Match</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">~*</span><span class="w"> </span><span class="s1">&#39;^DATAFUSION(-cli)*&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;datafusion&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">~*</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;^DATAFUSION(-cli)*&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                             </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id14">
+<h3><code class="docutils literal notranslate"><span class="pre">!~</span></code><a class="headerlink" href="#id14" title="Permalink to this heading">¶</a></h3>
+<p>Not Regex Match</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">!~</span><span class="w"> </span><span class="s1">&#39;^DATAFUSION(-cli)*&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;datafusion&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">!~</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;^DATAFUSION(-cli)*&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                             </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id15">
+<h3><code class="docutils literal notranslate"><span class="pre">!~*</span></code><a class="headerlink" href="#id15" title="Permalink to this heading">¶</a></h3>
+<p>Not Regex Case-Insensitive Match</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">!~*</span><span class="w"> </span><span class="s1">&#39;^DATAFUSION(-cli)+&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;datafusion&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">!~*</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;^DATAFUSION(-cli)+&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="logical-operators">
+<h2>Logical Operators<a class="headerlink" href="#logical-operators" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#and">AND</a></p></li>
+<li><p><a class="reference internal" href="#or">OR</a></p></li>
+</ul>
+<section id="and">
+<h3><code class="docutils literal notranslate"><span class="pre">AND</span></code><a class="headerlink" href="#and" title="Permalink to this heading">¶</a></h3>
+<p>Logical And</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">true</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="nb">Boolean</span><span class="p">(</span><span class="k">true</span><span class="p">)</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="nb">Boolean</span><span class="p">(</span><span class="k">true</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="or">
+<h3><code class="docutils literal notranslate"><span class="pre">OR</span></code><a class="headerlink" href="#or" title="Permalink to this heading">¶</a></h3>
+<p>Logical Or</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">false</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="nb">Boolean</span><span class="p">(</span><span class="k">false</span><span class="p">)</span><span class="w"> </span><span class="k">OR</span><span class="w"> </span><span class="nb">Boolean</span><span class="p">(</span><span class="k">true</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                            </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="bitwise-operators">
+<h2>Bitwise Operators<a class="headerlink" href="#bitwise-operators" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#id16"><span class="xref myst">&amp; (bitwise and)</span></a></p></li>
+<li><p><a class="reference internal" href="#id17"><span class="xref myst">| (bitwise or)</span></a></p></li>
+<li><p><a class="reference internal" href="#id18"><span class="xref myst"># (bitwise xor)</span></a></p></li>
+<li><p><a class="reference internal" href="#id19"><span class="xref myst">&gt;&gt; (bitwise shift right)</span></a></p></li>
+<li><p><a class="reference internal" href="#id20"><span class="xref myst">&lt;&lt; (bitwise shift left)</span></a></p></li>
+</ul>
+<section id="id16">
+<h3><code class="docutils literal notranslate"><span class="pre">&amp;</span></code><a class="headerlink" href="#id16" title="Permalink to this heading">¶</a></h3>
+<p>Bitwise And</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id17">
+<h3><code class="docutils literal notranslate"><span class="pre">|</span></code><a class="headerlink" href="#id17" title="Permalink to this heading">¶</a></h3>
+<p>Bitwise Or</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">7</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id18">
+<h3><code class="docutils literal notranslate"><span class="pre">#</span></code><a class="headerlink" href="#id18" title="Permalink to this heading">¶</a></h3>
+<p>Bitwise Xor (interchangeable with <code class="docutils literal notranslate"><span class="pre">^</span></code>)</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">#</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">#</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id19">
+<h3><code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code><a class="headerlink" href="#id19" title="Permalink to this heading">¶</a></h3>
+<p>Bitwise Shift Right</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id20">
+<h3><code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code><a class="headerlink" href="#id20" title="Permalink to this heading">¶</a></h3>
+<p>Bitwise Shift Left</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">40</span><span class="w">                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="other-operators">
+<h2>Other Operators<a class="headerlink" href="#other-operators" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#id21"><span class="xref myst">|| (string concatenation)</span></a></p></li>
+<li><p><a class="reference internal" href="#id22"><span class="xref myst">&#64;&gt; (array contains)</span></a></p></li>
+<li><p><a class="reference internal" href="#id23"><span class="xref myst">&lt;&#64; (array is contained by)</span></a></p></li>
+</ul>
+<section id="id21">
+<h3><code class="docutils literal notranslate"><span class="pre">||</span></code><a class="headerlink" href="#id21" title="Permalink to this heading">¶</a></h3>
+<p>String Concatenation</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;Hello, &#39;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="s1">&#39;DataFusion!&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;Hello, &quot;</span><span class="p">)</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;DataFusion!&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Hello</span><span class="p">,</span><span class="w"> </span><span class="n">DataFusion</span><span class="o">!</span><span class="w">                     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id22">
+<h3><code class="docutils literal notranslate"><span class="pre">&#64;&gt;</span></code><a class="headerlink" href="#id22" title="Permalink to this heading">¶</a></h3>
+<p>Array Contains</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">@&gt;</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">@&gt;</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                                                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+<section id="id23">
+<h3><code class="docutils literal notranslate"><span class="pre">&lt;&#64;</span></code><a class="headerlink" href="#id23" title="Permalink to this heading">¶</a></h3>
+<p>Array Is Contained By</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;@</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">&lt;@</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                                                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="information_schema.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">Information Schema</p>
+        </div>
+    </a>
+    <a class='right-next' id="next-link" href="aggregate_functions.html" title="next page">
+    <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Aggregate Functions</p>
+    </div>
+    <i class="fas fa-angle-right"></i>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  <footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2023, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+</p>
+    </div>
+    
+  </div>
+</footer>
+  </body>
+</html>
