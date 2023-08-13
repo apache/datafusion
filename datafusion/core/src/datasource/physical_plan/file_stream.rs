@@ -522,7 +522,7 @@ mod tests {
     use datafusion_common::DataFusionError;
 
     use super::*;
-    use crate::datasource::file_format::BatchSerializer;
+    use crate::datasource::file_format::write::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
