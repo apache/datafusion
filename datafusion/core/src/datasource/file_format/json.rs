@@ -47,13 +47,12 @@ use crate::physical_plan::insert::InsertExec;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
-use super::create_writer;
-use super::stateless_serialize_and_write_files;
-use super::BatchSerializer;
 use super::FileFormat;
 use super::FileScanConfig;
-use super::FileWriterMode;
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::file_format::write::{
+    create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
+};
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::physical_plan::NdJsonExec;

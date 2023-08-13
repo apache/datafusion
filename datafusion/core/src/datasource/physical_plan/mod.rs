@@ -46,7 +46,7 @@ pub use json::{JsonOpener, NdJsonExec};
 
 use crate::physical_plan::ExecutionPlan;
 use crate::{
-    datasource::file_format::FileWriterMode,
+    datasource::file_format::write::FileWriterMode,
     physical_plan::{DisplayAs, DisplayFormatType},
 };
 use crate::{
