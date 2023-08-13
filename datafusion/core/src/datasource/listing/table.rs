@@ -2267,7 +2267,6 @@ mod tests {
         // insert data
         session_ctx.sql("insert into foo values ('foo', 'bar', 1),('foo', 'bar', 2), ('foo', 'bar', 3)")
            .await?
-           .repartition(Partitioning::RoundRobinBatch(1))?
            .collect()
            .await?;
 
