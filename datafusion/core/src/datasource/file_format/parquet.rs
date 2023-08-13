@@ -604,6 +604,7 @@ impl DisplayAs for ParquetSink {
 }
 
 /// Parses datafusion.execution.parquet.encoding String to a parquet::basic::Encoding
+/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_encoding_string(str_setting: &str) -> Result<parquet::basic::Encoding> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -667,6 +668,7 @@ fn require_level(codec: &str, level: Option<u32>) -> Result<u32> {
 }
 
 /// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
+/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_compression_string(str_setting: &str) -> Result<parquet::basic::Compression> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     let (codec, level) = split_compression_string(str_setting_lower)?;
@@ -717,6 +719,7 @@ fn parse_compression_string(str_setting: &str) -> Result<parquet::basic::Compres
     }
 }
 
+/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -729,6 +732,7 @@ fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
     }
 }
 
+/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
