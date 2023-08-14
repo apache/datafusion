@@ -845,10 +845,12 @@ impl TableProvider for ListingTable {
                         file_groups.len()
                     )));
                 }
-                writer_mode = crate::datasource::file_format::FileWriterMode::Append;
+                writer_mode =
+                    crate::datasource::file_format::write::FileWriterMode::Append;
             }
             ListingTableInsertMode::AppendNewFiles => {
-                writer_mode = crate::datasource::file_format::FileWriterMode::PutMultipart
+                writer_mode =
+                    crate::datasource::file_format::write::FileWriterMode::PutMultipart
             }
             ListingTableInsertMode::Error => {
                 return plan_err!(
@@ -963,6 +965,7 @@ mod tests {
     use datafusion_common::assert_contains;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
+    use std::collections::HashMap;
     use std::fs::File;
     use tempfile::TempDir;
 
@@ -1554,6 +1557,7 @@ mod tests {
         helper_test_insert_into_append_to_existing_files(
             FileType::JSON,
             FileCompressionType::UNCOMPRESSED,
+            None,
         )
         .await?;
         Ok(())
@@ -1564,6 +1568,7 @@ mod tests {
         helper_test_append_new_files_to_table(
             FileType::JSON,
             FileCompressionType::UNCOMPRESSED,
+            None,
         )
         .await?;
         Ok(())
@@ -1574,6 +1579,7 @@ mod tests {
         helper_test_insert_into_append_to_existing_files(
             FileType::CSV,
             FileCompressionType::UNCOMPRESSED,
+            None,
         )
         .await?;
         Ok(())
@@ -1584,8 +1590,124 @@ mod tests {
         helper_test_append_new_files_to_table(
             FileType::CSV,
             FileCompressionType::UNCOMPRESSED,
+            None,
         )
         .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_new_parquet_files_defaults() -> Result<()> {
+        helper_test_append_new_files_to_table(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_new_parquet_files_session_overrides() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert(
+            "datafusion.execution.parquet.compression".into(),
+            "zstd(5)".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.dictionary_enabled".into(),
+            "false".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.dictionary_page_size_limit".into(),
+            "100".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.staistics_enabled".into(),
+            "none".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.max_statistics_size".into(),
+            "10".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.max_row_group_size".into(),
+            "5".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.created_by".into(),
+            "datafusion test".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.column_index_truncate_length".into(),
+            "50".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.data_page_row_count_limit".into(),
+            "50".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.encoding".into(),
+            "delta_binary_packed".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_enabled".into(),
+            "true".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_fpp".into(),
+            "0.01".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_ndv".into(),
+            "1000".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.writer_version".into(),
+            "2.0".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.write_batch_size".into(),
+            "5".into(),
+        );
+        helper_test_append_new_files_to_table(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+            Some(config_map),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_new_parquet_files_invalid_session_fails(
+    ) -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert(
+            "datafusion.execution.parquet.compression".into(),
+            "zstd".into(),
+        );
+        let e = helper_test_append_new_files_to_table(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+            Some(config_map),
+        )
+        .await
+        .expect_err("Example should fail!");
+        assert_eq!("Error during planning: zstd compression requires specifying a level such as zstd(4)", format!("{e}"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_to_parquet_file_fails() -> Result<()> {
+        let maybe_err = helper_test_insert_into_append_to_existing_files(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+            None,
+        )
+        .await;
+        let _err =
+            maybe_err.expect_err("Appending to existing parquet file did not fail!");
         Ok(())
     }
 
@@ -1615,9 +1737,16 @@ mod tests {
     async fn helper_test_insert_into_append_to_existing_files(
         file_type: FileType,
         file_compression_type: FileCompressionType,
+        session_config_map: Option<HashMap<String, String>>,
     ) -> Result<()> {
         // Create the initial context, schema, and batch.
-        let session_ctx = SessionContext::new();
+        let session_ctx = match session_config_map {
+            Some(cfg) => {
+                let config = SessionConfig::from_string_hash_map(cfg)?;
+                SessionContext::with_config(config)
+            }
+            None => SessionContext::new(),
+        };
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
             "column1",
@@ -1636,7 +1765,7 @@ mod tests {
             "path{}",
             file_type
                 .to_owned()
-                .get_ext_with_compression(file_compression_type.clone())
+                .get_ext_with_compression(file_compression_type)
                 .unwrap()
         );
 
@@ -1777,9 +1906,17 @@ mod tests {
     async fn helper_test_append_new_files_to_table(
         file_type: FileType,
         file_compression_type: FileCompressionType,
+        session_config_map: Option<HashMap<String, String>>,
     ) -> Result<()> {
         // Create the initial context, schema, and batch.
-        let session_ctx = SessionContext::new();
+        let session_ctx = match session_config_map {
+            Some(cfg) => {
+                let config = SessionConfig::from_string_hash_map(cfg)?;
+                SessionContext::with_config(config)
+            }
+            None => SessionContext::new(),
+        };
+
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
             "column1",
@@ -1825,9 +1962,9 @@ mod tests {
                     .register_parquet(
                         "t",
                         tmp_dir.path().to_str().unwrap(),
-                        ParquetReadOptions::default(), // TODO implement insert_mode for parquet
-                                                       //.insert_mode(ListingTableInsertMode::AppendNewFiles)
-                                                       //.schema(schema.as_ref()),
+                        ParquetReadOptions::default()
+                            .insert_mode(ListingTableInsertMode::AppendNewFiles)
+                            .schema(schema.as_ref()),
                     )
                     .await?;
             }
@@ -1894,16 +2031,16 @@ mod tests {
 
         // Read the records in the table
         let batches = session_ctx
-            .sql("select count(*) from t")
+            .sql("select count(*) as count from t")
             .await?
             .collect()
             .await?;
         let expected = vec![
-            "+----------+",
-            "| COUNT(*) |",
-            "+----------+",
-            "| 6        |",
-            "+----------+",
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
         ];
 
         // Assert that the batches read from the file match the expected result.
@@ -1935,18 +2072,18 @@ mod tests {
 
         // Read the contents of the table
         let batches = session_ctx
-            .sql("select count(*) from t")
+            .sql("select count(*) AS count from t")
             .await?
             .collect()
             .await?;
 
         // Define the expected result after the second append.
         let expected = vec![
-            "+----------+",
-            "| COUNT(*) |",
-            "+----------+",
-            "| 12       |",
-            "+----------+",
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 12    |",
+            "+-------+",
         ];
 
         // Assert that the batches read from the file after the second append match the expected result.

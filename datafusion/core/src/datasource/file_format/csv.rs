@@ -36,17 +36,14 @@ use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
-use tokio::io::AsyncWrite;
 
-use super::{stateless_serialize_and_write_files, FileFormat};
+use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::FileWriterMode;
-use crate::datasource::file_format::{
-    AbortMode, AbortableWrite, AsyncPutWriter, BatchSerializer, MultiPart,
-    DEFAULT_SCHEMA_INFER_MAX_RECORD,
+use crate::datasource::file_format::write::{
+    create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
 use crate::datasource::physical_plan::{
-    CsvExec, FileGroupDisplay, FileMeta, FileScanConfig, FileSinkConfig,
+    CsvExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -285,7 +282,7 @@ impl FileFormat for CsvFormat {
             conf,
             self.has_header,
             self.delimiter,
-            self.file_compression_type.clone(),
+            self.file_compression_type,
         ));
 
         Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
@@ -494,56 +491,6 @@ impl CsvSink {
             file_compression_type,
         }
     }
-
-    // Create a write for Csv files
-    async fn create_writer(
-        &self,
-        file_meta: FileMeta,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Result<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>> {
-        let object = &file_meta.object_meta;
-        match self.config.writer_mode {
-            // If the mode is append, call the store's append method and return wrapped in
-            // a boxed trait object.
-            FileWriterMode::Append => {
-                let writer = object_store
-                    .append(&object.location)
-                    .await
-                    .map_err(DataFusionError::ObjectStore)?;
-                let writer = AbortableWrite::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                    AbortMode::Append,
-                );
-                Ok(writer)
-            }
-            // If the mode is put, create a new AsyncPut writer and return it wrapped in
-            // a boxed trait object
-            FileWriterMode::Put => {
-                let writer = Box::new(AsyncPutWriter::new(object.clone(), object_store));
-                let writer = AbortableWrite::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                    AbortMode::Put,
-                );
-                Ok(writer)
-            }
-            // If the mode is put multipart, call the store's put_multipart method and
-            // return the writer wrapped in a boxed trait object.
-            FileWriterMode::PutMultipart => {
-                let (multipart_id, writer) = object_store
-                    .put_multipart(&object.location)
-                    .await
-                    .map_err(DataFusionError::ObjectStore)?;
-                Ok(AbortableWrite::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                    AbortMode::MultiPart(MultiPart::new(
-                        object_store,
-                        multipart_id,
-                        object.location.clone(),
-                    )),
-                ))
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -577,12 +524,13 @@ impl DataSink for CsvSink {
                     serializers.push(Box::new(serializer));
 
                     let file = file_group.clone();
-                    let writer = self
-                        .create_writer(
-                            file.object_meta.clone().into(),
-                            object_store.clone(),
-                        )
-                        .await?;
+                    let writer = create_writer(
+                        self.config.writer_mode,
+                        self.file_compression_type,
+                        file.object_meta.clone().into(),
+                        object_store.clone(),
+                    )
+                    .await?;
                     writers.push(writer);
                 }
             }
@@ -612,9 +560,13 @@ impl DataSink for CsvSink {
                         size: 0,
                         e_tag: None,
                     };
-                    let writer = self
-                        .create_writer(object_meta.into(), object_store.clone())
-                        .await?;
+                    let writer = create_writer(
+                        self.config.writer_mode,
+                        self.file_compression_type,
+                        object_meta.into(),
+                        object_store.clone(),
+                    )
+                    .await?;
                     writers.push(writer);
                 }
             }
@@ -854,8 +806,7 @@ mod tests {
             Field::new("c13", DataType::Utf8, true),
         ]);
 
-        let compressed_csv =
-            csv.with_file_compression_type(file_compression_type.clone());
+        let compressed_csv = csv.with_file_compression_type(file_compression_type);
 
         //convert compressed_stream to decoded_stream
         let decoded_stream = compressed_csv

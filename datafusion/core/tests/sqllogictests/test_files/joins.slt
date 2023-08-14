@@ -1569,7 +1569,6 @@ ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------MemoryExec: partitions=1, partition_sizes=[1]
 
-
 statement ok
 set datafusion.optimizer.repartition_joins = true;
 

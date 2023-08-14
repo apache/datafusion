@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion execution configuration and runtime structures
+use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::Result;
+use futures::Stream;
+use std::pin::Pin;
 
-pub mod config;
-pub mod disk_manager;
-pub mod memory_pool;
-pub mod object_store;
-pub mod registry;
-pub mod runtime_env;
-mod stream;
-mod task;
+/// Trait for types that stream [arrow::record_batch::RecordBatch]
+pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
+    /// Returns the schema of this `RecordBatchStream`.
+    ///
+    /// Implementation of this trait should guarantee that all `RecordBatch`'s returned by this
+    /// stream should have the same schema as returned from this method.
+    fn schema(&self) -> SchemaRef;
+}
 
-pub use disk_manager::DiskManager;
-pub use registry::FunctionRegistry;
-pub use stream::{RecordBatchStream, SendableRecordBatchStream};
-pub use task::TaskContext;
+/// Trait for a [`Stream`](futures::stream::Stream) of [`RecordBatch`]es
+pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;

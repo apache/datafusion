@@ -305,45 +305,9 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ConfigOptions;
-    use crate::datasource::MemTable;
-    use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
-    use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
     use arrow::datatypes::{DataType, Field, Schema};
-
-    #[tokio::test]
-    async fn test_custom_batch_size() -> Result<()> {
-        let mut config = ConfigOptions::new();
-        config.execution.batch_size = 1234;
-
-        let ctx = SessionContext::with_config(config.into());
-        let plan = create_physical_plan(ctx).await?;
-        let coalesce = plan.as_any().downcast_ref::<CoalesceBatchesExec>().unwrap();
-        assert_eq!(1234, coalesce.target_batch_size);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_disable_coalesce() -> Result<()> {
-        let mut config = ConfigOptions::new();
-        config.execution.coalesce_batches = false;
-
-        let ctx = SessionContext::with_config(config.into());
-        let plan = create_physical_plan(ctx).await?;
-        let _filter = plan.as_any().downcast_ref::<FilterExec>().unwrap();
-        Ok(())
-    }
-
-    async fn create_physical_plan(ctx: SessionContext) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = test_schema();
-        let partition = create_vec_batches(&schema, 10);
-        let table = MemTable::try_new(schema, vec![partition])?;
-        ctx.register_table("a", Arc::new(table))?;
-        let dataframe = ctx.sql("SELECT * FROM a WHERE c0 < 1").await?;
-        dataframe.create_physical_plan().await
-    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concat_batches() -> Result<()> {
@@ -385,10 +349,9 @@ mod tests {
         // execute and collect results
         let output_partition_count = exec.output_partitioning().partition_count();
         let mut output_partitions = Vec::with_capacity(output_partition_count);
-        let session_ctx = SessionContext::new();
         for i in 0..output_partition_count {
             // execute this *output* partition and collect all batches
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = Arc::new(TaskContext::default());
             let mut stream = exec.execute(i, task_ctx.clone())?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {

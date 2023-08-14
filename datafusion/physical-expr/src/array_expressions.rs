@@ -1789,6 +1789,53 @@ pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+// Create new offsets that are euqiavlent to `flatten` the array.
+fn get_offsets_for_flatten(
+    offsets: OffsetBuffer<i32>,
+    indexes: OffsetBuffer<i32>,
+) -> OffsetBuffer<i32> {
+    let buffer = offsets.into_inner();
+    let offsets: Vec<i32> = indexes.iter().map(|i| buffer[*i as usize]).collect();
+    OffsetBuffer::new(offsets.into())
+}
+
+fn flatten_internal(
+    array: &dyn Array,
+    indexes: Option<OffsetBuffer<i32>>,
+) -> Result<ListArray> {
+    let list_arr = as_list_array(array)?;
+    let (field, offsets, values, nulls) = list_arr.clone().into_parts();
+    let data_type = field.data_type();
+
+    match data_type {
+        // Recursively get the base offsets for flattened array
+        DataType::List(_) => {
+            if let Some(indexes) = indexes {
+                let offsets = get_offsets_for_flatten(offsets, indexes);
+                flatten_internal(&values, Some(offsets))
+            } else {
+                flatten_internal(&values, Some(offsets))
+            }
+        }
+        // Reach the base level, create a new list array
+        _ => {
+            if let Some(indexes) = indexes {
+                let offsets = get_offsets_for_flatten(offsets, indexes);
+                let list_arr = ListArray::new(field, offsets, values, nulls);
+                Ok(list_arr)
+            } else {
+                Ok(list_arr.clone())
+            }
+        }
+    }
+}
+
+/// Flatten SQL function
+pub fn flatten(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let flattened_array = flatten_internal(&args[0], None)?;
+    Ok(Arc::new(flattened_array) as ArrayRef)
+}
+
 /// Array_length SQL function
 pub fn array_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_list_array(&args[0])?;

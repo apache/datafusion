@@ -37,59 +37,18 @@ pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-use futures::stream::{Stream, TryStreamExt};
-use std::fmt;
+use futures::stream::TryStreamExt;
 use std::fmt::Debug;
 use tokio::task::JoinSet;
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
+use std::any::Any;
 use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::{any::Any, pin::Pin};
 
-/// Trait for types that stream [arrow::record_batch::RecordBatch]
-pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
-    /// Returns the schema of this `RecordBatchStream`.
-    ///
-    /// Implementation of this trait should guarantee that all `RecordBatch`'s returned by this
-    /// stream should have the same schema as returned from this method.
-    fn schema(&self) -> SchemaRef;
-}
-
-/// Trait for a [`Stream`](futures::stream::Stream) of [`RecordBatch`]es
-pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
-
-/// EmptyRecordBatchStream can be used to create a RecordBatchStream
-/// that will produce no results
-pub struct EmptyRecordBatchStream {
-    /// Schema wrapped by Arc
-    schema: SchemaRef,
-}
-
-impl EmptyRecordBatchStream {
-    /// Create an empty RecordBatchStream
-    pub fn new(schema: SchemaRef) -> Self {
-        Self { schema }
-    }
-}
-
-impl RecordBatchStream for EmptyRecordBatchStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
-impl Stream for EmptyRecordBatchStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        Poll::Ready(None)
-    }
-}
+// backwards compatibility
+pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
+pub use stream::EmptyRecordBatchStream;
 
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
@@ -168,10 +127,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         vec![false; self.children().len()]
     }
 
-    /// Returns `true` for the children if this operator would benefit from
-    /// partitioning at its input (and thus from more parallelism). For
-    /// operators that do very little work the overhead of extra
-    /// parallelism may outweigh any benefits
+    /// Specifies whether the operator benefits from increased parallelization
+    /// at its input for each child. If set to `true`, this indicates that the
+    /// operator would benefit from partitioning its corresponding child
+    /// (and thus from more parallelism). For operators that do very little work
+    /// the overhead of extra parallelism may outweigh any benefits
     ///
     /// The default implementation returns `true` unless this operator
     /// has signalled it requires a single child input partition.
@@ -413,177 +373,10 @@ pub fn execute_stream_partitioned(
     Ok(streams)
 }
 
-/// Partitioning schemes supported by operators.
-#[derive(Debug, Clone)]
-pub enum Partitioning {
-    /// Allocate batches using a round-robin algorithm and the specified number of partitions
-    RoundRobinBatch(usize),
-    /// Allocate rows based on a hash of one of more expressions and the specified number of
-    /// partitions
-    Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
-    /// Unknown partitioning scheme with a known number of partitions
-    UnknownPartitioning(usize),
-}
-
-impl fmt::Display for Partitioning {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Partitioning::RoundRobinBatch(size) => write!(f, "RoundRobinBatch({size})"),
-            Partitioning::Hash(phy_exprs, size) => {
-                let phy_exprs_str = phy_exprs
-                    .iter()
-                    .map(|e| format!("{e}"))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                write!(f, "Hash([{phy_exprs_str}], {size})")
-            }
-            Partitioning::UnknownPartitioning(size) => {
-                write!(f, "UnknownPartitioning({size})")
-            }
-        }
-    }
-}
-impl Partitioning {
-    /// Returns the number of partitions in this partitioning scheme
-    pub fn partition_count(&self) -> usize {
-        use Partitioning::*;
-        match self {
-            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
-        }
-    }
-
-    /// Returns true when the guarantees made by this [[Partitioning]] are sufficient to
-    /// satisfy the partitioning scheme mandated by the `required` [[Distribution]]
-    pub fn satisfy<F: FnOnce() -> EquivalenceProperties>(
-        &self,
-        required: Distribution,
-        equal_properties: F,
-    ) -> bool {
-        match required {
-            Distribution::UnspecifiedDistribution => true,
-            Distribution::SinglePartition if self.partition_count() == 1 => true,
-            Distribution::HashPartitioned(required_exprs) => {
-                match self {
-                    // Here we do not check the partition count for hash partitioning and assumes the partition count
-                    // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
-                    // then we need to have the partition count and hash functions validation.
-                    Partitioning::Hash(partition_exprs, _) => {
-                        let fast_match =
-                            expr_list_eq_strict_order(&required_exprs, partition_exprs);
-                        // If the required exprs do not match, need to leverage the eq_properties provided by the child
-                        // and normalize both exprs based on the eq_properties
-                        if !fast_match {
-                            let eq_properties = equal_properties();
-                            let eq_classes = eq_properties.classes();
-                            if !eq_classes.is_empty() {
-                                let normalized_required_exprs = required_exprs
-                                    .iter()
-                                    .map(|e| {
-                                        normalize_expr_with_equivalence_properties(
-                                            e.clone(),
-                                            eq_classes,
-                                        )
-                                    })
-                                    .collect::<Vec<_>>();
-                                let normalized_partition_exprs = partition_exprs
-                                    .iter()
-                                    .map(|e| {
-                                        normalize_expr_with_equivalence_properties(
-                                            e.clone(),
-                                            eq_classes,
-                                        )
-                                    })
-                                    .collect::<Vec<_>>();
-                                expr_list_eq_strict_order(
-                                    &normalized_required_exprs,
-                                    &normalized_partition_exprs,
-                                )
-                            } else {
-                                fast_match
-                            }
-                        } else {
-                            fast_match
-                        }
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-}
-
-impl PartialEq for Partitioning {
-    fn eq(&self, other: &Partitioning) -> bool {
-        match (self, other) {
-            (
-                Partitioning::RoundRobinBatch(count1),
-                Partitioning::RoundRobinBatch(count2),
-            ) if count1 == count2 => true,
-            (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2))
-                if expr_list_eq_strict_order(exprs1, exprs2) && (count1 == count2) =>
-            {
-                true
-            }
-            _ => false,
-        }
-    }
-}
-
-/// Retrieves the ordering equivalence properties for a given schema and output ordering.
-pub fn ordering_equivalence_properties_helper(
-    schema: SchemaRef,
-    eq_orderings: &[LexOrdering],
-) -> OrderingEquivalenceProperties {
-    let mut oep = OrderingEquivalenceProperties::new(schema);
-    let first_ordering = if let Some(first) = eq_orderings.first() {
-        first
-    } else {
-        // Return an empty OrderingEquivalenceProperties:
-        return oep;
-    };
-    // First entry among eq_orderings is the head, skip it:
-    for ordering in eq_orderings.iter().skip(1) {
-        if !ordering.is_empty() {
-            oep.add_equal_conditions((first_ordering, ordering))
-        }
-    }
-    oep
-}
-
-/// Distribution schemes
-#[derive(Debug, Clone)]
-pub enum Distribution {
-    /// Unspecified distribution
-    UnspecifiedDistribution,
-    /// A single partition is required
-    SinglePartition,
-    /// Requires children to be distributed in such a way that the same
-    /// values of the keys end up in the same partition
-    HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
-}
-
-impl Distribution {
-    /// Creates a Partitioning for this Distribution to satisfy itself
-    pub fn create_partitioning(&self, partition_count: usize) -> Partitioning {
-        match self {
-            Distribution::UnspecifiedDistribution => {
-                Partitioning::UnknownPartitioning(partition_count)
-            }
-            Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
-            Distribution::HashPartitioned(expr) => {
-                Partitioning::Hash(expr.clone(), partition_count)
-            }
-        }
-    }
-}
-
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
-use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, LexOrdering,
-};
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
+pub use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 pub mod aggregates;
@@ -616,7 +409,9 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_common::utils::project_schema;
 use datafusion_execution::TaskContext;
-pub use datafusion_physical_expr::{expressions, functions, hash_utils, udf};
+pub use datafusion_physical_expr::{
+    expressions, functions, hash_utils, ordering_equivalence_properties_helper, udf,
+};
 
 #[cfg(test)]
 mod tests {

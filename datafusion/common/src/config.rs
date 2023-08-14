@@ -235,11 +235,27 @@ config_namespace! {
         ///
         /// Defaults to the number of CPU cores on the system
         pub planning_concurrency: usize, default = num_cpus::get()
+
+        /// Specifies the reserved memory for each spillable sort operation to
+        /// facilitate an in-memory merge.
+        ///
+        /// When a sort operation spills to disk, the in-memory data must be
+        /// sorted and merged before being written to a file. This setting reserves
+        /// a specific amount of memory for that in-memory sort/merge process.
+        ///
+        /// Note: This setting is irrelevant if the sort operation cannot spill
+        /// (i.e., if there's no `DiskManager` configured).
+        pub sort_spill_reservation_bytes: usize, default = 10 * 1024 * 1024
+
+        /// When sorting, below what size should data be concatenated
+        /// and sorted in a single RecordBatch rather than sorted in
+        /// batches and merged.
+        pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
     }
 }
 
 config_namespace! {
-    /// Options related to reading of parquet files
+    /// Options related to parquet files
     pub struct ParquetOptions {
         /// If true, reads the Parquet data page level metadata (the
         /// Page Index), if present, to reduce the I/O and number of
@@ -270,6 +286,66 @@ config_namespace! {
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
+
+        // The following map to parquet::file::properties::WriterProperties
+
+        /// Sets best effort maximum size of data page in bytes
+        pub data_pagesize_limit: usize, default = 1024 * 1024
+
+        /// Sets write_batch_size in bytes
+        pub write_batch_size: usize, default = 1024
+
+        /// Sets parquet writer version
+        /// valid values are "1.0" and "2.0"
+        pub writer_version: String, default = "1.0".into()
+
+        /// Sets default parquet compression codec
+        /// Valid values are: uncompressed, snappy, gzip(level),
+        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// These values are not case sensitive.
+        pub compression: String, default = "snappy".into()
+
+        /// Sets if dictionary encoding is enabled
+        pub dictionary_enabled: bool, default = true
+
+        /// Sets best effort maximum dictionary page size, in bytes
+        pub dictionary_page_size_limit: usize, default = 1024 * 1024
+
+        /// Sets if statistics are enabled for any column
+        /// Valid values are: "none", "chunk", and "page"
+        /// These values are not case sensitive.
+        pub statistics_enabled: String, default = "page".into()
+
+        /// Sets max statistics size for any column
+        pub max_statistics_size: usize, default = 4096
+
+        /// Sets maximum number of rows in a row group
+        pub max_row_group_size: usize, default = 1024 * 1024
+
+        /// Sets "created by" property
+        pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
+
+        /// Sets column index trucate length
+        pub column_index_truncate_length: Option<usize>, default = None
+
+        /// Sets best effort maximum number of rows in data page
+        pub data_page_row_count_limit: usize, default = usize::MAX
+
+        /// Sets default encoding for any column
+        /// Valid values are: plain, plain_dictionary, rle,
+        /// bit_packed, delta_binary_packed, delta_length_byte_array,
+        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// These values are not case sensitive.
+        pub encoding: String, default = "plain".into()
+
+        /// Sets if bloom filter is enabled for any column
+        pub bloom_filter_enabled: bool, default = false
+
+        /// Sets bloom filter false positive probability
+        pub bloom_filter_fpp: f64, default = 0.05
+
+        /// Sets bloom filter number of distinct values
+        pub bloom_filter_ndv: u64, default = 1_000_000_u64
     }
 }
 
@@ -729,6 +805,8 @@ macro_rules! config_field {
 config_field!(String);
 config_field!(bool);
 config_field!(usize);
+config_field!(f64);
+config_field!(u64);
 
 /// An implementation trait used to recursively walk configuration
 trait Visit {

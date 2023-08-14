@@ -362,7 +362,6 @@ mod tests {
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::{collect, ExecutionPlan};
-    use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, csv_exec_sorted};
     use arrow::array::*;
@@ -370,11 +369,17 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_primitive_array;
+    use datafusion_execution::TaskContext;
     use datafusion_expr::{create_udaf, Accumulator, Volatility};
     use futures::FutureExt;
+    use std::path::Path;
+    use tempfile::TempDir;
 
-    fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
-        let csv = test::scan_partitioned_csv(partitions)?;
+    fn create_test_schema(
+        partitions: usize,
+        work_dir: &Path,
+    ) -> Result<(Arc<CsvExec>, SchemaRef)> {
+        let csv = test::scan_partitioned_csv(partitions, work_dir)?;
         let schema = csv.schema();
         Ok((csv, schema))
     }
@@ -546,9 +551,9 @@ mod tests {
             Arc::new(vec![DataType::Int64]),
         );
 
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let (input, schema) = create_test_schema(1)?;
+        let task_ctx = Arc::new(TaskContext::default());
+        let tmp_dir = TempDir::new()?;
+        let (input, schema) = create_test_schema(1, tmp_dir.path())?;
 
         let window_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
@@ -579,9 +584,9 @@ mod tests {
 
     #[tokio::test]
     async fn window_function() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let (input, schema) = create_test_schema(1)?;
+        let task_ctx = Arc::new(TaskContext::default());
+        let tmp_dir = TempDir::new()?;
+        let (input, schema) = create_test_schema(1, tmp_dir.path())?;
 
         let window_exec = Arc::new(WindowAggExec::try_new(
             vec![
@@ -643,8 +648,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
