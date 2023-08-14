@@ -1729,7 +1729,7 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
                     non_list_contains!(array, element, $ARRAY_TYPE)
                 };
             }
-            call_array_function!(data_type, false)
+            call_array_function!(data_type, true)
         }
     }
 }
