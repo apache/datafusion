@@ -1194,9 +1194,7 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::Sqrt
             | BuiltinScalarFunction::Tan
             | BuiltinScalarFunction::Tanh
-            | BuiltinScalarFunction::Cot
-            | BuiltinScalarFunction::Isnan
-            | BuiltinScalarFunction::Iszero => {
+            | BuiltinScalarFunction::Cot => {
                 // math expressions expect 1 argument of type f64 or f32
                 // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
                 // return the best approximation for it (in f64).
@@ -1208,6 +1206,12 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::CurrentDate
             | BuiltinScalarFunction::CurrentTime => {
                 Signature::uniform(0, vec![], self.volatility())
+            }
+            BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => {
+                Signature::one_of(
+                    vec![Exact(vec![Float32]), Exact(vec![Float64])],
+                    self.volatility(),
+                )
             }
         }
     }
