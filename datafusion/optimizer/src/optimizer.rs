@@ -291,11 +291,10 @@ impl Optimizer {
                 let result =
                     self.optimize_recursively(rule, &new_plan, config)
                         .and_then(|plan| {
-                            plan.map(|p| {
-                                assert_schema_is_the_same(rule.name(), &new_plan, &p)
-                                    .map(|_| Some(p))
-                            })
-                            .unwrap_or(Ok(None))
+                            if let Some(plan) = &plan {
+                                assert_schema_is_the_same(rule.name(), &new_plan, &plan)?;
+                            }
+                            Ok(plan)
                         });
                 match result {
                     Ok(Some(plan)) => {
