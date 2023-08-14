@@ -288,11 +288,17 @@ impl Optimizer {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
-                let result = self.optimize_recursively(rule, &new_plan, config);
-
+                let result =
+                    self.optimize_recursively(rule, &new_plan, config)
+                        .and_then(|plan| {
+                            plan.map(|p| {
+                                assert_schema_is_the_same(rule.name(), &new_plan, &p)
+                                    .map(|_| Some(p))
+                            })
+                            .unwrap_or(Ok(None))
+                        });
                 match result {
                     Ok(Some(plan)) => {
-                        assert_schema_is_the_same(rule.name(), &new_plan, &plan)?;
                         new_plan = plan;
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
@@ -428,8 +434,7 @@ fn assert_schema_is_the_same(
 
     if !equivalent {
         let e = DataFusionError::Internal(format!(
-            "Optimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
-            rule_name,
+            "Failed due to generate a different schema, original schema: {:?}, new schema: {:?}",
             prev_plan.schema(),
             new_plan.schema()
         ));
@@ -493,8 +498,8 @@ mod tests {
         });
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "get table_scan rule\ncaused by\n\
-             Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
+            "Optimizer rule 'get table_scan rule' failed\ncaused by\nget table_scan rule\ncaused by\n\
+             Internal error: Failed due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }, \
              new schema: DFSchema { fields: [\
              DFField { qualifier: Some(Bare { table: \"test\" }), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
