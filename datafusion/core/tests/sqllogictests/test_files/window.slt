@@ -418,6 +418,7 @@ sum(amount) - lag(sum(amount), 1) over (order by idx) as difference from (
 select * from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)
 ) a
 group by col1, idx
+ORDER BY idx
 ----
 a 1 1 100 NULL NULL
 a 2 1 150 100 50
