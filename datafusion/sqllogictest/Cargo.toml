@@ -55,3 +55,9 @@ postgres-protocol = {version = "0.6.4", optional = true}
 
 [features]
 postgres = ["bytes", "futures", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
+
+
+[[test]]
+harness = false
+name = "sqllogictests"
+path = "tests/sqllogictests/src/main.rs"

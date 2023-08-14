@@ -161,8 +161,3 @@ name = "sql_query_with_io"
 [[bench]]
 harness = false
 name = "sort"
-
-[[test]]
-harness = false
-name = "sqllogictests"
-path = "tests/sqllogictests/src/main.rs"
