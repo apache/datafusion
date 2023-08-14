@@ -65,7 +65,6 @@ impl OptimizerRule for PushDownProjection {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        println!("The plan is {plan:?}");
         let projection = match plan {
             LogicalPlan::Projection(projection) => projection,
             LogicalPlan::Aggregate(agg) => {
@@ -80,16 +79,16 @@ impl OptimizerRule for PushDownProjection {
                     new_expr,
                     agg.input.clone(),
                 )?);
-                let optimized_child = self.try_optimize(&projection, _config)?.unwrap_or(projection);
+                let optimized_child = self.try_optimize(&projection, _config)?;
 
-                // let optimized_child = match optimized_child {
-                //     // Some(LogicalPlan::Projection(p)) if  p.expr.is_empty() => {
-                //     //         p.input.as_ref().clone()
-                //     // },
-                //     Some(p) => p,
-                //     None if is_projection_empty => return Ok(None),
-                //     None => projection
-                // };
+                let optimized_child = match optimized_child {
+                    Some(LogicalPlan::Projection(p)) if  p.expr.is_empty() => {
+                            p.input.as_ref().clone()
+                    },
+                    Some(p) => p,
+                    None if is_projection_empty => return Ok(None),
+                    None => projection
+                };
                 return Ok(Some(plan.with_new_inputs(&[optimized_child])?));
             }
             LogicalPlan::TableScan(scan) if scan.projection.is_none() => {
