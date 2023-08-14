@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
@@ -223,7 +225,10 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Utf8 => {
                 Ok(varchar_to_str(get_row_value!(array::StringArray, col, row)))
             }
-            _ => arrow::util::display::array_value_to_string(col, row),
+            _ => {
+                let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
+                Ok(f.unwrap().value(row).to_string())
+            }
         }
         .map_err(DFSqlLogicTestError::Arrow)
     }

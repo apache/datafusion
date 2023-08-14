@@ -20,7 +20,8 @@
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, Signature, TypeSignature, Volatility,
+    conditional_expressions, struct_expressions, utils, Signature, TypeSignature,
+    Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{plan_err, DataFusionError, Result};
@@ -34,6 +35,8 @@ use strum_macros::EnumIter;
 use lazy_static::lazy_static;
 
 /// Enum of all built-in scalar functions
+// Contributor's guide for adding new scalar functions
+// https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-scalar-function
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
@@ -131,8 +134,6 @@ pub enum BuiltinScalarFunction {
     ArrayDims,
     /// array_element
     ArrayElement,
-    /// array_fill
-    ArrayFill,
     /// array_length
     ArrayLength,
     /// array_ndims
@@ -149,6 +150,8 @@ pub enum BuiltinScalarFunction {
     ArrayRemoveN,
     /// array_remove_all
     ArrayRemoveAll,
+    /// array_repeat
+    ArrayRepeat,
     /// array_replace
     ArrayReplace,
     /// array_replace_n
@@ -163,6 +166,8 @@ pub enum BuiltinScalarFunction {
     Cardinality,
     /// construct an array from columns
     MakeArray,
+    /// Flatten
+    Flatten,
 
     // struct functions
     /// struct
@@ -354,18 +359,19 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayRepeat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemoveAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceN => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplaceAll => Volatility::Immutable,
+            BuiltinScalarFunction::Flatten => Volatility::Immutable,
             BuiltinScalarFunction::ArraySlice => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
@@ -429,33 +435,6 @@ impl BuiltinScalarFunction {
         }
     }
 
-    /// Creates a detailed error message for a function with wrong signature.
-    ///
-    /// For example, a query like `select round(3.14, 1.1);` would yield:
-    /// ```text
-    /// Error during planning: No function matches 'round(Float64, Float64)'. You might need to add explicit type casts.
-    ///     Candidate functions:
-    ///     round(Float64, Int64)
-    ///     round(Float32, Int64)
-    ///     round(Float64)
-    ///     round(Float32)
-    /// ```
-    fn generate_signature_error_msg(&self, input_expr_types: &[DataType]) -> String {
-        let candidate_signatures = self
-            .signature()
-            .type_signature
-            .to_string_repr()
-            .iter()
-            .map(|args_str| format!("\t{self}({args_str})"))
-            .collect::<Vec<String>>()
-            .join("\n");
-
-        format!(
-            "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
-            self, TypeSignature::join_types(input_expr_types, ", "), candidate_signatures
-        )
-    }
-
     /// Returns the dimension [`DataType`] of [`DataType::List`] if
     /// treated as a N-dimensional array.
     ///
@@ -488,17 +467,44 @@ impl BuiltinScalarFunction {
         // or the execution panics.
 
         if input_expr_types.is_empty() && !self.supports_zero_argument() {
-            return plan_err!("{}", self.generate_signature_error_msg(input_expr_types));
+            return plan_err!(
+                "{}",
+                utils::generate_signature_error_msg(
+                    &format!("{self}"),
+                    self.signature(),
+                    input_expr_types
+                )
+            );
         }
 
         // verify that this is a valid set of data types for this function
         data_types(input_expr_types, &self.signature()).map_err(|_| {
-            DataFusionError::Plan(self.generate_signature_error_msg(input_expr_types))
+            DataFusionError::Plan(utils::generate_signature_error_msg(
+                &format!("{self}"),
+                self.signature(),
+                input_expr_types,
+            ))
         })?;
 
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
+            BuiltinScalarFunction::Flatten => {
+                fn get_base_type(data_type: &DataType) -> Result<DataType> {
+                    match data_type {
+                        DataType::List(field) => match field.data_type() {
+                            DataType::List(_) => get_base_type(field.data_type()),
+                            _ => Ok(data_type.to_owned()),
+                        },
+                        _ => Err(DataFusionError::Internal(
+                            "Not reachable, data_type should be List".to_string(),
+                        )),
+                    }
+                }
+
+                let data_type = get_base_type(&input_expr_types[0])?;
+                Ok(data_type)
+            }
             BuiltinScalarFunction::ArrayAppend => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
@@ -536,11 +542,6 @@ impl BuiltinScalarFunction {
                     "The {self} function can only accept list as the first argument"
                 ))),
             },
-            BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
-                "item",
-                input_expr_types[1].clone(),
-                true,
-            )))),
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
@@ -548,6 +549,11 @@ impl BuiltinScalarFunction {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
             BuiltinScalarFunction::ArrayPrepend => Ok(input_expr_types[1].clone()),
+            BuiltinScalarFunction::ArrayRepeat => Ok(List(Arc::new(Field::new(
+                "item",
+                input_expr_types[0].clone(),
+                true,
+            )))),
             BuiltinScalarFunction::ArrayRemove => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayRemoveN => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayRemoveAll => Ok(input_expr_types[0].clone()),
@@ -627,7 +633,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::Uuid => Ok(Utf8),
             BuiltinScalarFunction::RegexpReplace => {
-                utf8_to_str_type(&input_expr_types[0], "regex_replace")
+                utf8_to_str_type(&input_expr_types[0], "regexp_replace")
             }
             BuiltinScalarFunction::Repeat => {
                 utf8_to_str_type(&input_expr_types[0], "repeat")
@@ -643,7 +649,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
             BuiltinScalarFunction::Rtrim => {
-                utf8_to_str_type(&input_expr_types[0], "rtrimp")
+                utf8_to_str_type(&input_expr_types[0], "rtrim")
             }
             BuiltinScalarFunction::SHA224 => {
                 utf8_or_binary_to_binary_type(&input_expr_types[0], "sha224")
@@ -817,12 +823,12 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
+            BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
             | BuiltinScalarFunction::ArrayHas => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
-            BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
-            BuiltinScalarFunction::ArrayFill => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayLength => {
                 Signature::variadic_any(self.volatility())
             }
@@ -832,6 +838,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayPrepend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayRepeat => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::ArrayRemoveN => Signature::any(3, self.volatility()),
             BuiltinScalarFunction::ArrayRemoveAll => Signature::any(2, self.volatility()),
@@ -1305,12 +1312,12 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "list_element",
             "list_extract",
         ],
+        BuiltinScalarFunction::Flatten => &["flatten"],
         BuiltinScalarFunction::ArrayHasAll => &["array_has_all", "list_has_all"],
         BuiltinScalarFunction::ArrayHasAny => &["array_has_any", "list_has_any"],
         BuiltinScalarFunction::ArrayHas => {
             &["array_has", "list_has", "array_contains", "list_contains"]
         }
-        BuiltinScalarFunction::ArrayFill => &["array_fill"],
         BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
         BuiltinScalarFunction::ArrayPosition => &[
@@ -1326,6 +1333,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             "array_push_front",
             "list_push_front",
         ],
+        BuiltinScalarFunction::ArrayRepeat => &["array_repeat", "list_repeat"],
         BuiltinScalarFunction::ArrayRemove => &["array_remove", "list_remove"],
         BuiltinScalarFunction::ArrayRemoveN => &["array_remove_n", "list_remove_n"],
         BuiltinScalarFunction::ArrayRemoveAll => &["array_remove_all", "list_remove_all"],
@@ -1374,6 +1382,20 @@ macro_rules! make_utf8_to_return_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
                 DataType::Null => DataType::Null,
+                DataType::Dictionary(_, value_type) => {
+                    match **value_type {
+                        DataType::LargeUtf8 => $largeUtf8Type,
+                        DataType::Utf8 => $utf8Type,
+                        DataType::Null => DataType::Null,
+                        _ => {
+                            // this error is internal as `data_types` should have captured this.
+                            return Err(DataFusionError::Internal(format!(
+                                "The {:?} function can only accept strings.",
+                                name
+                            )));
+                        }
+                    }
+                }
                 _ => {
                     // this error is internal as `data_types` should have captured this.
                     return Err(DataFusionError::Internal(format!(

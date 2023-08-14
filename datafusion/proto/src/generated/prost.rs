@@ -611,13 +611,44 @@ pub struct RollupNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamedStructField {
+    #[prost(message, optional, tag = "1")]
+    pub name: ::core::option::Option<ScalarValue>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListIndex {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListRange {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub start: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub stop: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetIndexedField {
     #[prost(message, optional, boxed, tag = "1")]
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "2")]
-    pub key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "3")]
-    pub extra_key: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(oneof = "get_indexed_field::Field", tags = "2, 3, 4")]
+    pub field: ::core::option::Option<get_indexed_field::Field>,
+}
+/// Nested message and enum types in `GetIndexedField`.
+pub mod get_indexed_field {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Field {
+        #[prost(message, tag = "2")]
+        NamedStructField(super::NamedStructField),
+        #[prost(message, tag = "3")]
+        ListIndex(::prost::alloc::boxed::Box<super::ListIndex>),
+        #[prost(message, tag = "4")]
+        ListRange(::prost::alloc::boxed::Box<super::ListRange>),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1490,7 +1521,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1536,10 +1567,6 @@ pub mod physical_expr_node {
         WindowExpr(::prost::alloc::boxed::Box<super::PhysicalWindowExprNode>),
         #[prost(message, tag = "16")]
         ScalarUdf(super::PhysicalScalarUdfNode),
-        #[prost(message, tag = "17")]
-        DateTimeIntervalExpr(
-            ::prost::alloc::boxed::Box<super::PhysicalDateTimeIntervalExprNode>,
-        ),
         #[prost(message, tag = "18")]
         LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
         #[prost(message, tag = "19")]
@@ -1644,10 +1671,10 @@ pub struct PhysicalBinaryExprNode {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {
-    #[prost(message, optional, boxed, tag = "1")]
-    pub l: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "2")]
-    pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "1")]
+    pub l: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "2")]
+    pub r: ::core::option::Option<PhysicalExprNode>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
 }
@@ -2123,11 +2150,44 @@ pub struct ColumnStats {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamedStructFieldExpr {
+    #[prost(message, optional, tag = "1")]
+    pub name: ::core::option::Option<ScalarValue>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListIndexExpr {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub key: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListRangeExpr {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub start: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub stop: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalGetIndexedFieldExprNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub arg: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "2")]
-    pub key: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(oneof = "physical_get_indexed_field_expr_node::Field", tags = "2, 3, 4")]
+    pub field: ::core::option::Option<physical_get_indexed_field_expr_node::Field>,
+}
+/// Nested message and enum types in `PhysicalGetIndexedFieldExprNode`.
+pub mod physical_get_indexed_field_expr_node {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Field {
+        #[prost(message, tag = "2")]
+        NamedStructFieldExpr(super::NamedStructFieldExpr),
+        #[prost(message, tag = "3")]
+        ListIndexExpr(::prost::alloc::boxed::Box<super::ListIndexExpr>),
+        #[prost(message, tag = "4")]
+        ListRangeExpr(::prost::alloc::boxed::Box<super::ListRangeExpr>),
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2291,7 +2351,7 @@ pub enum ScalarFunction {
     ArrayAppend = 86,
     ArrayConcat = 87,
     ArrayDims = 88,
-    ArrayFill = 89,
+    ArrayRepeat = 89,
     ArrayLength = 90,
     ArrayNdims = 91,
     ArrayPosition = 92,
@@ -2314,6 +2374,7 @@ pub enum ScalarFunction {
     ArrayRemoveAll = 109,
     ArrayReplaceAll = 110,
     Nanvl = 111,
+    Flatten = 112,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2411,7 +2472,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayAppend => "ArrayAppend",
             ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayDims => "ArrayDims",
-            ScalarFunction::ArrayFill => "ArrayFill",
+            ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayLength => "ArrayLength",
             ScalarFunction::ArrayNdims => "ArrayNdims",
             ScalarFunction::ArrayPosition => "ArrayPosition",
@@ -2434,6 +2495,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
+            ScalarFunction::Flatten => "Flatten",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2528,7 +2590,7 @@ impl ScalarFunction {
             "ArrayAppend" => Some(Self::ArrayAppend),
             "ArrayConcat" => Some(Self::ArrayConcat),
             "ArrayDims" => Some(Self::ArrayDims),
-            "ArrayFill" => Some(Self::ArrayFill),
+            "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayLength" => Some(Self::ArrayLength),
             "ArrayNdims" => Some(Self::ArrayNdims),
             "ArrayPosition" => Some(Self::ArrayPosition),
@@ -2551,6 +2613,7 @@ impl ScalarFunction {
             "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
+            "Flatten" => Some(Self::Flatten),
             _ => None,
         }
     }
@@ -2587,6 +2650,14 @@ pub enum AggregateFunction {
     FirstValueAgg = 24,
     LastValueAgg = 25,
     RegrSlope = 26,
+    RegrIntercept = 27,
+    RegrCount = 28,
+    RegrR2 = 29,
+    RegrAvgx = 30,
+    RegrAvgy = 31,
+    RegrSxx = 32,
+    RegrSyy = 33,
+    RegrSxy = 34,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2624,6 +2695,14 @@ impl AggregateFunction {
             AggregateFunction::FirstValueAgg => "FIRST_VALUE_AGG",
             AggregateFunction::LastValueAgg => "LAST_VALUE_AGG",
             AggregateFunction::RegrSlope => "REGR_SLOPE",
+            AggregateFunction::RegrIntercept => "REGR_INTERCEPT",
+            AggregateFunction::RegrCount => "REGR_COUNT",
+            AggregateFunction::RegrR2 => "REGR_R2",
+            AggregateFunction::RegrAvgx => "REGR_AVGX",
+            AggregateFunction::RegrAvgy => "REGR_AVGY",
+            AggregateFunction::RegrSxx => "REGR_SXX",
+            AggregateFunction::RegrSyy => "REGR_SYY",
+            AggregateFunction::RegrSxy => "REGR_SXY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2658,6 +2737,14 @@ impl AggregateFunction {
             "FIRST_VALUE_AGG" => Some(Self::FirstValueAgg),
             "LAST_VALUE_AGG" => Some(Self::LastValueAgg),
             "REGR_SLOPE" => Some(Self::RegrSlope),
+            "REGR_INTERCEPT" => Some(Self::RegrIntercept),
+            "REGR_COUNT" => Some(Self::RegrCount),
+            "REGR_R2" => Some(Self::RegrR2),
+            "REGR_AVGX" => Some(Self::RegrAvgx),
+            "REGR_AVGY" => Some(Self::RegrAvgy),
+            "REGR_SXX" => Some(Self::RegrSxx),
+            "REGR_SYY" => Some(Self::RegrSyy),
+            "REGR_SXY" => Some(Self::RegrSxy),
             _ => None,
         }
     }

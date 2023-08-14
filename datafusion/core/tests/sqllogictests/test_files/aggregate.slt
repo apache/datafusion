@@ -76,23 +76,23 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error Error during planning: The function ApproxPercentileContWithWeight does not support inputs of type Utf8.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Utf8, Int8, Float64\)'. You might need to add explicit type casts.
 SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
 
-statement error Error during planning: The weight argument for ApproxPercentileContWithWeight does not support inputs of type Utf8
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Int16, Utf8, Float64\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 
-statement error Error during planning: The percentile argument for ApproxPercentileContWithWeight must be Float64, not Utf8.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT_WITH_WEIGHT\(Int16, Int8, Utf8\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\).
 SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Utf8.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Utf8\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 
-statement error Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'APPROX_PERCENTILE_CONT\(Int16, Float64, Float64\)'\. You might need to add explicit type casts\.
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
 # array agg can use order by
@@ -1644,10 +1644,10 @@ NULL NULL NULL NULL Row 2 Y
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
 
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
@@ -1688,10 +1688,10 @@ Y 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-0
 
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Timestamp\(Nanosecond, None\)\)'\. You might need to add explicit type casts\.
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
 
@@ -1738,10 +1738,10 @@ NULL NULL Row 2 Y
 
 
 # aggregate_timestamps_sum
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Date32\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Date32\)'\. You might need to add explicit type casts\.
 SELECT sum(date32), sum(date64) FROM t;
 
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Date32\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Date32\)'\. You might need to add explicit type casts\.
 SELECT tag, sum(date32), sum(date64) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
@@ -1782,10 +1782,10 @@ Y 2021-01-01 2021-01-01T00:00:00
 
 
 # aggregate_timestamps_avg
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Date32\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
 SELECT avg(date32), avg(date64) FROM t
 
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Date32\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Date32\)'\. You might need to add explicit type casts\.
 SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
 
 
@@ -1835,10 +1835,10 @@ select * from t;
 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3 B
 
 # aggregate_times_sum
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Time64\(Nanosecond\).
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
 
-statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Time64\(Nanosecond\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'SUM\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
 SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag
 
 # aggregate_times_count
@@ -1880,10 +1880,10 @@ B 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
 
 
 # aggregate_times_avg
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Time64\(Nanosecond\).
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
-statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Time64\(Nanosecond\)\.
+statement error DataFusion error: Error during planning: No function matches the given name and argument types 'AVG\(Time64\(Nanosecond\)\)'\. You might need to add explicit type casts\.
 SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
 statement ok
@@ -2294,157 +2294,268 @@ NULL
 
 
 #
-# regr_slope() tests
+# regr_*() tests
 #
 
-# invalid input
+# regr_*() invalid input
 statement error
 select regr_slope();
 
 statement error
-select regr_slope(*);
+select regr_intercept(*);
 
 statement error
-select regr_slope(*) from aggregate_test_100;
+select regr_count(*) from aggregate_test_100;
 
 statement error
-select regr_slope(1);
+select regr_r2(1);
 
 statement error
-select regr_slope(1,2,3);
+select regr_avgx(1,2,3);
 
 statement error
-select regr_slope(1, 'foo');
+select regr_avgy(1, 'foo');
 
 statement error
-select regr_slope('foo', 1);
+select regr_sxx('foo', 1);
 
 statement error
-select regr_slope('foo', 'bar');
+select regr_syy('foo', 'bar');
+
+statement error
+select regr_sxy(NULL, 'bar');
 
 
 
-# regr_slope() NULL result
-query R
-select regr_slope(1,1);
+# regr_*() NULL results
+query RRRRRRRRR
+select regr_slope(1,1), regr_intercept(1,1), regr_count(1,1), regr_r2(1,1), regr_avgx(1,1), regr_avgy(1,1), regr_sxx(1,1), regr_syy(1,1), regr_sxy(1,1);
 ----
-NULL
+NULL NULL 1 NULL 1 1 0 0 0
 
-query R
-select regr_slope(1, NULL);
+query RRRRRRRRR
+select regr_slope(1, NULL), regr_intercept(1, NULL), regr_count(1, NULL), regr_r2(1, NULL), regr_avgx(1, NULL), regr_avgy(1, NULL), regr_sxx(1, NULL), regr_syy(1, NULL), regr_sxy(1, NULL);
 ----
-NULL
+NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
-query R
-select regr_slope(NULL, 1);
+query RRRRRRRRR
+select regr_slope(NULL, 1), regr_intercept(NULL, 1), regr_count(NULL, 1), regr_r2(NULL, 1), regr_avgx(NULL, 1), regr_avgy(NULL, 1), regr_sxx(NULL, 1), regr_syy(NULL, 1), regr_sxy(NULL, 1);
 ----
-NULL
+NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
-query R
-select regr_slope(NULL, NULL);
+query RRRRRRRRR
+select regr_slope(NULL, NULL), regr_intercept(NULL, NULL), regr_count(NULL, NULL), regr_r2(NULL, NULL), regr_avgx(NULL, NULL), regr_avgy(NULL, NULL), regr_sxx(NULL, NULL), regr_syy(NULL, NULL), regr_sxy(NULL, NULL);
 ----
-NULL
+NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
-query R
-select regr_slope(column2, column1) from (values (1,2), (1,4), (1,6));
+query RRRRRRRRR
+select regr_slope(column2, column1), regr_intercept(column2, column1), regr_count(column2, column1), regr_r2(column2, column1), regr_avgx(column2, column1), regr_avgy(column2, column1), regr_sxx(column2, column1), regr_syy(column2, column1), regr_sxy(column2, column1) from (values (1,2), (1,4), (1,6));
 ----
-NULL
+NULL NULL 3 NULL 1 4 0 8 0
 
 
 
-# regr_slope() basic tests
-query R
-select regr_slope(column2, column1) from (values (1,2), (2,4), (3,6));
+# regr_*() basic tests
+query RRRRRRRRR
+select 
+    regr_slope(column2, column1),
+    regr_intercept(column2, column1),
+    regr_count(column2, column1),
+    regr_r2(column2, column1),
+    regr_avgx(column2, column1),
+    regr_avgy(column2, column1),
+    regr_sxx(column2, column1),
+    regr_syy(column2, column1),
+    regr_sxy(column2, column1)
+from (values (1,2), (2,4), (3,6));
 ----
-2
+2 0 3 1 2 4 2 8 4
 
-query R
-select regr_slope(c12, c11) from aggregate_test_100;
+query RRRRRRRRR
+select 
+    regr_slope(c12, c11),
+    regr_intercept(c12, c11),
+    regr_count(c12, c11),
+    regr_r2(c12, c11),
+    regr_avgx(c12, c11),
+    regr_avgy(c12, c11),
+    regr_sxx(c12, c11),
+    regr_syy(c12, c11),
+    regr_sxy(c12, c11)
+from aggregate_test_100;
 ----
-0.051534002628
+0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 
 
-# regr_slope() ignore NULLs
-query R
-select regr_slope(column2, column1) from (values (1,NULL), (2,4), (3,6));
+# regr_*() functions ignore NULLs
+query RRRRRRRRR
+select 
+    regr_slope(column2, column1),
+    regr_intercept(column2, column1),
+    regr_count(column2, column1),
+    regr_r2(column2, column1),
+    regr_avgx(column2, column1),
+    regr_avgy(column2, column1),
+    regr_sxx(column2, column1),
+    regr_syy(column2, column1),
+    regr_sxy(column2, column1)
+from (values (1,NULL), (2,4), (3,6));
 ----
-2
+2 0 2 1 2.5 5 0.5 2 1
 
-query R
-select regr_slope(column2, column1) from (values (1,NULL), (NULL,4), (3,6));
+query RRRRRRRRR
+select 
+    regr_slope(column2, column1),
+    regr_intercept(column2, column1),
+    regr_count(column2, column1),
+    regr_r2(column2, column1),
+    regr_avgx(column2, column1),
+    regr_avgy(column2, column1),
+    regr_sxx(column2, column1),
+    regr_syy(column2, column1),
+    regr_sxy(column2, column1)
+from (values (1,NULL), (NULL,4), (3,6));
 ----
-NULL
+NULL NULL 1 NULL 3 6 0 0 0
 
-query R
-select regr_slope(column2, column1) from (values (1,NULL), (NULL,4), (NULL,NULL));
+query RRRRRRRRR
+select 
+    regr_slope(column2, column1),
+    regr_intercept(column2, column1),
+    regr_count(column2, column1),
+    regr_r2(column2, column1),
+    regr_avgx(column2, column1),
+    regr_avgy(column2, column1),
+    regr_sxx(column2, column1),
+    regr_syy(column2, column1),
+    regr_sxy(column2, column1)
+from (values (1,NULL), (NULL,4), (NULL,NULL));
 ----
-NULL
+NULL NULL 0 NULL NULL NULL NULL NULL NULL
 
-query TR rowsort
-select column3, regr_slope(column2, column1)
+query TRRRRRRRRR rowsort
+select 
+    column3, 
+    regr_slope(column2, column1),
+    regr_intercept(column2, column1),
+    regr_count(column2, column1),
+    regr_r2(column2, column1),
+    regr_avgx(column2, column1),
+    regr_avgy(column2, column1),
+    regr_sxx(column2, column1),
+    regr_syy(column2, column1),
+    regr_sxy(column2, column1)
 from (values (1,2,'a'), (2,4,'a'), (1,3,'b'), (3,9,'b'), (1,10,'c'), (NULL,100,'c'))
 group by column3;
 ----
-a 2
-b 3
-c NULL
+a 2 0 2 1 1.5 3 0.5 2 1
+b 3 0 2 1 2 6 2 18 6
+c NULL NULL 1 NULL 1 10 0 0 0
 
 
 
-# regr_slope() testing merge_batch() from RegrSlopeAccumulator's internal implementation
+# regr_*() testing merge_batch() from RegrAccumulator's internal implementation
 statement ok
 set datafusion.execution.batch_size = 1;
 
-query R
-select regr_slope(c12, c11) from aggregate_test_100;
+query RRRRRRRRR
+select 
+    regr_slope(c12, c11),
+    regr_intercept(c12, c11),
+    regr_count(c12, c11),
+    regr_r2(c12, c11),
+    regr_avgx(c12, c11),
+    regr_avgy(c12, c11),
+    regr_sxx(c12, c11),
+    regr_syy(c12, c11),
+    regr_sxy(c12, c11)
+from aggregate_test_100;
 ----
-0.051534002628
+0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 statement ok
 set datafusion.execution.batch_size = 2;
 
-query R
-select regr_slope(c12, c11) from aggregate_test_100;
+query RRRRRRRRR
+select 
+    regr_slope(c12, c11),
+    regr_intercept(c12, c11),
+    regr_count(c12, c11),
+    regr_r2(c12, c11),
+    regr_avgx(c12, c11),
+    regr_avgy(c12, c11),
+    regr_sxx(c12, c11),
+    regr_syy(c12, c11),
+    regr_sxy(c12, c11)
+from aggregate_test_100;
 ----
-0.051534002628
+0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 statement ok
 set datafusion.execution.batch_size = 3;
 
-query R
-select regr_slope(c12, c11) from aggregate_test_100;
+query RRRRRRRRR
+select 
+    regr_slope(c12, c11),
+    regr_intercept(c12, c11),
+    regr_count(c12, c11),
+    regr_r2(c12, c11),
+    regr_avgx(c12, c11),
+    regr_avgy(c12, c11),
+    regr_sxx(c12, c11),
+    regr_syy(c12, c11),
+    regr_sxy(c12, c11)
+from aggregate_test_100;
 ----
-0.051534002628
+0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 statement ok
 set datafusion.execution.batch_size = 8192;
 
 
 
-# regr_slope testing retract_batch() from RegrSlopeAccumulator's internal implementation
-query R
-select regr_slope(column2, column1)
-over (order by column1 rows between 2 preceding and current row)
-from (values (1,2), (2,4), (3,6), (4,12), (5,15), (6, 18));
+# regr_*() testing retract_batch() from RegrAccumulator's internal implementation
+query RRRRRRRRR
+SELECT
+    regr_slope(column2, column1) OVER w AS slope,
+    regr_intercept(column2, column1) OVER w AS intercept,
+    regr_count(column2, column1) OVER w AS count,
+    regr_r2(column2, column1) OVER w AS r2,
+    regr_avgx(column2, column1) OVER w AS avgx,
+    regr_avgy(column2, column1) OVER w AS avgy,
+    regr_sxx(column2, column1) OVER w AS sxx,
+    regr_syy(column2, column1) OVER w AS syy,
+    regr_sxy(column2, column1) OVER w AS sxy
+FROM (VALUES (1,2), (2,4), (3,6), (4,12), (5,15), (6,18)) AS t(column1, column2)
+WINDOW w AS (ORDER BY column1 ROWS BETWEEN 2 PRECEDING AND CURRENT ROW);
 ----
-NULL
-2
-2
-4
-4.5
-3
+NULL NULL 1 NULL 1 2 0 0 0
+2 0 2 1 1.5 3 0.5 2 1
+2 0 3 1 2 4 2 8 4
+4 -4.666666666667 3 0.923076923077 3 7.333333333333 2 34.666666666667 8
+4.5 -7 3 0.964285714286 4 11 2 42 9
+3 0 3 1 5 15 2 18 6
 
-query R
-select regr_slope(column2, column1)
-over (order by column1 rows between 2 preceding and current row)
-from (values (1,2), (2,4), (3,6), (3, NULL), (4, NULL), (5,15), (6,18), (7, 21));
+query RRRRRRRRR
+SELECT
+    regr_slope(column2, column1) OVER w AS slope,
+    regr_intercept(column2, column1) OVER w AS intercept,
+    regr_count(column2, column1) OVER w AS count,
+    regr_r2(column2, column1) OVER w AS r2,
+    regr_avgx(column2, column1) OVER w AS avgx,
+    regr_avgy(column2, column1) OVER w AS avgy,
+    regr_sxx(column2, column1) OVER w AS sxx,
+    regr_syy(column2, column1) OVER w AS syy,
+    regr_sxy(column2, column1) OVER w AS sxy
+FROM (VALUES (1,2), (2,4), (3,6), (3, NULL), (4, NULL), (5,15), (6,18), (7, 21)) AS t(column1, column2)
+WINDOW w AS (ORDER BY column1 ROWS BETWEEN 2 PRECEDING AND CURRENT ROW);
 ----
-NULL
-2
-2
-2
-NULL
-NULL
-3
-3
+NULL NULL 1 NULL 1 2 0 0 0
+2 0 2 1 1.5 3 0.5 2 1
+2 0 3 1 2 4 2 8 4
+2 0 2 1 2.5 5 0.5 2 1
+NULL NULL 1 NULL 3 6 0 0 0
+NULL NULL 1 NULL 5 15 0 0 0
+3 0 2 1 5.5 16.5 0.5 4.5 1.5
+3 0 3 1 6 18 2 18 6

@@ -24,7 +24,7 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, SchemaError};
+use datafusion_common::{DataFusionError, SchemaError, UnnestOptions};
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -178,6 +178,11 @@ impl DataFrame {
 
     /// Expand each list element of a column to multiple rows.
     ///
+    /// Seee also:
+    ///
+    /// 1. [`UnnestOptions`] documentation for the behavior of `unnest`
+    /// 2. [`Self::unnest_column_with_options`]
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -190,8 +195,21 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
+        self.unnest_column_with_options(column, UnnestOptions::new())
+    }
+
+    /// Expand each list element of a column to multiple rows, with
+    /// behavior controlled by [`UnnestOptions`].
+    ///
+    /// Please see the documentation on [`UnnestOptions`] for more
+    /// details about the meaning of unnest.
+    pub fn unnest_column_with_options(
+        self,
+        column: &str,
+        options: UnnestOptions,
+    ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
-            .unnest_column(column)?
+            .unnest_column_with_options(column, options)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }

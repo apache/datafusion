@@ -40,6 +40,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, plan_err, Column, DFField, DFSchema, DFSchemaRef,
     DataFusionError, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
+    UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -1850,7 +1851,8 @@ pub enum Partitioning {
     DistributeBy(Vec<Expr>),
 }
 
-/// Unnest a column that contains a nested list type.
+/// Unnest a column that contains a nested list type. See
+/// [`UnnestOptions`] for more details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Unnest {
     /// The incoming logical plan
@@ -1859,6 +1861,8 @@ pub struct Unnest {
     pub column: Column,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
+    /// Options
+    pub options: UnnestOptions,
 }
 
 #[cfg(test)]

@@ -27,16 +27,20 @@ use datafusion_common::{
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::{
-    config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
-    runtime_env::RuntimeEnv,
+    config::SessionConfig,
+    memory_pool::MemoryPool,
+    registry::FunctionRegistry,
+    runtime_env::{RuntimeConfig, RuntimeEnv},
 };
 
 /// Task Execution Context
 ///
-/// A [`TaskContext`] has represents the state available during a single query's
-/// execution.
+/// A [`TaskContext`] contains the state available during a single
+/// query's execution. Please see [`SessionContext`] for a user level
+/// multi-query API.
 ///
-/// # Task Context
+/// [`SessionContext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
+#[derive(Debug)]
 pub struct TaskContext {
     /// Session Id
     session_id: String,
@@ -52,6 +56,24 @@ pub struct TaskContext {
     window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Runtime environment associated with this task context
     runtime: Arc<RuntimeEnv>,
+}
+
+impl Default for TaskContext {
+    fn default() -> Self {
+        let runtime = RuntimeEnv::new(RuntimeConfig::new())
+            .expect("defauly runtime created successfully");
+
+        // Create a default task context, mostly useful for testing
+        Self {
+            session_id: "DEFAULT".to_string(),
+            task_id: None,
+            session_config: SessionConfig::new(),
+            scalar_functions: HashMap::new(),
+            aggregate_functions: HashMap::new(),
+            window_functions: HashMap::new(),
+            runtime: Arc::new(runtime),
+        }
+    }
 }
 
 impl TaskContext {
@@ -136,6 +158,18 @@ impl TaskContext {
     /// Return the [RuntimeEnv] associated with this [TaskContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.runtime.clone()
+    }
+
+    /// Update the [`ConfigOptions`]
+    pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
+        self.session_config = session_config;
+        self
+    }
+
+    /// Update the [`RuntimeEnv`]
+    pub fn with_runtime(mut self, runtime: Arc<RuntimeEnv>) -> Self {
+        self.runtime = runtime;
+        self
     }
 }
 

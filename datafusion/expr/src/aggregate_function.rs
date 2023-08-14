@@ -17,6 +17,7 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
+use crate::utils;
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, DataFusionError, Result};
@@ -25,6 +26,8 @@ use std::{fmt, str::FromStr};
 use strum_macros::EnumIter;
 
 /// Enum of all built-in aggregate functions
+// Contributor's guide for adding new aggregate functions
+// https://arrow.apache.org/datafusion/contributor-guide/index.html#how-to-add-a-new-aggregate-function
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
     /// count
@@ -63,6 +66,22 @@ pub enum AggregateFunction {
     Correlation,
     /// Slope from linear regression
     RegrSlope,
+    /// Intercept from linear regression
+    RegrIntercept,
+    /// Number of input rows in which both expressions are not null
+    RegrCount,
+    /// R-squared value from linear regression
+    RegrR2,
+    /// Average of the independent variable
+    RegrAvgx,
+    /// Average of the dependent variable
+    RegrAvgy,
+    /// Sum of squares of the independent variable
+    RegrSXX,
+    /// Sum of squares of the dependent variable
+    RegrSYY,
+    /// Sum of products of pairs of numbers
+    RegrSXY,
     /// Approximate continuous percentile function
     ApproxPercentileCont,
     /// Approximate continuous percentile function with weight
@@ -105,6 +124,14 @@ impl AggregateFunction {
             CovariancePop => "COVARIANCE_POP",
             Correlation => "CORRELATION",
             RegrSlope => "REGR_SLOPE",
+            RegrIntercept => "REGR_INTERCEPT",
+            RegrCount => "REGR_COUNT",
+            RegrR2 => "REGR_R2",
+            RegrAvgx => "REGR_AVGX",
+            RegrAvgy => "REGR_AVGY",
+            RegrSXX => "REGR_SXX",
+            RegrSYY => "REGR_SYY",
+            RegrSXY => "REGR_SXY",
             ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             ApproxMedian => "APPROX_MEDIAN",
@@ -156,6 +183,14 @@ impl FromStr for AggregateFunction {
             "var_pop" => AggregateFunction::VariancePop,
             "var_samp" => AggregateFunction::Variance,
             "regr_slope" => AggregateFunction::RegrSlope,
+            "regr_intercept" => AggregateFunction::RegrIntercept,
+            "regr_count" => AggregateFunction::RegrCount,
+            "regr_r2" => AggregateFunction::RegrR2,
+            "regr_avgx" => AggregateFunction::RegrAvgx,
+            "regr_avgy" => AggregateFunction::RegrAvgy,
+            "regr_sxx" => AggregateFunction::RegrSXX,
+            "regr_syy" => AggregateFunction::RegrSYY,
+            "regr_sxy" => AggregateFunction::RegrSXY,
             // approximate
             "approx_distinct" => AggregateFunction::ApproxDistinct,
             "approx_median" => AggregateFunction::ApproxMedian,
@@ -197,7 +232,16 @@ impl AggregateFunction {
             self,
             input_expr_types,
             &self.signature(),
-        )?;
+        )
+        // original errors are all related to wrong function signature
+        // aggregate them for better error message
+        .map_err(|_| {
+            DataFusionError::Plan(utils::generate_signature_error_msg(
+                &format!("{self}"),
+                self.signature(),
+                input_expr_types,
+            ))
+        })?;
 
         match self {
             AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
@@ -230,7 +274,15 @@ impl AggregateFunction {
             }
             AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
             AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
-            AggregateFunction::RegrSlope => Ok(DataType::Float64),
+            AggregateFunction::RegrSlope
+            | AggregateFunction::RegrIntercept
+            | AggregateFunction::RegrCount
+            | AggregateFunction::RegrR2
+            | AggregateFunction::RegrAvgx
+            | AggregateFunction::RegrAvgy
+            | AggregateFunction::RegrSXX
+            | AggregateFunction::RegrSYY
+            | AggregateFunction::RegrSXY => Ok(DataType::Float64),
             AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
             AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
                 "item",
@@ -317,7 +369,15 @@ impl AggregateFunction {
             AggregateFunction::Covariance
             | AggregateFunction::CovariancePop
             | AggregateFunction::Correlation
-            | AggregateFunction::RegrSlope => {
+            | AggregateFunction::RegrSlope
+            | AggregateFunction::RegrIntercept
+            | AggregateFunction::RegrCount
+            | AggregateFunction::RegrR2
+            | AggregateFunction::RegrAvgx
+            | AggregateFunction::RegrAvgy
+            | AggregateFunction::RegrSXX
+            | AggregateFunction::RegrSYY
+            | AggregateFunction::RegrSXY => {
                 Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
             }
             AggregateFunction::ApproxPercentileCont => {

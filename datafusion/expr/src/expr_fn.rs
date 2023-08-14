@@ -565,6 +565,12 @@ scalar_expr!(
 "Returns true if at least one element of the second array appears in the first array; otherwise, it returns false."
 );
 scalar_expr!(
+    Flatten,
+    flatten,
+    array,
+    "flattens an array of arrays into a single array."
+);
+scalar_expr!(
     ArrayDims,
     array_dims,
     array,
@@ -575,12 +581,6 @@ scalar_expr!(
     array_element,
     array element,
     "extracts the element with the index n from the array."
-);
-scalar_expr!(
-    ArrayFill,
-    array_fill,
-    element array,
-    "returns an array filled with copies of the given value."
 );
 scalar_expr!(
     ArrayLength,
@@ -611,6 +611,12 @@ scalar_expr!(
     array_prepend,
     array element,
     "prepends an element to the beginning of an array."
+);
+scalar_expr!(
+    ArrayRepeat,
+    array_repeat,
+    element count,
+    "returns an array containing element `count` times."
 );
 scalar_expr!(
     ArrayRemove,
@@ -1062,12 +1068,12 @@ mod test {
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
         test_unary_scalar_expr!(ArrayDims, array_dims);
-        test_scalar_expr!(ArrayFill, array_fill, element, array);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
+        test_scalar_expr!(ArrayRepeat, array_repeat, element, count);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
         test_scalar_expr!(ArrayRemoveN, array_remove_n, array, element, max);
         test_scalar_expr!(ArrayRemoveAll, array_remove_all, array, element);

@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::{plan_err, SchemaExt, ToDFSchema};
+use datafusion_common::{plan_err, project_schema, SchemaExt, ToDFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
@@ -50,7 +50,7 @@ use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
     logical_expr::Expr,
-    physical_plan::{empty::EmptyExec, project_schema, ExecutionPlan, Statistics},
+    physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
 
 use super::PartitionedFile;
@@ -805,6 +805,19 @@ impl TableProvider for ListingTable {
             );
         }
 
+        // TODO support inserts to sorted tables which preserve sort_order
+        // Inserts currently make no effort to preserve sort_order. This could lead to
+        // incorrect query results on the table after inserting incorrectly sorted data.
+        let unsorted: Vec<Vec<Expr>> = vec![];
+        if self.options.file_sort_order != unsorted {
+            return Err(
+                DataFusionError::NotImplemented(
+                    "Writing to a sorted listing table via insert into is not supported yet. \
+                    To write to this table in the meantime, register an equivalent table with \
+                    file_sort_order = vec![]".into())
+            );
+        }
+
         let table_path = &self.table_paths()[0];
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
@@ -832,16 +845,17 @@ impl TableProvider for ListingTable {
                         file_groups.len()
                     )));
                 }
-                writer_mode = crate::datasource::file_format::FileWriterMode::Append;
+                writer_mode =
+                    crate::datasource::file_format::write::FileWriterMode::Append;
             }
             ListingTableInsertMode::AppendNewFiles => {
-                writer_mode = crate::datasource::file_format::FileWriterMode::PutMultipart
+                writer_mode =
+                    crate::datasource::file_format::write::FileWriterMode::PutMultipart
             }
             ListingTableInsertMode::Error => {
-                return Err(DataFusionError::Plan(
+                return plan_err!(
                     "Invalid plan attempting write to table with TableWriteMode::Error!"
-                        .into(),
-                ))
+                )
             }
         }
 
@@ -935,6 +949,7 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::file_type::GetExt;
     use crate::datasource::{provider_as_source, MemTable};
+    use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;
     use crate::prelude::*;
     use crate::{
@@ -944,14 +959,13 @@ mod tests {
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
-    use arrow::csv;
     use arrow::datatypes::{DataType, Schema};
-    use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
     use chrono::DateTime;
     use datafusion_common::assert_contains;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
+    use std::collections::HashMap;
     use std::fs::File;
     use tempfile::TempDir;
 
@@ -1434,26 +1448,6 @@ mod tests {
         Ok(Arc::new(table))
     }
 
-    fn load_empty_schema_csv_table(
-        schema: SchemaRef,
-        temp_path: &str,
-        insert_mode: ListingTableInsertMode,
-    ) -> Result<Arc<dyn TableProvider>> {
-        File::create(temp_path)?;
-        let table_path = ListingTableUrl::parse(temp_path).unwrap();
-
-        let file_format = CsvFormat::default();
-        let listing_options =
-            ListingOptions::new(Arc::new(file_format)).with_insert_mode(insert_mode);
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(listing_options)
-            .with_schema(schema);
-
-        let table = ListingTable::try_new(config)?;
-        Ok(Arc::new(table))
-    }
-
     /// Check that the files listed by the table match the specified `output_partitioning`
     /// when the object store contains `files`.
     async fn assert_list_files_for_scan_grouping(
@@ -1559,12 +1553,200 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_append_plan_to_external_table_stored_as_csv() -> Result<()> {
-        let file_type = FileType::CSV;
-        let file_compression_type = FileCompressionType::UNCOMPRESSED;
+    async fn test_insert_into_append_to_json_file() -> Result<()> {
+        helper_test_insert_into_append_to_existing_files(
+            FileType::JSON,
+            FileCompressionType::UNCOMPRESSED,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
 
+    #[tokio::test]
+    async fn test_insert_into_append_new_json_files() -> Result<()> {
+        helper_test_append_new_files_to_table(
+            FileType::JSON,
+            FileCompressionType::UNCOMPRESSED,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_to_csv_file() -> Result<()> {
+        helper_test_insert_into_append_to_existing_files(
+            FileType::CSV,
+            FileCompressionType::UNCOMPRESSED,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_new_csv_files() -> Result<()> {
+        helper_test_append_new_files_to_table(
+            FileType::CSV,
+            FileCompressionType::UNCOMPRESSED,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_new_parquet_files_defaults() -> Result<()> {
+        helper_test_append_new_files_to_table(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_new_parquet_files_session_overrides() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert(
+            "datafusion.execution.parquet.compression".into(),
+            "zstd(5)".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.dictionary_enabled".into(),
+            "false".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.dictionary_page_size_limit".into(),
+            "100".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.staistics_enabled".into(),
+            "none".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.max_statistics_size".into(),
+            "10".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.max_row_group_size".into(),
+            "5".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.created_by".into(),
+            "datafusion test".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.column_index_truncate_length".into(),
+            "50".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.data_page_row_count_limit".into(),
+            "50".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.encoding".into(),
+            "delta_binary_packed".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_enabled".into(),
+            "true".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_fpp".into(),
+            "0.01".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_ndv".into(),
+            "1000".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.writer_version".into(),
+            "2.0".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.write_batch_size".into(),
+            "5".into(),
+        );
+        helper_test_append_new_files_to_table(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+            Some(config_map),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_new_parquet_files_invalid_session_fails(
+    ) -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert(
+            "datafusion.execution.parquet.compression".into(),
+            "zstd".into(),
+        );
+        let e = helper_test_append_new_files_to_table(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+            Some(config_map),
+        )
+        .await
+        .expect_err("Example should fail!");
+        assert_eq!("Error during planning: zstd compression requires specifying a level such as zstd(4)", format!("{e}"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_append_to_parquet_file_fails() -> Result<()> {
+        let maybe_err = helper_test_insert_into_append_to_existing_files(
+            FileType::PARQUET,
+            FileCompressionType::UNCOMPRESSED,
+            None,
+        )
+        .await;
+        let _err =
+            maybe_err.expect_err("Appending to existing parquet file did not fail!");
+        Ok(())
+    }
+
+    fn load_empty_schema_table(
+        schema: SchemaRef,
+        temp_path: &str,
+        insert_mode: ListingTableInsertMode,
+        file_format: Arc<dyn FileFormat>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        File::create(temp_path)?;
+        let table_path = ListingTableUrl::parse(temp_path).unwrap();
+
+        let listing_options =
+            ListingOptions::new(file_format.clone()).with_insert_mode(insert_mode);
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(listing_options)
+            .with_schema(schema);
+
+        let table = ListingTable::try_new(config)?;
+        Ok(Arc::new(table))
+    }
+
+    /// Logic of testing inserting into listing table by Appending to existing files
+    /// is the same for all formats/options which support this. This helper allows
+    /// passing different options to execute the same test with different settings.
+    async fn helper_test_insert_into_append_to_existing_files(
+        file_type: FileType,
+        file_compression_type: FileCompressionType,
+        session_config_map: Option<HashMap<String, String>>,
+    ) -> Result<()> {
         // Create the initial context, schema, and batch.
-        let session_ctx = SessionContext::new();
+        let session_ctx = match session_config_map {
+            Some(cfg) => {
+                let config = SessionConfig::from_string_hash_map(cfg)?;
+                SessionContext::with_config(config)
+            }
+            None => SessionContext::new(),
+        };
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
             "column1",
@@ -1583,21 +1765,31 @@ mod tests {
             "path{}",
             file_type
                 .to_owned()
-                .get_ext_with_compression(file_compression_type.clone())
+                .get_ext_with_compression(file_compression_type)
                 .unwrap()
         );
-
-        // Define batch size for file reader
-        let batch_size = batch.num_rows();
 
         // Create a temporary directory and a CSV file within it.
         let tmp_dir = TempDir::new()?;
         let path = tmp_dir.path().join(filename);
 
-        let initial_table = load_empty_schema_csv_table(
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => Arc::new(
+                CsvFormat::default().with_file_compression_type(file_compression_type),
+            ),
+            FileType::JSON => Arc::new(
+                JsonFormat::default().with_file_compression_type(file_compression_type),
+            ),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat {}),
+            FileType::ARROW => Arc::new(ArrowFormat {}),
+        };
+
+        let initial_table = load_empty_schema_table(
             schema.clone(),
             path.to_str().unwrap(),
             ListingTableInsertMode::AppendToFile,
+            file_format,
         )?;
         session_ctx.register_table("t", initial_table)?;
         // Create and register the source table with the provided schema and inserted data
@@ -1632,19 +1824,9 @@ mod tests {
 
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &res);
-        // Open the CSV file, read its contents as a record batch, and collect the batches into a vector.
-        let file = File::open(path.clone())?;
-        let reader = csv::ReaderBuilder::new(schema.clone())
-            .has_header(true)
-            .with_batch_size(batch_size)
-            .build(file)
-            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
 
-        let batches = reader
-            .collect::<Vec<ArrowResult<RecordBatch>>>()
-            .into_iter()
-            .collect::<ArrowResult<Vec<RecordBatch>>>()
-            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+        // Read the records in the table
+        let batches = session_ctx.sql("select * from t").await?.collect().await?;
 
         // Define the expected result as a vector of strings.
         let expected = vec![
@@ -1662,6 +1844,10 @@ mod tests {
 
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &batches);
+
+        // Assert that only 1 file was added to the table
+        let num_files = tmp_dir.path().read_dir()?.count();
+        assert_eq!(num_files, 1);
 
         // Create a physical plan from the insert plan
         let plan = session_ctx
@@ -1684,18 +1870,7 @@ mod tests {
         assert_batches_eq!(expected, &res);
 
         // Open the CSV file, read its contents as a record batch, and collect the batches into a vector.
-        let file = File::open(path.clone())?;
-        let reader = csv::ReaderBuilder::new(schema.clone())
-            .has_header(true)
-            .with_batch_size(batch_size)
-            .build(file)
-            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
-
-        let batches = reader
-            .collect::<Vec<ArrowResult<RecordBatch>>>()
-            .into_iter()
-            .collect::<ArrowResult<Vec<RecordBatch>>>()
-            .map_err(|e| DataFusionError::Internal(e.to_string()));
+        let batches = session_ctx.sql("select * from t").await?.collect().await?;
 
         // Define the expected result after the second append.
         let expected = vec![
@@ -1718,16 +1893,30 @@ mod tests {
         ];
 
         // Assert that the batches read from the file after the second append match the expected result.
-        assert_batches_eq!(expected, &batches?);
+        assert_batches_eq!(expected, &batches);
+
+        // Assert that no additional files were added to the table
+        let num_files = tmp_dir.path().read_dir()?.count();
+        assert_eq!(num_files, 1);
 
         // Return Ok if the function
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_append_new_files_to_csv_table() -> Result<()> {
+    async fn helper_test_append_new_files_to_table(
+        file_type: FileType,
+        file_compression_type: FileCompressionType,
+        session_config_map: Option<HashMap<String, String>>,
+    ) -> Result<()> {
         // Create the initial context, schema, and batch.
-        let session_ctx = SessionContext::new();
+        let session_ctx = match session_config_map {
+            Some(cfg) => {
+                let config = SessionConfig::from_string_hash_map(cfg)?;
+                SessionContext::with_config(config)
+            }
+            None => SessionContext::new(),
+        };
+
         // Create a new schema with one field called "a" of type Int32
         let schema = Arc::new(Schema::new(vec![Field::new(
             "column1",
@@ -1741,17 +1930,70 @@ mod tests {
             vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
-        // Create a temporary directory and a CSV file within it.
+        // Register appropriate table depending on file_type we want to test
         let tmp_dir = TempDir::new()?;
-        session_ctx
-            .register_csv(
-                "t",
-                tmp_dir.path().to_str().unwrap(),
-                CsvReadOptions::new()
-                    .insert_mode(ListingTableInsertMode::AppendNewFiles)
-                    .schema(schema.as_ref()),
-            )
-            .await?;
+        match file_type {
+            FileType::CSV => {
+                session_ctx
+                    .register_csv(
+                        "t",
+                        tmp_dir.path().to_str().unwrap(),
+                        CsvReadOptions::new()
+                            .insert_mode(ListingTableInsertMode::AppendNewFiles)
+                            .schema(schema.as_ref())
+                            .file_compression_type(file_compression_type),
+                    )
+                    .await?;
+            }
+            FileType::JSON => {
+                session_ctx
+                    .register_json(
+                        "t",
+                        tmp_dir.path().to_str().unwrap(),
+                        NdJsonReadOptions::default()
+                            .insert_mode(ListingTableInsertMode::AppendNewFiles)
+                            .schema(schema.as_ref())
+                            .file_compression_type(file_compression_type),
+                    )
+                    .await?;
+            }
+            FileType::PARQUET => {
+                session_ctx
+                    .register_parquet(
+                        "t",
+                        tmp_dir.path().to_str().unwrap(),
+                        ParquetReadOptions::default()
+                            .insert_mode(ListingTableInsertMode::AppendNewFiles)
+                            .schema(schema.as_ref()),
+                    )
+                    .await?;
+            }
+            FileType::AVRO => {
+                session_ctx
+                    .register_avro(
+                        "t",
+                        tmp_dir.path().to_str().unwrap(),
+                        AvroReadOptions::default()
+                            // TODO implement insert_mode for avro
+                            //.insert_mode(ListingTableInsertMode::AppendNewFiles)
+                            .schema(schema.as_ref()),
+                    )
+                    .await?;
+            }
+            FileType::ARROW => {
+                session_ctx
+                    .register_arrow(
+                        "t",
+                        tmp_dir.path().to_str().unwrap(),
+                        ArrowReadOptions::default()
+                            // TODO implement insert_mode for arrow
+                            //.insert_mode(ListingTableInsertMode::AppendNewFiles)
+                            .schema(schema.as_ref()),
+                    )
+                    .await?;
+            }
+        }
+
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(
             schema.clone(),
@@ -1789,22 +2031,22 @@ mod tests {
 
         // Read the records in the table
         let batches = session_ctx
-            .sql("select count(*) from t")
+            .sql("select count(*) as count from t")
             .await?
             .collect()
             .await?;
         let expected = vec![
-            "+----------+",
-            "| COUNT(*) |",
-            "+----------+",
-            "| 6        |",
-            "+----------+",
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
         ];
 
         // Assert that the batches read from the file match the expected result.
         assert_batches_eq!(expected, &batches);
 
-        //asert that 6 files were added to the table
+        // Assert that 6 files were added to the table
         let num_files = tmp_dir.path().read_dir()?.count();
         assert_eq!(num_files, 6);
 
@@ -1830,18 +2072,18 @@ mod tests {
 
         // Read the contents of the table
         let batches = session_ctx
-            .sql("select count(*) from t")
+            .sql("select count(*) AS count from t")
             .await?
             .collect()
             .await?;
 
         // Define the expected result after the second append.
         let expected = vec![
-            "+----------+",
-            "| COUNT(*) |",
-            "+----------+",
-            "| 12       |",
-            "+----------+",
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 12    |",
+            "+-------+",
         ];
 
         // Assert that the batches read from the file after the second append match the expected result.

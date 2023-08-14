@@ -64,6 +64,11 @@ SELECT left('abcde', -2)
 abc
 
 query T
+SELECT left(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'), -2)
+----
+abc
+
+query T
 SELECT left('abcde', -200)
 ----
 (empty)
@@ -104,12 +109,22 @@ SELECT length('')
 0
 
 query I
+SELECT length(arrow_cast('', 'Dictionary(Int32, Utf8)'))
+----
+0
+
+query I
 SELECT length('chars')
 ----
 5
 
 query I
 SELECT length('josé')
+----
+4
+
+query I
+SELECT length(arrow_cast('josé', 'Dictionary(Int32, Utf8)'))
 ----
 4
 
@@ -159,6 +174,11 @@ SELECT lpad('hi', 5)
    hi
 
 query T
+SELECT lpad(arrow_cast('hi', 'Dictionary(Int32, Utf8)'), 5)
+----
+   hi
+
+query T
 SELECT lpad('hi', CAST(NULL AS INT), 'xy')
 ----
 NULL
@@ -189,6 +209,11 @@ SELECT reverse('abcde')
 edcba
 
 query T
+SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
+----
+edcba
+
+query T
 SELECT reverse('loẅks')
 ----
 sk̈wol
@@ -202,6 +227,11 @@ query T
 SELECT right('abcde', -2)
 ----
 cde
+
+query T
+SELECT right(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'), 1)
+----
+e
 
 query T
 SELECT right('abcde', -200)
@@ -265,6 +295,11 @@ hiabcdefabcdefabcdefa
 
 query T
 SELECT rpad('hi', 5, 'xy')
+----
+hixyx
+
+query T
+SELECT rpad(arrow_cast('hi', 'Dictionary(Int32, Utf8)'), 5, 'xy')
 ----
 hixyx
 
@@ -380,6 +415,11 @@ NULL
 
 query T
 SELECT translate('12345', '143', 'ax')
+----
+a2x5
+
+query T
+SELECT translate(arrow_cast('12345', 'Dictionary(Int32, Utf8)'), '143', 'ax')
 ----
 a2x5
 
@@ -565,3 +605,164 @@ SELECT sqrt(column1),sqrt(column2),sqrt(column3),sqrt(column4),sqrt(column5),sqr
 
 statement ok
 drop table t
+
+
+query T
+SELECT upper('foo')
+----
+FOO
+
+query T
+select upper(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
+----
+FOO
+
+query T
+SELECT btrim('   foo  ')
+----
+foo
+
+query T
+SELECT btrim(arrow_cast('   foo  ', 'Dictionary(Int32, Utf8)'))
+----
+foo
+
+query T
+SELECT initcap('foo')
+----
+Foo
+
+query T
+SELECT initcap(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
+----
+Foo
+
+query T
+SELECT lower('FOObar')
+----
+foobar
+
+query T
+SELECT lower(arrow_cast('FOObar', 'Dictionary(Int32, Utf8)'))
+----
+foobar
+
+query T
+SELECT ltrim('   foo')
+----
+foo
+
+query T
+SELECT ltrim(arrow_cast('    foo', 'Dictionary(Int32, Utf8)'))
+----
+foo
+
+query T
+SELECT md5('foo')
+----
+acbd18db4cc2f85cedef654fccc4a4d8
+
+query T
+SELECT md5(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
+----
+acbd18db4cc2f85cedef654fccc4a4d8
+
+query T
+SELECT regexp_replace('foobar', 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'xx', 'gi')
+----
+fooxx
+
+query T
+SELECT repeat('foo', 3)
+----
+foofoofoo
+
+query T
+SELECT repeat(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 3)
+----
+foofoofoo
+
+query T
+SELECT replace('foobar', 'bar', 'hello')
+----
+foohello
+
+query T
+SELECT replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'hello')
+----
+foohello
+
+query T
+SELECT rtrim(' foo  ')
+----
+ foo
+
+query T
+SELECT rtrim(arrow_cast(' foo  ', 'Dictionary(Int32, Utf8)'))
+----
+ foo
+
+query T
+SELECT split_part('foo_bar', '_', 2)
+----
+bar
+
+query T
+SELECT split_part(arrow_cast('foo_bar', 'Dictionary(Int32, Utf8)'), '_', 2)
+----
+bar
+
+query T
+SELECT trim('  foo  ')
+----
+foo
+
+query T
+SELECT trim(arrow_cast('  foo  ', 'Dictionary(Int32, Utf8)'))
+----
+foo
+
+query I
+SELECT bit_length('foo')
+----
+24
+
+query I
+SELECT bit_length(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
+----
+24
+
+query I
+SELECT character_length('foo')
+----
+3
+
+query I
+SELECT character_length(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
+----
+3
+
+query I
+SELECT octet_length('foo')
+----
+3
+
+query I
+SELECT octet_length(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
+----
+3
+
+query I
+SELECT strpos('helloworld', 'world')
+----
+6
+
+query I
+SELECT strpos(arrow_cast('helloworld', 'Dictionary(Int32, Utf8)'), 'world')
+----
+6

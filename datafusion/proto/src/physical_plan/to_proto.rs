@@ -45,9 +45,10 @@ use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 use crate::protobuf;
 use crate::protobuf::{
     physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    ScalarValue,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
-use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
+use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
@@ -362,20 +363,6 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                     )),
                 })
             }
-        } else if let Some(expr) = expr.downcast_ref::<DateTimeIntervalExpr>() {
-            let dti_expr = Box::new(protobuf::PhysicalDateTimeIntervalExprNode {
-                l: Some(Box::new(expr.lhs().to_owned().try_into()?)),
-                r: Some(Box::new(expr.rhs().to_owned().try_into()?)),
-                op: format!("{:?}", expr.op()),
-            });
-
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(
-                    protobuf::physical_expr_node::ExprType::DateTimeIntervalExpr(
-                        dti_expr,
-                    ),
-                ),
-            })
         } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
             Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(
@@ -388,19 +375,31 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<GetIndexedFieldExpr>() {
+            let field = match expr.field() {
+                GetFieldAccessExpr::NamedStructField{name} => Some(
+                    protobuf::physical_get_indexed_field_expr_node::Field::NamedStructFieldExpr(protobuf::NamedStructFieldExpr {
+                        name: Some(ScalarValue::try_from(name)?)
+                    })
+                ),
+                GetFieldAccessExpr::ListIndex{key} => Some(
+                    protobuf::physical_get_indexed_field_expr_node::Field::ListIndexExpr(Box::new(protobuf::ListIndexExpr {
+                        key: Some(Box::new(key.to_owned().try_into()?))
+                    }))
+                ),
+                GetFieldAccessExpr::ListRange{start, stop} => Some(
+                    protobuf::physical_get_indexed_field_expr_node::Field::ListRangeExpr(Box::new(protobuf::ListRangeExpr {
+                        start: Some(Box::new(start.to_owned().try_into()?)),
+                        stop: Some(Box::new(stop.to_owned().try_into()?)),
+                    }))
+                ),
+            };
+
             Ok(protobuf::PhysicalExprNode {
                 expr_type: Some(
                     protobuf::physical_expr_node::ExprType::GetIndexedFieldExpr(
                         Box::new(protobuf::PhysicalGetIndexedFieldExprNode {
                             arg: Some(Box::new(expr.arg().to_owned().try_into()?)),
-                            key: Some(Box::new(
-                                expr.key()
-                                    .list_key()
-                                    .clone()
-                                    .unwrap()
-                                    .to_owned()
-                                    .try_into()?,
-                            )),
+                            field,
                         }),
                     ),
                 ),

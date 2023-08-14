@@ -23,6 +23,12 @@ This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/s
 use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files
 in [`test_files`](test_files).
 
+#### Testing setup
+
+1. `rustup update stable` DataFusion uses the latest stable release of rust
+2. `git submodule init`
+3. `git submodule update`
+
 #### Running tests: TLDR Examples
 
 ```shell

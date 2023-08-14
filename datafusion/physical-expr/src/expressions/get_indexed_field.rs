@@ -27,73 +27,42 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{cast::as_struct_array, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{
-    field_util::get_indexed_field as get_data_type_field, ColumnarValue,
-};
+use datafusion_expr::{field_util::GetFieldAccessSchema, ColumnarValue};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-/// Key of `GetIndexedFieldExpr`.
-/// This structure is needed to separate the responsibilities of the key for `DataType::List` and `DataType::Struct`.
-/// If we use index with `DataType::List`, then we use the `list_key` argument with `struct_key` equal to `None`.
-/// If we use index with `DataType::Struct`, then we use the `struct_key` argument with `list_key` equal to `None`.
-/// `list_key` can be any expression, unlike `struct_key` which can only be `ScalarValue::Utf8`.
+/// Access a sub field of a nested type, such as `Field` or `List`
 #[derive(Clone, Hash, Debug)]
-pub struct GetIndexedFieldExprKey {
-    /// The key expression for `DataType::List`
-    list_key: Option<Arc<dyn PhysicalExpr>>,
-    /// The key expression for `DataType::Struct`
-    struct_key: Option<ScalarValue>,
+pub enum GetFieldAccessExpr {
+    /// Named field, For example `struct["name"]`
+    NamedStructField { name: ScalarValue },
+    /// Single list index, for example: `list[i]`
+    ListIndex { key: Arc<dyn PhysicalExpr> },
+    /// List range, for example `list[i:j]`
+    ListRange {
+        start: Arc<dyn PhysicalExpr>,
+        stop: Arc<dyn PhysicalExpr>,
+    },
 }
 
-impl GetIndexedFieldExprKey {
-    /// Create new get field expression key
-    pub fn new(
-        list_key: Option<Arc<dyn PhysicalExpr>>,
-        struct_key: Option<ScalarValue>,
-    ) -> Self {
-        Self {
-            list_key,
-            struct_key,
-        }
-    }
-
-    /// Get the key expression for `DataType::List`
-    pub fn list_key(&self) -> &Option<Arc<dyn PhysicalExpr>> {
-        &self.list_key
-    }
-
-    /// Get the key expression for `DataType::Struct`
-    pub fn struct_key(&self) -> &Option<ScalarValue> {
-        &self.struct_key
-    }
-}
-
-impl std::fmt::Display for GetIndexedFieldExprKey {
+impl std::fmt::Display for GetFieldAccessExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        if let Some(list_key) = &self.list_key {
-            write!(f, "{}", list_key)
-        } else {
-            write!(f, "{}", self.struct_key.clone().unwrap())
+        match self {
+            GetFieldAccessExpr::NamedStructField { name } => write!(f, "[{}]", name),
+            GetFieldAccessExpr::ListIndex { key } => write!(f, "[{}]", key),
+            GetFieldAccessExpr::ListRange { start, stop } => {
+                write!(f, "[{}:{}]", start, stop)
+            }
         }
     }
 }
 
-impl PartialEq<dyn Any> for GetIndexedFieldExprKey {
+impl PartialEq<dyn Any> for GetFieldAccessExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| {
-                if let Some(list_key) = &self.list_key {
-                    list_key.eq(&x.list_key.clone().unwrap())
-                } else {
-                    self.struct_key
-                        .clone()
-                        .unwrap()
-                        .eq(&x.struct_key.clone().unwrap())
-                }
-            })
+            .map(|x| self.eq(x))
             .unwrap_or(false)
     }
 }
@@ -104,48 +73,70 @@ pub struct GetIndexedFieldExpr {
     /// The expression to find
     arg: Arc<dyn PhysicalExpr>,
     /// The key statement
-    key: GetIndexedFieldExprKey,
-    /// The extra key (it can be used only with `DataType::List`)
-    extra_key: Option<Arc<dyn PhysicalExpr>>,
+    field: GetFieldAccessExpr,
 }
 
 impl GetIndexedFieldExpr {
-    /// Create new get field expression
-    pub fn new(
-        arg: Arc<dyn PhysicalExpr>,
-        key: GetIndexedFieldExprKey,
-        extra_key: Option<Arc<dyn PhysicalExpr>>,
-    ) -> Self {
-        Self {
+    /// Create new [`GetIndexedFieldExpr`]
+    pub fn new(arg: Arc<dyn PhysicalExpr>, field: GetFieldAccessExpr) -> Self {
+        Self { arg, field }
+    }
+
+    /// Create a new [`GetIndexedFieldExpr`] for accessing the named field
+    pub fn new_field(arg: Arc<dyn PhysicalExpr>, name: impl Into<String>) -> Self {
+        Self::new(
             arg,
-            key,
-            extra_key,
-        }
+            GetFieldAccessExpr::NamedStructField {
+                name: ScalarValue::Utf8(Some(name.into())),
+            },
+        )
     }
 
-    /// Get the input key
-    pub fn key(&self) -> &GetIndexedFieldExprKey {
-        &self.key
+    /// Create a new [`GetIndexedFieldExpr`] for accessing the specified index
+    pub fn new_index(arg: Arc<dyn PhysicalExpr>, key: Arc<dyn PhysicalExpr>) -> Self {
+        Self::new(arg, GetFieldAccessExpr::ListIndex { key })
     }
 
-    /// Get the input extra key
-    pub fn extra_key(&self) -> &Option<Arc<dyn PhysicalExpr>> {
-        &self.extra_key
+    /// Create a new [`GetIndexedFieldExpr`] for accessing the range
+    pub fn new_range(
+        arg: Arc<dyn PhysicalExpr>,
+        start: Arc<dyn PhysicalExpr>,
+        stop: Arc<dyn PhysicalExpr>,
+    ) -> Self {
+        Self::new(arg, GetFieldAccessExpr::ListRange { start, stop })
+    }
+
+    /// Get the description of what field should be accessed
+    pub fn field(&self) -> &GetFieldAccessExpr {
+        &self.field
     }
 
     /// Get the input expression
     pub fn arg(&self) -> &Arc<dyn PhysicalExpr> {
         &self.arg
     }
+
+    fn schema_access(&self, input_schema: &Schema) -> Result<GetFieldAccessSchema> {
+        Ok(match &self.field {
+            GetFieldAccessExpr::NamedStructField { name } => {
+                GetFieldAccessSchema::NamedStructField { name: name.clone() }
+            }
+            GetFieldAccessExpr::ListIndex { key } => GetFieldAccessSchema::ListIndex {
+                key_dt: key.data_type(input_schema)?,
+            },
+            GetFieldAccessExpr::ListRange { start, stop } => {
+                GetFieldAccessSchema::ListRange {
+                    start_dt: start.data_type(input_schema)?,
+                    stop_dt: stop.data_type(input_schema)?,
+                }
+            }
+        })
+    }
 }
 
 impl std::fmt::Display for GetIndexedFieldExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        if let Some(extra_key) = &self.extra_key {
-            write!(f, "({}).[{}:{}]", self.arg, self.key, extra_key)
-        } else {
-            write!(f, "({}).[{}]", self.arg, self.key)
-        }
+        write!(f, "({}).{}", self.arg, self.field)
     }
 }
 
@@ -156,87 +147,66 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         let arg_dt = self.arg.data_type(input_schema)?;
-        let key = if let Some(list_key) = &self.key.list_key {
-            (Some(list_key.data_type(input_schema)?), None)
-        } else {
-            (None, self.key.struct_key.clone())
-        };
-        let extra_key_dt = if let Some(extra_key) = &self.extra_key {
-            Some(extra_key.data_type(input_schema)?)
-        } else {
-            None
-        };
-        get_data_type_field(&arg_dt, &key, &extra_key_dt).map(|f| f.data_type().clone())
+        self.schema_access(input_schema)?
+            .get_accessed_field(&arg_dt)
+            .map(|f| f.data_type().clone())
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
         let arg_dt = self.arg.data_type(input_schema)?;
-        let key = if let Some(list_key) = &self.key.list_key {
-            (Some(list_key.data_type(input_schema)?), None)
-        } else {
-            (None, self.key.struct_key.clone())
-        };
-        let extra_key_dt = if let Some(extra_key) = &self.extra_key {
-            Some(extra_key.data_type(input_schema)?)
-        } else {
-            None
-        };
-        get_data_type_field(&arg_dt, &key, &extra_key_dt).map(|f| f.is_nullable())
+        self.schema_access(input_schema)?
+            .get_accessed_field(&arg_dt)
+            .map(|f| f.is_nullable())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let array = self.arg.evaluate(batch)?.into_array(batch.num_rows());
-        if let Some(extra_key) = &self.extra_key {
-            let list_key = self
-                .key
-                .list_key
-                .clone()
-                .unwrap()
-                .evaluate(batch)?
-                .into_array(batch.num_rows());
-            let extra_key = extra_key.evaluate(batch)?.into_array(batch.num_rows());
-            match (array.data_type(), list_key.data_type(), extra_key.data_type()) {
-                (DataType::List(_), DataType::Int64, DataType::Int64) => Ok(ColumnarValue::Array(array_slice(&[
-                    array, list_key, extra_key
-                ])?)),
-                (DataType::List(_), key, extra_key) => Err(DataFusionError::Execution(
-                    format!("get indexed field is only possible on lists with int64 indexes. \
-                             Tried with {key:?} and {extra_key:?} indices"))),
-                (dt, key, extra_key) => Err(DataFusionError::Execution(
-                    format!("get indexed field is only possible on lists with int64 indexes or struct \
-                             with utf8 indexes. Tried {dt:?} with {key:?} and {extra_key:?} indices"))),
-            }
-        } else if let Some(list_key) = &self.key.list_key {
-            let list_key = list_key.evaluate(batch)?.into_array(batch.num_rows());
-            match (array.data_type(), list_key.data_type()) {
-                    (DataType::List(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
-                        array, list_key
-                    ])?)),
-                    (DataType::List(_), key) => Err(DataFusionError::Execution(
-                        format!("get indexed field is only possible on lists with int64 indexes. \
-                            Tried with {key:?} index"))),
-                    (dt, key) => Err(DataFusionError::Execution(
-                                format!("get indexed field is only possible on lists with int64 indexes or struct \
-                                         with utf8 indexes. Tried {dt:?} with {key:?} index"))),
-                }
-        } else {
-            let struct_key = self.key.struct_key.clone().unwrap();
-            match (array.data_type(), struct_key) {
-                    (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
-                        let as_struct_array = as_struct_array(&array)?;
-                        match as_struct_array.column_by_name(&k) {
-                            None => Err(DataFusionError::Execution(
-                                format!("get indexed field {k} not found in struct"))),
-                            Some(col) => Ok(ColumnarValue::Array(col.clone()))
-                        }
+        match &self.field {
+            GetFieldAccessExpr::NamedStructField{name} => match (array.data_type(), name) {
+                (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
+                    let as_struct_array = as_struct_array(&array)?;
+                    match as_struct_array.column_by_name(k) {
+                        None => Err(DataFusionError::Execution(
+                            format!("get indexed field {k} not found in struct"))),
+                        Some(col) => Ok(ColumnarValue::Array(col.clone()))
                     }
-                    (DataType::Struct(_), key) => Err(DataFusionError::Execution(
-                        format!("get indexed field is only possible on struct with utf8 indexes. \
-                                 Tried with {key:?} index"))),
-                    (dt, key) => Err(DataFusionError::Execution(
-                                    format!("get indexed field is only possible on lists with int64 indexes or struct \
-                                             with utf8 indexes. Tried {dt:?} with {key:?} index"))),
                 }
+                (DataType::Struct(_), name) => Err(DataFusionError::Execution(
+                    format!("get indexed field is only possible on struct with utf8 indexes. \
+                             Tried with {name:?} index"))),
+                (dt, name) => Err(DataFusionError::Execution(
+                                format!("get indexed field is only possible on lists with int64 indexes or struct \
+                                         with utf8 indexes. Tried {dt:?} with {name:?} index"))),
+            },
+            GetFieldAccessExpr::ListIndex{key} => {
+            let key = key.evaluate(batch)?.into_array(batch.num_rows());
+            match (array.data_type(), key.data_type()) {
+                (DataType::List(_), DataType::Int64) => Ok(ColumnarValue::Array(array_element(&[
+                    array, key
+                ])?)),
+                (DataType::List(_), key) => Err(DataFusionError::Execution(
+                                format!("get indexed field is only possible on lists with int64 indexes. \
+                                    Tried with {key:?} index"))),
+                            (dt, key) => Err(DataFusionError::Execution(
+                                        format!("get indexed field is only possible on lists with int64 indexes or struct \
+                                                 with utf8 indexes. Tried {dt:?} with {key:?} index"))),
+                        }
+                },
+            GetFieldAccessExpr::ListRange{start, stop} => {
+                let start = start.evaluate(batch)?.into_array(batch.num_rows());
+                let stop = stop.evaluate(batch)?.into_array(batch.num_rows());
+                match (array.data_type(), start.data_type(), stop.data_type()) {
+                    (DataType::List(_), DataType::Int64, DataType::Int64) => Ok(ColumnarValue::Array(array_slice(&[
+                        array, start, stop
+                    ])?)),
+                    (DataType::List(_), start, stop) => Err(DataFusionError::Execution(
+                        format!("get indexed field is only possible on lists with int64 indexes. \
+                                 Tried with {start:?} and {stop:?} indices"))),
+                    (dt, start, stop) => Err(DataFusionError::Execution(
+                        format!("get indexed field is only possible on lists with int64 indexes or struct \
+                                 with utf8 indexes. Tried {dt:?} with {start:?} and {stop:?} indices"))),
+                }
+            },
         }
     }
 
@@ -250,8 +220,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(GetIndexedFieldExpr::new(
             children[0].clone(),
-            self.key.clone(),
-            self.extra_key.clone(),
+            self.field.clone(),
         )))
     }
 
@@ -265,15 +234,7 @@ impl PartialEq<dyn Any> for GetIndexedFieldExpr {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
-            .map(|x| {
-                if let Some(extra_key) = &self.extra_key {
-                    self.arg.eq(&x.arg)
-                        && self.key.eq(&x.key)
-                        && extra_key.eq(&x.extra_key)
-                } else {
-                    self.arg.eq(&x.arg) && self.key.eq(&x.key)
-                }
-            })
+            .map(|x| self.arg.eq(&x.arg) && self.field.eq(&x.field))
             .unwrap_or(false)
     }
 }
@@ -294,8 +255,8 @@ mod tests {
 
     fn build_list_arguments(
         list_of_lists: Vec<Vec<Option<&str>>>,
-        list_of_keys: Vec<Option<i64>>,
-        list_of_extra_keys: Vec<Option<i64>>,
+        list_of_start_indices: Vec<Option<i64>>,
+        list_of_stop_indices: Vec<Option<i64>>,
     ) -> (GenericListArray<i32>, Int64Array, Int64Array) {
         let builder = StringBuilder::with_capacity(list_of_lists.len(), 1024);
         let mut list_builder = ListBuilder::new(builder);
@@ -310,13 +271,13 @@ mod tests {
             list_builder.append(true);
         }
 
-        let key_array = Int64Array::from(list_of_keys);
-        let extra_key_array = Int64Array::from(list_of_extra_keys);
-        (list_builder.finish(), key_array, extra_key_array)
+        let start_array = Int64Array::from(list_of_start_indices);
+        let stop_array = Int64Array::from(list_of_stop_indices);
+        (list_builder.finish(), start_array, stop_array)
     }
 
     #[test]
-    fn get_indexed_field_struct() -> Result<()> {
+    fn get_indexed_field_named_struct_field() -> Result<()> {
         let schema = struct_schema();
         let boolean = BooleanArray::from(vec![false, false, true, true]);
         let int = Int64Array::from(vec![42, 28, 19, 31]);
@@ -333,14 +294,7 @@ mod tests {
         let expr = col("str", &schema).unwrap();
         // only one row should be processed
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(struct_array)])?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(
-            expr,
-            GetIndexedFieldExprKey::new(
-                None,
-                Some(ScalarValue::Utf8(Some(String::from("a")))),
-            ),
-            None,
-        ));
+        let expr = Arc::new(GetIndexedFieldExpr::new_field(expr, "a"));
         let result = expr.evaluate(&batch)?.into_array(1);
         let result =
             as_boolean_array(&result).expect("failed to downcast to BooleanArray");
@@ -375,30 +329,29 @@ mod tests {
     }
 
     #[test]
-    fn get_indexed_field_list_without_extra_key() -> Result<()> {
+    fn get_indexed_field_list_index() -> Result<()> {
         let list_of_lists = vec![
             vec![Some("a"), Some("b"), None],
             vec![None, Some("c"), Some("d")],
             vec![Some("e"), None, Some("f")],
         ];
-        let list_of_keys = vec![Some(1), Some(2), None];
-        let list_of_extra_keys = vec![None];
+        let list_of_start_indices = vec![Some(1), Some(2), None];
+        let list_of_stop_indices = vec![None];
         let expected_list = vec![Some("a"), Some("c"), None];
 
-        let schema = list_schema(&["l", "k"]);
-        let (list_col, key_col, _) =
-            build_list_arguments(list_of_lists, list_of_keys, list_of_extra_keys);
-        let expr = col("l", &schema).unwrap();
-        let key = col("k", &schema).unwrap();
+        let schema = list_schema(&["list", "key"]);
+        let (list_col, key_col, _) = build_list_arguments(
+            list_of_lists,
+            list_of_start_indices,
+            list_of_stop_indices,
+        );
+        let expr = col("list", &schema).unwrap();
+        let key = col("key", &schema).unwrap();
         let batch = RecordBatch::try_new(
             Arc::new(schema),
             vec![Arc::new(list_col), Arc::new(key_col)],
         )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(
-            expr,
-            GetIndexedFieldExprKey::new(Some(key), None),
-            None,
-        ));
+        let expr = Arc::new(GetIndexedFieldExpr::new_index(expr, key));
         let result = expr.evaluate(&batch)?.into_array(1);
         let result = as_string_array(&result).expect("failed to downcast to ListArray");
         let expected = StringArray::from(expected_list);
@@ -407,39 +360,34 @@ mod tests {
     }
 
     #[test]
-    fn get_indexed_field_list_with_extra_key() -> Result<()> {
+    fn get_indexed_field_list_range() -> Result<()> {
         let list_of_lists = vec![
             vec![Some("a"), Some("b"), None],
             vec![None, Some("c"), Some("d")],
             vec![Some("e"), None, Some("f")],
         ];
-        let list_of_keys = vec![Some(1), Some(2), None];
-        let list_of_extra_keys = vec![Some(2), None, Some(3)];
+        let list_of_start_indices = vec![Some(1), Some(2), None];
+        let list_of_stop_indices = vec![Some(2), None, Some(3)];
         let expected_list = vec![
             vec![Some("a"), Some("b")],
             vec![Some("c"), Some("d")],
             vec![Some("e"), None, Some("f")],
         ];
 
-        let schema = list_schema(&["l", "k", "ek"]);
-        let (list_col, key_col, extra_key_col) =
-            build_list_arguments(list_of_lists, list_of_keys, list_of_extra_keys);
-        let expr = col("l", &schema).unwrap();
-        let key = col("k", &schema).unwrap();
-        let extra_key = col("ek", &schema).unwrap();
+        let schema = list_schema(&["list", "start", "stop"]);
+        let (list_col, start_col, stop_col) = build_list_arguments(
+            list_of_lists,
+            list_of_start_indices,
+            list_of_stop_indices,
+        );
+        let expr = col("list", &schema).unwrap();
+        let start = col("start", &schema).unwrap();
+        let stop = col("stop", &schema).unwrap();
         let batch = RecordBatch::try_new(
             Arc::new(schema),
-            vec![
-                Arc::new(list_col),
-                Arc::new(key_col),
-                Arc::new(extra_key_col),
-            ],
+            vec![Arc::new(list_col), Arc::new(start_col), Arc::new(stop_col)],
         )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(
-            expr,
-            GetIndexedFieldExprKey::new(Some(key), None),
-            Some(extra_key),
-        ));
+        let expr = Arc::new(GetIndexedFieldExpr::new_range(expr, start, stop));
         let result = expr.evaluate(&batch)?.into_array(1);
         let result = as_list_array(&result).expect("failed to downcast to ListArray");
         let (expected, _, _) =
@@ -450,21 +398,17 @@ mod tests {
 
     #[test]
     fn get_indexed_field_empty_list() -> Result<()> {
-        let schema = list_schema(&["l", "k"]);
+        let schema = list_schema(&["list", "key"]);
         let builder = StringBuilder::new();
         let mut list_builder = ListBuilder::new(builder);
         let key_array = new_empty_array(&DataType::Int64);
-        let expr = col("l", &schema).unwrap();
-        let key = col("k", &schema).unwrap();
+        let expr = col("list", &schema).unwrap();
+        let key = col("key", &schema).unwrap();
         let batch = RecordBatch::try_new(
             Arc::new(schema),
             vec![Arc::new(list_builder.finish()), key_array],
         )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(
-            expr,
-            GetIndexedFieldExprKey::new(Some(key), None),
-            None,
-        ));
+        let expr = Arc::new(GetIndexedFieldExpr::new_index(expr, key));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         assert!(result.is_null(0));
         Ok(())
@@ -472,9 +416,9 @@ mod tests {
 
     #[test]
     fn get_indexed_field_invalid_list_index() -> Result<()> {
-        let schema = list_schema(&["l", "e"]);
-        let expr = col("l", &schema).unwrap();
-        let key_expr = col("e", &schema).unwrap();
+        let schema = list_schema(&["list", "error"]);
+        let expr = col("list", &schema).unwrap();
+        let key = col("error", &schema).unwrap();
         let builder = StringBuilder::with_capacity(3, 1024);
         let mut list_builder = ListBuilder::new(builder);
         list_builder.values().append_value("hello");
@@ -485,11 +429,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(list_builder.finish()), Arc::new(key_array)],
         )?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(
-            expr,
-            GetIndexedFieldExprKey::new(Some(key_expr), None),
-            None,
-        ));
+        let expr = Arc::new(GetIndexedFieldExpr::new_index(expr, key));
         let result = expr.evaluate(&batch)?.into_array(1);
         assert!(result.is_null(0));
         Ok(())

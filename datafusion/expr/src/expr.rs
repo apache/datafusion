@@ -115,8 +115,8 @@ pub enum Expr {
     IsNotUnknown(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
-    /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-    ///
+    /// Returns the field of a [`arrow::array::ListArray`] or
+    /// [`arrow::array::StructArray`] by index or range
     GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
     Between(Between),
@@ -359,57 +359,32 @@ impl ScalarUDF {
     }
 }
 
-/// Key of `GetIndexedFieldKey`.
-/// This structure is needed to separate the responsibilities of the key for `DataType::List` and `DataType::Struct`.
-/// If we use index with `DataType::List`, then we use the `list_key` argument with `struct_key` equal to `None`.
-/// If we use index with `DataType::Struct`, then we use the `struct_key` argument with `list_key` equal to `None`.
-/// `list_key` can be any expression, unlike `struct_key` which can only be `ScalarValue::Utf8`.
+/// Access a sub field of a nested type, such as `Field` or `List`
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct GetIndexedFieldKey {
-    /// The key expression for `DataType::List`
-    pub list_key: Option<Expr>,
-    /// The key expression for `DataType::Struct`
-    pub struct_key: Option<ScalarValue>,
+pub enum GetFieldAccess {
+    /// Named field, for example `struct["name"]`
+    NamedStructField { name: ScalarValue },
+    /// Single list index, for example: `list[i]`
+    ListIndex { key: Box<Expr> },
+    /// List range, for example `list[i:j]`
+    ListRange { start: Box<Expr>, stop: Box<Expr> },
 }
 
-impl GetIndexedFieldKey {
-    /// Create a new GetIndexedFieldKey expression
-    pub fn new(list_key: Option<Expr>, struct_key: Option<ScalarValue>) -> Self {
-        // value must be either `list_key` or `struct_key`
-        assert_ne!(list_key.is_some(), struct_key.is_some());
-        assert_ne!(list_key.is_none(), struct_key.is_none());
-
-        Self {
-            list_key,
-            struct_key,
-        }
-    }
-}
-
-/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by `key`.
-/// If `extra_key` is not `None`, returns the slice of a [`arrow::array::ListArray`] in the range from `key` to `extra_key`.
+/// Returns the field of a [`arrow::array::ListArray`] or
+/// [`arrow::array::StructArray`] by `key`. See [`GetFieldAccess`] for
+/// details.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct GetIndexedField {
     /// The expression to take the field from
     pub expr: Box<Expr>,
     /// The name of the field to take
-    pub key: Box<GetIndexedFieldKey>,
-    /// The right border of the field to take
-    pub extra_key: Option<Box<Expr>>,
+    pub field: GetFieldAccess,
 }
 
 impl GetIndexedField {
     /// Create a new GetIndexedField expression
-    pub fn new(
-        expr: Box<Expr>,
-        key: Box<GetIndexedFieldKey>,
-        extra_key: Option<Box<Expr>>,
-    ) -> Self {
-        Self {
-            expr,
-            key,
-            extra_key,
-        }
+    pub fn new(expr: Box<Expr>, field: GetFieldAccess) -> Self {
+        Self { expr, field }
     }
 }
 
@@ -951,6 +926,90 @@ impl Expr {
         ))
     }
 
+    /// Return access to the named field. Example `expr["name"]`
+    ///
+    /// ## Access field "my_field" from column "c1"
+    ///
+    /// For example if column "c1" holds documents like this
+    ///
+    /// ```json
+    /// {
+    ///   "my_field": 123.34,
+    ///   "other_field": "Boston",
+    /// }
+    /// ```
+    ///
+    /// You can access column "my_field" with
+    ///
+    /// ```
+    /// # use datafusion_expr::{col};
+    /// let expr = col("c1")
+    ///    .field("my_field");
+    /// assert_eq!(expr.display_name().unwrap(), "c1[my_field]");
+    /// ```
+    pub fn field(self, name: impl Into<String>) -> Self {
+        Expr::GetIndexedField(GetIndexedField {
+            expr: Box::new(self),
+            field: GetFieldAccess::NamedStructField {
+                name: ScalarValue::Utf8(Some(name.into())),
+            },
+        })
+    }
+
+    /// Return access to the element field. Example `expr["name"]`
+    ///
+    /// ## Example Access element 2 from column "c1"
+    ///
+    /// For example if column "c1" holds documents like this
+    ///
+    /// ```json
+    /// [10, 20, 30, 40]
+    /// ```
+    ///
+    /// You can access the value "30" with
+    ///
+    /// ```
+    /// # use datafusion_expr::{lit, col, Expr};
+    /// let expr = col("c1")
+    ///    .index(lit(3));
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(3)]");
+    /// ```
+    pub fn index(self, key: Expr) -> Self {
+        Expr::GetIndexedField(GetIndexedField {
+            expr: Box::new(self),
+            field: GetFieldAccess::ListIndex { key: Box::new(key) },
+        })
+    }
+
+    /// Return elements between `1` based `start` and `stop`, for
+    /// example `expr[1:3]`
+    ///
+    /// ## Example: Access element 2, 3, 4 from column "c1"
+    ///
+    /// For example if column "c1" holds documents like this
+    ///
+    /// ```json
+    /// [10, 20, 30, 40]
+    /// ```
+    ///
+    /// You can access the value `[20, 30, 40]` with
+    ///
+    /// ```
+    /// # use datafusion_expr::{lit, col};
+    /// let expr = col("c1")
+    ///    .range(lit(2), lit(4));
+    /// assert_eq!(expr.display_name().unwrap(), "c1[Int32(2):Int32(4)]");
+    /// ```
+    pub fn range(self, start: Expr, stop: Expr) -> Self {
+        Expr::GetIndexedField(GetIndexedField {
+            expr: Box::new(self),
+            field: GetFieldAccess::ListRange {
+                start: Box::new(start),
+                stop: Box::new(stop),
+            },
+        })
+    }
+
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
             Expr::Column(it) => Ok(it.clone()),
@@ -1178,22 +1237,15 @@ impl fmt::Display for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{qualifier}.*"),
-            Expr::GetIndexedField(GetIndexedField {
-                key,
-                extra_key,
-                expr,
-            }) => {
-                let key = if let Some(list_key) = &key.list_key {
-                    format!("{list_key}")
-                } else {
-                    format!("{0}", key.struct_key.clone().unwrap())
-                };
-                if let Some(extra_key) = extra_key {
-                    write!(f, "({expr})[{key}:{extra_key}]")
-                } else {
-                    write!(f, "({expr})[{key}]")
+            Expr::GetIndexedField(GetIndexedField { field, expr }) => match field {
+                GetFieldAccess::NamedStructField { name } => {
+                    write!(f, "({expr})[{name}]")
                 }
-            }
+                GetFieldAccess::ListIndex { key } => write!(f, "({expr})[{key}]"),
+                GetFieldAccess::ListRange { start, stop } => {
+                    write!(f, "({expr})[{start}:{stop}]")
+                }
+            },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)
@@ -1382,24 +1434,21 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField(GetIndexedField {
-            key,
-            extra_key,
-            expr,
-        }) => {
+        Expr::GetIndexedField(GetIndexedField { expr, field }) => {
             let expr = create_name(expr)?;
-            let key = if let Some(list_key) = &key.list_key {
-                create_name(list_key)?
-            } else if let Some(ScalarValue::Utf8(Some(struct_key))) = &key.struct_key {
-                struct_key.to_string()
-            } else {
-                String::new()
-            };
-            if let Some(extra_key) = extra_key {
-                let extra_key = create_name(extra_key)?;
-                Ok(format!("{expr}[{key}:{extra_key}]"))
-            } else {
-                Ok(format!("{expr}[{key}]"))
+            match field {
+                GetFieldAccess::NamedStructField { name } => {
+                    Ok(format!("{expr}[{name}]"))
+                }
+                GetFieldAccess::ListIndex { key } => {
+                    let key = create_name(key)?;
+                    Ok(format!("{expr}[{key}]"))
+                }
+                GetFieldAccess::ListRange { start, stop } => {
+                    let start = create_name(start)?;
+                    let stop = create_name(stop)?;
+                    Ok(format!("{expr}[{start}:{stop}]"))
+                }
             }
         }
         Expr::ScalarFunction(func) => {
