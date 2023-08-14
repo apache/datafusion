@@ -39,7 +39,7 @@ use async_trait::async_trait;
 use bytes::Buf;
 
 use datafusion_physical_expr::PhysicalExpr;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 use crate::datasource::physical_plan::FileGroupDisplay;
 use crate::physical_plan::insert::DataSink;
@@ -121,14 +121,15 @@ impl FileFormat for JsonFormat {
                 should_take
             };
 
-            let schema = match store.get(&object.location).await? {
-                GetResult::File(file, _) => {
+            let r = store.as_ref().get(&object.location).await?;
+            let schema = match r.payload {
+                GetResultPayload::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
                     let mut reader = BufReader::new(decoder);
                     let iter = ValueIter::new(&mut reader, None);
                     infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
                 }
-                r @ GetResult::Stream(_) => {
+                GetResultPayload::Stream(_) => {
                     let data = r.bytes().await?;
                     let decoder = file_compression_type.convert_read(data.reader())?;
                     let mut reader = BufReader::new(decoder);

@@ -19,8 +19,6 @@
 
 mod arrow_file;
 mod avro;
-#[cfg(test)]
-mod chunked_store;
 mod csv;
 mod file_stream;
 mod json;

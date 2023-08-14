@@ -40,7 +40,7 @@ use datafusion_physical_expr::{
 use bytes::{Buf, Bytes};
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store;
-use object_store::{GetResult, ObjectStore};
+use object_store::{GetResultPayload, ObjectStore};
 use std::any::Any;
 use std::io::BufReader;
 use std::sync::Arc;
@@ -209,15 +209,16 @@ impl FileOpener for JsonOpener {
 
         let file_compression_type = self.file_compression_type.to_owned();
         Ok(Box::pin(async move {
-            match store.get(file_meta.location()).await? {
-                GetResult::File(file, _) => {
+            let r = store.get(file_meta.location()).await?;
+            match r.payload {
+                GetResultPayload::File(file, _) => {
                     let bytes = file_compression_type.convert_read(file)?;
                     let reader = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
                     Ok(futures::stream::iter(reader).boxed())
                 }
-                GetResult::Stream(s) => {
+                GetResultPayload::Stream(s) => {
                     let mut decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
@@ -324,12 +325,12 @@ mod tests {
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::execution::context::SessionState;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::partitioned_file_groups;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
+    use object_store::chunked::ChunkedStore;
     use rstest::*;
     use std::path::Path;
     use tempfile::TempDir;
