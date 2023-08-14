@@ -513,6 +513,17 @@ mod tests {
     }
 
     #[test]
+    fn skip_generate_different_schema() {
+        let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
+        let config = OptimizerContext::new().with_skip_failing_rules(true);
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        opt.optimize(&plan, &config, &observe).unwrap();
+    }
+
+    #[test]
     fn generate_same_schema_different_metadata() -> Result<()> {
         // if the plan creates more metadata than previously (because
         // some wrapping functions are removed, etc) do not error
