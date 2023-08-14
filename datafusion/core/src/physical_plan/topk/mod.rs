@@ -19,7 +19,7 @@
 
 use arrow::{
     compute::interleave,
-    row::{OwnedRow, RowConverter, Rows, SortField},
+    row::{RowConverter, Rows, SortField},
 };
 use std::{cmp::Ordering, sync::Arc};
 
@@ -169,11 +169,11 @@ impl TopK {
             match self.heap.k_largest() {
                 // heap has k items, and the current row is not
                 // smaller than the curret smallest k value, skip
-                Some(largest) if largest.row.row() <= row => {}
+                Some(largest) if largest.row.as_slice() <= row.as_ref() => {}
                 // don't yet have k items or new item is greater than
                 // current min top k
                 None | Some(_) => {
-                    self.heap.add(&mut batch_entry, row.owned(), index);
+                    self.heap.add(&mut batch_entry, row, index);
                     self.metrics.row_replacements.add(1);
                 }
             }
@@ -210,7 +210,8 @@ impl TopK {
                 break;
             } else {
                 batches.push(Ok(batch.slice(0, batch_size)));
-                batch = batch.slice(batch_size, batch.num_rows());
+                let remaining_length = batch.num_rows() - batch_size;
+                batch = batch.slice(batch_size, remaining_length);
             }
         }
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -266,8 +267,8 @@ struct TopKHeap {
     inner: Vec<TopKRow>,
     /// Storage the original row values (TopKRow only has the sort key)
     store: RecordBatchStore,
-    /// The size of all `OwnedRows`s held by this heap
-    owned_row_bytes: usize,
+    /// The size of all owned data held by this heap
+    owned_bytes: usize,
 }
 
 impl TopKHeap {
@@ -277,7 +278,7 @@ impl TopKHeap {
             k,
             inner: Vec::with_capacity(k),
             store: RecordBatchStore::new(),
-            owned_row_bytes: 0,
+            owned_bytes: 0,
         }
     }
 
@@ -306,42 +307,44 @@ impl TopKHeap {
     /// Adds `row` to this heap. If inserting this new item would
     /// increase the size past `k`, removes the previously smallest
     /// item.
-    fn add(&mut self, batch_entry: &mut RecordBatchEntry, row: OwnedRow, index: usize) {
-        assert!(self.inner.len() <= self.k);
-
+    fn add(
+        &mut self,
+        batch_entry: &mut RecordBatchEntry,
+        row: impl AsRef<[u8]>,
+        index: usize,
+    ) {
+        let batch_id = batch_entry.id;
         batch_entry.uses += 1;
 
-        self.owned_row_bytes += owned_row_size(&row);
+        assert!(self.inner.len() <= self.k);
+        let row = row.as_ref();
+
+        // Reuse storage for evicted item if possible
+        let new_top_k = if self.inner.len() == self.k {
+            let prev_min = self.inner.pop().unwrap();
+
+            // Update batch use
+            if prev_min.batch_id == batch_entry.id {
+                batch_entry.uses -= 1;
+            } else {
+                self.store.unuse(prev_min.batch_id);
+            }
+
+            // update memory accounting
+            self.owned_bytes -= prev_min.owned_size();
+            prev_min.with_new_row(row, batch_id, index)
+        } else {
+            TopKRow::new(row, batch_id, index)
+        };
+
+        self.owned_bytes += new_top_k.owned_size();
 
         // put the new row into the correct location to maintain that
         // self.inner is sorted in descending order
         let insertion_point = self
             .inner
-            .partition_point(|current_row| current_row.row <= row);
-        self.inner.insert(
-            insertion_point,
-            TopKRow {
-                row,
-                batch_id: batch_entry.id,
-                index,
-            },
-        );
-
-        // limit size to k items
-        if self.inner.len() > self.k {
-            // If there was a previous minimum value, decrement its use
-            if let Some(prev_min) = self.inner.pop() {
-                if prev_min.batch_id == batch_entry.id {
-                    batch_entry.uses -= 1;
-                } else {
-                    self.store.unuse(prev_min.batch_id);
-                }
-                // update memory accounting
-                let prev_size = owned_row_size(&prev_min.row);
-                assert!(self.owned_row_bytes >= prev_size);
-                self.owned_row_bytes -= prev_size;
-            }
-        }
+            .partition_point(|current_row| current_row.row() <= row.as_ref());
+        self.inner.insert(insertion_point, new_top_k);
     }
 
     /// Returns the values stored in this heap, from values low to high, as a single
@@ -396,25 +399,69 @@ impl TopKHeap {
         std::mem::size_of::<Self>()
             + (self.inner.capacity() * std::mem::size_of::<TopKRow>())
             + self.store.size()
-            + self.owned_row_bytes
+            + self.owned_bytes
     }
 }
 
-/// Size of memory owned by `row` until row::size() is available
-/// TODO file upstream ticket in arrow-rs to add this
-fn owned_row_size(row: &OwnedRow) -> usize {
-    std::mem::size_of_val(row) + row.as_ref().len() // underlying data, doesn't account for capacity
-}
-
-/// Represents one of the top K rows. Orders according to `OwnedRow`
+/// Represents one of the top K rows held in this heap. Orders
+/// according to memcmp of row (e.g. the arrow Row format, but could
+/// also be primtive values)
+///
+/// Reuses allocations to minimize runtime overhead of creating new Vecs
 #[derive(Debug, PartialEq)]
 struct TopKRow {
-    /// the value of the sort key for this row
-    row: OwnedRow,
-    /// the index in this record batch the row came from
-    index: usize,
+    /// the value of the sort key for this row. This contains the
+    /// bytes that could be stored in `OwnedRow` but uses `Vec<u8>` to
+    /// reuse allocations.
+    row: Vec<u8>,
     /// the RecordBatch this row came from: an id into a [`RecordBatchStore`]
     batch_id: u32,
+    /// the index in this record batch the row came from
+    index: usize,
+}
+
+impl TopKRow {
+    /// Create a new TopKRow with new allocation
+    fn new(row: impl AsRef<[u8]>, batch_id: u32, index: usize) -> Self {
+        Self {
+            row: row.as_ref().to_vec(),
+            batch_id,
+            index,
+        }
+    }
+
+    /// Create a new  TopKRow reusing the existing allocation
+    fn with_new_row(
+        self,
+        new_row: impl AsRef<[u8]>,
+        batch_id: u32,
+        index: usize,
+    ) -> Self {
+        let Self {
+            mut row,
+            batch_id: _,
+            index: _,
+        } = self;
+        row.clear();
+        row.extend_from_slice(new_row.as_ref());
+
+        Self {
+            row,
+            batch_id,
+            index,
+        }
+    }
+
+    /// Returns the number of bytes owned by this row in the heap (not
+    /// including itself)
+    fn owned_size(&self) -> usize {
+        self.row.capacity()
+    }
+
+    /// Returns a slice to the owned row value
+    fn row(&self) -> &[u8] {
+        self.row.as_slice()
+    }
 }
 
 impl Eq for TopKRow {}
