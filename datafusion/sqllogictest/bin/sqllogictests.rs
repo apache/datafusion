@@ -16,6 +16,7 @@
 // under the License.
 
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
@@ -54,9 +55,25 @@ pub async fn main() -> Result<()> {
     run_tests().await
 }
 
+/// Sets up an empty directory at tests/sqllogictests/test_files/scratch/
+/// creating it if needed and clearing any file contents if it exists
+/// This allows tests for inserting to external tables or copy to
+/// to persist data to disk and have consistent state when running
+/// a new test
+fn setup_scratch_dir() -> Result<()> {
+    let path = std::path::Path::new("tests/sqllogictests/test_files/scratch");
+    if path.exists() {
+        fs::remove_dir_all(path)?;
+    }
+    fs::create_dir(path)?;
+    Ok(())
+}
+
 async fn run_tests() -> Result<()> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
+
+    setup_scratch_dir()?;
 
     let options = Options::new();
 

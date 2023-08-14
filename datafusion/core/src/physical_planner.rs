@@ -17,6 +17,15 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
+use crate::datasource::file_format::arrow::ArrowFormat;
+use crate::datasource::file_format::avro::AvroFormat;
+use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::json::JsonFormat;
+use crate::datasource::file_format::parquet::ParquetFormat;
+use crate::datasource::file_format::write::FileWriterMode;
+use crate::datasource::file_format::FileFormat;
+use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -29,6 +38,9 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_expr::dml::{CopyTo, OutputFileFormat};
+use object_store::local::LocalFileSystem;
+use url::Url;
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -80,6 +92,7 @@ use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::fs;
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -543,6 +556,74 @@ impl DefaultPhysicalPlanner {
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
                     source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
+                }
+                LogicalPlan::Copy(CopyTo{
+                    input,
+                    output_url,
+                    file_format,
+                    per_thread_output,
+                    options: _,
+                }) => {
+                    let input_exec = self.create_initial_plan(input, session_state).await?;
+                    // Get object store for specified output_url
+                    let maybe_parsed_url = ListingTableUrl::parse(output_url);
+
+                    // if we failed due to non existing local path passed, try again as local url with ObjectStore
+                    // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
+                    // TODO: add additional configurable options for if existing files should be overwritten or
+                    // appended to
+                    let parsed_url = match maybe_parsed_url {
+                        Ok(url) => Ok(url),
+                        Err(DataFusionError::IoError(_e)) => {
+                            let path = std::path::PathBuf::from(output_url);
+                            if !path.exists(){
+                                if *per_thread_output{
+                                    fs::create_dir_all(path)?;
+                                } else{
+                                    fs::File::create(path)?;
+                                }
+                            }
+                            let clean_path = std::path::PathBuf::from(output_url)
+                                .canonicalize()?
+                                .to_str()
+                                .ok_or(DataFusionError::Plan(format!("Unable to clean path {output_url}")))?
+                                .to_owned();
+                            let local = Arc::new(LocalFileSystem::new());
+                            let local_url = Url::parse("file://").unwrap();
+                            session_state.runtime_env().register_object_store(&local_url, local);
+                            let output_local_url = format!("file://{clean_path}");
+                            ListingTableUrl::parse(output_local_url)
+                        }
+                        Err(e) => Err(e)
+                    }?;
+
+                    let object_store_url = parsed_url.object_store();
+
+                    let schema: Schema = (**input.schema()).clone().into();
+
+                    // Set file sink related options
+                    let config = FileSinkConfig {
+                        object_store_url,
+                        table_paths: vec![parsed_url],
+                        file_groups: vec![],
+                        output_schema: Arc::new(schema),
+                        table_partition_cols: vec![],
+                        writer_mode: FileWriterMode::PutMultipart,
+                        per_thread_output: *per_thread_output,
+                        overwrite: false,
+                    };
+
+                    // TODO: implement statement level overrides for each file type
+                    // E.g. CsvFormat::from_options(options)
+                    let sink_format: Arc<dyn FileFormat> = match file_format {
+                        OutputFileFormat::CSV => Arc::new(CsvFormat::default()),
+                        OutputFileFormat::PARQUET => Arc::new(ParquetFormat::default()),
+                        OutputFileFormat::JSON => Arc::new(JsonFormat::default()),
+                        OutputFileFormat::AVRO => Arc::new(AvroFormat {} ),
+                        OutputFileFormat::ARROW => Arc::new(ArrowFormat {}),
+                    };
+
+                    sink_format.create_writer_physical_plan(input_exec, session_state, config).await
                 }
                 LogicalPlan::Dml(DmlStatement {
                     table_name,

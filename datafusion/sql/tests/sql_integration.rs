@@ -326,6 +326,30 @@ fn plan_rollback_transaction_chained() {
 }
 
 #[test]
+fn plan_copy_to() {
+    let sql = "COPY test_decimal to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+  TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_copy_to_query() {
+    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+  Limit: skip=0, fetch=10
+    Projection: test_decimal.id, test_decimal.price
+      TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
