@@ -24,6 +24,7 @@ use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
+use crate::physical_optimizer::global_order_require::GlobalOrderRequire;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::repartition::Repartition;
@@ -68,6 +69,9 @@ impl PhysicalOptimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
+            // Requires global ordering at the output of the query, to make sure that
+            // this information is not lost across different rules.
+            Arc::new(GlobalOrderRequire::new_add_mode()),
             Arc::new(AggregateStatistics::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
@@ -96,6 +100,8 @@ impl PhysicalOptimizer {
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
+            //  Makes sure to remove auxiliary executor (requires desired ordering at the output) at the end.
+            Arc::new(GlobalOrderRequire::new_remove_mode()),
             // The PipelineChecker rule will reject non-runnable query plans that use
             // pipeline-breaking operators on infinite input(s). The rule generates a
             // diagnostic error message when this happens. It makes no changes to the
