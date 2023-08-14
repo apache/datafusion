@@ -20,7 +20,9 @@ use crate::equivalence::{
     OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
+use crate::{
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
@@ -157,13 +159,31 @@ pub fn normalize_expr_with_equivalence_properties(
 
 /// This function returns the head [`PhysicalSortExpr`] of equivalence set of a [`PhysicalSortExpr`],
 /// if there is any, otherwise; returns the same [`PhysicalSortExpr`].
-pub fn normalize_sort_expr_with_equivalence_properties(
+fn normalize_sort_expr_with_equivalence_properties(
     mut sort_requirement: PhysicalSortExpr,
     eq_properties: &[EquivalentClass],
 ) -> PhysicalSortExpr {
     sort_requirement.expr =
         normalize_expr_with_equivalence_properties(sort_requirement.expr, eq_properties);
     sort_requirement
+}
+
+/// This function returns the head [`PhysicalSortExpr`] of equivalence set of a [`PhysicalSortExpr`],
+/// for each `PhysicalSortExpr` inside `sort_exprs`
+/// if there is any, otherwise; returns the same [`PhysicalSortExpr`].
+pub fn normalize_sort_exprs_with_equivalence_properties(
+    sort_exprs: LexOrderingRef,
+    eq_properties: &EquivalenceProperties,
+) -> LexOrdering {
+    sort_exprs
+        .iter()
+        .map(|expr| {
+            normalize_sort_expr_with_equivalence_properties(
+                expr.clone(),
+                eq_properties.classes(),
+            )
+        })
+        .collect()
 }
 
 /// This function returns the head [`PhysicalSortRequirement`] of equivalence set of a [`PhysicalSortRequirement`],

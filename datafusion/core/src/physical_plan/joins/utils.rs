@@ -50,7 +50,7 @@ use datafusion_physical_expr::{
 };
 
 use datafusion_physical_expr::utils::{
-    normalize_sort_expr_with_equivalence_properties, normalize_sort_exprs,
+    normalize_sort_exprs, normalize_sort_exprs_with_equivalence_properties,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -545,30 +545,19 @@ fn normalize_ordering_equivalence_classes(
     updated_indices
         .iter()
         .map(|class| {
-            let head = class
-                .head()
-                .iter()
-                .map(|expr| {
-                    normalize_sort_expr_with_equivalence_properties(
-                        expr.clone(),
-                        join_eq_properties.classes(),
-                    )
-                })
-                .collect::<Vec<_>>();
+            let head = normalize_sort_exprs_with_equivalence_properties(
+                class.head(),
+                join_eq_properties,
+            );
 
             let others = class
                 .others()
                 .iter()
                 .map(|other| {
-                    other
-                        .iter()
-                        .map(|expr| {
-                            normalize_sort_expr_with_equivalence_properties(
-                                expr.clone(),
-                                join_eq_properties.classes(),
-                            )
-                        })
-                        .collect()
+                    normalize_sort_exprs_with_equivalence_properties(
+                        other,
+                        join_eq_properties,
+                    )
                 })
                 .collect();
 
