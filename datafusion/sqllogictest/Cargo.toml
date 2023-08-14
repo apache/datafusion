@@ -34,8 +34,8 @@ path = "src/lib.rs"
 arrow = {workspace = true}
 async-trait = "0.1.41"
 bigdecimal = "0.4.1"
-datafusion = {path = "../core", version = "28.0.0"}
-datafusion-common = {path = "../common", version = "28.0.0"}
+datafusion = {path = "../core", version = "29.0.0"}
+datafusion-common = {path = "../common", version = "29.0.0"}
 half = "2.2.1"
 itertools = "0.11"
 lazy_static = {version = "^1.4.0"}
