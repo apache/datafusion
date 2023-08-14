@@ -44,20 +44,25 @@ rust_decimal = {version = "1.27.0"}
 log = "^0.4"
 sqllogictest = "0.15.0"
 sqlparser.workspace = true
+tempfile = "3"
 thiserror = "1.0.44"
 tokio = {version = "1.0"}
 bytes = {version = "1.4.0", optional = true}
-futures = {version = "0.3.28", optional = true}
+futures = {version = "0.3.28"}
 chrono = {version = "0.4.26", optional = true}
 tokio-postgres = {version = "0.7.7", optional = true}
 postgres-types = {version = "0.2.4", optional = true}
 postgres-protocol = {version = "0.6.4", optional = true}
 
 [features]
-postgres = ["bytes", "futures", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
+postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
+
+[dev-dependencies]
+env_logger = "0.10"
+num_cpus = "1.13.0"
 
 
 [[test]]
 harness = false
 name = "sqllogictests"
-path = "tests/sqllogictests/src/main.rs"
+path = "bin/sqllogictests.rs"

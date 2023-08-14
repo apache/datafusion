@@ -102,7 +102,6 @@ bigdecimal = "0.4.1"
 criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
 ctor = "0.2.0"
-datafusion-sqllogictest = { path = "../sqllogictest", version = "29.0.0", features = ["postgres"] }
 doc-comment = "0.3"
 env_logger = "0.10"
 half = "2.2.1"
@@ -111,7 +110,6 @@ postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 regex = "1.5.4"
 rstest = "0.18.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
-sqllogictest = "0.15.0"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"

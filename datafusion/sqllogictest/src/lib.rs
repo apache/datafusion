@@ -15,9 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+///! DataFusion sqllogictest driver
 mod engines;
 
 pub use engines::DataFusion;
 
 #[cfg(feature = "postgres")]
 pub use engines::Postgres;
+
+mod test_context;
+pub use test_context::TestContext;

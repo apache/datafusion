@@ -20,18 +20,14 @@ use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
 
-use datafusion_sqllogictest::{DataFusion, Postgres};
+use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
-use tempfile::TempDir;
 
-use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{DataFusionError, Result};
 
-mod setup;
-
-const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";
+const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 
 #[cfg(target_family = "windows")]
@@ -121,7 +117,7 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         relative_path,
     } = test_file;
     info!("Running with DataFusion runner: {}", path.display());
-    let Some(test_ctx) = context_for_test_file(&relative_path).await else {
+    let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
@@ -138,7 +134,9 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
+#[cfg(feature = "postgres")]
 async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
+    use datafusion_sqllogictest::Postgres;
     let TestFile {
         path,
         relative_path,
@@ -154,6 +152,12 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "postgres"))]
+async fn run_test_file_with_postgres(_test_file: TestFile) -> Result<()> {
+    use datafusion_common::plan_err;
+    plan_err!("Can not run with postgres as postgres feature is not enabled")
+}
+
 async fn run_complete_file(test_file: TestFile) -> Result<()> {
     let TestFile {
         path,
@@ -163,7 +167,7 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
 
     info!("Using complete mode to complete: {}", path.display());
 
-    let Some(test_ctx) = context_for_test_file(&relative_path).await else {
+    let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
@@ -248,96 +252,6 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBu
                 }
             }),
     )
-}
-
-/// Create a SessionContext, configured for the specific test, if
-/// possible.
-///
-/// If `None` is returned (e.g. because some needed feature is not
-/// enabled), the file should be skipped
-async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
-    let config = SessionConfig::new()
-        // hardcode target partitions so plans are deterministic
-        .with_target_partitions(4);
-
-    let test_ctx = TestContext::new(SessionContext::with_config(config));
-
-    let file_name = relative_path.file_name().unwrap().to_str().unwrap();
-    match file_name {
-        "scalar.slt" => {
-            info!("Registering scalar tables");
-            setup::register_scalar_tables(test_ctx.session_ctx()).await;
-        }
-        "information_schema_table_types.slt" => {
-            info!("Registering local temporary table");
-            setup::register_temp_table(test_ctx.session_ctx()).await;
-        }
-        "information_schema_columns.slt" => {
-            info!("Registering table with many types");
-            setup::register_table_with_many_types(test_ctx.session_ctx()).await;
-        }
-        "avro.slt" => {
-            #[cfg(feature = "avro")]
-            {
-                let mut test_ctx = test_ctx;
-                info!("Registering avro tables");
-                setup::register_avro_tables(&mut test_ctx).await;
-                return Some(test_ctx);
-            }
-            #[cfg(not(feature = "avro"))]
-            {
-                info!("Skipping {file_name} because avro feature is not enabled");
-                return None;
-            }
-        }
-        "joins.slt" => {
-            info!("Registering partition table tables");
-
-            let mut test_ctx = test_ctx;
-            setup::register_partition_table(&mut test_ctx).await;
-            return Some(test_ctx);
-        }
-        _ => {
-            info!("Using default SessionContext");
-        }
-    };
-    Some(test_ctx)
-}
-
-/// Context for running tests
-pub struct TestContext {
-    /// Context for running queries
-    ctx: SessionContext,
-    /// Temporary directory created and cleared at the end of the test
-    test_dir: Option<TempDir>,
-}
-
-impl TestContext {
-    pub fn new(ctx: SessionContext) -> Self {
-        Self {
-            ctx,
-            test_dir: None,
-        }
-    }
-
-    /// Enables the test directory feature. If not enabled,
-    /// calling `testdir_path` will result in a panic.
-    pub fn enable_testdir(&mut self) {
-        if self.test_dir.is_none() {
-            self.test_dir = Some(TempDir::new().expect("failed to create testdir"));
-        }
-    }
-
-    /// Returns the path to the test directory. Panics if the test
-    /// directory feature is not enabled via `enable_testdir`.
-    pub fn testdir_path(&self) -> &Path {
-        self.test_dir.as_ref().expect("testdir not enabled").path()
-    }
-
-    /// Returns a reference to the internal SessionContext
-    fn session_ctx(&self) -> &SessionContext {
-        &self.ctx
-    }
 }
 
 /// Parsed command line options
