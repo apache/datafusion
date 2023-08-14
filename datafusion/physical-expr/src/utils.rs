@@ -256,6 +256,32 @@ pub fn normalize_sort_exprs(
     let normalized_exprs = PhysicalSortRequirement::to_sort_exprs(normalized_exprs);
     collapse_vec(normalized_exprs)
 }
+/// This function makes sure that `oeq_classes` expressions, that are inside
+/// `eq_properties` is head of the `eq_properties` (if it is in the others replace with head).
+pub fn normalize_ordering_equivalence_classes(
+    oeq_classes: &[OrderingEquivalentClass],
+    eq_properties: &EquivalenceProperties,
+) -> Vec<OrderingEquivalentClass> {
+    oeq_classes
+        .iter()
+        .map(|class| {
+            let head = normalize_sort_exprs_with_equivalence_properties(
+                class.head(),
+                eq_properties,
+            );
+
+            let others = class
+                .others()
+                .iter()
+                .map(|other| {
+                    normalize_sort_exprs_with_equivalence_properties(other, eq_properties)
+                })
+                .collect();
+
+            EquivalentClass::new(head, others)
+        })
+        .collect()
+}
 
 /// Transform `sort_reqs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
 /// Assume `eq_properties` states that `Column a` and `Column b` are aliases.

@@ -50,7 +50,7 @@ use datafusion_physical_expr::{
 };
 
 use datafusion_physical_expr::utils::{
-    normalize_sort_exprs, normalize_sort_exprs_with_equivalence_properties,
+    normalize_ordering_equivalence_classes, normalize_sort_exprs,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -534,34 +534,6 @@ pub(crate) fn add_offset_to_ordering_equivalence_classes(
                 .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
                 .collect::<Result<Vec<_>>>()?;
             Ok(OrderingEquivalentClass::new(new_head, new_others))
-        })
-        .collect()
-}
-
-fn normalize_ordering_equivalence_classes(
-    updated_indices: &[OrderingEquivalentClass],
-    join_eq_properties: &EquivalenceProperties,
-) -> Vec<OrderingEquivalentClass> {
-    updated_indices
-        .iter()
-        .map(|class| {
-            let head = normalize_sort_exprs_with_equivalence_properties(
-                class.head(),
-                join_eq_properties,
-            );
-
-            let others = class
-                .others()
-                .iter()
-                .map(|other| {
-                    normalize_sort_exprs_with_equivalence_properties(
-                        other,
-                        join_eq_properties,
-                    )
-                })
-                .collect();
-
-            EquivalentClass::new(head, others)
         })
         .collect()
 }
