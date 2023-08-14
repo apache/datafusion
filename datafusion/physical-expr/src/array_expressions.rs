@@ -226,6 +226,46 @@ fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     Ok(())
 }
 
+macro_rules! call_array_function {
+    ($DATATYPE:expr, false) => {
+        match $DATATYPE {
+            DataType::Utf8 => array_function!(StringArray),
+            DataType::LargeUtf8 => array_function!(LargeStringArray),
+            DataType::Boolean => array_function!(BooleanArray),
+            DataType::Float32 => array_function!(Float32Array),
+            DataType::Float64 => array_function!(Float64Array),
+            DataType::Int8 => array_function!(Int8Array),
+            DataType::Int16 => array_function!(Int16Array),
+            DataType::Int32 => array_function!(Int32Array),
+            DataType::Int64 => array_function!(Int64Array),
+            DataType::UInt8 => array_function!(UInt8Array),
+            DataType::UInt16 => array_function!(UInt16Array),
+            DataType::UInt32 => array_function!(UInt32Array),
+            DataType::UInt64 => array_function!(UInt64Array),
+            _ => unreachable!(),
+        }
+    };
+    ($DATATYPE:expr, $INCLUDE_LIST:expr) => {{
+        match $DATATYPE {
+            DataType::List(_) => array_function!(ListArray),
+            DataType::Utf8 => array_function!(StringArray),
+            DataType::LargeUtf8 => array_function!(LargeStringArray),
+            DataType::Boolean => array_function!(BooleanArray),
+            DataType::Float32 => array_function!(Float32Array),
+            DataType::Float64 => array_function!(Float64Array),
+            DataType::Int8 => array_function!(Int8Array),
+            DataType::Int16 => array_function!(Int16Array),
+            DataType::Int32 => array_function!(Int32Array),
+            DataType::Int64 => array_function!(Int64Array),
+            DataType::UInt8 => array_function!(UInt8Array),
+            DataType::UInt16 => array_function!(UInt16Array),
+            DataType::UInt32 => array_function!(UInt32Array),
+            DataType::UInt64 => array_function!(UInt64Array),
+            _ => unreachable!(),
+        }
+    }};
+}
+
 #[derive(Debug)]
 enum ListOrNull<'a> {
     List(&'a dyn Array),
@@ -547,41 +587,12 @@ fn define_array_slice(
     extra_key: &Int64Array,
     return_element: bool,
 ) -> Result<ArrayRef> {
-    match list_array.value_type() {
-        DataType::List(_) => {
-            slice!(list_array, key, extra_key, return_element, ListArray)
-        }
-        DataType::Utf8 => slice!(list_array, key, extra_key, return_element, StringArray),
-        DataType::LargeUtf8 => {
-            slice!(list_array, key, extra_key, return_element, LargeStringArray)
-        }
-        DataType::Boolean => {
-            slice!(list_array, key, extra_key, return_element, BooleanArray)
-        }
-        DataType::Float32 => {
-            slice!(list_array, key, extra_key, return_element, Float32Array)
-        }
-        DataType::Float64 => {
-            slice!(list_array, key, extra_key, return_element, Float64Array)
-        }
-        DataType::Int8 => slice!(list_array, key, extra_key, return_element, Int8Array),
-        DataType::Int16 => slice!(list_array, key, extra_key, return_element, Int16Array),
-        DataType::Int32 => slice!(list_array, key, extra_key, return_element, Int32Array),
-        DataType::Int64 => slice!(list_array, key, extra_key, return_element, Int64Array),
-        DataType::UInt8 => slice!(list_array, key, extra_key, return_element, UInt8Array),
-        DataType::UInt16 => {
-            slice!(list_array, key, extra_key, return_element, UInt16Array)
-        }
-        DataType::UInt32 => {
-            slice!(list_array, key, extra_key, return_element, UInt32Array)
-        }
-        DataType::UInt64 => {
-            slice!(list_array, key, extra_key, return_element, UInt64Array)
-        }
-        data_type => Err(DataFusionError::NotImplemented(format!(
-            "array is not implemented for types '{data_type:?}'"
-        ))),
+    macro_rules! array_function {
+        ($ARRAY_TYPE:ident) => {
+            slice!(list_array, key, extra_key, return_element, $ARRAY_TYPE)
+        };
     }
+    call_array_function!(list_array.value_type(), true)
 }
 
 pub fn array_element(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -655,26 +666,16 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[1];
 
     check_datatypes("array_append", &[arr.values(), &args[1]])?;
-    let res = match (arr.value_type(), element.data_type()) {
-                (DataType::List(_), DataType::List(_)) => concat_internal(args)?,
-                (DataType::Utf8, DataType::Utf8) => append!(arr, element, StringArray),
-                (DataType::LargeUtf8, DataType::LargeUtf8) => append!(arr, element, LargeStringArray),
-                (DataType::Boolean, DataType::Boolean) => append!(arr, element, BooleanArray),
-                (DataType::Float32, DataType::Float32) => append!(arr, element, Float32Array),
-                (DataType::Float64, DataType::Float64) => append!(arr, element, Float64Array),
-                (DataType::Int8, DataType::Int8) => append!(arr, element, Int8Array),
-                (DataType::Int16, DataType::Int16) => append!(arr, element, Int16Array),
-                (DataType::Int32, DataType::Int32) => append!(arr, element, Int32Array),
-                (DataType::Int64, DataType::Int64) => append!(arr, element, Int64Array),
-                (DataType::UInt8, DataType::UInt8) => append!(arr, element, UInt8Array),
-                (DataType::UInt16, DataType::UInt16) => append!(arr, element, UInt16Array),
-                (DataType::UInt32, DataType::UInt32) => append!(arr, element, UInt32Array),
-                (DataType::UInt64, DataType::UInt64) => append!(arr, element, UInt64Array),
-                (array_data_type, element_data_type) => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Array_append is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
-                    )))
-                }
+    let res = match arr.value_type() {
+        DataType::List(_) => concat_internal(args)?,
+        data_type => {
+            macro_rules! array_function {
+                ($ARRAY_TYPE:ident) => {
+                    append!(arr, element, $ARRAY_TYPE)
+                };
+            }
+            call_array_function!(data_type, false)
+        }
     };
 
     Ok(res)
@@ -738,26 +739,16 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[1])?;
 
     check_datatypes("array_prepend", &[&args[0], arr.values()])?;
-    let res = match (arr.value_type(), element.data_type()) {
-                (DataType::List(_), DataType::List(_)) => concat_internal(args)?,
-                (DataType::Utf8, DataType::Utf8) => prepend!(arr, element, StringArray),
-                (DataType::LargeUtf8, DataType::LargeUtf8) => prepend!(arr, element, LargeStringArray),
-                (DataType::Boolean, DataType::Boolean) => prepend!(arr, element, BooleanArray),
-                (DataType::Float32, DataType::Float32) => prepend!(arr, element, Float32Array),
-                (DataType::Float64, DataType::Float64) => prepend!(arr, element, Float64Array),
-                (DataType::Int8, DataType::Int8) => prepend!(arr, element, Int8Array),
-                (DataType::Int16, DataType::Int16) => prepend!(arr, element, Int16Array),
-                (DataType::Int32, DataType::Int32) => prepend!(arr, element, Int32Array),
-                (DataType::Int64, DataType::Int64) => prepend!(arr, element, Int64Array),
-                (DataType::UInt8, DataType::UInt8) => prepend!(arr, element, UInt8Array),
-                (DataType::UInt16, DataType::UInt16) => prepend!(arr, element, UInt16Array),
-                (DataType::UInt32, DataType::UInt32) => prepend!(arr, element, UInt32Array),
-                (DataType::UInt64, DataType::UInt64) => prepend!(arr, element, UInt64Array),
-                (array_data_type, element_data_type) => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Array_prepend is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
-                    )))
-                }
+    let res = match arr.value_type() {
+        DataType::List(_) => concat_internal(args)?,
+        data_type => {
+            macro_rules! array_function {
+                ($ARRAY_TYPE:ident) => {
+                    prepend!(arr, element, $ARRAY_TYPE)
+                };
+            }
+            call_array_function!(data_type, false)
+        }
     };
 
     Ok(res)
@@ -1002,44 +993,21 @@ pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     let count = as_int64_array(&args[1])?;
 
     let res = match element.data_type() {
-        DataType::List(field) => match field.data_type() {
-            DataType::List(_) => general_repeat_list!(element, count, ListArray),
-            DataType::Utf8 => general_repeat_list!(element, count, StringArray),
-            DataType::LargeUtf8 => general_repeat_list!(element, count, LargeStringArray),
-            DataType::Boolean => general_repeat_list!(element, count, BooleanArray),
-            DataType::Float32 => general_repeat_list!(element, count, Float32Array),
-            DataType::Float64 => general_repeat_list!(element, count, Float64Array),
-            DataType::Int8 => general_repeat_list!(element, count, Int8Array),
-            DataType::Int16 => general_repeat_list!(element, count, Int16Array),
-            DataType::Int32 => general_repeat_list!(element, count, Int32Array),
-            DataType::Int64 => general_repeat_list!(element, count, Int64Array),
-            DataType::UInt8 => general_repeat_list!(element, count, UInt8Array),
-            DataType::UInt16 => general_repeat_list!(element, count, UInt16Array),
-            DataType::UInt32 => general_repeat_list!(element, count, UInt32Array),
-            DataType::UInt64 => general_repeat_list!(element, count, UInt64Array),
-            data_type => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Array_repeat is not implemented for types 'List({data_type:?})'."
-                )))
+        DataType::List(field) => {
+            macro_rules! array_function {
+                ($ARRAY_TYPE:ident) => {
+                    general_repeat_list!(element, count, $ARRAY_TYPE)
+                };
             }
-        },
-        DataType::Utf8 => general_repeat!(element, count, StringArray),
-        DataType::LargeUtf8 => general_repeat!(element, count, LargeStringArray),
-        DataType::Boolean => general_repeat!(element, count, BooleanArray),
-        DataType::Float32 => general_repeat!(element, count, Float32Array),
-        DataType::Float64 => general_repeat!(element, count, Float64Array),
-        DataType::Int8 => general_repeat!(element, count, Int8Array),
-        DataType::Int16 => general_repeat!(element, count, Int16Array),
-        DataType::Int32 => general_repeat!(element, count, Int32Array),
-        DataType::Int64 => general_repeat!(element, count, Int64Array),
-        DataType::UInt8 => general_repeat!(element, count, UInt8Array),
-        DataType::UInt16 => general_repeat!(element, count, UInt16Array),
-        DataType::UInt32 => general_repeat!(element, count, UInt32Array),
-        DataType::UInt64 => general_repeat!(element, count, UInt64Array),
+            call_array_function!(field.data_type(), true)
+        }
         data_type => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Array_repeat is not implemented for types '{data_type:?}'."
-            )))
+            macro_rules! array_function {
+                ($ARRAY_TYPE:ident) => {
+                    general_repeat!(element, count, $ARRAY_TYPE)
+                };
+            }
+            call_array_function!(data_type, false)
         }
     };
 
@@ -1101,27 +1069,12 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     check_datatypes("array_position", &[arr.values(), &args[1]])?;
-    let res = match arr.value_type() {
-        DataType::List(_) => position!(arr, element, index, ListArray),
-        DataType::Utf8 => position!(arr, element, index, StringArray),
-        DataType::LargeUtf8 => position!(arr, element, index, LargeStringArray),
-        DataType::Boolean => position!(arr, element, index, BooleanArray),
-        DataType::Float32 => position!(arr, element, index, Float32Array),
-        DataType::Float64 => position!(arr, element, index, Float64Array),
-        DataType::Int8 => position!(arr, element, index, Int8Array),
-        DataType::Int16 => position!(arr, element, index, Int16Array),
-        DataType::Int32 => position!(arr, element, index, Int32Array),
-        DataType::Int64 => position!(arr, element, index, Int64Array),
-        DataType::UInt8 => position!(arr, element, index, UInt8Array),
-        DataType::UInt16 => position!(arr, element, index, UInt16Array),
-        DataType::UInt32 => position!(arr, element, index, UInt32Array),
-        DataType::UInt64 => position!(arr, element, index, UInt64Array),
-        data_type => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Array_position is not implemented for types '{data_type:?}'."
-            )))
-        }
-    };
+    macro_rules! array_function {
+        ($ARRAY_TYPE:ident) => {
+            position!(arr, element, index, $ARRAY_TYPE)
+        };
+    }
+    let res = call_array_function!(arr.value_type(), true);
 
     Ok(Arc::new(res))
 }
@@ -1181,27 +1134,12 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[1];
 
     check_datatypes("array_positions", &[arr.values(), &args[1]])?;
-    let res = match arr.value_type() {
-        DataType::List(_) => positions!(arr, element, ListArray),
-        DataType::Utf8 => positions!(arr, element, StringArray),
-        DataType::LargeUtf8 => positions!(arr, element, LargeStringArray),
-        DataType::Boolean => positions!(arr, element, BooleanArray),
-        DataType::Float32 => positions!(arr, element, Float32Array),
-        DataType::Float64 => positions!(arr, element, Float64Array),
-        DataType::Int8 => positions!(arr, element, Int8Array),
-        DataType::Int16 => positions!(arr, element, Int16Array),
-        DataType::Int32 => positions!(arr, element, Int32Array),
-        DataType::Int64 => positions!(arr, element, Int64Array),
-        DataType::UInt8 => positions!(arr, element, UInt8Array),
-        DataType::UInt16 => positions!(arr, element, UInt16Array),
-        DataType::UInt32 => positions!(arr, element, UInt32Array),
-        DataType::UInt64 => positions!(arr, element, UInt64Array),
-        data_type => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Array_positions is not implemented for types '{data_type:?}'."
-            )))
-        }
-    };
+    macro_rules! array_function {
+        ($ARRAY_TYPE:ident) => {
+            positions!(arr, element, $ARRAY_TYPE)
+        };
+    }
+    let res = call_array_function!(arr.value_type(), true);
 
     Ok(res)
 }
@@ -1267,32 +1205,16 @@ macro_rules! array_removement_function {
             let max = $MAX_FUNC(args)?;
 
             check_datatypes(stringify!($FUNC), &[arr.values(), &args[1]])?;
-            let res = match (arr.value_type(), element.data_type()) {
-                        (DataType::List(_), DataType::List(_)) => general_remove!(arr, element, max, ListArray),
-                        (DataType::Utf8, DataType::Utf8) => general_remove!(arr, element, max, StringArray),
-                        (DataType::LargeUtf8, DataType::LargeUtf8) => general_remove!(arr, element, max, LargeStringArray),
-                        (DataType::Boolean, DataType::Boolean) => general_remove!(arr, element, max, BooleanArray),
-                        (DataType::Float32, DataType::Float32) => general_remove!(arr, element, max, Float32Array),
-                        (DataType::Float64, DataType::Float64) => general_remove!(arr, element, max, Float64Array),
-                        (DataType::Int8, DataType::Int8) => general_remove!(arr, element, max, Int8Array),
-                        (DataType::Int16, DataType::Int16) => general_remove!(arr, element, max, Int16Array),
-                        (DataType::Int32, DataType::Int32) => general_remove!(arr, element, max, Int32Array),
-                        (DataType::Int64, DataType::Int64) => general_remove!(arr, element, max, Int64Array),
-                        (DataType::UInt8, DataType::UInt8) => general_remove!(arr, element, max, UInt8Array),
-                        (DataType::UInt16, DataType::UInt16) => general_remove!(arr, element, max, UInt16Array),
-                        (DataType::UInt32, DataType::UInt32) => general_remove!(arr, element, max, UInt32Array),
-                        (DataType::UInt64, DataType::UInt64) => general_remove!(arr, element, max, UInt64Array),
-                        (array_data_type, element_data_type) => {
-                            return Err(DataFusionError::NotImplemented(format!(
-                                "{} is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'.",
-                                stringify!($FUNC),
-                            )))
-                        }
-            };
+            macro_rules! array_function {
+                ($ARRAY_TYPE:ident) => {
+                    general_remove!(arr, element, max, $ARRAY_TYPE)
+                };
+            }
+            let res = call_array_function!(arr.value_type(), true);
 
             Ok(res)
         }
-    }
+    };
 }
 
 fn remove_one(args: &[ArrayRef]) -> Result<Int64Array> {
@@ -1482,50 +1404,23 @@ macro_rules! array_replacement_function {
             let max = $MAX_FUNC(args)?;
 
             check_datatypes(stringify!($FUNC), &[arr.values(), &args[1], &args[2]])?;
-            let res = match (arr.value_type(), from.data_type(), to.data_type()) {
-                        (DataType::List(afield), DataType::List(ffield), DataType::List(tfield)) => {
-                            match (afield.data_type(), ffield.data_type(), tfield.data_type()) {
-                                (DataType::List(_), DataType::List(_), DataType::List(_)) => general_replace_list!(arr, from, to, max, ListArray),
-                                (DataType::Utf8, DataType::Utf8, DataType::Utf8) => general_replace_list!(arr, from, to, max, StringArray),
-                                (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => general_replace_list!(arr, from, to, max, LargeStringArray),
-                                (DataType::Boolean, DataType::Boolean, DataType::Boolean) => general_replace_list!(arr, from, to, max, BooleanArray),
-                                (DataType::Float32, DataType::Float32, DataType::Float32) => general_replace_list!(arr, from, to, max, Float32Array),
-                                (DataType::Float64, DataType::Float64, DataType::Float64) => general_replace_list!(arr, from, to, max, Float64Array),
-                                (DataType::Int8, DataType::Int8, DataType::Int8) => general_replace_list!(arr, from, to, max, Int8Array),
-                                (DataType::Int16, DataType::Int16, DataType::Int16) => general_replace_list!(arr, from, to, max, Int16Array),
-                                (DataType::Int32, DataType::Int32, DataType::Int32) => general_replace_list!(arr, from, to, max, Int32Array),
-                                (DataType::Int64, DataType::Int64, DataType::Int64) => general_replace_list!(arr, from, to, max, Int64Array),
-                                (DataType::UInt8, DataType::UInt8, DataType::UInt8) => general_replace_list!(arr, from, to, max, UInt8Array),
-                                (DataType::UInt16, DataType::UInt16, DataType::UInt16) => general_replace_list!(arr, from, to, max, UInt16Array),
-                                (DataType::UInt32, DataType::UInt32, DataType::UInt32) => general_replace_list!(arr, from, to, max, UInt32Array),
-                                (DataType::UInt64, DataType::UInt64, DataType::UInt64) => general_replace_list!(arr, from, to, max, UInt64Array),
-                                (array_data_type, from_data_type, to_data_type) => {
-                                    return Err(DataFusionError::NotImplemented(format!(
-                                        "{} is not implemented for types 'List({array_data_type:?})', 'List({from_data_type:?})' and 'List({to_data_type:?})'.",
-                                        stringify!($FUNC),
-                                    )))
-                                }
-                            }
-                        }
-                        (DataType::Utf8, DataType::Utf8, DataType::Utf8) => general_replace!(arr, from, to, max, StringArray),
-                        (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => general_replace!(arr, from, to, max, LargeStringArray),
-                        (DataType::Boolean, DataType::Boolean, DataType::Boolean) => general_replace!(arr, from, to, max, BooleanArray),
-                        (DataType::Float32, DataType::Float32, DataType::Float32) => general_replace!(arr, from, to, max, Float32Array),
-                        (DataType::Float64, DataType::Float64, DataType::Float64) => general_replace!(arr, from, to, max, Float64Array),
-                        (DataType::Int8, DataType::Int8, DataType::Int8) => general_replace!(arr, from, to, max, Int8Array),
-                        (DataType::Int16, DataType::Int16, DataType::Int16) => general_replace!(arr, from, to, max, Int16Array),
-                        (DataType::Int32, DataType::Int32, DataType::Int32) => general_replace!(arr, from, to, max, Int32Array),
-                        (DataType::Int64, DataType::Int64, DataType::Int64) => general_replace!(arr, from, to, max, Int64Array),
-                        (DataType::UInt8, DataType::UInt8, DataType::UInt8) => general_replace!(arr, from, to, max, UInt8Array),
-                        (DataType::UInt16, DataType::UInt16, DataType::UInt16) => general_replace!(arr, from, to, max, UInt16Array),
-                        (DataType::UInt32, DataType::UInt32, DataType::UInt32) => general_replace!(arr, from, to, max, UInt32Array),
-                        (DataType::UInt64, DataType::UInt64, DataType::UInt64) => general_replace!(arr, from, to, max, UInt64Array),
-                        (array_data_type, from_data_type, to_data_type) => {
-                            return Err(DataFusionError::NotImplemented(format!(
-                                "{} is not implemented for types '{array_data_type:?}', '{from_data_type:?}' and '{to_data_type:?}'.",
-                                stringify!($FUNC),
-                            )))
-                        }
+            let res = match arr.value_type() {
+                DataType::List(field) => {
+                    macro_rules! array_function {
+                        ($ARRAY_TYPE:ident) => {
+                            general_replace_list!(arr, from, to, max, $ARRAY_TYPE)
+                        };
+                    }
+                    call_array_function!(field.data_type(), true)
+                }
+                data_type => {
+                    macro_rules! array_function {
+                        ($ARRAY_TYPE:ident) => {
+                            general_replace!(arr, from, to, max, $ARRAY_TYPE)
+                        };
+                    }
+                    call_array_function!(data_type, false)
+                }
             };
 
             Ok(res)
@@ -1614,114 +1509,22 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
 
                 Ok(arg)
             }
-            DataType::Utf8 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                StringArray
-            ),
-            DataType::LargeUtf8 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                LargeStringArray
-            ),
-            DataType::Boolean => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                BooleanArray
-            ),
-            DataType::Float32 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                Float32Array
-            ),
-            DataType::Float64 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                Float64Array
-            ),
-            DataType::Int8 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                Int8Array
-            ),
-            DataType::Int16 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                Int16Array
-            ),
-            DataType::Int32 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                Int32Array
-            ),
-            DataType::Int64 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                Int64Array
-            ),
-            DataType::UInt8 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                UInt8Array
-            ),
-            DataType::UInt16 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                UInt16Array
-            ),
-            DataType::UInt32 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                UInt32Array
-            ),
-            DataType::UInt64 => to_string!(
-                arg,
-                arr,
-                &delimeter,
-                &null_string,
-                with_null_string,
-                UInt64Array
-            ),
             DataType::Null => Ok(arg),
-            data_type => Err(DataFusionError::NotImplemented(format!(
-                "Array is not implemented for type '{data_type:?}'."
-            ))),
+            data_type => {
+                macro_rules! array_function {
+                    ($ARRAY_TYPE:ident) => {
+                        to_string!(
+                            arg,
+                            arr,
+                            &delimeter,
+                            &null_string,
+                            with_null_string,
+                            $ARRAY_TYPE
+                        )
+                    };
+                }
+                call_array_function!(data_type, false)
+            }
         }
     }
 
@@ -1920,52 +1723,14 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
             Ok(Arc::new(boolean_builder.finish()))
         }
-
-        // Int64, Int32, Int16, Int8
-        // UInt64, UInt32, UInt16, UInt8
-        DataType::Int64 => {
-            non_list_contains!(array, element, Int64Array)
+        data_type => {
+            macro_rules! array_function {
+                ($ARRAY_TYPE:ident) => {
+                    non_list_contains!(array, element, $ARRAY_TYPE)
+                };
+            }
+            call_array_function!(data_type, false)
         }
-        DataType::Int32 => {
-            non_list_contains!(array, element, Int32Array)
-        }
-        DataType::Int16 => {
-            non_list_contains!(array, element, Int16Array)
-        }
-        DataType::Int8 => {
-            non_list_contains!(array, element, Int8Array)
-        }
-        DataType::UInt64 => {
-            non_list_contains!(array, element, UInt64Array)
-        }
-        DataType::UInt32 => {
-            non_list_contains!(array, element, UInt32Array)
-        }
-        DataType::UInt16 => {
-            non_list_contains!(array, element, UInt16Array)
-        }
-        DataType::UInt8 => {
-            non_list_contains!(array, element, UInt8Array)
-        }
-
-        DataType::Float64 => {
-            non_list_contains!(array, element, Float64Array)
-        }
-        DataType::Float32 => {
-            non_list_contains!(array, element, Float32Array)
-        }
-        DataType::Utf8 => {
-            non_list_contains!(array, element, StringArray)
-        }
-        DataType::LargeUtf8 => {
-            non_list_contains!(array, element, LargeStringArray)
-        }
-        DataType::Boolean => {
-            non_list_contains!(array, element, BooleanArray)
-        }
-        data_type => Err(DataFusionError::NotImplemented(format!(
-            "Array_has is not implemented for '{data_type:?}'"
-        ))),
     }
 }
 
@@ -1998,8 +1763,8 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(array.len());
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match (arr.data_type(), sub_arr.data_type()) {
-                (DataType::List(_), DataType::List(_)) => {
+            let res = match arr.data_type() {
+                DataType::List(_) => {
                     let arr = downcast_arg!(arr, ListArray);
                     let sub_arr = downcast_arg!(sub_arr, ListArray);
 
@@ -2009,53 +1774,14 @@ pub fn array_has_any(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                     res
                 }
-                // Int64, Int32, Int16, Int8
-                // UInt64, UInt32, UInt16, UInt8
-                (DataType::Int64, DataType::Int64) => {
-                    array_has_any_non_list_check!(arr, sub_arr, Int64Array)
+                data_type => {
+                    macro_rules! array_function {
+                        ($ARRAY_TYPE:ident) => {
+                            array_has_any_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
+                        };
+                    }
+                    call_array_function!(data_type, false)
                 }
-                (DataType::Int32, DataType::Int32) => {
-                    array_has_any_non_list_check!(arr, sub_arr, Int32Array)
-                }
-                (DataType::Int16, DataType::Int16) => {
-                    array_has_any_non_list_check!(arr, sub_arr, Int16Array)
-                }
-                (DataType::Int8, DataType::Int8) => {
-                    array_has_any_non_list_check!(arr, sub_arr, Int8Array)
-                }
-                (DataType::UInt64, DataType::UInt64) => {
-                    array_has_any_non_list_check!(arr, sub_arr, UInt64Array)
-                }
-                (DataType::UInt32, DataType::UInt32) => {
-                    array_has_any_non_list_check!(arr, sub_arr, UInt32Array)
-                }
-                (DataType::UInt16, DataType::UInt16) => {
-                    array_has_any_non_list_check!(arr, sub_arr, UInt16Array)
-                }
-                (DataType::UInt8, DataType::UInt8) => {
-                    array_has_any_non_list_check!(arr, sub_arr, UInt8Array)
-                }
-
-                (DataType::Float64, DataType::Float64) => {
-                    array_has_any_non_list_check!(arr, sub_arr, Float64Array)
-                }
-                (DataType::Float32, DataType::Float32) => {
-                    array_has_any_non_list_check!(arr, sub_arr, Float32Array)
-                }
-                (DataType::Boolean, DataType::Boolean) => {
-                    array_has_any_non_list_check!(arr, sub_arr, BooleanArray)
-                }
-                // Utf8, LargeUtf8
-                (DataType::Utf8, DataType::Utf8) => {
-                    array_has_any_non_list_check!(arr, sub_arr, StringArray)
-                }
-                (DataType::LargeUtf8, DataType::LargeUtf8) => {
-                    array_has_any_non_list_check!(arr, sub_arr, LargeStringArray)
-                }
-
-                (arr_type, sub_arr_type) => Err(DataFusionError::NotImplemented(format!(
-                    "Array_has_any is not implemented for '{arr_type:?}' and '{sub_arr_type:?}'",
-                )))?,
             };
             boolean_builder.append_value(res);
         }
@@ -2092,8 +1818,8 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(array.len());
     for (arr, sub_arr) in array.iter().zip(sub_array.iter()) {
         if let (Some(arr), Some(sub_arr)) = (arr, sub_arr) {
-            let res = match (arr.data_type(), sub_arr.data_type()) {
-                (DataType::List(_), DataType::List(_)) => {
+            let res = match arr.data_type() {
+                DataType::List(_) => {
                     let arr = downcast_arg!(arr, ListArray);
                     let sub_arr = downcast_arg!(sub_arr, ListArray);
 
@@ -2103,51 +1829,14 @@ pub fn array_has_all(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                     res
                 }
-                // Int64, Int32, Int16, Int8
-                // UInt64, UInt32, UInt16, UInt8
-                (DataType::Int64, DataType::Int64) => {
-                    array_has_all_non_list_check!(arr, sub_arr, Int64Array)
+                data_type => {
+                    macro_rules! array_function {
+                        ($ARRAY_TYPE:ident) => {
+                            array_has_all_non_list_check!(arr, sub_arr, $ARRAY_TYPE)
+                        };
+                    }
+                    call_array_function!(data_type, false)
                 }
-                (DataType::Int32, DataType::Int32) => {
-                    array_has_all_non_list_check!(arr, sub_arr, Int32Array)
-                }
-                (DataType::Int16, DataType::Int16) => {
-                    array_has_all_non_list_check!(arr, sub_arr, Int16Array)
-                }
-                (DataType::Int8, DataType::Int8) => {
-                    array_has_all_non_list_check!(arr, sub_arr, Int8Array)
-                }
-                (DataType::UInt64, DataType::UInt64) => {
-                    array_has_all_non_list_check!(arr, sub_arr, UInt64Array)
-                }
-                (DataType::UInt32, DataType::UInt32) => {
-                    array_has_all_non_list_check!(arr, sub_arr, UInt32Array)
-                }
-                (DataType::UInt16, DataType::UInt16) => {
-                    array_has_all_non_list_check!(arr, sub_arr, UInt16Array)
-                }
-                (DataType::UInt8, DataType::UInt8) => {
-                    array_has_all_non_list_check!(arr, sub_arr, UInt8Array)
-                }
-
-                (DataType::Float64, DataType::Float64) => {
-                    array_has_all_non_list_check!(arr, sub_arr, Float64Array)
-                }
-                (DataType::Float32, DataType::Float32) => {
-                    array_has_all_non_list_check!(arr, sub_arr, Float32Array)
-                }
-                (DataType::Boolean, DataType::Boolean) => {
-                    array_has_all_non_list_check!(arr, sub_arr, BooleanArray)
-                }
-                (DataType::Utf8, DataType::Utf8) => {
-                    array_has_all_non_list_check!(arr, sub_arr, StringArray)
-                }
-                (DataType::LargeUtf8, DataType::LargeUtf8) => {
-                    array_has_all_non_list_check!(arr, sub_arr, LargeStringArray)
-                }
-                (arr_type, sub_arr_type) => Err(DataFusionError::NotImplemented(format!(
-                    "Array_has_all is not implemented for '{arr_type:?}' and '{sub_arr_type:?}'",
-                )))?,
             };
             boolean_builder.append_value(res);
         }
