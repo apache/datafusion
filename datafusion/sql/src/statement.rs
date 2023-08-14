@@ -607,11 +607,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options,
         } = statement;
 
-        // semantic checks
-        if file_type == "PARQUET" && !columns.is_empty() {
-            plan_err!("Column definitions can not be specified for PARQUET files.")?;
-        }
-
         if file_type != "CSV"
             && file_type != "JSON"
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED

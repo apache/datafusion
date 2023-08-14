@@ -40,6 +40,8 @@ use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
+use super::listing::ListingTableInsertMode;
+
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 pub struct ListingTableFactory {}
 
@@ -131,13 +133,26 @@ impl TableProviderFactory for ListingTableFactory {
         // look for 'infinite' as an option
         let infinite_source = cmd.unbounded;
 
+        let explicit_insert_mode = cmd.options.get("insert_mode");
+        let insert_mode = match explicit_insert_mode {
+            Some(mode) => ListingTableInsertMode::from_str(mode),
+            None => match file_type {
+                FileType::CSV => Ok(ListingTableInsertMode::AppendToFile),
+                FileType::PARQUET => Ok(ListingTableInsertMode::AppendNewFiles),
+                FileType::AVRO => Ok(ListingTableInsertMode::AppendNewFiles),
+                FileType::JSON => Ok(ListingTableInsertMode::AppendToFile),
+                FileType::ARROW => Ok(ListingTableInsertMode::AppendNewFiles),
+            },
+        }?;
+
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_infinite_source(infinite_source)
-            .with_file_sort_order(cmd.order_exprs.clone());
+            .with_file_sort_order(cmd.order_exprs.clone())
+            .with_insert_mode(insert_mode);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {

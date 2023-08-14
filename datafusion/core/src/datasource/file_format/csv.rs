@@ -545,12 +545,11 @@ impl DataSink for CsvSink {
                 // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
                 let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
                 for part_idx in 0..num_partitions {
-                    let header = true;
+                    let header = self.has_header;
                     let builder = WriterBuilder::new().with_delimiter(self.delimiter);
                     let serializer = CsvSerializer::new()
                         .with_builder(builder)
                         .with_header(header);
-                    serializers.push(Box::new(serializer));
                     let file_path = base_path
                         .prefix()
                         .child(format!("/{}_{}.csv", write_id, part_idx));
@@ -567,6 +566,8 @@ impl DataSink for CsvSink {
                         object_store.clone(),
                     )
                     .await?;
+
+                    serializers.push(Box::new(serializer));
                     writers.push(writer);
                 }
             }
