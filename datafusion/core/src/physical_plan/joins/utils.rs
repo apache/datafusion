@@ -44,13 +44,12 @@ use datafusion_common::{
     plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::{
+    normalize_ordering_equivalence_classes, normalize_sort_exprs,
+};
 use datafusion_physical_expr::{
     EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalenceProperties,
     OrderingEquivalentClass, PhysicalExpr, PhysicalSortExpr,
-};
-
-use datafusion_physical_expr::utils::{
-    normalize_ordering_equivalence_classes, normalize_sort_exprs,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -225,7 +224,7 @@ pub fn calculate_join_output_ordering(
                 );
                 merge_vectors(&right_ordering, left_ordering)
             } else {
-                right_ordering.to_vec()
+                right_ordering
             }
         }
         // Doesn't maintain ordering, output ordering is None.
@@ -313,15 +312,16 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
-/// Update right table ordering equivalences so that they point to valid indices
-/// at the output of the join schema, and also they are normalized with equivalence
-/// columns. To do so, we increment column indices by left table size
-/// when join schema consist of combination of left and right schema (Inner, Left, Full, Right joins).
+/// Update right table ordering equivalences so that: (1) They point to valid
+/// indices at the output of the join schema, and (2) they are normalized w.r.t.
+/// given equivalence properties. To do so, we first increment column indices by
+/// the left table size when join schema consists of a combination of left and
+/// right schemas (Inner, Left, Full, Right joins).
 /// Then, we normalize the sort expressions of ordering equivalences one by one.
-/// We make sure that, each expression in the ordering equivalence is either
-/// - head of the one of the equivalent classes
-/// - or doesn't have an equivalent column
-/// by this way, once we normalize an expression according to equivalence properties
+/// We make sure that each expression in the ordering equivalence is either:
+/// - Is the head of an equivalent classes, or
+/// - Doesn't have an equivalent column.
+/// This way, once we normalize an expression according to equivalence properties,
 /// then it can be safely used for ordering equivalence normalization.
 fn get_updated_right_ordering_equivalence_properties(
     join_type: &JoinType,

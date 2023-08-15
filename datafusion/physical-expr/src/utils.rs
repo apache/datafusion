@@ -155,20 +155,24 @@ pub fn normalize_expr_with_equivalence_properties(
         .unwrap_or(expr)
 }
 
-/// This function returns the head [`PhysicalSortExpr`] of equivalence set of a [`PhysicalSortExpr`],
-/// if there is any, otherwise; returns the same [`PhysicalSortExpr`].
+/// This function returns the normalized version of `sort_expr` with respect to
+/// `eq_properties`, if possible. Otherwise, it returns its first argument as is.
+/// Note that this simply means returning the head [`PhysicalSortExpr`] in the
+/// given equivalence set.
 fn normalize_sort_expr_with_equivalence_properties(
-    mut sort_requirement: PhysicalSortExpr,
+    mut sort_expr: PhysicalSortExpr,
     eq_properties: &[EquivalentClass],
 ) -> PhysicalSortExpr {
-    sort_requirement.expr =
-        normalize_expr_with_equivalence_properties(sort_requirement.expr, eq_properties);
-    sort_requirement
+    sort_expr.expr =
+        normalize_expr_with_equivalence_properties(sort_expr.expr, eq_properties);
+    sort_expr
 }
 
-/// This function returns the head [`PhysicalSortExpr`] of equivalence set of a [`PhysicalSortExpr`],
-/// for each `PhysicalSortExpr` inside `sort_exprs`
-/// if there is any, otherwise; returns the same [`PhysicalSortExpr`].
+/// This function returns the normalized version of every [`PhysicalSortExpr`]
+/// in `sort_exprs` w.r.t. `eq_properties`, if possible. The [`PhysicalSortExpr`]s
+/// for which this is impossible are returned as is. Basically, this function
+/// applies [`normalize_sort_expr_with_equivalence_properties`] to multiple
+/// [`PhysicalSortExpr`]s at once.
 pub fn normalize_sort_exprs_with_equivalence_properties(
     sort_exprs: LexOrderingRef,
     eq_properties: &EquivalenceProperties,
@@ -254,8 +258,10 @@ pub fn normalize_sort_exprs(
     let normalized_exprs = PhysicalSortRequirement::to_sort_exprs(normalized_exprs);
     collapse_vec(normalized_exprs)
 }
-/// This function makes sure that `oeq_classes` expressions, that are inside
-/// `eq_properties` is head of the `eq_properties` (if it is in the others replace with head).
+
+/// This function "normalizes" its argument `oeq_classes` by making sure that
+/// it only refers to representative (i.e. head) entries in the given equivlance
+/// properties (`eq_properties`).
 pub fn normalize_ordering_equivalence_classes(
     oeq_classes: &[OrderingEquivalentClass],
     eq_properties: &EquivalenceProperties,
