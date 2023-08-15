@@ -665,7 +665,7 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
-    check_datatypes("array_append", &[arr.values(), &args[1]])?;
+    check_datatypes("array_append", &[arr.values(), element])?;
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
         data_type => {
@@ -738,7 +738,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[0];
     let arr = as_list_array(&args[1])?;
 
-    check_datatypes("array_prepend", &[&args[0], arr.values()])?;
+    check_datatypes("array_prepend", &[element, arr.values()])?;
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
         data_type => {
@@ -1068,7 +1068,7 @@ pub fn array_position(args: &[ArrayRef]) -> Result<ArrayRef> {
         Int64Array::from_value(0, arr.len())
     };
 
-    check_datatypes("array_position", &[arr.values(), &args[1]])?;
+    check_datatypes("array_position", &[arr.values(), element])?;
     macro_rules! array_function {
         ($ARRAY_TYPE:ident) => {
             position!(arr, element, index, $ARRAY_TYPE)
@@ -1133,7 +1133,7 @@ pub fn array_positions(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
-    check_datatypes("array_positions", &[arr.values(), &args[1]])?;
+    check_datatypes("array_positions", &[arr.values(), element])?;
     macro_rules! array_function {
         ($ARRAY_TYPE:ident) => {
             positions!(arr, element, $ARRAY_TYPE)
@@ -1204,7 +1204,7 @@ macro_rules! array_removement_function {
             let element = &args[1];
             let max = $MAX_FUNC(args)?;
 
-            check_datatypes(stringify!($FUNC), &[arr.values(), &args[1]])?;
+            check_datatypes(stringify!($FUNC), &[arr.values(), element])?;
             macro_rules! array_function {
                 ($ARRAY_TYPE:ident) => {
                     general_remove!(arr, element, max, $ARRAY_TYPE)
@@ -1403,7 +1403,7 @@ macro_rules! array_replacement_function {
             let to = &args[2];
             let max = $MAX_FUNC(args)?;
 
-            check_datatypes(stringify!($FUNC), &[arr.values(), &args[1], &args[2]])?;
+            check_datatypes(stringify!($FUNC), &[arr.values(), from, to])?;
             let res = match arr.value_type() {
                 DataType::List(field) => {
                     macro_rules! array_function {
@@ -1707,7 +1707,7 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = as_list_array(&args[0])?;
     let element = &args[1];
 
-    check_datatypes("array_has", &[array.values(), &args[1]])?;
+    check_datatypes("array_has", &[array.values(), element])?;
     match element.data_type() {
         DataType::List(_) => {
             let sub_array = as_list_array(element)?;
