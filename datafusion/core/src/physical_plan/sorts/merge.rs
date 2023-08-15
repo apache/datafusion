@@ -15,94 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Merge that deals with an arbitrary size of streaming inputs.
-//! This is an order-preserving merge.
-
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
-use crate::physical_plan::sorts::stream::{
-    FieldCursorStream, PartitionedStream, RowCursorStream,
-};
-use crate::physical_plan::{
-    PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
-};
-use arrow::datatypes::{DataType, SchemaRef};
+use crate::physical_plan::sorts::stream::PartitionedStream;
+use crate::physical_plan::RecordBatchStream;
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use arrow_array::*;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-macro_rules! primitive_merge_helper {
-    ($t:ty, $($v:ident),+) => {
-        merge_helper!(PrimitiveArray<$t>, $($v),+)
-    };
-}
-
-macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident) => {{
-        let streams = FieldCursorStream::<$t>::new($sort, $streams);
-        return Ok(Box::pin(SortPreservingMergeStream::new(
-            Box::new(streams),
-            $schema,
-            $tracking_metrics,
-            $batch_size,
-            $fetch,
-            $reservation,
-        )));
-    }};
-}
-
-/// Perform a streaming merge of [`SendableRecordBatchStream`] based on provided sort expressions
-/// while preserving order.
-pub fn streaming_merge(
-    streams: Vec<SendableRecordBatchStream>,
-    schema: SchemaRef,
-    expressions: &[PhysicalSortExpr],
-    metrics: BaselineMetrics,
-    batch_size: usize,
-    fetch: Option<usize>,
-    reservation: MemoryReservation,
-) -> Result<SendableRecordBatchStream> {
-    // Special case single column comparisons with optimized cursor implementations
-    if expressions.len() == 1 {
-        let sort = expressions[0].clone();
-        let data_type = sort.expr.data_type(schema.as_ref())?;
-        downcast_primitive! {
-            data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation),
-            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            _ => {}
-        }
-    }
-
-    let streams = RowCursorStream::try_new(
-        schema.as_ref(),
-        expressions,
-        streams,
-        reservation.new_empty(),
-    )?;
-
-    Ok(Box::pin(SortPreservingMergeStream::new(
-        Box::new(streams),
-        schema,
-        metrics,
-        batch_size,
-        fetch,
-        reservation,
-    )))
-}
-
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
 #[derive(Debug)]
-struct SortPreservingMergeStream<C: Cursor> {
+pub(crate) struct SortPreservingMergeStream<C: Cursor> {
     in_progress: BatchBuilder<C>,
 
     /// The sorted input streams to merge together
@@ -163,7 +93,7 @@ struct SortPreservingMergeStream<C: Cursor> {
 }
 
 impl<C: Cursor> SortPreservingMergeStream<C> {
-    fn new(
+    pub(crate) fn new(
         streams: CursorStream<C>,
         schema: SchemaRef,
         metrics: BaselineMetrics,

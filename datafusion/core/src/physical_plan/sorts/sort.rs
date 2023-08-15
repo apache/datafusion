@@ -24,7 +24,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::physical_plan::sorts::merge::streaming_merge;
+use crate::physical_plan::sorts::streaming_merge::streaming_merge;
 use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
