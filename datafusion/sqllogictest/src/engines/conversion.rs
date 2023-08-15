@@ -82,6 +82,12 @@ pub(crate) fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
     )
 }
 
+
+#[cfg(feature = "postgres")]
+pub(crate) fn decimal_to_str(value: Decimal) -> String {
+    big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+}
+
 pub(crate) fn big_decimal_to_str(value: BigDecimal) -> String {
     value.round(12).normalized().to_string()
 }

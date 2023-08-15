@@ -33,27 +33,27 @@ in [`test_files`](test_files).
 
 ```shell
 # Run all tests
-cargo test -p datafusion --test sqllogictests
+cargo test --test sqllogictests
 ```
 
 ```shell
 # Run all tests, with debug logging enabled
-RUST_LOG=debug cargo test -p datafusion --test sqllogictests
+RUST_LOG=debug cargo test --test sqllogictests
 ```
 
 ```shell
 # Run only the tests in `information_schema.slt`
-cargo test -p datafusion --test sqllogictests -- information_schema
+cargo test --test sqllogictests -- information_schema
 ```
 
 ```shell
 # Automatically update ddl.slt with expected output
-cargo test -p datafusion --test sqllogictests -- ddl --complete
+cargo test --test sqllogictests -- ddl --complete
 ```
 
 ```shell
 # Run ddl.slt, printing debug logging to stdout
-RUST_LOG=debug cargo test -p datafusion --test sqllogictests -- ddl
+RUST_LOG=debug cargo test --test sqllogictests -- ddl
 ```
 
 #### Cookbook: Adding Tests
@@ -76,7 +76,7 @@ SELECT * from foo;
 Running the following command will update `my_awesome_test.slt` with the expected output:
 
 ```shell
-cargo test -p datafusion --test sqllogictests -- my_awesome_test --complete
+cargo test --test sqllogictests -- my_awesome_test --complete
 ```
 
 3. Verify the content
@@ -105,14 +105,14 @@ file to the output produced by that run.
 For example, to run all tests suites in validation mode
 
 ```shell
-cargo test -p datafusion --test sqllogictests
+cargo test --test sqllogictests
 ```
 
 sqllogictests also supports `cargo test` style substring matches on file names to restrict which tests to run
 
 ```shell
 # information_schema.slt matches due to substring matching `information`
-cargo test -p datafusion --test sqllogictests -- information
+cargo test --test sqllogictests -- information
 ```
 
 #### Running tests: Postgres compatibility
@@ -123,7 +123,7 @@ with Postgres by running the same script files both with DataFusion and with Pos
 In order to run the sqllogictests running against a previously running Postgres instance, do:
 
 ```shell
-PG_COMPAT=true PG_URI="postgresql://postgres@127.0.0.1/postgres" cargo test -p datafusion --test sqllogictests
+PG_COMPAT=true PG_URI="postgresql://postgres@127.0.0.1/postgres" cargo test --features=postgres --test sqllogictests
 ```
 
 The environemnt variables:
@@ -161,7 +161,7 @@ docker run -it \
 Then you need to add `INCLUDE_TPCH=true` to run tpch tests:
 
 ```shell
-INCLUDE_TPCH=true cargo test -p datafusion --test sqllogictests
+INCLUDE_TPCH=true cargo test --test sqllogictests
 ```
 
 #### Updating tests: Completion Mode
@@ -173,7 +173,7 @@ You can update the tests / generate expected output by passing the `--complete` 
 
 ```shell
 # Update ddl.slt with output from running
-cargo test -p datafusion --test sqllogictests -- ddl --complete
+cargo test --test sqllogictests -- ddl --complete
 ```
 
 #### sqllogictests
