@@ -27,11 +27,9 @@ use crate::{
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::SchemaRef;
-use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
-use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
@@ -821,117 +819,6 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
     let data = mutable.freeze();
     Ok(make_array(data))
-}
-
-/// Return indices of each item in `required_exprs` inside `provided_exprs`.
-/// All of the indices should be found inside `provided_exprs`.
-/// Also found indices should be a permutation of range consecutive range from 0 to n.
-/// Such as \[2,1,0\] is valid (\[0,1,2\] is consecutive). However, \[3,1,0\] is not
-/// valid (\[0,1,3\] is not consecutive).
-fn get_lexicographical_match_indices(
-    required_exprs: &[Arc<dyn PhysicalExpr>],
-    provided_exprs: &[Arc<dyn PhysicalExpr>],
-) -> Option<Vec<usize>> {
-    let indices_of_equality = get_indices_of_exprs_strict(required_exprs, provided_exprs);
-    let mut ordered_indices = indices_of_equality.clone();
-    ordered_indices.sort();
-    let n_match = indices_of_equality.len();
-    let first_n = longest_consecutive_prefix(ordered_indices);
-    // If we found all the expressions, return early:
-    if n_match == required_exprs.len() && first_n == n_match && n_match > 0 {
-        return Some(indices_of_equality);
-    }
-    None
-}
-
-/// This function attempts to find a full match between required and provided
-/// sorts, returning the indices and sort options of the matches found.
-///
-/// First, it normalizes the sort requirements and then checks for matches.
-/// If no full match is found, it then checks against ordering equivalence properties.
-/// If still no full match is found, it returns `None`.
-/// required_columns columns of lexicographical ordering.
-pub fn get_indices_of_matching_sort_exprs_with_order_eq<
-    F: Fn() -> EquivalenceProperties,
-    F2: Fn() -> OrderingEquivalenceProperties,
->(
-    provided_sorts: &[PhysicalSortExpr],
-    required_columns: &[Column],
-    equal_properties: F,
-    ordering_equal_properties: F2,
-) -> Option<(Vec<SortOptions>, Vec<usize>)> {
-    // Transform the required columns into a vector of Arc<PhysicalExpr>:
-    let required_exprs = required_columns
-        .iter()
-        .map(|required_column| Arc::new(required_column.clone()) as _)
-        .collect::<Vec<Arc<dyn PhysicalExpr>>>();
-
-    // Create a vector of `PhysicalSortRequirement`s from the required expressions:
-    let sort_requirement_on_requirements = required_exprs
-        .iter()
-        .map(|required_expr| PhysicalSortRequirement {
-            expr: required_expr.clone(),
-            options: None,
-        })
-        .collect::<Vec<_>>();
-
-    let order_eq_properties = ordering_equal_properties();
-    let eq_properties = equal_properties();
-
-    let normalized_required = normalize_sort_requirements(
-        &sort_requirement_on_requirements,
-        eq_properties.classes(),
-        &[],
-    );
-    let normalized_provided_requirements = normalize_sort_requirements(
-        &PhysicalSortRequirement::from_sort_exprs(provided_sorts.iter()),
-        eq_properties.classes(),
-        &[],
-    );
-
-    let provided_sorts = normalized_provided_requirements
-        .iter()
-        .map(|req| req.expr.clone())
-        .collect::<Vec<_>>();
-
-    let normalized_required_expr = normalized_required
-        .iter()
-        .map(|req| req.expr.clone())
-        .collect::<Vec<_>>();
-
-    if let Some(indices_of_equality) =
-        get_lexicographical_match_indices(&normalized_required_expr, &provided_sorts)
-    {
-        return Some((
-            indices_of_equality
-                .iter()
-                .filter_map(|index| normalized_provided_requirements[*index].options)
-                .collect(),
-            indices_of_equality,
-        ));
-    }
-
-    // We did not find all the expressions, consult ordering equivalence properties:
-    for class in order_eq_properties.classes() {
-        let head = class.head();
-        for ordering in class.others().iter().chain(std::iter::once(head)) {
-            let order_eq_class_exprs = convert_to_expr(ordering);
-            if let Some(indices_of_equality) = get_lexicographical_match_indices(
-                &normalized_required_expr,
-                &order_eq_class_exprs,
-            ) {
-                return Some((
-                    indices_of_equality
-                        .iter()
-                        .map(|index| ordering[*index].options)
-                        .collect(),
-                    indices_of_equality,
-                ));
-            }
-        }
-    }
-    // If no match found, return `None`:
-    None
 }
 
 #[cfg(test)]
