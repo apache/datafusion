@@ -150,9 +150,9 @@ As mentioned the [csv] and [parquet] implementations are good examples of how to
 
 More abstractly, see the following traits for more information on how to implement a custom `TableProvider` for a file format:
 
-* `FileOpener` - a trait for opening a file and inferring the schema
-* `FileFormat` - a trait for reading a file format
-* `ListingTableProvider` - a useful trait for implementing a `TableProvider` that lists files in a directory
+- `FileOpener` - a trait for opening a file and inferring the schema
+- `FileFormat` - a trait for reading a file format
+- `ListingTableProvider` - a useful trait for implementing a `TableProvider` that lists files in a directory
 
 [ex]: https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276
 [csv]: https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/csv.rs#L57-L70
