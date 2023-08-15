@@ -153,8 +153,9 @@ command to generate tpch data, assuming you are in the repository
 root:
 
 ```shell
+mkdir -p datafusion/sqllogictest/test_files/tpch/data
 docker run -it \
-  -v "$(realpath datafusion/core/tests/sqllogictests/test_files/tpch/data)":/data \
+  -v "$(realpath datafusion/sqllogictest/test_files/tpch/data)":/data \
   ghcr.io/databloom-ai/tpch-docker:main -vf -s 0.1
 ```
 
