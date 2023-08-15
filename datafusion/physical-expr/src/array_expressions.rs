@@ -1704,11 +1704,10 @@ macro_rules! non_list_contains {
 
 /// Array_has SQL function
 pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
-    check_datatypes("array_has", &[&args[0], &args[1]])?;
-
     let array = as_list_array(&args[0])?;
     let element = &args[1];
 
+    check_datatypes("array_has", &[array.values(), &args[1]])?;
     match element.data_type() {
         DataType::List(_) => {
             let sub_array = as_list_array(element)?;
@@ -1716,7 +1715,7 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             for (arr, elem) in array.iter().zip(sub_array.iter()) {
                 if let (Some(arr), Some(elem)) = (arr, elem) {
-                    let list_arr = arr.as_list::<i32>();
+                    let list_arr = as_list_array(&arr)?;
                     let res = list_arr.iter().dedup().flatten().any(|x| *x == *elem);
                     boolean_builder.append_value(res);
                 }
@@ -1729,7 +1728,7 @@ pub fn array_has(args: &[ArrayRef]) -> Result<ArrayRef> {
                     non_list_contains!(array, element, $ARRAY_TYPE)
                 };
             }
-            call_array_function!(data_type, true)
+            call_array_function!(data_type, false)
         }
     }
 }
