@@ -44,6 +44,35 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
 
+/// DataFusion specific EXPLAIN (needed so we can EXPLAIN datafusion
+/// specific COPY and other statements)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplainStatement {
+    pub analyze: bool,
+    pub verbose: bool,
+    pub statement: Box<Statement>,
+}
+
+impl fmt::Display for ExplainStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            analyze,
+            verbose,
+            statement,
+        } = self;
+
+        write!(f, "EXPLAIN ")?;
+        if *analyze {
+            write!(f, "ANALYZE ")?;
+        }
+        if *verbose {
+            write!(f, "VERBOSE ")?;
+        }
+
+        write!(f, "{statement}")
+    }
+}
+
 /// DataFusion extension DDL for `COPY`
 ///
 /// # Syntax:
@@ -204,6 +233,8 @@ pub enum Statement {
     DescribeTableStmt(DescribeTableStmt),
     /// Extension: `COPY TO`
     CopyTo(CopyToStatement),
+    /// EXPLAIN for extensions
+    Explain(ExplainStatement),
 }
 
 impl fmt::Display for Statement {
@@ -213,11 +244,12 @@ impl fmt::Display for Statement {
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::DescribeTableStmt(_) => write!(f, "DESCRIBE TABLE ..."),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
+            Statement::Explain(stmt) => write!(f, "{stmt}"),
         }
     }
 }
 
-/// DataFusion SQL Parser based on [`sqlparser`]
+/// Datafusion1 SQL Parser based on [`sqlparser`]
 ///
 /// This parser handles DataFusion specific statements, delegating to
 /// [`Parser`](sqlparser::parser::Parser) for other SQL statements.
@@ -298,24 +330,24 @@ impl<'a> DFParser<'a> {
             Token::Word(w) => {
                 match w.keyword {
                     Keyword::CREATE => {
-                        // move one token forward
-                        self.parser.next_token();
-                        // use custom parsing
+                        self.parser.next_token(); // CREATE
                         self.parse_create()
                     }
                     Keyword::COPY => {
-                        // move one token forward
-                        self.parser.next_token();
+                        self.parser.next_token(); // COPY
                         self.parse_copy()
                     }
                     Keyword::DESCRIBE => {
-                        // move one token forward
-                        self.parser.next_token();
-                        // use custom parsing
+                        self.parser.next_token(); // DESCRIBE
                         self.parse_describe()
                     }
+                    Keyword::EXPLAIN => {
+                        // (TODO parse all supported statements)
+                        self.parser.next_token(); // EXPLAIN
+                        self.parse_explain()
+                    }
                     _ => {
-                        // use the native parser
+                        // use sqlparser-rs parser
                         Ok(Statement::Statement(Box::from(
                             self.parser.parse_statement()?,
                         )))
@@ -410,6 +442,19 @@ impl<'a> DFParser<'a> {
             },
             _ => self.parser.expected("string or numeric value", next_token),
         }
+    }
+
+    /// Parse a SQL `EXPLAIN`
+    pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
+        let analyze = self.parser.parse_keyword(Keyword::ANALYZE);
+        let verbose = self.parser.parse_keyword(Keyword::VERBOSE);
+        let statement = self.parse_statement()?;
+
+        Ok(Statement::Explain(ExplainStatement {
+            statement: Box::new(statement),
+            analyze,
+            verbose,
+        }))
     }
 
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
@@ -1280,6 +1325,32 @@ mod tests {
         });
 
         assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn explain_copy_to_table_to_table() -> Result<(), ParserError> {
+        let cases = vec![
+            ("EXPLAIN COPY foo TO bar", false, false),
+            ("EXPLAIN ANALYZE COPY foo TO bar", true, false),
+            ("EXPLAIN VERBOSE COPY foo TO bar", false, true),
+            ("EXPLAIN ANALYZE VERBOSE COPY foo TO bar", true, true),
+        ];
+        for (sql, analyze, verbose) in cases {
+            println!("sql: {sql}, analyze: {analyze}, verbose: {verbose}");
+
+            let expected_copy = Statement::CopyTo(CopyToStatement {
+                source: object_name("foo"),
+                target: "bar".to_string(),
+                options: HashMap::new(),
+            });
+            let expected = Statement::Explain(ExplainStatement {
+                analyze,
+                verbose,
+                statement: Box::new(expected_copy),
+            });
+            assert_eq!(verified_stmt(sql), expected);
+        }
         Ok(())
     }
 

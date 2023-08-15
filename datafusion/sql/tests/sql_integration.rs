@@ -337,6 +337,18 @@ CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
 }
 
 #[test]
+fn plan_explain_copy_to() {
+    let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
+    let plan = r#"
+Explain
+  CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+    TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_copy_to_query() {
     let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
     let plan = r#"

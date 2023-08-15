@@ -101,13 +101,17 @@ set datafusion.explain.physical_plan_only = false
 
 
 ## explain nested
-statement error Explain must be root of the plan
+query error DataFusion error: Error during planning: Nested explain not supported
 EXPLAIN explain select 1
+
+## explain nested
+statement error DataFusion error: Error during planning: Nested explain not supported
+EXPLAIN EXPLAIN explain select 1
 
 statement ok
 set datafusion.explain.physical_plan_only = true
 
-statement error Explain must be root of the plan
+statement error DataFusion error: Error during planning: Nested explain not supported
 EXPLAIN explain select 1
 
 statement ok

@@ -1698,29 +1698,41 @@ impl SessionState {
         }
 
         let mut visitor = RelationVisitor(&mut relations);
-        match statement {
-            DFStatement::Statement(s) => {
-                let _ = s.as_ref().visit(&mut visitor);
-            }
-            DFStatement::CreateExternalTable(table) => {
-                visitor
-                    .0
-                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
-            }
-            DFStatement::DescribeTableStmt(table) => visitor.insert(&table.table_name),
-            DFStatement::CopyTo(CopyToStatement {
-                source,
-                target: _,
-                options: _,
-            }) => match source {
-                CopyToSource::Relation(table_name) => {
-                    visitor.insert(table_name);
+        fn visit_statement<'a>(
+            statement: &DFStatement,
+            visitor: &mut RelationVisitor<'a>,
+        ) {
+            match statement {
+                DFStatement::Statement(s) => {
+                    let _ = s.as_ref().visit(visitor);
                 }
-                CopyToSource::Query(query) => {
-                    query.visit(&mut visitor);
+                DFStatement::CreateExternalTable(table) => {
+                    visitor
+                        .0
+                        .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-            },
+                DFStatement::DescribeTableStmt(table) => {
+                    visitor.insert(&table.table_name)
+                }
+                DFStatement::CopyTo(CopyToStatement {
+                    source,
+                    target: _,
+                    options: _,
+                }) => match source {
+                    CopyToSource::Relation(table_name) => {
+                        visitor.insert(table_name);
+                    }
+                    CopyToSource::Query(query) => {
+                        query.visit(visitor);
+                    }
+                },
+                DFStatement::Explain(explain) => {
+                    visit_statement(&explain.statement, visitor)
+                }
+            }
         }
+
+        visit_statement(statement, &mut visitor);
 
         // Always include information_schema if available
         if self.config.information_schema() {

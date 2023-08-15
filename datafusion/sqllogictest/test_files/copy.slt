@@ -25,12 +25,19 @@ COPY source_table TO 'test_files/scratch/table' (format parquet, per_thread_outp
 ----
 2
 
-#Explain copy queries not currently working
-query error DataFusion error: This feature is not implemented: Unsupported SQL statement: Some\("COPY source_table TO 'test_files/scratch/table'"\)
+# Error case
+query error DataFusion error: Error during planning: Copy To format not explicitly set and unable to get file extension!
 EXPLAIN COPY source_table to 'test_files/scratch/table'
 
-query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: source_table"\)
+query TT
 EXPLAIN COPY source_table to 'test_files/scratch/table' (format parquet, per_thread_output true)
+----
+logical_plan
+CopyTo: format=parquet output_url=test_files/scratch/table per_thread_output=true options: (,per_thread_output true,format parquet)
+--TableScan: source_table projection=[col1, col2]
+physical_plan
+InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
+--MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 # Copy more files to directory via query
 query IT
