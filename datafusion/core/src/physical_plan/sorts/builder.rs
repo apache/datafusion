@@ -118,11 +118,6 @@ impl<C: Cursor> BatchBuilder<C> {
         self.indices.is_empty()
     }
 
-    /// Returns the schema of this [`BatchBuilder`]
-    pub fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
     /// For a finished cursor, remove from BatchCursor (per stream_idx), and track in batch_cursors (per batch_idx)
     fn cursor_finished(&mut self, stream_idx: usize) {
         let batch_idx = self.cursors[stream_idx].batch_idx;

@@ -20,7 +20,7 @@
 
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::{
-    merge::SortPreservingMergeStream,
+    cascade::SortPreservingCascadeStream,
     stream::{FieldCursorStream, RowCursorStream},
 };
 use crate::physical_plan::{PhysicalSortExpr, SendableRecordBatchStream};
@@ -38,7 +38,7 @@ macro_rules! primitive_merge_helper {
 macro_rules! merge_helper {
     ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident) => {{
         let streams = FieldCursorStream::<$t>::new($sort, $streams);
-        return Ok(Box::pin(SortPreservingMergeStream::new(
+        return Ok(Box::pin(SortPreservingCascadeStream::new(
             Box::new(streams),
             $schema,
             $tracking_metrics,
@@ -81,7 +81,7 @@ pub fn streaming_merge(
         reservation.new_empty(),
     )?;
 
-    Ok(Box::pin(SortPreservingMergeStream::new(
+    Ok(Box::pin(SortPreservingCascadeStream::new(
         Box::new(streams),
         schema,
         metrics,

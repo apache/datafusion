@@ -19,7 +19,6 @@ use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
 use crate::physical_plan::sorts::stream::PartitionedStream;
-use crate::physical_plan::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -29,7 +28,8 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
-type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
+pub(crate) type CursorStream<C> =
+    Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
 #[derive(Debug)]
 pub(crate) struct SortPreservingMergeStream<C: Cursor> {
@@ -290,13 +290,6 @@ impl<C: Cursor + Unpin> Stream for SortPreservingMergeStream<C> {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = self.poll_next_inner(cx);
-        self.metrics.record_poll(poll)
-    }
-}
-
-impl<C: Cursor + Unpin> RecordBatchStream for SortPreservingMergeStream<C> {
-    fn schema(&self) -> SchemaRef {
-        self.in_progress.schema().clone()
+        self.poll_next_inner(cx)
     }
 }
