@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::interleave;
-use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use super::cursor::Cursor;
 
+pub type SortOrder = (usize, usize); // batch_idx, row_idx
+
 #[derive(Debug, Default)]
 struct BatchCursor<C: Cursor> {
-    /// The index into BatchBuilder::batches
+    /// The index into SortOrderBuilder::batches
     batch_idx: usize,
     /// The row index within the given batch
     row_idx: usize,
@@ -35,10 +35,7 @@ struct BatchCursor<C: Cursor> {
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
 #[derive(Debug)]
-pub struct BatchBuilder<C: Cursor> {
-    /// The schema of the RecordBatches yielded by this stream
-    schema: SchemaRef,
-
+pub struct SortOrderBuilder<C: Cursor> {
     /// Maintain a list of [`RecordBatch`] and their corresponding stream
     batches: Vec<(usize, RecordBatch)>,
 
@@ -53,20 +50,17 @@ pub struct BatchBuilder<C: Cursor> {
     cursors: Vec<BatchCursor<C>>,
 
     /// The accumulated stream indexes from which to pull rows
-    /// Consists of a tuple of `(batch_idx, row_idx)`
-    indices: Vec<(usize, usize)>,
+    indices: Vec<SortOrder>,
 }
 
-impl<C: Cursor> BatchBuilder<C> {
-    /// Create a new [`BatchBuilder`] with the provided `stream_count` and `batch_size`
+impl<C: Cursor> SortOrderBuilder<C> {
+    /// Create a new [`SortOrderBuilder`] with the provided `stream_count` and `batch_size`
     pub fn new(
-        schema: SchemaRef,
         stream_count: usize,
         batch_size: usize,
         reservation: MemoryReservation,
     ) -> Self {
         Self {
-            schema,
             batches: Vec::with_capacity(stream_count * 2),
             batch_cursors: Vec::with_capacity(stream_count * 2),
             cursors: (0..stream_count)
@@ -108,12 +102,12 @@ impl<C: Cursor> BatchBuilder<C> {
         self.indices.push((cursor.batch_idx, row_idx));
     }
 
-    /// Returns the number of in-progress rows in this [`BatchBuilder`]
+    /// Returns the number of in-progress rows in this [`SortOrderBuilder`]
     pub fn len(&self) -> usize {
         self.indices.len()
     }
 
-    /// Returns `true` if this [`BatchBuilder`] contains no in-progress rows
+    /// Returns `true` if this [`SortOrderBuilder`] contains no in-progress rows
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
@@ -187,50 +181,37 @@ impl<C: Cursor> BatchBuilder<C> {
         }
     }
 
-    /// Drains the in_progress row indexes, and builds a new RecordBatch from them
+    /// Takes the batches which already are sorted, and returns them with the corresponding cursors and sort order
     ///
-    /// Will then drop any batches for which all rows have been yielded to the output
-    ///
-    /// Returns `None` if no pending rows
-    pub fn build_record_batch(&mut self) -> Result<Option<RecordBatch>> {
+    /// This will drain the internal state of the builder, and return `None` if there are no pendin
+    pub fn build_sort_order(
+        &mut self,
+    ) -> Result<Option<(Vec<RecordBatch>, Vec<C>, Vec<SortOrder>)>> {
         if self.is_empty() {
             return Ok(None);
         }
 
-        let columns = (0..self.schema.fields.len())
-            .map(|column_idx| {
-                let arrays: Vec<_> = self
-                    .batches
-                    .iter()
-                    .map(|(_, batch)| batch.column(column_idx).as_ref())
-                    .collect();
-                Ok(interleave(&arrays, &self.indices)?)
+        let batches = std::mem::take(&mut self.batches);
+        let batch_cursors = std::mem::take(&mut self.batch_cursors);
+        let sort_order = std::mem::take(&mut self.indices);
+
+        // reset the cursors per stream_idx (but keep the same capacity)
+        // these should already be empty when the caller calls this method, but just in case
+        self.cursors = (0..self.cursors.len())
+            .map(|_| BatchCursor {
+                batch_idx: 0,
+                row_idx: 0,
+                cursor: None,
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect();
 
-        self.indices.clear();
-
-        // New cursors are only created once the previous cursor for the stream
-        // is finished. This means all remaining rows from all but the last batch
-        // for each stream have been yielded to the newly created record batch
-        //
-        // We can therefore drop all but the last batch for each stream
-        let mut batch_idx = 0;
-        let mut retained = 0;
-        self.batches.retain(|(stream_idx, batch)| {
-            let stream_cursor = &mut self.cursors[*stream_idx];
-            let retain = stream_cursor.batch_idx == batch_idx;
-            batch_idx += 1;
-
-            if retain {
-                stream_cursor.batch_idx = retained;
-                retained += 1;
-            } else {
-                self.reservation.shrink(batch.get_array_memory_size());
-            }
-            retain
-        });
-
-        Ok(Some(RecordBatch::try_new(self.schema.clone(), columns)?))
+        Ok(Some((
+            batches.into_iter().map(|(_, batch)| batch).collect(),
+            batch_cursors
+                .into_iter()
+                .map(|cursor| cursor.expect("batch cursor should be Some"))
+                .collect(),
+            sort_order,
+        )))
     }
 }

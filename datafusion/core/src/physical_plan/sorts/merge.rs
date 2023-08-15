@@ -16,10 +16,9 @@
 // under the License.
 
 use crate::physical_plan::metrics::BaselineMetrics;
-use crate::physical_plan::sorts::builder::BatchBuilder;
+use crate::physical_plan::sorts::builder::{SortOrder, SortOrderBuilder};
 use crate::physical_plan::sorts::cursor::Cursor;
 use crate::physical_plan::sorts::stream::PartitionedStream;
-use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -33,7 +32,7 @@ pub(crate) type CursorStream<C> =
 
 #[derive(Debug)]
 pub(crate) struct SortPreservingMergeStream<C: Cursor> {
-    in_progress: BatchBuilder<C>,
+    in_progress: SortOrderBuilder<C>,
 
     /// The sorted input streams to merge together
     streams: CursorStream<C>,
@@ -95,7 +94,6 @@ pub(crate) struct SortPreservingMergeStream<C: Cursor> {
 impl<C: Cursor> SortPreservingMergeStream<C> {
     pub(crate) fn new(
         streams: CursorStream<C>,
-        schema: SchemaRef,
         metrics: BaselineMetrics,
         batch_size: usize,
         fetch: Option<usize>,
@@ -104,7 +102,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         let stream_count = streams.partitions();
 
         Self {
-            in_progress: BatchBuilder::new(schema, stream_count, batch_size, reservation),
+            in_progress: SortOrderBuilder::new(stream_count, batch_size, reservation),
             streams,
             metrics,
             aborted: false,
@@ -141,7 +139,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
     fn poll_next_inner(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
+    ) -> Poll<Option<Result<(Vec<RecordBatch>, Vec<C>, Vec<SortOrder>)>>> {
         if self.aborted {
             return Poll::Ready(None);
         }
@@ -189,7 +187,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             }
 
             self.produced += self.in_progress.len();
-            return Poll::Ready(self.in_progress.build_record_batch().transpose());
+            return Poll::Ready(self.in_progress.build_sort_order().transpose());
         }
     }
 
@@ -284,7 +282,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
 }
 
 impl<C: Cursor + Unpin> Stream for SortPreservingMergeStream<C> {
-    type Item = Result<RecordBatch>;
+    type Item = Result<(Vec<RecordBatch>, Vec<C>, Vec<SortOrder>)>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
