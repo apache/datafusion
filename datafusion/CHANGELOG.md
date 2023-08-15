@@ -19,6 +19,7 @@
 
 # Changelog
 
+- [29.0.0](../dev/changelog/29.0.0.md)
 - [28.0.0](../dev/changelog/28.0.0.md)
 - [27.0.0](../dev/changelog/27.0.0.md)
 - [26.0.0](../dev/changelog/26.0.0.md)

@@ -38,6 +38,7 @@ crates = {
     'datafusion-proto': 'datafusion/proto/Cargo.toml',
     'datafusion-substrait': 'datafusion/substrait/Cargo.toml',
     'datafusion-sql': 'datafusion/sql/Cargo.toml',
+    'datafusion-sqllogictest': 'datafusion/sqllogictest/Cargo.toml',
     'datafusion-benchmarks': 'benchmarks/Cargo.toml',
     'datafusion-examples': 'datafusion-examples/Cargo.toml',
 }
