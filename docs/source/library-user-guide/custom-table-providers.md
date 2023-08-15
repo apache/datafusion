@@ -19,7 +19,7 @@
 
 # Custom Table Provider
 
-Like other areas of DataFusion, you extend DataFusion's functionality by implementing a trait. The `TableProvider` and associated traits, have methods that allow you to implement a custom table provider, i.e. use DataFusion's other functionality on your custom data source.
+Like other areas of DataFusion, you extend DataFusion's functionality by implementing a trait. The `TableProvider` and associated traits, have methods that allow you to implement a custom table provider, i.e. use DataFusion's other functionality with your custom data source.
 
 This section will also touch on how to have DataFusion use the new `TableProvider` implementation.
 

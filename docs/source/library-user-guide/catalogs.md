@@ -1,4 +1,3 @@
-
 <!---
   Licensed to the Apache Software Foundation (ASF) under one
   or more contributor license agreements.  See the NOTICE file
@@ -24,7 +23,7 @@ This section describes how to create and manage catalogs, schemas, and tables in
 
 ## General Concepts
 
-Catalogs, schemas, and tables are organized in a hierarchy. A catalog contains schemas, and a schema contains tables. A catalog can contain multiple schemas, and a schema can contain multiple tables.
+Catalogs, schemas, and tables are organized in a hierarchy. A catalog contains schemas, and a schema contains tables.
 
 Similarly to other concepts in Datafusion, you'll implement various traits to create your own catalogs, schemas, and tables. The following sections describe the traits you'll need to implement.
 
