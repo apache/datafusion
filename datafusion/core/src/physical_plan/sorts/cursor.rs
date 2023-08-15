@@ -99,6 +99,9 @@ pub trait Cursor: Ord {
 
     /// Advance the cursor, returning the previous row index
     fn advance(&mut self) -> usize;
+
+    /// Go to reference row, returning the previous row index
+    fn seek(&mut self, row: usize) -> usize;
 }
 
 impl Cursor for RowCursor {
@@ -112,6 +115,13 @@ impl Cursor for RowCursor {
         let t = self.cur_row;
         self.cur_row += 1;
         t
+    }
+
+    #[inline]
+    fn seek(&mut self, goto: usize) -> usize {
+        let previous = self.cur_row;
+        self.cur_row = goto;
+        previous
     }
 }
 
@@ -275,6 +285,12 @@ impl<T: FieldValues> Cursor for FieldCursor<T> {
         self.offset += 1;
         t
     }
+
+    fn seek(&mut self, goto: usize) -> usize {
+        let previous = self.offset;
+        self.offset = goto;
+        previous
+    }
 }
 
 #[cfg(test)]
@@ -431,5 +447,38 @@ mod tests {
         // 6 < -3
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    #[test]
+    fn test_primitive_goto() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        let buffer = ScalarBuffer::from(vec![1]);
+        let cmp = new_primitive(options, buffer, 0);
+
+        let buffer = ScalarBuffer::from(vec![0, 1, 2]);
+        let mut cursor = new_primitive(options, buffer, 0);
+
+        // comparisons as advance
+        assert_eq!(cursor.cmp(&cmp), Ordering::Less);
+        cursor.advance();
+        assert_eq!(cursor.cmp(&cmp), Ordering::Equal);
+        cursor.advance();
+        assert_eq!(cursor.cmp(&cmp), Ordering::Greater);
+
+        // goto
+        cursor.seek(1);
+        assert_eq!(cursor.cmp(&cmp), Ordering::Equal);
+        cursor.seek(0);
+        assert_eq!(cursor.cmp(&cmp), Ordering::Less);
+        cursor.seek(2);
+        assert_eq!(cursor.cmp(&cmp), Ordering::Greater);
+
+        // goto returns previous row_idx
+        let prev = cursor.seek(0);
+        assert_eq!(prev, 2);
     }
 }
