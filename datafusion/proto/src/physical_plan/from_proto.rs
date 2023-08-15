@@ -257,6 +257,7 @@ pub fn parse_physical_expr(
                 fun_expr,
                 args,
                 &convert_required!(e.return_type)?,
+                None,
             ))
         }
         ExprType::ScalarUdf(e) => {
@@ -273,6 +274,7 @@ pub fn parse_physical_expr(
                 scalar_fun,
                 args,
                 &convert_required!(e.return_type)?,
+                None,
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(

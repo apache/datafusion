@@ -1825,6 +1825,7 @@ mod roundtrip_tests {
             fun_expr,
             vec![col("a", &schema)?],
             &DataType::Int64,
+            None,
         );
 
         let project =
@@ -1858,6 +1859,7 @@ mod roundtrip_tests {
             scalar_fn,
             vec![col("a", &schema)?],
             &DataType::Int64,
+            None,
         );
 
         let project =

@@ -31,6 +31,7 @@
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::utils::expr_list_eq_strict_order;
+use crate::ExtendedSortOptions;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
@@ -51,6 +52,9 @@ pub struct ScalarFunctionExpr {
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
+    // This field is used to store which argument of the scalar function maintains
+    // the order information. `true` means order is maintained, `false` means order is reversed.
+    maintains_order: Option<(usize, bool)>,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -71,12 +75,14 @@ impl ScalarFunctionExpr {
         fun: ScalarFunctionImplementation,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: &DataType,
+        maintains_order: Option<(usize, bool)>,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
             return_type: return_type.clone(),
+            maintains_order,
         }
     }
 
@@ -157,6 +163,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             self.fun.clone(),
             children,
             self.return_type(),
+            self.maintains_order,
         )))
     }
 
@@ -166,6 +173,18 @@ impl PhysicalExpr for ScalarFunctionExpr {
         self.args.hash(&mut s);
         self.return_type.hash(&mut s);
         // Add `self.fun` when hash is available
+    }
+
+    fn get_ordering(&self, children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
+        if let Some((index, opt)) = self.maintains_order {
+            return if opt {
+                *children[index]
+            } else {
+                -*children[index]
+            };
+        }
+
+        ExtendedSortOptions::Unordered
     }
 }
 

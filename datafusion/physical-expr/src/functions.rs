@@ -173,11 +173,14 @@ pub fn create_physical_expr(
         _ => create_physical_fun(fun, execution_props)?,
     };
 
+    let maintains_order = get_physical_fun_order(fun);
+
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{fun}"),
         fun_expr,
         input_phy_exprs.to_vec(),
         &data_type,
+        maintains_order,
     )))
 }
 
@@ -892,6 +895,50 @@ pub fn create_physical_fun(
             )));
         }
     })
+}
+
+/// This function determines the preservation of order for a scalar function
+/// according to its arguments. It returns an Option<(usize, bool)> where
+/// the tuple contains information about the index of the function's arguments
+/// which is order-preserved and whether the order is maintained or reversed.
+pub fn get_physical_fun_order(fun: &BuiltinScalarFunction) -> Option<(usize, bool)> {
+    // math_expressions and datetime_expressions are considered only for the initial implementation of this feature.
+    if matches!(
+        fun,
+        BuiltinScalarFunction::Atan
+            | BuiltinScalarFunction::Acosh
+            | BuiltinScalarFunction::Asinh
+            | BuiltinScalarFunction::Atanh
+            | BuiltinScalarFunction::Ceil
+            | BuiltinScalarFunction::Degrees
+            | BuiltinScalarFunction::Exp
+            | BuiltinScalarFunction::Factorial
+            | BuiltinScalarFunction::Floor
+            | BuiltinScalarFunction::Ln
+            | BuiltinScalarFunction::Log10
+            | BuiltinScalarFunction::Log2
+            | BuiltinScalarFunction::Radians
+            | BuiltinScalarFunction::Round
+            | BuiltinScalarFunction::Signum
+            | BuiltinScalarFunction::Sinh
+            | BuiltinScalarFunction::Sqrt
+            | BuiltinScalarFunction::Cbrt
+            | BuiltinScalarFunction::Tanh
+            | BuiltinScalarFunction::Trunc
+            | BuiltinScalarFunction::Pi
+            | BuiltinScalarFunction::Log
+    ) {
+        Some((0, true))
+    } else if matches!(
+        fun,
+        BuiltinScalarFunction::Log
+            | BuiltinScalarFunction::DateTrunc
+            | BuiltinScalarFunction::DateBin
+    ) {
+        Some((1, true))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
