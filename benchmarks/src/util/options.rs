@@ -33,21 +33,22 @@ pub struct CommonOpt {
     /// Batch size when reading CSV or Parquet files
     #[structopt(short = "s", long = "batch-size", default_value = "8192")]
     pub batch_size: usize,
+
+    /// Activate debug mode to see more details
+    #[structopt(short, long)]
+    pub debug: bool,
 }
 
 impl CommonOpt {
     /// Return an appropriately configured `SessionConfig`
     pub fn config(&self) -> SessionConfig {
-        SessionConfig::new()
+        self.update_config(SessionConfig::new())
+    }
+
+    /// Modify the existing config appropriately
+    pub fn update_config(&self, config: SessionConfig) -> SessionConfig {
+        config
             .with_target_partitions(self.partitions)
             .with_batch_size(self.batch_size)
-    }
-
-    pub fn iterations(&self) -> usize {
-        self.iterations
-    }
-
-    pub fn partitions(&self) -> usize {
-        self.partitions
     }
 }
