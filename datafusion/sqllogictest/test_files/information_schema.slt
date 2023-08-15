@@ -131,6 +131,10 @@ SET datafusion.execution.target_partitions=7
 statement ok
 SET datafusion.execution.planning_concurrency=13
 
+# pin the version string for test
+statement ok
+SET datafusion.execution.parquet.created_by=datafusion
+
 # show all variables
 query TT rowsort
 SHOW ALL
@@ -151,7 +155,7 @@ datafusion.execution.parquet.bloom_filter_fpp 0.05
 datafusion.execution.parquet.bloom_filter_ndv 1000000
 datafusion.execution.parquet.column_index_truncate_length NULL
 datafusion.execution.parquet.compression snappy
-datafusion.execution.parquet.created_by datafusion version 29.0.0
+datafusion.execution.parquet.created_by datafusion
 datafusion.execution.parquet.data_page_row_count_limit 18446744073709551615
 datafusion.execution.parquet.data_pagesize_limit 1048576
 datafusion.execution.parquet.dictionary_enabled true
