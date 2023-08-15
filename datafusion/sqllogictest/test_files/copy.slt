@@ -25,6 +25,13 @@ COPY source_table TO 'tests/sqllogictests/test_files/scratch/table' (format parq
 ----
 2
 
+#Explain copy queries not currently working
+query error DataFusion error: This feature is not implemented: Unsupported SQL statement: Some\("COPY source_table TO 'tests/sqllogictests/test_files/scratch/table'"\)
+EXPLAIN COPY source_table to 'tests/sqllogictests/test_files/scratch/table'
+
+query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: source_table"\)
+EXPLAIN COPY source_table to 'tests/sqllogictests/test_files/scratch/table' (format parquet, per_thread_output true)
+
 # Copy more files to directory via query
 query IT
 COPY (select * from source_table UNION ALL select * from source_table) to 'tests/sqllogictests/test_files/scratch/table' (format parquet, per_thread_output true);
@@ -125,14 +132,17 @@ select * from validate_single_json;
 1 Foo
 2 Bar
 
-# TODO add tests for statement level overrides once implemented (currently they have no effect)
 # Copy from table with options
-#statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is not yet supported
-#COPY source_table  to '/home/dev/test/table.parquet' (row_group_size 55);
+query IT
+COPY source_table  to 'tests/sqllogictests/test_files/scratch/table.json' (row_group_size 55);
+----
+2
 
 # Copy from table with options (and trailing comma)
-#statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is not yet supported
-#COPY source_table  to '/tmp/table.parquet' (row_group_size 55, row_group_limit_bytes 9,);
+query IT
+COPY source_table  to 'tests/sqllogictests/test_files/scratch/table.json' (row_group_size 55, row_group_limit_bytes 9,);
+----
+2
 
 
 # Error cases:
