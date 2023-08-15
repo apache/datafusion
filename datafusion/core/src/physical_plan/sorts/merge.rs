@@ -102,8 +102,8 @@ pub fn streaming_merge(
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
 #[derive(Debug)]
-struct SortPreservingMergeStream<C> {
-    in_progress: BatchBuilder,
+struct SortPreservingMergeStream<C: Cursor> {
+    in_progress: BatchBuilder<C>,
 
     /// The sorted input streams to merge together
     streams: CursorStream<C>,
@@ -155,9 +155,6 @@ struct SortPreservingMergeStream<C> {
     /// target batch size
     batch_size: usize,
 
-    /// Vector that holds cursors for each non-exhausted input partition
-    cursors: Vec<Option<C>>,
-
     /// Optional number of rows to fetch
     fetch: Option<usize>,
 
@@ -181,7 +178,6 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             streams,
             metrics,
             aborted: false,
-            cursors: (0..stream_count).map(|_| None).collect(),
             loser_tree: vec![],
             loser_tree_adjusted: false,
             batch_size,
@@ -198,7 +194,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         cx: &mut Context<'_>,
         idx: usize,
     ) -> Poll<Result<()>> {
-        if self.cursors[idx].is_some() {
+        if self.in_progress.cursor_in_progress(idx) {
             // Cursor is not finished - don't need a new RecordBatch yet
             return Poll::Ready(Ok(()));
         }
@@ -207,8 +203,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             None => Poll::Ready(Ok(())),
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
-                self.cursors[idx] = Some(cursor);
-                Poll::Ready(self.in_progress.push_batch(idx, batch))
+                Poll::Ready(self.in_progress.push_batch(idx, batch, cursor))
             }
         }
     }
@@ -246,11 +241,12 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
                     self.aborted = true;
                     return Poll::Ready(Some(Err(e)));
                 }
+
                 self.update_loser_tree();
             }
 
             let stream_idx = self.loser_tree[0];
-            if self.advance(stream_idx) {
+            if self.in_progress.advance(stream_idx) {
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
 
@@ -263,7 +259,6 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             }
 
             self.produced += self.in_progress.len();
-
             return Poll::Ready(self.in_progress.build_record_batch().transpose());
         }
     }
@@ -272,30 +267,6 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         self.fetch
             .map(|fetch| self.produced + self.in_progress.len() >= fetch)
             .unwrap_or(false)
-    }
-
-    fn advance(&mut self, stream_idx: usize) -> bool {
-        let slot = &mut self.cursors[stream_idx];
-        match slot.as_mut() {
-            Some(c) => {
-                c.advance();
-                if c.is_finished() {
-                    *slot = None;
-                }
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Returns `true` if the cursor at index `a` is greater than at index `b`
-    #[inline]
-    fn is_gt(&self, a: usize, b: usize) -> bool {
-        match (&self.cursors[a], &self.cursors[b]) {
-            (None, _) => true,
-            (_, None) => false,
-            (Some(ac), Some(bc)) => ac.cmp(bc).then_with(|| a.cmp(&b)).is_gt(),
-        }
     }
 
     /// Find the leaf node index in the loser tree for the given cursor index
@@ -328,7 +299,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
     ///
     #[inline]
     fn lt_leaf_node_index(&self, cursor_index: usize) -> usize {
-        (self.cursors.len() + cursor_index) / 2
+        (self.num_leaf_nodes() + cursor_index) / 2
     }
 
     /// Find the parent node index for the given node index
@@ -337,17 +308,22 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         node_idx / 2
     }
 
+    #[inline]
+    fn num_leaf_nodes(&self) -> usize {
+        self.streams.partitions()
+    }
+
     /// Attempts to initialize the loser tree with one value from each
     /// non exhausted input, if possible
     fn init_loser_tree(&mut self) {
         // Init loser tree
-        self.loser_tree = vec![usize::MAX; self.cursors.len()];
-        for i in 0..self.cursors.len() {
+        self.loser_tree = vec![usize::MAX; self.num_leaf_nodes()];
+        for i in 0..self.num_leaf_nodes() {
             let mut winner = i;
             let mut cmp_node = self.lt_leaf_node_index(i);
             while cmp_node != 0 && self.loser_tree[cmp_node] != usize::MAX {
                 let challenger = self.loser_tree[cmp_node];
-                if self.is_gt(winner, challenger) {
+                if self.in_progress.is_gt(winner, challenger) {
                     self.loser_tree[cmp_node] = winner;
                     winner = challenger;
                 }
@@ -366,7 +342,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         let mut cmp_node = self.lt_leaf_node_index(winner);
         while cmp_node != 0 {
             let challenger = self.loser_tree[cmp_node];
-            if self.is_gt(winner, challenger) {
+            if self.in_progress.is_gt(winner, challenger) {
                 self.loser_tree[cmp_node] = winner;
                 winner = challenger;
             }
