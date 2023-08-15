@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! DataFusion sqllogictest driver
+//! DataFusion sqllogictest driver
+
 mod engines;
 
 pub use engines::DataFusion;
