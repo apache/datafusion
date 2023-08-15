@@ -1989,7 +1989,7 @@ CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION 'tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv';
 
 # Create a table with 2 ordered columns.
 # In the next step, we will expect to observe the removed sort execs.
@@ -2005,7 +2005,7 @@ STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC, b ASC)
 WITH ORDER (c ASC)
-LOCATION 'tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv';
 
 # Expected a sort exec for b DESC
 query TT

@@ -23,7 +23,7 @@ CREATE EXTERNAL TABLE case_insensitive_test (
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION './tests/data/example.csv'
+LOCATION '../core/tests/data/example.csv'
 
 # normalized column identifiers
 query II

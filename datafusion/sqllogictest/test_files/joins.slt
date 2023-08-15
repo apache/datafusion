@@ -3094,7 +3094,7 @@ CREATE EXTERNAL TABLE annotated_data (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC NULLS FIRST, b ASC, c ASC)
-LOCATION 'tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv';
 
 # sort merge join should propagate ordering equivalence of the left side
 # for inner join. Hence final requirement rn1 ASC is already satisfied at

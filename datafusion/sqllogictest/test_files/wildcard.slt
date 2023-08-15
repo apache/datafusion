@@ -41,7 +41,7 @@ CREATE EXTERNAL TABLE aggregate_simple (
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION 'tests/data/aggregate_simple.csv'
+LOCATION '../core/tests/data/aggregate_simple.csv'
 
 
 ##########

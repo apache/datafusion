@@ -36,7 +36,7 @@ WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv';
 
 
 # csv_query_group_by_int_min_max

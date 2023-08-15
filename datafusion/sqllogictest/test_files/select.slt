@@ -44,7 +44,7 @@ CREATE EXTERNAL TABLE aggregate_simple (
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION 'tests/data/aggregate_simple.csv'
+LOCATION '../core/tests/data/aggregate_simple.csv'
 
 
 ##########
@@ -729,7 +729,7 @@ CREATE EXTERNAL TABLE annotated_data_finite2 (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION 'tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv';
 
 # test_source_projection
 

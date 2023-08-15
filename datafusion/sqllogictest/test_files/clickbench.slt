@@ -28,7 +28,7 @@
 statement ok
 CREATE EXTERNAL TABLE hits
 STORED AS PARQUET
-LOCATION 'tests/data/clickbench_hits_10.parquet';
+LOCATION '../core/tests/data/clickbench_hits_10.parquet';
 
 
 # queries.sql came from

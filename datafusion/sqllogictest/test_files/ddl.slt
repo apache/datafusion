@@ -256,7 +256,7 @@ DROP VIEW non_existent_view
 ##########
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv';
 
 # create_table_as
 statement ok
@@ -312,7 +312,7 @@ DROP TABLE aggregate_simple
 
 # Arrow format
 statement ok
-CREATE external table arrow_simple STORED as ARROW LOCATION 'tests/data/example.arrow';
+CREATE external table arrow_simple STORED as ARROW LOCATION '../core/tests/data/example.arrow';
 
 query ITB rowsort
 SELECT * FROM arrow_simple order by f1 LIMIT 1
@@ -470,7 +470,7 @@ statement ok
 CREATE EXTERNAL TABLE csv_with_timestamps (
 name VARCHAR,
 ts TIMESTAMP
-) STORED AS CSV LOCATION 'tests/data/timestamps.csv';
+) STORED AS CSV LOCATION '../core/tests/data/timestamps.csv';
 
 query TP
 SELECT * from csv_with_timestamps
@@ -496,7 +496,7 @@ CREATE EXTERNAL TABLE csv_with_timestamps (
 )
 STORED AS CSV
 PARTITIONED BY (c_date)
-LOCATION 'tests/data/partitioned_table';
+LOCATION '../core/tests/data/partitioned_table';
 
 query TPD
 SELECT * from csv_with_timestamps where c_date='2018-11-13'
@@ -535,7 +535,7 @@ DROP VIEW y;
 # create_pipe_delimited_csv_table()
 
 statement ok
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/data/aggregate_simple_pipe.csv';
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION '../core/tests/data/aggregate_simple_pipe.csv';
 
 
 query RRB
@@ -581,14 +581,14 @@ statement ok
 CREATE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
 
 statement ok
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv'
 
 # Should not recreate the same EXTERNAL table
 statement error Execution error: Table 'aggregate_simple' already exists
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv'
 
 statement ok
-CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/aggregate_simple.csv'
 
 # create bad custom table
 statement error DataFusion error: Execution error: Unable to find factory for DELTATABLE
@@ -717,7 +717,7 @@ drop table foo;
 
 # create csv table with empty csv file
 statement ok
-CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/empty.csv';
+CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION '../core/tests/data/empty.csv';
 
 query TTI
 select column_name, data_type, ordinal_position from information_schema.columns where table_name='empty';;
@@ -770,7 +770,7 @@ statement ok
 CREATE UNBOUNDED external table t(c1 integer, c2 integer, c3 integer)
 STORED as CSV
 WITH HEADER ROW
-LOCATION 'tests/data/empty.csv';
+LOCATION '../core/tests/data/empty.csv';
 
 # should see infinite_source=true in the explain
 query TT
@@ -788,7 +788,7 @@ statement ok
 CREATE external table t(c1 integer, c2 integer, c3 integer)
 STORED as CSV
 WITH HEADER ROW
-LOCATION 'tests/data/empty.csv';
+LOCATION '../core/tests/data/empty.csv';
 
 # expect to see no infinite_source in the explain
 query TT

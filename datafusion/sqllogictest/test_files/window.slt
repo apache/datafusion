@@ -43,13 +43,13 @@ CREATE EXTERNAL TABLE null_cases(
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION 'tests/data/null_cases.csv';
+LOCATION '../core/tests/data/null_cases.csv';
 
 ### This is the same table as
 ### execute_with_partition with 4 partitions
 statement ok
 CREATE EXTERNAL TABLE test (c1 int, c2 bigint, c3 boolean)
-STORED AS CSV LOCATION 'tests/data/partitioned_csv';
+STORED AS CSV LOCATION '../core/tests/data/partitioned_csv';
 
 
 # for window functions without order by the first, last, and nth function call does not make sense
@@ -2486,7 +2486,7 @@ CREATE EXTERNAL TABLE annotated_data_finite (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (ts ASC)
-LOCATION 'tests/data/window_1.csv'
+LOCATION '../core/tests/data/window_1.csv'
 ;
 
 # 100 rows. Columns in the table are ts, inc_col, desc_col.
@@ -2501,7 +2501,7 @@ CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (ts ASC)
-LOCATION 'tests/data/window_1.csv';
+LOCATION '../core/tests/data/window_1.csv';
 
 # test_source_sorted_aggregate
 
@@ -2901,7 +2901,7 @@ CREATE EXTERNAL TABLE annotated_data_finite2 (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION 'tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv';
 
 # Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
@@ -2917,7 +2917,7 @@ CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-LOCATION 'tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv';
 
 
 # test_infinite_source_partition_by

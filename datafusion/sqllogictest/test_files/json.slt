@@ -22,12 +22,12 @@
 statement ok
 CREATE EXTERNAL TABLE json_test
 STORED AS JSON
-LOCATION 'tests/data/2.json';
+LOCATION '../core/tests/data/2.json';
 
 statement ok
 CREATE EXTERNAL TABLE single_nan
 STORED AS JSON
-LOCATION 'tests/data/3.json';
+LOCATION '../core/tests/data/3.json';
 
 query IR rowsort
 SELECT a, b FROM json_test

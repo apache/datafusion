@@ -45,7 +45,7 @@ c5 DECIMAL(12,7) NOT NULL
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION 'tests/data/decimal_data.csv';
+LOCATION '../core/tests/data/decimal_data.csv';
 
 
 query TT

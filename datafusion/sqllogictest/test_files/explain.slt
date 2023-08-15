@@ -70,7 +70,7 @@ CREATE EXTERNAL TABLE aggregate_test_100_with_order (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (c1 ASC)
-LOCATION 'tests/data/aggregate_test_100_order_by_c1_asc.csv';
+LOCATION '../core/tests/data/aggregate_test_100_order_by_c1_asc.csv';
 
 query TT
 explain SELECT c1 FROM aggregate_test_100_with_order order by c1 ASC limit 10
@@ -125,7 +125,7 @@ CREATE EXTERNAL TABLE simple_explain_test (
 )
 STORED AS CSV
 WITH HEADER ROW
-LOCATION './tests/data/example.csv'
+LOCATION '../core/tests/data/example.csv'
 
 query TT
 EXPLAIN SELECT a, b, c FROM simple_explain_test
