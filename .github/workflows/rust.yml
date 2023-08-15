@@ -239,7 +239,7 @@ jobs:
         run: |
           export TPCH_DATA=`realpath datafusion/core/tests/sqllogictests/test_files/tpch/data`
           cargo test serde_q --profile release-nonlto --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test -p datafusion --test sqllogictests
+          INCLUDE_TPCH=true cargo test --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -270,7 +270,7 @@ jobs:
           rustup toolchain install stable
           rustup default stable
       - name: Run sqllogictest
-        run: PG_COMPAT=true PG_URI="postgresql://postgres:postgres@localhost:$POSTGRES_PORT/db_test" cargo test -p datafusion --test sqllogictests
+        run: PG_COMPAT=true PG_URI="postgresql://postgres:postgres@localhost:$POSTGRES_PORT/db_test" cargo test --test sqllogictests
         env:
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
 
