@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
-use datafusion_common::{plan_err, ScalarValue};
+use datafusion_common::{internal_err, plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools;
@@ -638,10 +638,10 @@ macro_rules! append {
 /// Array_append SQL function
 pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "Array_append function requires two arguments, got {}",
             args.len()
-        )));
+        );
     }
 
     let arr = as_list_array(&args[0])?;
@@ -728,10 +728,10 @@ macro_rules! prepend {
 /// Array_prepend SQL function
 pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "Array_prepend function requires two arguments, got {}",
             args.len()
-        )));
+        );
     }
 
     let element = &args[0];
@@ -1974,9 +1974,9 @@ macro_rules! array_has_any_non_list_check {
             if let Some(elem) = elem {
                 res |= arr.iter().dedup().flatten().any(|x| x == elem);
             } else {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "array_has_any does not support Null type for element in sub_array"
-                )));
+                );
             }
         }
         res
@@ -2068,9 +2068,9 @@ macro_rules! array_has_all_non_list_check {
             if let Some(elem) = elem {
                 res &= arr.iter().dedup().flatten().any(|x| x == elem);
             } else {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "array_has_all does not support Null type for element in sub_array"
-                )));
+                );
             }
         }
         res

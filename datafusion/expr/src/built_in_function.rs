@@ -24,7 +24,7 @@ use crate::{
     Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -521,9 +521,9 @@ impl BuiltinScalarFunction {
                             }
                         }
                         _ => {
-                            return Err(DataFusionError::Internal(format!(
+                            return internal_err!(
                                 "The {self} function can only accept list as the args."
-                            )))
+                            )
                         }
                     }
                 }
@@ -538,9 +538,9 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field) => Ok(field.data_type().clone()),
-                _ => Err(DataFusionError::Internal(format!(
+                _ => internal_err!(
                     "The {self} function can only accept list as the first argument"
-                ))),
+                ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
@@ -604,9 +604,9 @@ impl BuiltinScalarFunction {
                     Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
                     Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
                     Timestamp(Second, _) => Ok(Timestamp(Second, None)),
-                    _ => Err(DataFusionError::Internal(format!(
+                    _ => internal_err!(
                     "The {self} function can only accept timestamp as the second arg."
-                ))),
+                ),
                 }
             }
             BuiltinScalarFunction::InitCap => {
@@ -1389,19 +1389,19 @@ macro_rules! make_utf8_to_return_type {
                         DataType::Null => DataType::Null,
                         _ => {
                             // this error is internal as `data_types` should have captured this.
-                            return Err(DataFusionError::Internal(format!(
+                            return internal_err!(
                                 "The {:?} function can only accept strings.",
                                 name
-                            )));
+                            );
                         }
                     }
                 }
                 _ => {
                     // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(format!(
+                    return internal_err!(
                         "The {:?} function can only accept strings.",
                         name
-                    )));
+                    );
                 }
             })
         }
@@ -1420,9 +1420,9 @@ fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<Data
         DataType::Null => DataType::Null,
         _ => {
             // this error is internal as `data_types` should have captured this.
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "The {name:?} function can only accept strings or binary arrays."
-            )));
+            );
         }
     })
 }

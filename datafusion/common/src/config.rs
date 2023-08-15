@@ -16,7 +16,7 @@
 // under the License.
 
 //! Runtime configuration, via [`ConfigOptions`]
-
+use crate::error::_internal_err;
 use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -65,7 +65,7 @@ use std::fmt::Display;
 ///             "field1" => self.field1.set(rem, value),
 ///             "field2" => self.field2.set(rem, value),
 ///             "field3" => self.field3.set(rem, value),
-///             _ => Err(DataFusionError::Internal(format!(
+///             _ => internal_err!(
 ///                 "Config value \"{}\" not found on MyConfig",
 ///                 key
 ///             ))),
@@ -510,9 +510,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
-            _ => Err(DataFusionError::Internal(format!(
-                "Config value \"{key}\" not found on ConfigOptions"
-            ))),
+            _ => _internal_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
 

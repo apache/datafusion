@@ -33,7 +33,7 @@ use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics}
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
@@ -165,9 +165,7 @@ impl ExecutionPlan for GlobalLimitExec {
         );
         // GlobalLimitExec has a single output partition
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "GlobalLimitExec invalid partition {partition}"
-            )));
+            return internal_err!("GlobalLimitExec invalid partition {partition}");
         }
 
         // GlobalLimitExec requires a single input partition

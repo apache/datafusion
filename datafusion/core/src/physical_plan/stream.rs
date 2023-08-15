@@ -24,6 +24,7 @@ use std::task::Poll;
 
 use crate::physical_plan::displayable;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::internal_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
@@ -180,9 +181,7 @@ impl RecordBatchReceiverStreamBuilder {
                             // the JoinSet were aborted, which in turn
                             // would imply that the receiver has been
                             // dropped and this code is not running
-                            return Some(Err(DataFusionError::Internal(format!(
-                                "Non Panic Task error: {e}"
-                            ))));
+                            return Some(internal_err!("Non Panic Task error: {e}"));
                         }
                     }
                 }

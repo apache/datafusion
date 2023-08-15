@@ -24,7 +24,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 
-use datafusion_common::{plan_err, DataFusionError, Result, Statistics};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use log::debug;
 
@@ -165,9 +165,7 @@ impl ExecutionPlan for StreamingTableExec {
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::Internal(format!(
-            "Children cannot be replaced in {self:?}"
-        )))
+        internal_err!("Children cannot be replaced in {self:?}")
     }
 
     fn execute(

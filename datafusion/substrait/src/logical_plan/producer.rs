@@ -28,6 +28,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
+use datafusion::common::internal_err;
 use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
@@ -539,11 +540,11 @@ pub fn to_substrait_agg_measure(
         Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
         }
-        _ => Err(DataFusionError::Internal(format!(
+        _ => internal_err!(
             "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
             expr,
             expr.variant_name()
-        ))),
+        ),
     }
 }
 

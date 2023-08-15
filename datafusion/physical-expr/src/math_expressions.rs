@@ -20,6 +20,7 @@
 use arrow::array::ArrayRef;
 use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
+use datafusion_common::internal_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::{Float32, Int64};
 use datafusion_common::{DataFusionError, Result};
@@ -39,10 +40,7 @@ macro_rules! downcast_compute_op {
                     arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
                 Ok(Arc::new(res))
             }
-            _ => Err(DataFusionError::Internal(format!(
-                "Invalid data type for {}",
-                $NAME
-            ))),
+            _ => internal_err!("Invalid data type for {}", $NAME),
         }
     }};
 }
@@ -59,10 +57,11 @@ macro_rules! unary_primitive_array_op {
                     let result = downcast_compute_op!(array, $NAME, $FUNC, Float64Array);
                     Ok(ColumnarValue::Array(result?))
                 }
-                other => Err(DataFusionError::Internal(format!(
+                other => internal_err!(
                     "Unsupported data type {:?} for function {}",
-                    other, $NAME,
-                ))),
+                    other,
+                    $NAME
+                ),
             },
             ColumnarValue::Scalar(a) => match a {
                 ScalarValue::Float32(a) => Ok(ColumnarValue::Scalar(
@@ -71,11 +70,11 @@ macro_rules! unary_primitive_array_op {
                 ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Float64(a.map(|x| x.$FUNC())),
                 )),
-                _ => Err(DataFusionError::Internal(format!(
+                _ => internal_err!(
                     "Unsupported data type {:?} for function {}",
                     ($VALUE).data_type(),
-                    $NAME,
-                ))),
+                    $NAME
+                ),
             },
         }
     }};
@@ -176,9 +175,7 @@ pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { |value: i64| { (1..=value).product() } }
         )) as ArrayRef),
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function factorial."
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function factorial."),
     }
 }
 
@@ -225,9 +222,7 @@ pub fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { compute_gcd }
         )) as ArrayRef),
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function gcd"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function gcd"),
     }
 }
 
@@ -253,9 +248,7 @@ pub fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
             Int64Array,
             { compute_lcm }
         )) as ArrayRef),
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function lcm"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function lcm"),
     }
 }
 
@@ -300,9 +293,7 @@ pub fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
             )) as ArrayRef)
         }
 
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function nanvl"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function nanvl"),
     }
 }
 
@@ -336,10 +327,10 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// Round SQL function
 pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "round function requires one or two arguments, got {}",
             args.len()
-        )));
+        );
     }
 
     let mut decimal_places = ColumnarValue::Scalar(ScalarValue::Int64(Some(0)));
@@ -423,9 +414,7 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
             )),
         },
 
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function round"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function round"),
     }
 }
 
@@ -450,9 +439,7 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
             { i64::pow }
         )) as ArrayRef),
 
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function power"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function power"),
     }
 }
 
@@ -477,9 +464,7 @@ pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
             { f32::atan2 }
         )) as ArrayRef),
 
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function atan2"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function atan2"),
     }
 }
 
@@ -537,9 +522,7 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
             )),
         },
 
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function log"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function log"),
     }
 }
 
@@ -560,9 +543,7 @@ pub fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
             { compute_cot32 }
         )) as ArrayRef),
 
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function cot"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function cot"),
     }
 }
 
@@ -579,10 +560,10 @@ fn compute_cot64(x: f64) -> f64 {
 /// Truncate(numeric, decimalPrecision) and trunc(numeric) SQL function
 pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "truncate function requires one or two arguments, got {}",
             args.len()
-        )));
+        );
     }
 
     //if only one arg then invoke toolchain trunc(num) and precision = 0 by default
@@ -629,9 +610,7 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 "trunc function requires a scalar or array for precision".to_string(),
             )),
         },
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function trunc"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function trunc"),
     }
 }
 
