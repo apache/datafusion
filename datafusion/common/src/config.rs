@@ -65,10 +65,10 @@ use std::fmt::Display;
 ///             "field1" => self.field1.set(rem, value),
 ///             "field2" => self.field2.set(rem, value),
 ///             "field3" => self.field3.set(rem, value),
-///             _ => internal_err!(
+///             _ => _internal_err!(
 ///                 "Config value \"{}\" not found on MyConfig",
 ///                 key
-///             ))),
+///             ),
 ///         }
 ///     }
 ///
