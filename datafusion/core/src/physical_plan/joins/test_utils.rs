@@ -37,7 +37,7 @@ use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::intervals::test_utils::{
     gen_conjunctive_numerical_expr, gen_conjunctive_temporal_expr,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
@@ -489,25 +489,21 @@ pub fn build_sides_record_batches(
 pub fn create_memory_table(
     left_batch: RecordBatch,
     right_batch: RecordBatch,
-    left_sorted: Option<Vec<PhysicalSortExpr>>,
-    right_sorted: Option<Vec<PhysicalSortExpr>>,
+    left_sorted: Vec<LexOrdering>,
+    right_sorted: Vec<LexOrdering>,
     batch_size: usize,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
-    let mut left = MemoryExec::try_new(
+    let left = MemoryExec::try_new(
         &[split_record_batches(&left_batch, batch_size)?],
         left_batch.schema(),
         None,
-    )?;
-    if let Some(sorted) = left_sorted {
-        left = left.with_sort_information(sorted);
-    }
-    let mut right = MemoryExec::try_new(
+    )?
+    .with_sort_information(left_sorted);
+    let right = MemoryExec::try_new(
         &[split_record_batches(&right_batch, batch_size)?],
         right_batch.schema(),
         None,
-    )?;
-    if let Some(sorted) = right_sorted {
-        right = right.with_sort_information(sorted);
-    }
+    )?
+    .with_sort_information(right_sorted);
     Ok((Arc::new(left), Arc::new(right)))
 }

@@ -20,7 +20,8 @@
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::type_coercion::functions::data_types;
 use crate::{
-    conditional_expressions, struct_expressions, Signature, TypeSignature, Volatility,
+    conditional_expressions, struct_expressions, utils, Signature, TypeSignature,
+    Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{plan_err, DataFusionError, Result};
@@ -440,33 +441,6 @@ impl BuiltinScalarFunction {
         }
     }
 
-    /// Creates a detailed error message for a function with wrong signature.
-    ///
-    /// For example, a query like `select round(3.14, 1.1);` would yield:
-    /// ```text
-    /// Error during planning: No function matches 'round(Float64, Float64)'. You might need to add explicit type casts.
-    ///     Candidate functions:
-    ///     round(Float64, Int64)
-    ///     round(Float32, Int64)
-    ///     round(Float64)
-    ///     round(Float32)
-    /// ```
-    fn generate_signature_error_msg(&self, input_expr_types: &[DataType]) -> String {
-        let candidate_signatures = self
-            .signature()
-            .type_signature
-            .to_string_repr()
-            .iter()
-            .map(|args_str| format!("\t{self}({args_str})"))
-            .collect::<Vec<String>>()
-            .join("\n");
-
-        format!(
-            "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
-            self, TypeSignature::join_types(input_expr_types, ", "), candidate_signatures
-        )
-    }
-
     /// Returns the dimension [`DataType`] of [`DataType::List`] if
     /// treated as a N-dimensional array.
     ///
@@ -499,12 +473,23 @@ impl BuiltinScalarFunction {
         // or the execution panics.
 
         if input_expr_types.is_empty() && !self.supports_zero_argument() {
-            return plan_err!("{}", self.generate_signature_error_msg(input_expr_types));
+            return plan_err!(
+                "{}",
+                utils::generate_signature_error_msg(
+                    &format!("{self}"),
+                    self.signature(),
+                    input_expr_types
+                )
+            );
         }
 
         // verify that this is a valid set of data types for this function
         data_types(input_expr_types, &self.signature()).map_err(|_| {
-            DataFusionError::Plan(self.generate_signature_error_msg(input_expr_types))
+            DataFusionError::Plan(utils::generate_signature_error_msg(
+                &format!("{self}"),
+                self.signature(),
+                input_expr_types,
+            ))
         })?;
 
         // the return type of the built in function.
@@ -654,7 +639,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Random => Ok(Float64),
             BuiltinScalarFunction::Uuid => Ok(Utf8),
             BuiltinScalarFunction::RegexpReplace => {
-                utf8_to_str_type(&input_expr_types[0], "regex_replace")
+                utf8_to_str_type(&input_expr_types[0], "regexp_replace")
             }
             BuiltinScalarFunction::Repeat => {
                 utf8_to_str_type(&input_expr_types[0], "repeat")
@@ -670,7 +655,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
             BuiltinScalarFunction::Rtrim => {
-                utf8_to_str_type(&input_expr_types[0], "rtrimp")
+                utf8_to_str_type(&input_expr_types[0], "rtrim")
             }
             BuiltinScalarFunction::SHA224 => {
                 utf8_or_binary_to_binary_type(&input_expr_types[0], "sha224")
@@ -1413,6 +1398,20 @@ macro_rules! make_utf8_to_return_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
                 DataType::Null => DataType::Null,
+                DataType::Dictionary(_, value_type) => {
+                    match **value_type {
+                        DataType::LargeUtf8 => $largeUtf8Type,
+                        DataType::Utf8 => $utf8Type,
+                        DataType::Null => DataType::Null,
+                        _ => {
+                            // this error is internal as `data_types` should have captured this.
+                            return Err(DataFusionError::Internal(format!(
+                                "The {:?} function can only accept strings.",
+                                name
+                            )));
+                        }
+                    }
+                }
                 _ => {
                     // this error is internal as `data_types` should have captured this.
                     return Err(DataFusionError::Internal(format!(

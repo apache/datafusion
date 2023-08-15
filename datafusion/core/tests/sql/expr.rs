@@ -450,8 +450,10 @@ async fn test_substring_expr() -> Result<()> {
     Ok(())
 }
 
+/// Test string expressions test split into two batches
+/// to prevent stack overflow error
 #[tokio::test]
-async fn test_string_expressions() -> Result<()> {
+async fn test_string_expressions_batch1() -> Result<()> {
     test_expression!("ascii('')", "0");
     test_expression!("ascii('x')", "120");
     test_expression!("ascii(NULL)", "NULL");
@@ -503,6 +505,13 @@ async fn test_string_expressions() -> Result<()> {
     test_expression!("rtrim(' zzzytest ', NULL)", "NULL");
     test_expression!("rtrim('testxxzx', 'xyz')", "test");
     test_expression!("rtrim(NULL, 'xyz')", "NULL");
+    Ok(())
+}
+
+/// Test string expressions test split into two batches
+/// to prevent stack overflow error
+#[tokio::test]
+async fn test_string_expressions_batch2() -> Result<()> {
     test_expression!("split_part('abc~@~def~@~ghi', '~@~', 2)", "def");
     test_expression!("split_part('abc~@~def~@~ghi', '~@~', 20)", "");
     test_expression!("split_part(NULL, '~@~', 20)", "NULL");

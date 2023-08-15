@@ -412,8 +412,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         Ok(children.iter().any(|u| *u))
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false, false]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -1520,8 +1520,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1595,8 +1595,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1658,7 +1658,8 @@ mod tests {
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
         let left_schema = &left_batch.schema();
         let right_schema = &right_batch.schema();
-        let (left, right) = create_memory_table(left_batch, right_batch, None, None, 13)?;
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, vec![], vec![], 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", left_schema)?,
@@ -1709,7 +1710,8 @@ mod tests {
         let (left_batch, right_batch) = build_sides_record_batches(TABLE_SIZE, (11, 21))?;
         let left_schema = &left_batch.schema();
         let right_schema = &right_batch.schema();
-        let (left, right) = create_memory_table(left_batch, right_batch, None, None, 13)?;
+        let (left, right) =
+            create_memory_table(left_batch, right_batch, vec![], vec![], 13)?;
 
         let on = vec![(
             Column::new_with_schema("lc1", left_schema)?,
@@ -1764,8 +1766,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1828,8 +1830,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1891,8 +1893,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1955,8 +1957,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -2015,8 +2017,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -2097,8 +2099,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             10,
         )?;
 
@@ -2226,8 +2228,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
         let intermediate_schema = Schema::new(vec![
@@ -2310,8 +2312,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
         let intermediate_schema = Schema::new(vec![
@@ -2379,8 +2381,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 

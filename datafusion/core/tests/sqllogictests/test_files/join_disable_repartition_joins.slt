@@ -56,11 +56,13 @@ Limit: skip=0, fetch=5
 ----------TableScan: annotated_data projection=[a, c]
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
---ProjectionExec: expr=[a@1 as a]
-----CoalesceBatchesExec: target_batch_size=8192
-------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
---------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+--SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
+----ProjectionExec: expr=[a@1 as a]
+------CoalesceBatchesExec: target_batch_size=8192
+--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]
+----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # preserve_inner_join
 query IIII nosort

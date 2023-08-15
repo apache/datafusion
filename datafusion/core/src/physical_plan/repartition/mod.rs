@@ -370,6 +370,12 @@ impl RepartitionExec {
         &self.partitioning
     }
 
+    /// Get preserve_order flag of the RepartitionExecutor
+    /// `true` means `SortPreservingRepartitionExec`, `false` means `RepartitionExec`
+    pub fn preserve_order(&self) -> bool {
+        self.preserve_order
+    }
+
     /// Get name of the Executor
     pub fn name(&self) -> &str {
         if self.preserve_order {
@@ -430,6 +436,10 @@ impl ExecutionPlan for RepartitionExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![matches!(self.partitioning, Partitioning::Hash(_, _))]
     }
 
     fn output_partitioning(&self) -> Partitioning {
