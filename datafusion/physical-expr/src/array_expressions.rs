@@ -218,9 +218,8 @@ fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
         .iter()
         .all(|arg| arg.data_type().equals_datatype(data_type))
     {
-        return Err(DataFusionError::NotImplemented(format!(
-            "{name} is not implemented for type '{data_type:?}'."
-        )));
+        let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
+        return plan_err!("{name} received incompatible types: '{types:?}'.");
     }
 
     Ok(())
@@ -668,6 +667,9 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     check_datatypes("array_append", &[arr.values(), element])?;
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
+        DataType::Null => {
+            return Ok(array(&[ColumnarValue::Array(args[1].clone())])?.into_array(1))
+        }
         data_type => {
             macro_rules! array_function {
                 ($ARRAY_TYPE:ident) => {
@@ -741,6 +743,9 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     check_datatypes("array_prepend", &[element, arr.values()])?;
     let res = match arr.value_type() {
         DataType::List(_) => concat_internal(args)?,
+        DataType::Null => {
+            return Ok(array(&[ColumnarValue::Array(args[0].clone())])?.into_array(1))
+        }
         data_type => {
             macro_rules! array_function {
                 ($ARRAY_TYPE:ident) => {
@@ -3043,11 +3048,11 @@ mod tests {
             Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
         let int64_array = Arc::new(StringArray::from(vec![Some("string")])) as ArrayRef;
 
-        let args = [list_array, int64_array];
+        let args = [list_array.clone(), int64_array.clone()];
 
         let array = array_append(&args);
 
-        assert!(array.is_err());
+        assert_eq!(array.unwrap_err().to_string(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
     }
 
     fn return_array() -> ColumnarValue {
