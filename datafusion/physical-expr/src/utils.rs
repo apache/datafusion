@@ -559,7 +559,7 @@ pub fn get_indices_of_matching_exprs<
 
 /// This function finds the indices of `targets` within `items` using strict
 /// equality.
-pub fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
+fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
     targets: impl IntoIterator<Item = T>,
     items: &[Arc<dyn PhysicalExpr>],
 ) -> Vec<usize> {
