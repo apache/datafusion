@@ -27,7 +27,7 @@ Catalogs, schemas, and tables are organized in a hierarchy. A catalog contains s
 
 Similarly to other concepts in Datafusion, you'll implement various traits to create your own catalogs, schemas, and tables. The following sections describe the traits you'll need to implement.
 
-The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in Datafusion. The `TableProvider` trait is covered in more detail [here](./custom-data-sources.md).
+The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in Datafusion. The `TableProvider` trait is covered in more detail [here](./custom-table-providers.md).
 
 We'll start with a the `SchemaProvider` trait as we need one to register with the `CatalogProvider`.
 

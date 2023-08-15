@@ -85,6 +85,7 @@ The `developer’s guide`_ contains information on how to contribute.
    library-user-guide/index
    library-user-guide/using-the-sql-api
    library-user-guide/working-with-exprs
+   library-user-guide/using-the-dataframe-api
    library-user-guide/building-logical-plans
    library-user-guide/catalogs
    library-user-guide/adding-udfs
