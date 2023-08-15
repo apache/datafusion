@@ -25,15 +25,15 @@ This section describes how to create and manage catalogs, schemas, and tables in
 
 Catalogs, schemas, and tables are organized in a hierarchy. A catalog contains schemas, and a schema contains tables.
 
-Similarly to other concepts in Datafusion, you'll implement various traits to create your own catalogs, schemas, and tables. The following sections describe the traits you'll need to implement.
+Similarly to other concepts in DataFusion, you'll implement various traits to create your own catalogs, schemas, and tables. The following sections describe the traits you'll need to implement.
 
-The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in Datafusion. The `TableProvider` trait is covered in more detail [here](./custom-table-providers.md).
+The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in DataFusion. The `TableProvider` trait is covered in more detail [here](./custom-table-providers.md).
 
-We'll start with a the `SchemaProvider` trait as we need one to register with the `CatalogProvider`.
+We'll start with the `SchemaProvider` trait as we need one to register with the `CatalogProvider`.
 
 ## Implementing `MemorySchemaProvider`
 
-The `MemorySchemaProvider` is a simple implementation of the `SchemaProvider` trait. It stores tables in a `DashMap`.
+The `MemorySchemaProvider` is a simple implementation of the `SchemaProvider` trait. It stores state (i.e. tables) in a `DashMap`, which then underlies the `SchemaProvider` trait.
 
 ```rust
 pub struct MemorySchemaProvider {
