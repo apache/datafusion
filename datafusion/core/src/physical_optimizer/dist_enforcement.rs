@@ -968,7 +968,7 @@ fn add_hash_on_top(
             .with_preserve_order(should_preserve_order),
     ) as Arc<dyn ExecutionPlan>;
 
-    // Update exec tree, if there is branch connected to repartition roundrobin
+    // Update exec tree, if there is a branch connected to repartition round-robin
     if let Some(exec_tree) = repartition_onward {
         *exec_tree = ExecTree::new(new_plan.clone(), 0, vec![exec_tree.clone()]);
     }
@@ -1028,9 +1028,9 @@ fn update_repartition_from_context(
                         || new_child.equivalence_properties(),
                         || new_child.ordering_equivalence_properties(),
                     ) {
-                        // removing parallelization helps with satisfying ordering requirement
+                        // Removing parallelization helps with satisfying ordering requirement
                         *child = new_child;
-                        // reset repartition onwards, since it no longer contains any roundrobin RepartitonExec
+                        // Reset repartition onwards, since it no longer contains any round-robin RepartitonExec
                         *repartition_onwards = None;
                     }
                 }
@@ -1073,7 +1073,7 @@ fn update_repartition_from_context(
 /// "      SortExec: expr=\[c1@0 ASC]",
 /// "        ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[c1]",
 ///
-/// remains same. Because removing repartition doesn't help us to satisfy ordering requirement.
+/// remains the same. Because removing repartition doesn't help us to satisfy the ordering requirement.
 fn remove_parallelization(exec_tree: &ExecTree) -> Result<Arc<dyn ExecutionPlan>> {
     let mut updated_children = exec_tree.plan.children();
     for child in &exec_tree.children {
@@ -1267,7 +1267,7 @@ fn ensure_distribution(
     Ok(Transformed::Yes(new_repartition_context))
 }
 
-/// Decide whether we should preserve ordering, while adding repartition.
+/// Decide whether we should preserve ordering while adding repartition.
 fn should_preserve_ordering(
     input: &Arc<dyn ExecutionPlan>,
     required_input_ordering: Option<&[PhysicalSortRequirement]>,
