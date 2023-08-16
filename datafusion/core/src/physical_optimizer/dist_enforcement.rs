@@ -44,8 +44,7 @@ use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
 use datafusion_physical_expr::utils::{
-    map_columns_before_projection, ordering_satisfy_requirement,
-    ordering_satisfy_requirement_concrete,
+    map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
@@ -1152,46 +1151,36 @@ fn ensure_distribution(
         mut repartition_onwards,
     } = repartition_context;
 
+    // This loop iterates over all the children
+    // - It increases parallelism for each child if it is beneficial for the
+    //   executor
+    // - Satisfies distribution requirement for each child, if it is not
+    //   already satisfied
+    // `new_children` stores updated children
     let new_children = izip!(
-        plan.children().iter(),
+        plan.children().into_iter(),
         plan.required_input_distribution().iter(),
         plan.required_input_ordering().iter(),
-        plan.maintains_input_order().iter(),
         repartition_onwards.iter_mut(),
         plan.benefits_from_input_partitioning()
     )
     .map(
         |(
-            child,
+            mut child,
             requirement,
             required_input_ordering,
-            maintains,
             repartition_onward,
             would_benefit,
         )| {
-            let mut child = child.clone();
-            let requirement_satisfied = ordering_satisfy_requirement(
-                child.output_ordering(),
-                required_input_ordering.as_deref(),
-                || child.equivalence_properties(),
-                || child.ordering_equivalence_properties(),
-            );
             if enable_round_robin
                 // executor benefits from partitioning (such as filter)
                 && (would_benefit && repartition_beneficial_stat)
                 // Unless partitioning doesn't increase partition number, it is not beneficial.
                 && child.output_partitioning().partition_count() < target_partitions
-                // At least one of the following conditions is true
-                // - Executor doesn't require ordering
-                // - at the input of the executor there is no ordering
-                // - executor doesn't maintain ordering
-                // - requirement is not satisfied by the existing ordering.
-                // In this case, adding repartition is not harmful as long as orderings concerned
-                && (required_input_ordering.is_none()
-                || child.output_ordering().is_none()
-                || !maintains || !requirement_satisfied)
+                // Do not add repartition exec, if existing ordering satisfies requirement
+                && !should_preserve_ordering(&child, required_input_ordering.as_deref())
             {
-                // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
+                // For ParquetExec increase parallelism at the source, in case `repartition_file_scans` is set
                 if let Some(parquet_exec) = child.as_any().downcast_ref::<ParquetExec>() {
                     if repartition_file_scans {
                         child = Arc::new(parquet_exec.get_repartitioned(
@@ -1201,6 +1190,7 @@ fn ensure_distribution(
                     }
                 }
 
+                // For CsvExec increase parallelism at the source, in case `repartition_file_scans` is set
                 if let Some(csv_exec) = child.as_any().downcast_ref::<CsvExec>() {
                     if repartition_file_scans {
                         if let Some(csv_exec) = csv_exec.get_repartitioned(
@@ -1211,11 +1201,14 @@ fn ensure_distribution(
                         }
                     }
                 }
+                // increase parallelism, by adding round-robin repartition on top of the executor
+                // If partition count already matches with desired partition number, useless partition
+                // is not added.
                 child =
                     add_roundrobin_on_top(child, target_partitions, repartition_onward)?;
             }
 
-            // If requirement is already satisfied, return immediately
+            // If distribution requirement is already satisfied, return immediately
             if child
                 .output_partitioning()
                 .satisfy(requirement.clone(), || child.equivalence_properties())
@@ -1223,6 +1216,8 @@ fn ensure_distribution(
                 Ok(child)
             } else {
                 // satisfy the distribution requirement
+
+                // Stores whether we should preserve ordering, while adding repartition.
                 let should_preserve_ordering =
                     should_preserve_ordering(&child, required_input_ordering.as_deref());
 
