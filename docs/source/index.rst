@@ -63,6 +63,23 @@ The `developer’s guide`_ contains information on how to contribute.
    user-guide/configs
    user-guide/faq
 
+.. _toc.library-user-guide:
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Library User Guide
+
+   library-user-guide/index
+   library-user-guide/using-the-sql-api
+   library-user-guide/working-with-exprs
+   library-user-guide/using-the-dataframe-api
+   library-user-guide/building-logical-plans
+   library-user-guide/catalogs
+   library-user-guide/adding-udfs
+   library-user-guide/custom-table-providers
+   library-user-guide/extending-operators
+   library-user-guide/execution-plans
+
 .. _toc.contributor-guide:
 
 .. toctree::
