@@ -25,7 +25,7 @@ This section will also touch on how to have DataFusion use the new `TableProvide
 
 ## Table Provider and Scan
 
-the `scan` method on the `TableProvider` is arguably its most important. It returns an execution plan that DataFusion will use as part of the query plan to execute the query.
+The `scan` method on the `TableProvider` is likely its most important. It returns an `ExecutionPlan` that DataFusion will use to read the actual data during execution o the query.
 
 ### Scan
 
@@ -34,6 +34,9 @@ As mentioned, `scan` returns an execution plan, and in particular a `Result<Arc<
 #### Execution Plan
 
 The `ExecutionPlan` trait at its core is a way to get a stream of batches. The aptly-named `execute` method returns a `Result<SendableRecordBatchStream>`, which should be a stream of `RecordBatch`es that can be sent across threads, and has a schema that matches the data to be contained in those batches.
+
+There are many different types of `SendableRecordBatchStream` implemented in DataFusion -- you can use a pre existing one, such as `MemoryStream` (if your `RecordBatch`es are all in memory) or implement your own custom logic, depending on your usecase.
+
 
 Looking at the [example in this repo][ex], the execute method:
 
@@ -80,12 +83,12 @@ impl ExecutionPlan for CustomExec {
 This:
 
 1. Gets the users from the database
-2. Constructs the individual arrays
+2. Constructs the individual output arrays (columns)
 3. Returns a `MemoryStream` of a single `RecordBatch` with the arrays
 
 I.e. returns the "physical" data. For other examples, refer to the [`CsvExec`][csv] and [`ParquetExec`][parquet] for more complex implementations.
 
-With the `ExecutionPlan` implemented, we can now return to the `scan` method of the `TableProvider`.
+With the `ExecutionPlan` implemented, we can now implement the `scan` method of the `TableProvider`.
 
 #### Scan Revisited
 
