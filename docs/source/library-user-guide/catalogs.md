@@ -45,7 +45,7 @@ pub struct MemorySchemaProvider {
 }
 ```
 
-`tables` is the key-value pair described above. The underlying state could also be another data structure or other storage mechanism.
+`tables` is the key-value pair described above. The underlying state could also be another data structure or other storage mechanism such as a file or transactional database.
 
 Then we implement the `SchemaProvider` trait for `MemorySchemaProvider`.
 
