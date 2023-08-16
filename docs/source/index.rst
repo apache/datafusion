@@ -78,7 +78,6 @@ The `developer’s guide`_ contains information on how to contribute.
    library-user-guide/adding-udfs
    library-user-guide/custom-table-providers
    library-user-guide/extending-operators
-   library-user-guide/execution-plans
 
 .. _toc.contributor-guide:
 
