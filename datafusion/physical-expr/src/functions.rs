@@ -374,6 +374,12 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Gcd => {
             Arc::new(|args| make_scalar_function(math_expressions::gcd)(args))
         }
+        BuiltinScalarFunction::Isnan => {
+            Arc::new(|args| make_scalar_function(math_expressions::isnan)(args))
+        }
+        BuiltinScalarFunction::Iszero => {
+            Arc::new(|args| make_scalar_function(math_expressions::iszero)(args))
+        }
         BuiltinScalarFunction::Lcm => {
             Arc::new(|args| make_scalar_function(math_expressions::lcm)(args))
         }
