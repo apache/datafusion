@@ -860,17 +860,11 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq<
     equal_properties: F,
     ordering_equal_properties: F2,
 ) -> Option<(Vec<SortOptions>, Vec<usize>)> {
-    // Transform the required columns into a vector of Arc<PhysicalExpr>:
-    let required_exprs = required_columns
+    // Create a vector of `PhysicalSortRequirement`s from the required columns:
+    let sort_requirement_on_requirements = required_columns
         .iter()
-        .map(|required_column| Arc::new(required_column.clone()) as _)
-        .collect::<Vec<Arc<dyn PhysicalExpr>>>();
-
-    // Create a vector of `PhysicalSortRequirement`s from the required expressions:
-    let sort_requirement_on_requirements = required_exprs
-        .iter()
-        .map(|required_expr| PhysicalSortRequirement {
-            expr: required_expr.clone(),
+        .map(|required_column| PhysicalSortRequirement {
+            expr: Arc::new(required_column.clone()) as _,
             options: None,
         })
         .collect::<Vec<_>>();
@@ -883,13 +877,13 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq<
         eq_properties.classes(),
         &[],
     );
-    let normalized_provided_requirements = normalize_sort_requirements(
+    let normalized_provided = normalize_sort_requirements(
         &PhysicalSortRequirement::from_sort_exprs(provided_sorts.iter()),
         eq_properties.classes(),
         &[],
     );
 
-    let provided_sorts = normalized_provided_requirements
+    let provided_sorts = normalized_provided
         .iter()
         .map(|req| req.expr.clone())
         .collect::<Vec<_>>();
@@ -905,7 +899,7 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq<
         return Some((
             indices_of_equality
                 .iter()
-                .filter_map(|index| normalized_provided_requirements[*index].options)
+                .filter_map(|index| normalized_provided[*index].options)
                 .collect(),
             indices_of_equality,
         ));

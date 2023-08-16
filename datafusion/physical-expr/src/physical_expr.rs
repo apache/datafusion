@@ -168,7 +168,8 @@ impl Neg for ExtendedSortOptions {
                 descending: !descending,
                 nulls_first,
             }),
-            _ => self,
+            ExtendedSortOptions::Singleton => ExtendedSortOptions::Singleton,
+            ExtendedSortOptions::Unordered => ExtendedSortOptions::Unordered,
         }
     }
 }

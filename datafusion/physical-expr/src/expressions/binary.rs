@@ -721,19 +721,14 @@ impl ExtendedSortOptions {
         match (self, rhs) {
             (Self::Singleton, _) => *rhs,
             (_, Self::Singleton) => *self,
-            (
+            (Self::Ordered(lhs), Self::Ordered(rhs))
+                if lhs.descending == rhs.descending =>
+            {
                 Self::Ordered(SortOptions {
-                    descending: left_descending,
-                    nulls_first: left_nulls_first,
-                }),
-                Self::Ordered(SortOptions {
-                    descending: right_descending,
-                    nulls_first: right_nulls_first,
-                }),
-            ) if left_descending == right_descending => Self::Ordered(SortOptions {
-                descending: *left_descending,
-                nulls_first: *left_nulls_first || *right_nulls_first,
-            }),
+                    descending: lhs.descending,
+                    nulls_first: lhs.nulls_first || rhs.nulls_first,
+                })
+            }
             _ => Self::Unordered,
         }
     }
@@ -741,17 +736,17 @@ impl ExtendedSortOptions {
     fn sub(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Singleton, Self::Singleton) => Self::Singleton,
-            (Self::Singleton, Self::Ordered(rhs_opts)) => Self::Ordered(SortOptions {
-                descending: !rhs_opts.descending,
-                nulls_first: rhs_opts.nulls_first,
+            (Self::Singleton, Self::Ordered(rhs)) => Self::Ordered(SortOptions {
+                descending: !rhs.descending,
+                nulls_first: rhs.nulls_first,
             }),
             (_, Self::Singleton) => *self,
-            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
-                if lhs_opts.descending != rhs_opts.descending =>
+            (Self::Ordered(lhs), Self::Ordered(rhs))
+                if lhs.descending != rhs.descending =>
             {
                 Self::Ordered(SortOptions {
-                    descending: lhs_opts.descending,
-                    nulls_first: lhs_opts.nulls_first || rhs_opts.nulls_first,
+                    descending: lhs.descending,
+                    nulls_first: lhs.nulls_first || rhs.nulls_first,
                 })
             }
             _ => Self::Unordered,
@@ -760,13 +755,13 @@ impl ExtendedSortOptions {
 
     fn gt_or_gteq(&self, rhs: &Self) -> Self {
         match (self, rhs) {
-            (Self::Singleton, Self::Ordered(rhs_opts)) => Self::Ordered(SortOptions {
-                descending: !rhs_opts.descending,
-                nulls_first: rhs_opts.nulls_first,
+            (Self::Singleton, Self::Ordered(rhs)) => Self::Ordered(SortOptions {
+                descending: !rhs.descending,
+                nulls_first: rhs.nulls_first,
             }),
             (_, Self::Singleton) => *self,
-            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
-                if lhs_opts.descending != rhs_opts.descending =>
+            (Self::Ordered(lhs), Self::Ordered(rhs))
+                if lhs.descending != rhs.descending =>
             {
                 *self
             }
@@ -776,12 +771,12 @@ impl ExtendedSortOptions {
 
     fn and(&self, rhs: &Self) -> Self {
         match (self, rhs) {
-            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
-                if lhs_opts.descending == rhs_opts.descending =>
+            (Self::Ordered(lhs), Self::Ordered(rhs))
+                if lhs.descending == rhs.descending =>
             {
                 Self::Ordered(SortOptions {
-                    descending: lhs_opts.descending,
-                    nulls_first: lhs_opts.nulls_first || rhs_opts.nulls_first,
+                    descending: lhs.descending,
+                    nulls_first: lhs.nulls_first || rhs.nulls_first,
                 })
             }
             (Self::Ordered(opt), Self::Singleton)

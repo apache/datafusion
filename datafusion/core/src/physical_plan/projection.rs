@@ -271,24 +271,17 @@ impl ExecutionPlan for ProjectionExec {
             &mut new_properties,
         );
 
-        if let Some(output_ordering) =
-            self.output_ordering.as_ref().and_then(|o| o.get(0))
+        if let Some(leading_ordering) = self
+            .output_ordering
+            .as_ref()
+            .map(|output_ordering| &output_ordering[0])
         {
             for order in self.orderings.iter().flatten() {
-                if order.eq(output_ordering) {
-                    continue;
-                }
-
-                let add_new_oeq =
-                    if let Some(first_class) = new_properties.classes().get(0) {
-                        !first_class.others().iter().any(|v| &v[0] == order)
-                    } else {
-                        true
-                    };
-
-                if add_new_oeq {
+                if !order.eq(leading_ordering)
+                    && !new_properties.satisfies_leading_ordering(order)
+                {
                     new_properties.add_equal_conditions((
-                        &vec![output_ordering.clone()],
+                        &vec![leading_ordering.clone()],
                         &vec![order.clone()],
                     ));
                 }
@@ -349,13 +342,16 @@ fn find_orderings_of_exprs(
     input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<Option<PhysicalSortExpr>>> {
     let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
-    if let Some(input_output_ordering) = input.output_ordering().unwrap_or(&[]).get(0) {
+    if let Some(leading_ordering) = input
+        .output_ordering()
+        .map(|output_ordering| &output_ordering[0])
+    {
         for (index, (expression, name)) in expr.iter().enumerate() {
             let initial_expr = ExprOrdering::new(expression.clone());
             let transformed = initial_expr.transform_up(&|expr| {
                 update_ordering(
                     expr,
-                    input_output_ordering,
+                    leading_ordering,
                     || input.equivalence_properties().clone(),
                     || input.ordering_equivalence_properties().clone(),
                 )
@@ -383,25 +379,20 @@ fn validate_output_ordering(
     expr: &[(Arc<dyn PhysicalExpr>, String)],
 ) -> Option<Vec<PhysicalSortExpr>> {
     output_ordering.and_then(|ordering| {
-        if ordering
-            .get(0)?
-            .expr
-            .clone()
-            .as_any()
-            .downcast_ref::<UnKnownColumn>()
-            .is_some()
-        {
-            orderings
-                .iter()
-                .position(|o| o.is_some())
-                .map(|index| {
-                    [PhysicalSortExpr {
-                        expr: Arc::new(Column::new(&expr[index].1, index)),
-                        options: orderings[index].clone().unwrap().options,
-                    }]
-                    .to_vec()
-                })
-                .or(None)
+        // If leading expression is is invalid column.
+        // Change output ordering of the projection so that it refers to valid
+        // Columns if possible.
+        if ordering[0].expr.as_any().is::<UnKnownColumn>() {
+            for (idx, order) in orderings.iter().enumerate() {
+                if let Some(sort_expr) = order {
+                    let (_, col_name) = &expr[idx];
+                    return Some(vec![PhysicalSortExpr {
+                        expr: Arc::new(Column::new(col_name, idx)),
+                        options: sort_expr.options,
+                    }]);
+                }
+            }
+            None
         } else {
             Some(ordering)
         }
@@ -491,7 +482,7 @@ fn update_ordering<
             });
             return Ok(Transformed::Yes(node));
         }
-        // last opiton, literal leaf:
+        // last option, literal leaf:
         node.state = Some(node.expr.get_ordering(&[]));
         Ok(Transformed::Yes(node))
     }
