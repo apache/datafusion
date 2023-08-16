@@ -1698,9 +1698,9 @@ impl SessionState {
         }
 
         let mut visitor = RelationVisitor(&mut relations);
-        fn visit_statement<'a>(
+        fn visit_statement<'_>(
             statement: &DFStatement,
-            visitor: &mut RelationVisitor<'a>,
+            visitor: &mut RelationVisitor<'_>,
         ) {
             match statement {
                 DFStatement::Statement(s) => {
