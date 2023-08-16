@@ -44,7 +44,7 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 
-use datafusion_physical_expr::expressions::UnKnownColumn;
+use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, ExtendedSortOptions,

@@ -426,7 +426,7 @@ WITH HEADER ROW
 WITH ORDER (a ASC)
 WITH ORDER (b ASC)
 WITH ORDER (c ASC)
-LOCATION 'tests/data/window_2.csv';
+LOCATION '../core/tests/data/window_2.csv';
 
 query TT
 EXPLAIN SELECT (b+a+c) AS result 
