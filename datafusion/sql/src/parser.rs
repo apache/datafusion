@@ -103,7 +103,7 @@ pub struct CopyToStatement {
     /// The URL to where the data is heading
     pub target: String,
     /// Target specific options
-    pub options: HashMap<String, Value>,
+    pub options: Vec<(String, Value)>,
 }
 
 impl fmt::Display for CopyToStatement {
@@ -117,10 +117,8 @@ impl fmt::Display for CopyToStatement {
         write!(f, "COPY {source} TO {target}")?;
 
         if !options.is_empty() {
-            let mut opts: Vec<_> =
-                options.iter().map(|(k, v)| format!("{k} {v}")).collect();
+            let opts: Vec<_> = options.iter().map(|(k, v)| format!("{k} {v}")).collect();
             // print them in sorted order
-            opts.sort_unstable();
             write!(f, " ({})", opts.join(", "))?;
         }
 
@@ -392,7 +390,7 @@ impl<'a> DFParser<'a> {
         let options = if self.parser.peek_token().token == Token::LParen {
             self.parse_value_options()?
         } else {
-            HashMap::new()
+            vec![]
         };
 
         Ok(Statement::CopyTo(CopyToStatement {
@@ -794,14 +792,14 @@ impl<'a> DFParser<'a> {
     /// Unlike [`Self::parse_string_options`], this method supports
     /// keywords as key names as well as multiple value types such as
     /// Numbers as well as Strings.
-    fn parse_value_options(&mut self) -> Result<HashMap<String, Value>, ParserError> {
-        let mut options = HashMap::new();
+    fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>, ParserError> {
+        let mut options = vec![];
         self.parser.expect_token(&Token::LParen)?;
 
         loop {
             let key = self.parse_option_key()?;
             let value = self.parse_option_value()?;
-            options.insert(key, value);
+            options.push((key, value));
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
                 // allow a trailing comma, even though it's not in standard
@@ -1321,7 +1319,7 @@ mod tests {
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
             target: "bar".to_string(),
-            options: HashMap::new(),
+            options: vec![],
         });
 
         assert_eq!(verified_stmt(sql), expected);
@@ -1342,7 +1340,7 @@ mod tests {
             let expected_copy = Statement::CopyTo(CopyToStatement {
                 source: object_name("foo"),
                 target: "bar".to_string(),
-                options: HashMap::new(),
+                options: vec![],
             });
             let expected = Statement::Explain(ExplainStatement {
                 analyze,
@@ -1375,7 +1373,7 @@ mod tests {
         let expected = Statement::CopyTo(CopyToStatement {
             source: CopyToSource::Query(query),
             target: "bar".to_string(),
-            options: HashMap::new(),
+            options: vec![],
         });
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
@@ -1387,10 +1385,10 @@ mod tests {
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
             target: "bar".to_string(),
-            options: HashMap::from([(
+            options: vec![(
                 "row_group_size".to_string(),
                 Value::Number("55".to_string(), false),
-            )]),
+            )],
         });
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
@@ -1398,17 +1396,11 @@ mod tests {
 
     #[test]
     fn copy_to_multi_options() -> Result<(), ParserError> {
+        // order of options is preserved
         let sql =
             "COPY foo TO bar (format parquet, row_group_size 55, compression snappy)";
-        // canonical order is alphabetical
-        let canonical =
-            "COPY foo TO bar (compression snappy, format parquet, row_group_size 55)";
 
-        let expected_options = HashMap::from([
-            (
-                "compression".to_string(),
-                Value::UnQuotedString("snappy".to_string()),
-            ),
+        let expected_options = vec![
             (
                 "format".to_string(),
                 Value::UnQuotedString("parquet".to_string()),
@@ -1417,14 +1409,17 @@ mod tests {
                 "row_group_size".to_string(),
                 Value::Number("55".to_string(), false),
             ),
-        ]);
+            (
+                "compression".to_string(),
+                Value::UnQuotedString("snappy".to_string()),
+            ),
+        ];
 
-        let options =
-            if let Statement::CopyTo(copy_to) = one_statement_parses_to(sql, canonical) {
-                copy_to.options
-            } else {
-                panic!("Expected copy");
-            };
+        let options = if let Statement::CopyTo(copy_to) = verified_stmt(sql) {
+            copy_to.options
+        } else {
+            panic!("Expected copy");
+        };
 
         assert_eq!(options, expected_options);
 

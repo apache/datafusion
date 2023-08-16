@@ -1100,15 +1100,13 @@ impl LogicalPlan {
                         options,
                     }) => {
                         let mut op_str = String::new();
-                        op_str.push('(');
                         for (key, val) in options {
                             if !op_str.is_empty() {
-                                op_str.push(',');
+                                op_str.push_str(", ");
                             }
                             op_str.push_str(&format!("{key} {val}"));
                         }
-                        op_str.push(')');
-                        write!(f, "CopyTo: format={file_format} output_url={output_url} per_thread_output={per_thread_output} options: {op_str}")
+                        write!(f, "CopyTo: format={file_format} output_url={output_url} per_thread_output={per_thread_output} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
