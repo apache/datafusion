@@ -73,7 +73,7 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{plan_err, DFSchema, ScalarValue};
+use datafusion_common::{internal_err, plan_err, DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
@@ -1819,9 +1819,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
             Ok((agg_expr?, filter, order_by))
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Invalid aggregate expression '{other:?}'"
-        ))),
+        other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
 }
 

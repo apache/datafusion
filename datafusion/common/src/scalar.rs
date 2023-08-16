@@ -30,7 +30,7 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array, as_list_array, as_struct_array,
 };
 use crate::delta::shift_months;
-use crate::error::{DataFusionError, Result};
+use crate::error::{DataFusionError, Result, _internal_err};
 use arrow::buffer::NullBuffer;
 use arrow::compute::nullif;
 use arrow::datatypes::{i256, FieldRef, Fields, SchemaBuilder};
@@ -699,9 +699,9 @@ macro_rules! primitive_right {
         Ok(ScalarValue::$SCALAR(Some($TERM.recip())))
     };
     ($TERM:expr, /, $SCALAR:ident) => {
-        Err(DataFusionError::Internal(format!(
+        internal_err!(
             "Can not divide an uninitialized value to a non-floating point value",
-        )))
+        )
     };
     ($TERM:expr, &, $SCALAR:ident) => {
         Ok(ScalarValue::$SCALAR(Some($TERM)))
@@ -834,12 +834,12 @@ macro_rules! impl_bit_op_arithmetic {
             (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
                 primitive_op!(lhs, rhs, Int8, $OPERATION)
             }
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
                 $LHS,
                 $RHS
-            ))),
+            ),
         }
     };
 }
@@ -850,12 +850,12 @@ macro_rules! impl_bool_op_arithmetic {
             (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
                 primitive_op!(lhs, rhs, Boolean, $OPERATION)
             }
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
                 $LHS,
                 $RHS
-            ))),
+            ),
         }
     };
 }
@@ -1020,12 +1020,12 @@ macro_rules! impl_op_arithmetic {
                 true,
             )))),
             // todo: Add Decimal256 support
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
                 $LHS,
                 $RHS
-            ))),
+            ),
         }
     };
 }
@@ -1790,9 +1790,9 @@ impl ScalarValue {
         if precision <= DECIMAL128_MAX_PRECISION && scale.unsigned_abs() <= precision {
             return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
         }
-        Err(DataFusionError::Internal(format!(
+        _internal_err!(
             "Can not new a decimal type ScalarValue for precision {precision} and scale {scale}"
-        )))
+        )
     }
 
     /// Returns a [`ScalarValue::Utf8`] representing `val`
@@ -2051,9 +2051,9 @@ impl ScalarValue {
             ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
                 ScalarValue::Decimal256(Some(v.neg_wrapping()), *precision, *scale),
             ),
-            value => Err(DataFusionError::Internal(format!(
+            value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
-            ))),
+            ),
         }
     }
 
@@ -2257,11 +2257,11 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v) = sv {
                             Ok(v)
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
@@ -2277,11 +2277,11 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v, _) = sv {
                             Ok(v)
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
@@ -2299,11 +2299,11 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v) = sv {
                             Ok(v)
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
@@ -2352,11 +2352,11 @@ impl ScalarValue {
                                         builder.values().append_null();
                                     }
                                     sv => {
-                                        return Err(DataFusionError::Internal(format!(
+                                        return _internal_err!(
                                             "Inconsistent types in ScalarValue::iter_to_array. \
                                                 Expected Utf8, got {:?}",
                                             sv
-                                        )))
+                                        )
                                     }
                                 }
                             }
@@ -2366,11 +2366,11 @@ impl ScalarValue {
                             builder.append(false);
                         }
                         sv => {
-                            return Err(DataFusionError::Internal(format!(
+                            return _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected List, got {:?}",
                                 sv
-                            )))
+                            )
                         }
                     }
                 }
@@ -2524,9 +2524,7 @@ impl ScalarValue {
                             }
                         };
                     } else {
-                        return Err(DataFusionError::Internal(format!(
-                            "Expected Struct but found: {scalar}"
-                        )));
+                        return _internal_err!("Expected Struct but found: {scalar}");
                     };
                 }
 
@@ -2554,9 +2552,9 @@ impl ScalarValue {
                             }
                         }
                         _ => {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Expected scalar of type {value_type} but found: {scalar} {scalar:?}"
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -2582,10 +2580,10 @@ impl ScalarValue {
                         if let ScalarValue::FixedSizeBinary(_, v) = sv {
                             Ok(v)
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                 Expected {data_type:?}, got {sv:?}"
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -2611,11 +2609,11 @@ impl ScalarValue {
             | DataType::Union(_, _)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _) => {
-                return Err(DataFusionError::Internal(format!(
+                return _internal_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
                     scalars.peek()
-                )));
+                );
             }
         };
 
@@ -2703,9 +2701,9 @@ impl ScalarValue {
                     }
                 }
             } else {
-                return Err(DataFusionError::Internal(format!(
+                return _internal_err!(
                     "Expected ScalarValue::List element. Received {scalar:?}"
-                )));
+                );
             }
         }
 
@@ -3641,11 +3639,11 @@ macro_rules! impl_try_from {
             fn try_from(value: ScalarValue) -> Result<Self> {
                 match value {
                     ScalarValue::$SCALAR(Some(inner_value)) => Ok(inner_value),
-                    _ => Err(DataFusionError::Internal(format!(
+                    _ => _internal_err!(
                         "Cannot convert {:?} to {}",
                         value,
                         std::any::type_name::<Self>()
-                    ))),
+                    ),
                 }
             }
         }
@@ -3665,11 +3663,11 @@ impl TryFrom<ScalarValue> for i32 {
             | ScalarValue::Date32(Some(inner_value))
             | ScalarValue::Time32Second(Some(inner_value))
             | ScalarValue::Time32Millisecond(Some(inner_value)) => Ok(inner_value),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
                 std::any::type_name::<Self>()
-            ))),
+            ),
         }
     }
 }
@@ -3688,11 +3686,11 @@ impl TryFrom<ScalarValue> for i64 {
             | ScalarValue::TimestampMicrosecond(Some(inner_value), _)
             | ScalarValue::TimestampMillisecond(Some(inner_value), _)
             | ScalarValue::TimestampSecond(Some(inner_value), _) => Ok(inner_value),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
                 std::any::type_name::<Self>()
-            ))),
+            ),
         }
     }
 }
@@ -3704,11 +3702,11 @@ impl TryFrom<ScalarValue> for i128 {
     fn try_from(value: ScalarValue) -> Result<Self> {
         match value {
             ScalarValue::Decimal128(Some(inner_value), _, _) => Ok(inner_value),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
                 std::any::type_name::<Self>()
-            ))),
+            ),
         }
     }
 }
@@ -3720,11 +3718,11 @@ impl TryFrom<ScalarValue> for i256 {
     fn try_from(value: ScalarValue) -> Result<Self> {
         match value {
             ScalarValue::Decimal256(Some(inner_value), _, _) => Ok(inner_value),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
                 std::any::type_name::<Self>()
-            ))),
+            ),
         }
     }
 }

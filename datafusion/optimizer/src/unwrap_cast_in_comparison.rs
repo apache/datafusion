@@ -26,7 +26,9 @@ use arrow::datatypes::{
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
-use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, DFSchemaRef, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::from_plan;
@@ -226,10 +228,10 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                         .map(|right| {
                             let right_type = right.get_type(&self.schema)?;
                             if !is_support_data_type(&right_type) {
-                                return Err(DataFusionError::Internal(format!(
+                                return internal_err!(
                                     "The type of list expr {} not support",
                                     &right_type
-                                )));
+                                );
                             }
                             match right {
                                 Expr::Literal(right_lit_value) => {
@@ -240,16 +242,16 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                                     if let Some(value) = casted_scalar_value {
                                         Ok(lit(value))
                                     } else {
-                                        Err(DataFusionError::Internal(format!(
+                                        internal_err!(
                                             "Can't cast the list expr {:?} to type {:?}",
                                             right_lit_value, &internal_left_type
-                                        )))
+                                        )
                                     }
                                 }
-                                other_expr => Err(DataFusionError::Internal(format!(
+                                other_expr => internal_err!(
                                     "Only support literal expr to optimize, but the expr is {:?}",
                                     &other_expr
-                                ))),
+                                ),
                             }
                         })
                         .collect::<Result<Vec<_>>>();
@@ -322,9 +324,7 @@ fn try_cast_literal_to_type(
         DataType::Timestamp(_, _) => 1_i128,
         DataType::Decimal128(_, scale) => 10_i128.pow(*scale as u32),
         other_type => {
-            return Err(DataFusionError::Internal(format!(
-                "Error target data type {other_type:?}"
-            )));
+            return internal_err!("Error target data type {other_type:?}");
         }
     };
     let (target_min, target_max) = match target_type {
@@ -345,9 +345,7 @@ fn try_cast_literal_to_type(
             MAX_DECIMAL_FOR_EACH_PRECISION[*precision as usize - 1],
         ),
         other_type => {
-            return Err(DataFusionError::Internal(format!(
-                "Error target data type {other_type:?}"
-            )));
+            return internal_err!("Error target data type {other_type:?}");
         }
     };
     let lit_value_target_type = match lit_value {
@@ -383,9 +381,7 @@ fn try_cast_literal_to_type(
             }
         }
         other_value => {
-            return Err(DataFusionError::Internal(format!(
-                "Invalid literal value {other_value:?}"
-            )));
+            return internal_err!("Invalid literal value {other_value:?}");
         }
     };
 
@@ -440,9 +436,7 @@ fn try_cast_literal_to_type(
                         ScalarValue::Decimal128(Some(value), *p, *s)
                     }
                     other_type => {
-                        return Err(DataFusionError::Internal(format!(
-                            "Error target data type {other_type:?}"
-                        )));
+                        return internal_err!("Error target data type {other_type:?}");
                     }
                 };
                 Ok(Some(result_scalar))

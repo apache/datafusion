@@ -28,7 +28,7 @@ use crate::intervals::rounding::alter_fp_rounding_mode;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
@@ -258,9 +258,9 @@ impl Interval {
         if lower_type == upper_type {
             Ok(lower_type)
         } else {
-            Err(DataFusionError::Internal(format!(
-                "Interval bounds have different types: {lower_type} != {upper_type}",
-            )))
+            internal_err!(
+                "Interval bounds have different types: {lower_type} != {upper_type}"
+            )
         }
     }
 
