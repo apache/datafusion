@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Communication &#8212; Arrow DataFusion  documentation</title>
+    <title>Using the DataFrame API &#8212; Arrow DataFusion  documentation</title>
     
     <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,8 +33,8 @@
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Architecture" href="architecture.html" />
-    <link rel="prev" title="Introduction" href="index.html" />
+    <link rel="next" title="Building Logical Plans" href="building-logical-plans.html" />
+    <link rel="prev" title="Working with Exprs" href="working-with-exprs.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -206,54 +206,54 @@
   Library User Guide
  </span>
 </p>
-<ul class="nav bd-sidenav">
+<ul class="current nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/index.html">
+  <a class="reference internal" href="index.html">
    Introduction
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/using-the-sql-api.html">
+  <a class="reference internal" href="using-the-sql-api.html">
    Using the SQL API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/working-with-exprs.html">
+  <a class="reference internal" href="working-with-exprs.html">
    Working with Exprs
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
    Using the DataFrame API
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/building-logical-plans.html">
+  <a class="reference internal" href="building-logical-plans.html">
    Building Logical Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/catalogs.html">
+  <a class="reference internal" href="catalogs.html">
    Catalogs, Schemas, and Tables
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/adding-udfs.html">
+  <a class="reference internal" href="adding-udfs.html">
    Adding User Defined Functions: Scalar/Window/Aggregate
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/custom-table-providers.html">
+  <a class="reference internal" href="custom-table-providers.html">
    Custom Table Provider
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/extending-operators.html">
+  <a class="reference internal" href="extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/execution-plans.html">
+  <a class="reference internal" href="execution-plans.html">
    Execution Plans
   </a>
  </li>
@@ -263,34 +263,34 @@
   Contributor Guide
  </span>
 </p>
-<ul class="current nav bd-sidenav">
+<ul class="nav bd-sidenav">
  <li class="toctree-l1">
-  <a class="reference internal" href="index.html">
+  <a class="reference internal" href="../contributor-guide/index.html">
    Introduction
   </a>
  </li>
- <li class="toctree-l1 current active">
-  <a class="current reference internal" href="#">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../contributor-guide/communication.html">
    Communication
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="architecture.html">
+  <a class="reference internal" href="../contributor-guide/architecture.html">
    Architecture
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="roadmap.html">
+  <a class="reference internal" href="../contributor-guide/roadmap.html">
    Roadmap
   </a>
  </li>
  <li class="toctree-l1">
-  <a class="reference internal" href="quarterly_roadmap.html">
+  <a class="reference internal" href="../contributor-guide/quarterly_roadmap.html">
    Quarterly Roadmap
   </a>
  </li>
  <li class="toctree-l1 has-children">
-  <a class="reference internal" href="specification/index.html">
+  <a class="reference internal" href="../contributor-guide/specification/index.html">
    Specifications
   </a>
   <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
@@ -300,12 +300,12 @@
   </label>
   <ul>
    <li class="toctree-l2">
-    <a class="reference internal" href="specification/invariants.html">
+    <a class="reference internal" href="../contributor-guide/specification/invariants.html">
      Invariants
     </a>
    </li>
    <li class="toctree-l2">
-    <a class="reference internal" href="specification/output-field-name-semantic.html">
+    <a class="reference internal" href="../contributor-guide/specification/output-field-name-semantic.html">
      Output field name semantics
     </a>
    </li>
@@ -334,36 +334,9 @@
               
               <div class="toc-item">
                 
-<div class="tocsection onthispage pt-5 pb-3">
-    <i class="fas fa-list"></i> On this page
-</div>
 
 <nav id="bd-toc-nav">
-    <ul class="visible nav section-nav flex-column">
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#questions">
-   Questions?
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#mailing-list">
-     Mailing list
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#slack-and-discord">
-     Slack and Discord
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#sync-up-video-calls">
-     Sync up video calls
-    </a>
-   </li>
-  </ul>
- </li>
-</ul>
-
+    
 </nav>
               </div>
               
@@ -371,7 +344,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/communication.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/library-user-guide/using-the-dataframe-api.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -408,55 +381,9 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="communication">
-<h1>Communication<a class="headerlink" href="#communication" title="Permalink to this heading">¶</a></h1>
-<p>We welcome participation from everyone and encourage you to join us, ask
-questions, and get involved.</p>
-<p>All participation in the Apache Arrow DataFusion project is governed by the
-Apache Software Foundation’s <a class="reference external" href="https://www.apache.org/foundation/policies/conduct.html">code of
-conduct</a>.</p>
-<p>The vast majority of communication occurs in the open on our
-<a class="reference external" href="https://github.com/apache/arrow-datafusion">github repository</a>.</p>
-<section id="questions">
-<h2>Questions?<a class="headerlink" href="#questions" title="Permalink to this heading">¶</a></h2>
-<section id="mailing-list">
-<h3>Mailing list<a class="headerlink" href="#mailing-list" title="Permalink to this heading">¶</a></h3>
-<p>We use arrow.apache.org’s <code class="docutils literal notranslate"><span class="pre">dev&#64;</span></code> mailing list for project management, release
-coordination and design discussions
-(<a class="reference external" href="mailto:dev-subscribe&#37;&#52;&#48;arrow&#46;apache&#46;org">subscribe</a>,
-<a class="reference external" href="mailto:dev-unsubscribe&#37;&#52;&#48;arrow&#46;apache&#46;org">unsubscribe</a>,
-<a class="reference external" href="https://lists.apache.org/list.html?dev&#64;arrow.apache.org">archives</a>).</p>
-<p>When emailing the dev list, please make sure to prefix the subject line with a
-<code class="docutils literal notranslate"><span class="pre">[DataFusion]</span></code> tag, e.g. <code class="docutils literal notranslate"><span class="pre">&quot;[DataFusion]</span> <span class="pre">New</span> <span class="pre">API</span> <span class="pre">for</span> <span class="pre">remote</span> <span class="pre">data</span> <span class="pre">sources&quot;</span></code>, so
-that the appropriate people in the Apache Arrow community notice the message.</p>
-</section>
-<section id="slack-and-discord">
-<h3>Slack and Discord<a class="headerlink" href="#slack-and-discord" title="Permalink to this heading">¶</a></h3>
-<p>We use the official <a class="reference external" href="https://s.apache.org/slack-invite">ASF</a> Slack workspace
-for informal discussions and coordination. This is a great place to meet other
-contributors and get guidance on where to contribute. Join us in the
-<code class="docutils literal notranslate"><span class="pre">#arrow-rust</span></code> channel.</p>
-<p>We also have a backup Arrow Rust Discord
-server (<a class="reference external" href="https://discord.gg/Qw5gKqHxUM">invite link</a>) in case you are not able
-to join the Slack workspace. If you need an invite to the Slack workspace, you
-can also ask for one in our Discord server.</p>
-</section>
-<section id="sync-up-video-calls">
-<h3>Sync up video calls<a class="headerlink" href="#sync-up-video-calls" title="Permalink to this heading">¶</a></h3>
-<p>We have biweekly sync calls every other Thursdays at both 04:00 UTC
-and 16:00 UTC (starting September 30, 2021) depending on if there are
-items on the agenda to discuss and someone being willing to host.</p>
-<p>Please see the <a class="reference external" href="https://docs.google.com/document/d/1atCVnoff5SR4eM4Lwf2M1BBJTY6g3_HUNR6qswYJW_U/edit">agenda</a>
-for the video call link, add topics and to see what others plan to discuss.</p>
-<p>The goals of these calls are:</p>
-<ol class="arabic simple">
-<li><p>Help “put a face to the name” of some of other contributors we are working with</p></li>
-<li><p>Discuss / synchronize on the goals and major initiatives from different stakeholders to identify areas where more alignment is needed</p></li>
-</ol>
-<p>No decisions are made on the call and anything of substance will be discussed on the mailing list or in github issues / google docs.</p>
-<p>We will send a summary of all sync ups to the dev&#64;arrow.apache.org mailing list.</p>
-</section>
-</section>
+<section id="using-the-dataframe-api">
+<h1>Using the DataFrame API<a class="headerlink" href="#using-the-dataframe-api" title="Permalink to this heading">¶</a></h1>
+<p>Coming Soon</p>
 </section>
 
 
@@ -465,17 +392,17 @@ for the video call link, add topics and to see what others plan to discuss.</p>
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="index.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="working-with-exprs.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Introduction</p>
+            <p class="prev-next-title">Working with Exprs</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="architecture.html" title="next page">
+    <a class='right-next' id="next-link" href="building-logical-plans.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Architecture</p>
+        <p class="prev-next-title">Building Logical Plans</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
