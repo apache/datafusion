@@ -184,7 +184,6 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_sort_order(cmd.order_exprs.clone())
             .with_insert_mode(insert_mode);
 
-        //let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,
             Some(s) => s,
