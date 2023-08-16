@@ -101,6 +101,7 @@ expressions such as `col("a") + col("b")` to be used.
 | log(base, x)          | logarithm of x for a particular base              |
 | log10(x)              | base 10 logarithm                                 |
 | log2(x)               | base 2 logarithm                                  |
+| nanvl(x, y)           | returns x if x is not NaN otherwise returns y     |
 | pi()                  | approximate value of π                            |
 | power(base, exponent) | base raised to the power of exponent              |
 | radians(x)            | converts degrees to radians                       |
