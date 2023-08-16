@@ -16,29 +16,141 @@
 # under the License.
 
 # tests for copy command
-
 statement ok
 create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');
 
-# Copy from table
-statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is not yet supported
-COPY source_table  to '/tmp/table.parquet';
+# Copy to directory as multiple files
+query IT
+COPY source_table TO 'test_files/scratch/table' (format parquet, per_thread_output true);
+----
+2
+
+#Explain copy queries not currently working
+query error DataFusion error: This feature is not implemented: Unsupported SQL statement: Some\("COPY source_table TO 'test_files/scratch/table'"\)
+EXPLAIN COPY source_table to 'test_files/scratch/table'
+
+query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: source_table"\)
+EXPLAIN COPY source_table to 'test_files/scratch/table' (format parquet, per_thread_output true)
+
+# Copy more files to directory via query
+query IT
+COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/table' (format parquet, per_thread_output true);
+----
+4
+
+# validate multiple parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_parquet STORED AS PARQUET LOCATION 'test_files/scratch/table/';
+
+query IT
+select * from validate_parquet;
+----
+1 Foo
+2 Bar
+1 Foo
+2 Bar
+1 Foo
+2 Bar
+
+# Copy from table to single file
+query IT
+COPY source_table to 'test_files/scratch/table.parquet';
+----
+2
+
+# validate single parquet file output
+statement ok
+CREATE EXTERNAL TABLE validate_parquet_single STORED AS PARQUET LOCATION 'test_files/scratch/table.parquet';
+
+query IT
+select * from validate_parquet_single;
+----
+1 Foo
+2 Bar
+
+# copy from table to folder of csv files
+query IT
+COPY source_table  to 'test_files/scratch/table_csv' (format csv, per_thread_output true);
+----
+2
+
+# validate folder of csv files
+statement ok
+CREATE EXTERNAL TABLE validate_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/table_csv';
+
+query IT
+select * from validate_csv;
+----
+1 Foo
+2 Bar
+
+# Copy from table to single csv
+query IT
+COPY source_table  to 'test_files/scratch/table.csv';
+----
+2
+
+# Validate single csv output
+statement ok
+CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/table.csv';
+
+query IT
+select * from validate_single_csv;
+----
+1 Foo
+2 Bar
+
+# Copy from table to folder of json
+query IT
+COPY source_table to 'test_files/scratch/table_json' (format json, per_thread_output true);
+----
+2
+
+# Validate json output
+statement ok
+CREATE EXTERNAL TABLE validate_json STORED AS json LOCATION 'test_files/scratch/table_json';
+
+query IT
+select * from validate_json;
+----
+1 Foo
+2 Bar
+
+# Copy from table to single json file
+query IT
+COPY source_table  to 'test_files/scratch/table.json';
+----
+2
+
+# Validate single JSON file`
+statement ok
+CREATE EXTERNAL TABLE validate_single_json STORED AS json LOCATION 'test_files/scratch/table_json';
+
+query IT
+select * from validate_single_json;
+----
+1 Foo
+2 Bar
 
 # Copy from table with options
-statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is not yet supported
-COPY source_table  to '/tmp/table.parquet' (row_group_size 55);
+query IT
+COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55);
+----
+2
 
 # Copy from table with options (and trailing comma)
-statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is not yet supported
-COPY source_table  to '/tmp/table.parquet' (row_group_size 55, row_group_limit_bytes 9,);
+query IT
+COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55, row_group_limit_bytes 9,);
+----
+2
 
 
 # Error cases:
 
 # Incomplete statement
-statement error DataFusion error: SQL error: ParserError\("Expected \), found: EOF"\)
+query error DataFusion error: SQL error: ParserError\("Expected \), found: EOF"\)
 COPY (select col2, sum(col1) from source_table
 
 # Copy from table with non literal
-statement error DataFusion error: SQL error: ParserError\("Expected ',' or '\)' after option definition, found: \+"\)
+query error DataFusion error: SQL error: ParserError\("Expected ',' or '\)' after option definition, found: \+"\)
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);

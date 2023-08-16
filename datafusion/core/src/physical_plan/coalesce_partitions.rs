@@ -31,7 +31,7 @@ use crate::physical_plan::{
 };
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
@@ -120,9 +120,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     ) -> Result<SendableRecordBatchStream> {
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "CoalescePartitionsExec invalid partition {partition}"
-            )));
+            return internal_err!("CoalescePartitionsExec invalid partition {partition}");
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();

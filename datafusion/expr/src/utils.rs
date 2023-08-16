@@ -17,6 +17,7 @@
 
 //! Expression utilities
 
+use crate::dml::CopyTo;
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
@@ -35,8 +36,8 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    Result, ScalarValue, TableReference,
+    internal_err, plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -592,9 +593,9 @@ pub fn group_window_expr_by_sort_keys(
             }
             Ok(())
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Impossibly got non-window expr {other:?}",
-        ))),
+        other => internal_err!(
+            "Impossibly got non-window expr {other:?}"
+        ),
     })?;
     Ok(result)
 }
@@ -745,6 +746,19 @@ pub fn from_plan(
             op: op.clone(),
             input: Arc::new(inputs[0].clone()),
         })),
+        LogicalPlan::Copy(CopyTo {
+            input: _,
+            output_url,
+            file_format,
+            per_thread_output,
+            options,
+        }) => Ok(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(inputs[0].clone()),
+            output_url: output_url.clone(),
+            file_format: file_format.clone(),
+            per_thread_output: *per_thread_output,
+            options: options.clone(),
+        })),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
@@ -861,9 +875,9 @@ pub fn from_plan(
                     if let Expr::BinaryExpr(BinaryExpr { left, op:Operator::Eq, right }) = unalias_expr {
                         Ok((*left, *right))
                     } else {
-                        Err(DataFusionError::Internal(format!(
+                        internal_err!(
                             "The front part expressions should be an binary equiality expression, actual:{equi_expr}"
-                        )))
+                        )
                     }
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
 

@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
-use datafusion_common::{plan_err, ScalarValue};
+use datafusion_common::{internal_err, plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools;
@@ -52,7 +52,7 @@ macro_rules! downcast_vec {
             .iter()
             .map(|e| match e.as_any().downcast_ref::<$ARRAY_TYPE>() {
                 Some(array) => Ok(array),
-                _ => Err(DataFusionError::Internal("failed to downcast".to_string())),
+                _ => internal_err!("failed to downcast"),
             })
     }};
 }
@@ -111,11 +111,7 @@ macro_rules! array {
                                 builder.values().append_null();
                             }
                         }
-                        None => {
-                            return Err(DataFusionError::Internal(
-                                "failed to downcast".to_string(),
-                            ))
-                        }
+                        None => return internal_err!("failed to downcast"),
                     },
                 }
             }
@@ -331,9 +327,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                 } else if arg.as_any().downcast_ref::<NullArray>().is_some() {
                     arrays.push(ListOrNull::Null);
                 } else {
-                    return Err(DataFusionError::Internal(
-                        "Unsupported argument type for array".to_string(),
-                    ));
+                    return internal_err!("Unsupported argument type for array");
                 }
             }
 
@@ -1748,9 +1742,9 @@ macro_rules! array_has_any_non_list_check {
             if let Some(elem) = elem {
                 res |= arr.iter().dedup().flatten().any(|x| x == elem);
             } else {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "array_has_any does not support Null type for element in sub_array"
-                )));
+                );
             }
         }
         res
@@ -1803,9 +1797,9 @@ macro_rules! array_has_all_non_list_check {
             if let Some(elem) = elem {
                 res &= arr.iter().dedup().flatten().any(|x| x == elem);
             } else {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "array_has_all does not support Null type for element in sub_array"
-                )));
+                );
             }
         }
         res

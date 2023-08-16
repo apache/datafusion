@@ -17,6 +17,15 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
+use crate::datasource::file_format::arrow::ArrowFormat;
+use crate::datasource::file_format::avro::AvroFormat;
+use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::json::JsonFormat;
+use crate::datasource::file_format::parquet::ParquetFormat;
+use crate::datasource::file_format::write::FileWriterMode;
+use crate::datasource::file_format::FileFormat;
+use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -29,6 +38,8 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_expr::dml::{CopyTo, OutputFileFormat};
+use url::Url;
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -62,7 +73,7 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{plan_err, DFSchema, ScalarValue};
+use datafusion_common::{internal_err, plan_err, DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
@@ -80,6 +91,7 @@ use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::fs;
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -543,6 +555,67 @@ impl DefaultPhysicalPlanner {
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
                     source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
+                }
+                LogicalPlan::Copy(CopyTo{
+                    input,
+                    output_url,
+                    file_format,
+                    per_thread_output,
+                    options: _,
+                }) => {
+                    let input_exec = self.create_initial_plan(input, session_state).await?;
+
+                    // Get object store for specified output_url
+                    // if user did not pass in a url, we assume it is a local file path
+                    // this requires some special handling as copy can create non
+                    // existing file paths
+                    let is_valid_url = Url::parse(output_url).is_ok();
+
+                    // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
+                    // TODO: add additional configurable options for if existing files should be overwritten or
+                    // appended to
+                    let parsed_url = match is_valid_url {
+                        true => ListingTableUrl::parse(output_url),
+                        false => {
+                            let path = std::path::PathBuf::from(output_url);
+                            if !path.exists(){
+                                if *per_thread_output{
+                                    fs::create_dir_all(path)?;
+                                } else{
+                                    fs::File::create(path)?;
+                                }
+                            }
+                            ListingTableUrl::parse(output_url)
+                        }
+                    }?;
+
+                    let object_store_url = parsed_url.object_store();
+
+                    let schema: Schema = (**input.schema()).clone().into();
+
+                    // Set file sink related options
+                    let config = FileSinkConfig {
+                        object_store_url,
+                        table_paths: vec![parsed_url],
+                        file_groups: vec![],
+                        output_schema: Arc::new(schema),
+                        table_partition_cols: vec![],
+                        writer_mode: FileWriterMode::PutMultipart,
+                        per_thread_output: *per_thread_output,
+                        overwrite: false,
+                    };
+
+                    // TODO: implement statement level overrides for each file type
+                    // E.g. CsvFormat::from_options(options)
+                    let sink_format: Arc<dyn FileFormat> = match file_format {
+                        OutputFileFormat::CSV => Arc::new(CsvFormat::default()),
+                        OutputFileFormat::PARQUET => Arc::new(ParquetFormat::default()),
+                        OutputFileFormat::JSON => Arc::new(JsonFormat::default()),
+                        OutputFileFormat::AVRO => Arc::new(AvroFormat {} ),
+                        OutputFileFormat::ARROW => Arc::new(ArrowFormat {}),
+                    };
+
+                    sink_format.create_writer_physical_plan(input_exec, session_state, config).await
                 }
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
@@ -1746,9 +1819,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
             Ok((agg_expr?, filter, order_by))
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Invalid aggregate expression '{other:?}'"
-        ))),
+        other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
 }
 

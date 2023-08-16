@@ -68,6 +68,7 @@ use arrow::{
 };
 use datafusion::{
     common::cast::{as_int64_array, as_string_array},
+    common::internal_err,
     common::DFSchemaRef,
     error::{DataFusionError, Result},
     execution::{
@@ -480,9 +481,7 @@ impl ExecutionPlan for TopKExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "TopKExec invalid partition {partition}"
-            )));
+            return internal_err!("TopKExec invalid partition {partition}");
         }
 
         Ok(Box::pin(TopKReader {

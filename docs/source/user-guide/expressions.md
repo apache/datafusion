@@ -94,6 +94,8 @@ expressions such as `col("a") + col("b")` to be used.
 | factorial(x)          | factorial                                         |
 | floor(x)              | nearest integer less than or equal to argument    |
 | gcd(x, y)             | greatest common divisor                           |
+| isnan(x)              | predicate determining whether NaN/-NaN or not     |
+| iszero(x)             | predicate determining whether 0.0/-0.0 or not     |
 | lcm(x, y)             | least common multiple                             |
 | ln(x)                 | natural logarithm                                 |
 | log(base, x)          | logarithm of x for a particular base              |
