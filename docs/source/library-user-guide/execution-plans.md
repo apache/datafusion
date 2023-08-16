@@ -19,4 +19,4 @@
 
 # Execution Plans
 
-Coming Soon
+More information will be added here soon, but for now, see the [Custom Table Provider](./custom-table-providers.md) documentation for an example implementation.
