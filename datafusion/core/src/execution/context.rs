@@ -1698,7 +1698,7 @@ impl SessionState {
         }
 
         let mut visitor = RelationVisitor(&mut relations);
-        fn visit_statement<'_>(
+        fn visit_statement(
             statement: &DFStatement,
             visitor: &mut RelationVisitor<'_>,
         ) {
