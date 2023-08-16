@@ -44,7 +44,8 @@ use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
 use datafusion_physical_expr::utils::{
-    map_columns_before_projection, ordering_satisfy_requirement_concrete,
+    map_columns_before_projection, ordering_satisfy_requirement,
+    ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
@@ -994,9 +995,27 @@ fn update_repartition_from_context(
     repartition_context: RepartitionContext,
 ) -> Result<RepartitionContext> {
     let RepartitionContext {
-        plan,
+        mut plan,
         mut repartition_onwards,
     } = repartition_context;
+
+    // Remove redundant RoundRobin at the start
+    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        if let Partitioning::RoundRobinBatch(n_out) = repartition.partitioning() {
+            // Repartition is useless
+            if *n_out <= repartition.input().output_partitioning().partition_count() {
+                let mut new_repartition_onwards =
+                    vec![None; repartition.input().children().len()];
+                if let Some(exec_tree) = &repartition_onwards[0] {
+                    for child in &exec_tree.children {
+                        new_repartition_onwards[child.idx] = Some(child.clone());
+                    }
+                }
+                plan = repartition.input().clone();
+                repartition_onwards = new_repartition_onwards;
+            }
+        }
+    }
 
     let mut new_children = plan.children();
     for (child, repartition_onwards, required_ordering) in izip!(
@@ -1030,7 +1049,7 @@ fn update_repartition_from_context(
                     ) {
                         // Removing parallelization helps with satisfying ordering requirement
                         *child = new_child;
-                        // Reset repartition onwards, since it no longer contains any round-robin RepartitonExec
+                        // Reset repartition onwards, since it no longer contains any round-robin RepartitionExec
                         *repartition_onwards = None;
                     }
                 }
@@ -1151,17 +1170,26 @@ fn ensure_distribution(
             would_benefit,
         )| {
             let mut child = child.clone();
-
+            let requirement_satisfied = ordering_satisfy_requirement(
+                child.output_ordering(),
+                required_input_ordering.as_deref(),
+                || child.equivalence_properties(),
+                || child.ordering_equivalence_properties(),
+            );
             if enable_round_robin
                 // executor benefits from partitioning (such as filter)
                 && (would_benefit && repartition_beneficial_stat)
                 // Unless partitioning doesn't increase partition number, it is not beneficial.
                 && child.output_partitioning().partition_count() < target_partitions
-                // Either doesn't require ordering, or at the input there is no ordering, or
-                // operator doesn't maintain ordering
-                // In this case, adding repartition is not harmful for ordering propagation.
+                // At least one of the following conditions is true
+                // - Executor doesn't require ordering
+                // - at the input of the executor there is no ordering
+                // - executor doesn't maintain ordering
+                // - requirement is not satisfied by the existing ordering.
+                // In this case, adding repartition is not harmful as long as orderings concerned
                 && (required_input_ordering.is_none()
-                || child.output_ordering().is_none() || !maintains)
+                || child.output_ordering().is_none()
+                || !maintains || !requirement_satisfied)
             {
                 // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
                 if let Some(parquet_exec) = child.as_any().downcast_ref::<ParquetExec>() {
