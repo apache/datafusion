@@ -107,7 +107,6 @@ impl ListingTableUrl {
         .map_err(|_| DataFusionError::Internal(format!("Can not open path: {s}")))?;
         // TODO: Currently we do not have an IO-related error variant that accepts ()
         //       or a string. Once we have such a variant, change the error type above.
-
         Ok(Self::new(url, glob))
     }
 

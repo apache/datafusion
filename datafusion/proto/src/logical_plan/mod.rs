@@ -1429,6 +1429,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Dml(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Dml",
             )),
+            LogicalPlan::Copy(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Copy",
+            )),
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
