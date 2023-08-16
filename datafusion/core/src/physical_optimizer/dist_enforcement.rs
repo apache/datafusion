@@ -961,7 +961,7 @@ fn add_hash_on_top(
     repartition_onward: &mut Option<ExecTree>,
     should_preserve_order: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // Since hash join benefits from partitioning add roundrobin repartition before it
+    // Since hash join benefits from partitioning add round-robin repartition before it
     let mut new_plan = add_roundrobin_on_top(input, n_target, repartition_onward)?;
     new_plan = Arc::new(
         RepartitionExec::try_new(new_plan, Partitioning::Hash(hash_exprs, n_target))?
@@ -1046,7 +1046,7 @@ fn update_repartition_from_context(
     Ok(repartition_context)
 }
 
-/// Remove parallelization from the plan inside `exec_tree`, it it helps to satisfy ordering
+/// Remove parallelization from the plan inside `exec_tree`, if it helps to satisfy ordering
 /// requirement of operator.
 ///
 /// Turns plan in the form (Please note that plan below is not valid in terms of ordering requirements):
