@@ -84,6 +84,10 @@ pub enum BuiltinScalarFunction {
     Gcd,
     /// lcm, Least common multiple
     Lcm,
+    /// isnan
+    Isnan,
+    /// iszero
+    Iszero,
     /// ln, Natural logarithm
     Ln,
     /// log, same as log10
@@ -334,6 +338,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
             BuiltinScalarFunction::Gcd => Volatility::Immutable,
+            BuiltinScalarFunction::Isnan => Volatility::Immutable,
+            BuiltinScalarFunction::Iszero => Volatility::Immutable,
             BuiltinScalarFunction::Lcm => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
             BuiltinScalarFunction::Log => Volatility::Immutable,
@@ -774,6 +780,8 @@ impl BuiltinScalarFunction {
                 _ => Ok(Float64),
             },
 
+            BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => Ok(Boolean),
+
             BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
             BuiltinScalarFunction::Abs
@@ -1184,6 +1192,12 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::CurrentTime => {
                 Signature::uniform(0, vec![], self.volatility())
             }
+            BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => {
+                Signature::one_of(
+                    vec![Exact(vec![Float32]), Exact(vec![Float64])],
+                    self.volatility(),
+                )
+            }
         }
     }
 }
@@ -1208,6 +1222,8 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Factorial => &["factorial"],
         BuiltinScalarFunction::Floor => &["floor"],
         BuiltinScalarFunction::Gcd => &["gcd"],
+        BuiltinScalarFunction::Isnan => &["isnan"],
+        BuiltinScalarFunction::Iszero => &["iszero"],
         BuiltinScalarFunction::Lcm => &["lcm"],
         BuiltinScalarFunction::Ln => &["ln"],
         BuiltinScalarFunction::Log => &["log"],
