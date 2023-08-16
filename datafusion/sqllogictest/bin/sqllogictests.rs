@@ -55,25 +55,23 @@ pub async fn main() -> Result<()> {
     run_tests().await
 }
 
-/// Sets up an empty directory at test_files/scratch
+/// Sets up an empty directory at test_files/scratch/<name>
 /// creating it if needed and clearing any file contents if it exists
 /// This allows tests for inserting to external tables or copy to
 /// to persist data to disk and have consistent state when running
 /// a new test
-fn setup_scratch_dir() -> Result<()> {
-    let path = std::path::Path::new("test_files/scratch");
+fn setup_scratch_dir(name: &Path) -> Result<()> {
+    let path = PathBuf::from("test_files").join("scratch").join(name);
     if path.exists() {
-        fs::remove_dir_all(path)?;
+        fs::remove_dir_all(&path)?;
     }
-    fs::create_dir(path)?;
+    fs::create_dir_all(&path)?;
     Ok(())
 }
 
 async fn run_tests() -> Result<()> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
-
-    setup_scratch_dir()?;
 
     let options = Options::new();
 
@@ -138,6 +136,7 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
+    setup_scratch_dir(&relative_path)?;
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
