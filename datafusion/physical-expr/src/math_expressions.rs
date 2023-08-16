@@ -1057,9 +1057,9 @@ mod tests {
             Arc::new(Float64Array::from(vec![5.0, 6.0, f64::NAN, f64::NAN])), // x
         ];
 
-        let result = nanvl(&args).expect("failed to initialize function atan2");
+        let result = nanvl(&args).expect("failed to initialize function nanvl");
         let floats =
-            as_float64_array(&result).expect("failed to initialize function atan2");
+            as_float64_array(&result).expect("failed to initialize function nanvl");
 
         assert_eq!(floats.len(), 4);
         assert_eq!(floats.value(0), 1.0);
@@ -1075,9 +1075,9 @@ mod tests {
             Arc::new(Float32Array::from(vec![5.0, 6.0, f32::NAN, f32::NAN])), // x
         ];
 
-        let result = nanvl(&args).expect("failed to initialize function atan2");
+        let result = nanvl(&args).expect("failed to initialize function nanvl");
         let floats =
-            as_float32_array(&result).expect("failed to initialize function atan2");
+            as_float32_array(&result).expect("failed to initialize function nanvl");
 
         assert_eq!(floats.len(), 4);
         assert_eq!(floats.value(0), 1.0);
