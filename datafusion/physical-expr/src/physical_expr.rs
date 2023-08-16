@@ -143,9 +143,13 @@ impl Hash for dyn PhysicalExpr {
 
 /// To propagate [`SortOptions`] across the [`PhysicalExpr`], using the [`Option<SortOptions>`]
 /// structure is insufficient. There must be a differentiation between unordered columns
-/// and literal values since literals do not break the ordering when they are used as a child
+/// and literal values since literals may not break the ordering when they are used as a child
 /// of a binary expression, if the other child has some ordering. On the other hand, unordered
 /// columns cannot maintain the ordering when they take part in such operations.
+// Ex.: ((a_orderedd + b_unordered) + c_ordered) expression cannot end up with sorted data,
+// However, ((a_orderedd + 999) + c_ordered) expression can. Therefore, we need two different
+// variants for literals and unordered columns since literals may not break the order of
+// the other child under some mathematical operations.
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ExtendedSortOptions {
     // For an ordered data, we use ordinary [`SortOptions`]
