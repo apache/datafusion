@@ -306,7 +306,8 @@ config_namespace! {
         /// default parquet writer setting
         pub compression: Option<String>, default = None
 
-        /// Sets if dictionary encoding is enabled
+        /// Sets if dictionary encoding is enabled. If NULL, uses 
+        /// default parquet writer setting
         pub dictionary_enabled: Option<bool>, default = None
 
         /// Sets best effort maximum dictionary page size, in bytes
@@ -314,10 +315,12 @@ config_namespace! {
 
         /// Sets if statistics are enabled for any column
         /// Valid values are: "none", "chunk", and "page"
-        /// These values are not case sensitive.
+        /// These values are not case sensitive. If NULL, uses 
+        /// default parquet writer setting
         pub statistics_enabled: Option<String>, default = None
 
-        /// Sets max statistics size for any column
+        /// Sets max statistics size for any column. If NULL, uses 
+        /// default parquet writer setting
         pub max_statistics_size: Option<usize>, default = None
 
         /// Sets maximum number of rows in a row group
@@ -336,16 +339,19 @@ config_namespace! {
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
-        /// These values are not case sensitive.
+        /// These values are not case sensitive. If NULL, uses 
+        /// default parquet writer setting
         pub encoding: Option<String>, default = None
 
         /// Sets if bloom filter is enabled for any column
         pub bloom_filter_enabled: bool, default = false
 
-        /// Sets bloom filter false positive probability
+        /// Sets bloom filter false positive probability. If NULL, uses 
+        /// default parquet writer setting
         pub bloom_filter_fpp: Option<f64>, default = None
 
-        /// Sets bloom filter number of distinct values
+        /// Sets bloom filter number of distinct values. If NULL, uses 
+        /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
     }
 }
