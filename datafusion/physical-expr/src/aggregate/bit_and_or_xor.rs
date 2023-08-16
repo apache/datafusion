@@ -34,6 +34,7 @@ use arrow::{
     },
     datatypes::Field,
 };
+use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::collections::HashSet;
@@ -96,9 +97,9 @@ macro_rules! bit_and_or_xor_batch {
                 typed_bit_and_or_xor_batch!($VALUES, UInt8Array, UInt8, $OP)
             }
             e => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Bit and/Bit or/Bit xor is not expected to receive the type {e:?}"
-                )));
+                );
             }
         }
     }};

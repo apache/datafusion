@@ -47,7 +47,7 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -651,9 +651,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 },
                             })
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            internal_err!(
                                 "physical_plan::from_proto() {self:?}"
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -698,9 +698,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 },
                             })
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            internal_err!(
                                 "physical_plan::from_proto() {self:?}"
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1300,9 +1300,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         )),
                     })
                 }
-                Err(e) => Err(DataFusionError::Internal(format!(
+                Err(e) => internal_err!(
                     "Unsupported plan and extension codec failed with [{e}]. Plan: {plan_clone:?}"
-                ))),
+                ),
             }
         }
     }

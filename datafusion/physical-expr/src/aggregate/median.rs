@@ -23,6 +23,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::{Array, ArrayRef, UInt32Array};
 use arrow::compute::sort_to_indices;
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::internal_err;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
@@ -150,9 +151,9 @@ impl Accumulator for MedianAccumulator {
                 }
                 ScalarValue::List(None, _) => {} // skip empty state
                 v => {
-                    return Err(DataFusionError::Internal(format!(
+                    return internal_err!(
                         "unexpected state in median. Expected DataType::List, got {v:?}"
-                    )))
+                    )
                 }
             }
         }
@@ -211,9 +212,7 @@ impl Accumulator for MedianAccumulator {
                     ScalarValue::Decimal128(Some(v / 2), p, s)
                 }
                 v => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported type in MedianAccumulator: {v:?}"
-                    )))
+                    return internal_err!("Unsupported type in MedianAccumulator: {v:?}")
                 }
             }
         } else {

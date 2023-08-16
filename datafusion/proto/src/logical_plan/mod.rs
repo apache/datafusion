@@ -39,8 +39,8 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{
-    context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
-    Result,
+    context, internal_err, parsers::CompressionTypeVariant, DataFusionError,
+    OwnedTableReference, Result,
 };
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::DropView;
@@ -225,11 +225,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let values: Vec<Vec<Expr>> = if values.values_list.is_empty() {
                     Ok(Vec::new())
                 } else if values.values_list.len() % n_cols != 0 {
-                    Err(DataFusionError::Internal(format!(
+                    internal_err!(
                         "Invalid values list length, expect {} to be divisible by {}",
                         values.values_list.len(),
                         n_cols
-                    )))
+                    )
                 } else {
                     values
                         .values_list
@@ -503,9 +503,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let file_type = create_extern_table.file_type.as_str();
                 if ctx.table_factory(file_type).is_none() {
-                    Err(DataFusionError::Internal(format!(
-                        "No TableProviderFactory for file type: {file_type}"
-                    )))?
+                    internal_err!("No TableProviderFactory for file type: {file_type}")?
                 }
 
                 let mut order_exprs = vec![];

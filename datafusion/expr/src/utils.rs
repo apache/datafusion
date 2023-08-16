@@ -36,8 +36,8 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    Result, ScalarValue, TableReference,
+    internal_err, plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -593,9 +593,9 @@ pub fn group_window_expr_by_sort_keys(
             }
             Ok(())
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Impossibly got non-window expr {other:?}",
-        ))),
+        other => internal_err!(
+            "Impossibly got non-window expr {other:?}"
+        ),
     })?;
     Ok(result)
 }
@@ -875,9 +875,9 @@ pub fn from_plan(
                     if let Expr::BinaryExpr(BinaryExpr { left, op:Operator::Eq, right }) = unalias_expr {
                         Ok((*left, *right))
                     } else {
-                        Err(DataFusionError::Internal(format!(
+                        internal_err!(
                             "The front part expressions should be an binary equiality expression, actual:{equi_expr}"
-                        )))
+                        )
                     }
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
 

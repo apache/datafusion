@@ -39,9 +39,9 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, plan_err, Column, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
-    UnnestOptions,
+    aggregate_functional_dependencies, internal_err, plan_err, Column, DFField, DFSchema,
+    DFSchemaRef, DataFusionError, FunctionalDependencies, OwnedTableReference, Result,
+    ScalarValue, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -791,11 +791,11 @@ impl LogicalPlan {
                     })?;
                     // check if the data type of the value matches the data type of the placeholder
                     if Some(value.get_datatype()) != *data_type {
-                        return Err(DataFusionError::Internal(format!(
+                        return internal_err!(
                             "Placeholder value type mismatch: expected {:?}, got {:?}",
                             data_type,
                             value.get_datatype()
-                        )));
+                        );
                     }
                     // Replace the placeholder with the value
                     Ok(Transformed::Yes(Expr::Literal(value.clone())))
