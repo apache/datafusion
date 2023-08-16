@@ -33,7 +33,7 @@ Similarly to other concepts in DataFusion, you'll implement various traits to cr
 
 The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in DataFusion. The `TableProvider` trait is covered in more detail [here](./custom-table-providers.md).
 
-We'll start with the `SchemaProvider` trait as we need one to register with the `CatalogProvider`.
+In the following example, we'll implement an in memory catalog, starting with the `SchemaProvider` trait as we need one to register with the `CatalogProvider`.
 
 ## Implementing `MemorySchemaProvider`
 
