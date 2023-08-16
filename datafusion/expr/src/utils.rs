@@ -17,6 +17,7 @@
 
 //! Expression utilities
 
+use crate::dml::CopyTo;
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
@@ -744,6 +745,19 @@ pub fn from_plan(
             table_schema: table_schema.clone(),
             op: op.clone(),
             input: Arc::new(inputs[0].clone()),
+        })),
+        LogicalPlan::Copy(CopyTo {
+            input: _,
+            output_url,
+            file_format,
+            per_thread_output,
+            options,
+        }) => Ok(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(inputs[0].clone()),
+            output_url: output_url.clone(),
+            file_format: file_format.clone(),
+            per_thread_output: *per_thread_output,
+            options: options.clone(),
         })),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),

@@ -883,6 +883,8 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             writer_mode,
+            // TODO: when listing table is known to be backed by a single file, this should be false
+            per_thread_output: true,
             overwrite,
         };
 

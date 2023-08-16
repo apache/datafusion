@@ -53,11 +53,12 @@ use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
+
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::insert::{DataSink, InsertExec};
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
@@ -238,7 +239,7 @@ impl FileFormat for ParquetFormat {
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(ParquetSink::new(conf));
 
-        Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
+        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
     }
 }
 
@@ -604,7 +605,6 @@ impl DisplayAs for ParquetSink {
 }
 
 /// Parses datafusion.execution.parquet.encoding String to a parquet::basic::Encoding
-/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_encoding_string(str_setting: &str) -> Result<parquet::basic::Encoding> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -668,7 +668,6 @@ fn require_level(codec: &str, level: Option<u32>) -> Result<u32> {
 }
 
 /// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
-/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_compression_string(str_setting: &str) -> Result<parquet::basic::Compression> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     let (codec, level) = split_compression_string(str_setting_lower)?;
@@ -719,7 +718,6 @@ fn parse_compression_string(str_setting: &str) -> Result<parquet::basic::Compres
     }
 }
 
-/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -732,7 +730,6 @@ fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
     }
 }
 
-/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -848,26 +845,48 @@ impl DataSink for ParquetSink {
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
                 let base_path = &self.config.table_paths[0];
-                // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
-                let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-                for part_idx in 0..num_partitions {
-                    let file_path = base_path
-                        .prefix()
-                        .child(format!("/{}_{}.parquet", write_id, part_idx));
-                    let object_meta = ObjectMeta {
-                        location: file_path,
-                        last_modified: chrono::offset::Utc::now(),
-                        size: 0,
-                        e_tag: None,
-                    };
-                    let writer = self
-                        .create_writer(
-                            object_meta.into(),
-                            object_store.clone(),
-                            parquet_props.clone(),
-                        )
-                        .await?;
-                    writers.push(writer);
+                match self.config.per_thread_output {
+                    true => {
+                        // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
+                        let write_id =
+                            Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                        for part_idx in 0..num_partitions {
+                            let file_path = base_path
+                                .prefix()
+                                .child(format!("{}_{}.parquet", write_id, part_idx));
+                            let object_meta = ObjectMeta {
+                                location: file_path,
+                                last_modified: chrono::offset::Utc::now(),
+                                size: 0,
+                                e_tag: None,
+                            };
+                            let writer = self
+                                .create_writer(
+                                    object_meta.into(),
+                                    object_store.clone(),
+                                    parquet_props.clone(),
+                                )
+                                .await?;
+                            writers.push(writer);
+                        }
+                    }
+                    false => {
+                        let file_path = base_path.prefix();
+                        let object_meta = ObjectMeta {
+                            location: file_path.clone(),
+                            last_modified: chrono::offset::Utc::now(),
+                            size: 0,
+                            e_tag: None,
+                        };
+                        let writer = self
+                            .create_writer(
+                                object_meta.into(),
+                                object_store.clone(),
+                                parquet_props.clone(),
+                            )
+                            .await?;
+                        writers.push(writer);
+                    }
                 }
             }
         }
@@ -875,8 +894,12 @@ impl DataSink for ParquetSink {
         let mut row_count = 0;
         // TODO parallelize serialization accross partitions and batches within partitions
         // see: https://github.com/apache/arrow-datafusion/issues/7079
-        for idx in 0..num_partitions {
-            while let Some(batch) = data[idx].next().await.transpose()? {
+        for (part_idx, data_stream) in data.iter_mut().enumerate().take(num_partitions) {
+            let idx = match self.config.per_thread_output {
+                true => part_idx,
+                false => 0,
+            };
+            while let Some(batch) = data_stream.next().await.transpose()? {
                 row_count += batch.num_rows();
                 // TODO cleanup all multipart writes when any encounters an error
                 writers[idx].write(&batch).await?;

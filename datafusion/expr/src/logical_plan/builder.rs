@@ -17,6 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use crate::dml::{CopyTo, OutputFileFormat};
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -230,6 +231,23 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
+    }
+
+    /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
+    pub fn copy_to(
+        input: LogicalPlan,
+        output_url: String,
+        file_format: OutputFileFormat,
+        per_thread_output: bool,
+        options: Vec<(String, String)>,
+    ) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(input),
+            output_url,
+            file_format,
+            per_thread_output,
+            options,
+        })))
     }
 
     /// Create a [DmlStatement] for inserting the contents of this builder into the named table
