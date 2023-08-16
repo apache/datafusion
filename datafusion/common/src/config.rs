@@ -303,10 +303,10 @@ config_namespace! {
         /// Valid values are: uncompressed, snappy, gzip(level),
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive.
-        pub compression: String, default = "snappy".into()
+        pub compression: Option<String>, default = None
 
         /// Sets if dictionary encoding is enabled
-        pub dictionary_enabled: bool, default = true
+        pub dictionary_enabled: Option<bool>, default = None
 
         /// Sets best effort maximum dictionary page size, in bytes
         pub dictionary_page_size_limit: usize, default = 1024 * 1024
@@ -314,10 +314,10 @@ config_namespace! {
         /// Sets if statistics are enabled for any column
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive.
-        pub statistics_enabled: String, default = "page".into()
+        pub statistics_enabled: Option<String>, default = None
 
         /// Sets max statistics size for any column
-        pub max_statistics_size: usize, default = 4096
+        pub max_statistics_size: Option<usize>, default = None
 
         /// Sets maximum number of rows in a row group
         pub max_row_group_size: usize, default = 1024 * 1024
@@ -336,16 +336,16 @@ config_namespace! {
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive.
-        pub encoding: String, default = "plain".into()
+        pub encoding: Option<String>, default = None
 
         /// Sets if bloom filter is enabled for any column
         pub bloom_filter_enabled: bool, default = false
 
         /// Sets bloom filter false positive probability
-        pub bloom_filter_fpp: f64, default = 0.05
+        pub bloom_filter_fpp: Option<f64>, default = None
 
         /// Sets bloom filter number of distinct values
-        pub bloom_filter_ndv: u64, default = 1_000_000_u64
+        pub bloom_filter_ndv: Option<u64>, default = None
     }
 }
 
