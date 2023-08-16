@@ -63,19 +63,6 @@ The `developer’s guide`_ contains information on how to contribute.
    user-guide/configs
    user-guide/faq
 
-.. _toc.contributor-guide:
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Contributor Guide
-
-   contributor-guide/index
-   contributor-guide/communication
-   contributor-guide/architecture
-   contributor-guide/roadmap
-   contributor-guide/quarterly_roadmap
-   contributor-guide/specification/index
-
 .. _toc.library-user-guide:
 
 .. toctree::
@@ -92,3 +79,16 @@ The `developer’s guide`_ contains information on how to contribute.
    library-user-guide/custom-table-providers
    library-user-guide/extending-operators
    library-user-guide/execution-plans
+
+.. _toc.contributor-guide:
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Contributor Guide
+
+   contributor-guide/index
+   contributor-guide/communication
+   contributor-guide/architecture
+   contributor-guide/roadmap
+   contributor-guide/quarterly_roadmap
+   contributor-guide/specification/index
