@@ -37,10 +37,11 @@ use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
-use super::{create_writer, stateless_serialize_and_write_files, FileFormat};
+use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::FileWriterMode;
-use crate::datasource::file_format::{BatchSerializer, DEFAULT_SCHEMA_INFER_MAX_RECORD};
+use crate::datasource::file_format::write::{
+    create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
+};
 use crate::datasource::physical_plan::{
     CsvExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
 };
@@ -544,12 +545,11 @@ impl DataSink for CsvSink {
                 // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
                 let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
                 for part_idx in 0..num_partitions {
-                    let header = true;
+                    let header = self.has_header;
                     let builder = WriterBuilder::new().with_delimiter(self.delimiter);
                     let serializer = CsvSerializer::new()
                         .with_builder(builder)
                         .with_header(header);
-                    serializers.push(Box::new(serializer));
                     let file_path = base_path
                         .prefix()
                         .child(format!("/{}_{}.csv", write_id, part_idx));
@@ -566,6 +566,8 @@ impl DataSink for CsvSink {
                         object_store.clone(),
                     )
                     .await?;
+
+                    serializers.push(Box::new(serializer));
                     writers.push(writer);
                 }
             }

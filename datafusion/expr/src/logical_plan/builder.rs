@@ -41,6 +41,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::plan_err;
+use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
@@ -1036,6 +1037,19 @@ impl LogicalPlanBuilder {
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
         Ok(Self::from(unnest(self.plan, column.into())?))
     }
+
+    /// Unnest the given column given [`UnnestOptions`]
+    pub fn unnest_column_with_options(
+        self,
+        column: impl Into<Column>,
+        options: UnnestOptions,
+    ) -> Result<Self> {
+        Ok(Self::from(unnest_with_options(
+            self.plan,
+            column.into(),
+            options,
+        )?))
+    }
 }
 
 /// Creates a schema for a join operation.
@@ -1379,8 +1393,17 @@ impl TableSource for LogicalTableSource {
     }
 }
 
-/// Create an unnest plan.
+/// Create a [`LogicalPlan::Unnest`] plan
 pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
+    unnest_with_options(input, column, UnnestOptions::new())
+}
+
+/// Create a [`LogicalPlan::Unnest`] plan with options
+pub fn unnest_with_options(
+    input: LogicalPlan,
+    column: Column,
+    options: UnnestOptions,
+) -> Result<LogicalPlan> {
     let unnest_field = input.schema().field_from_column(&column)?;
 
     // Extract the type of the nested field in the list.
@@ -1423,6 +1446,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         input: Arc::new(input),
         column: unnested_field.qualified_column(),
         schema,
+        options,
     }))
 }
 
