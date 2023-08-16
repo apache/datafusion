@@ -25,7 +25,7 @@ This section describes how to create and manage catalogs, schemas, and tables in
 
 Catalogs, schemas, and tables are organized in a hierarchy. A catalog contains schemas, and a schema contains tables.
 
-DataFusion comes with a basic in memory catalog functionality in the [`catalog` module]. You can use these in memory implementations as is, or extend DataFusion with your own catalog implementations, for example based on local files or files on remote object storage. 
+DataFusion comes with a basic in memory catalog functionality in the [`catalog` module]. You can use these in memory implementations as is, or extend DataFusion with your own catalog implementations, for example based on local files or files on remote object storage.
 
 [`catalog` module]: https://docs.rs/datafusion/latest/datafusion/catalog/index.html
 

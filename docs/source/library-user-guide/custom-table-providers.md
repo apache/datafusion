@@ -37,7 +37,6 @@ The `ExecutionPlan` trait at its core is a way to get a stream of batches. The a
 
 There are many different types of `SendableRecordBatchStream` implemented in DataFusion -- you can use a pre existing one, such as `MemoryStream` (if your `RecordBatch`es are all in memory) or implement your own custom logic, depending on your usecase.
 
-
 Looking at the [example in this repo][ex], the execute method:
 
 ```rust
