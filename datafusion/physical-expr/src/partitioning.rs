@@ -20,10 +20,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
-    EquivalenceProperties, PhysicalExpr,
-};
+use crate::{expr_list_eq_strict_order, EquivalenceProperties, PhysicalExpr};
 
 /// Partitioning schemes supported by operators.
 #[derive(Debug, Clone)]
@@ -90,21 +87,11 @@ impl Partitioning {
                             if !eq_classes.is_empty() {
                                 let normalized_required_exprs = required_exprs
                                     .iter()
-                                    .map(|e| {
-                                        normalize_expr_with_equivalence_properties(
-                                            e.clone(),
-                                            eq_classes,
-                                        )
-                                    })
+                                    .map(|e| eq_properties.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 let normalized_partition_exprs = partition_exprs
                                     .iter()
-                                    .map(|e| {
-                                        normalize_expr_with_equivalence_properties(
-                                            e.clone(),
-                                            eq_classes,
-                                        )
-                                    })
+                                    .map(|e| eq_properties.normalize_expr(e.clone()))
                                     .collect::<Vec<_>>();
                                 expr_list_eq_strict_order(
                                     &normalized_required_exprs,

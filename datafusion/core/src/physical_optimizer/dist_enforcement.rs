@@ -39,9 +39,7 @@ use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
 use datafusion_physical_expr::utils::map_columns_before_projection;
-use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
-};
+use datafusion_physical_expr::{expr_list_eq_strict_order, PhysicalExpr};
 use std::sync::Arc;
 
 /// The EnforceDistribution rule ensures that distribution requirements are met
@@ -675,36 +673,21 @@ fn try_reorder(
     } else if !equivalence_properties.classes().is_empty() {
         normalized_expected = expected
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(normalized_expected.len(), expected.len());
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
-            .map(|e| {
-                normalize_expr_with_equivalence_properties(
-                    e.clone(),
-                    equivalence_properties.classes(),
-                )
-            })
+            .map(|e| equivalence_properties.normalize_expr(e.clone()))
             .collect::<Vec<_>>();
         assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
 

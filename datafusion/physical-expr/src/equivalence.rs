@@ -16,17 +16,16 @@
 // under the License.
 
 use crate::expressions::{CastExpr, Column};
-use crate::{
-    normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
-    PhysicalSortExpr,
-};
+use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
 
 use crate::utils::collect_columns;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Represents a collection of [`EquivalentClass`] (equivalences
@@ -114,6 +113,69 @@ impl EquivalenceProperties {
             _ => {}
         }
     }
+
+    pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+        expr.clone()
+            .transform(&|expr| {
+                let normalized_form =
+                    expr.as_any().downcast_ref::<Column>().and_then(|column| {
+                        for class in &self.classes {
+                            if class.contains(column) {
+                                return Some(Arc::new(class.head().clone()) as _);
+                            }
+                        }
+                        None
+                    });
+                Ok(if let Some(normalized_form) = normalized_form {
+                    Transformed::Yes(normalized_form)
+                } else {
+                    Transformed::No(expr)
+                })
+            })
+            .unwrap_or(expr)
+    }
+
+    pub fn normalize_exprs(
+        &self,
+        exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        exprs
+            .iter()
+            .map(|expr| self.normalize_expr(expr.clone()))
+            .collect::<Vec<_>>()
+    }
+
+    pub fn normalize_sort_requirement(
+        &self,
+        mut sort_requirement: PhysicalSortRequirement,
+    ) -> PhysicalSortRequirement {
+        sort_requirement.expr = self.normalize_expr(sort_requirement.expr);
+        sort_requirement
+    }
+
+    pub fn normalize_sort_requirements(
+        &self,
+        sort_reqs: &[PhysicalSortRequirement],
+    ) -> Vec<PhysicalSortRequirement> {
+        // TODO: Move collapse logic to here from normalize_sort_exprs
+        sort_reqs
+            .iter()
+            .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
+            .collect::<Vec<_>>()
+    }
+
+    pub fn normalize_sort_exprs(
+        &self,
+        sort_exprs: &[PhysicalSortExpr],
+    ) -> Vec<PhysicalSortExpr> {
+        let sort_requirements =
+            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let normalized_sort_requirement =
+            self.normalize_sort_requirements(&sort_requirements);
+        let normalized_sort_exprs =
+            PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement);
+        collapse_vec(normalized_sort_exprs)
+    }
 }
 
 /// `OrderingEquivalenceProperties` keeps track of columns that describe the
@@ -177,6 +239,46 @@ impl OrderingEquivalenceProperties {
 
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    pub fn normalize_sort_requirements(
+        &self,
+        sort_reqs: &[PhysicalSortRequirement],
+    ) -> Vec<PhysicalSortRequirement> {
+        let mut normalized_sort_reqs = sort_reqs.to_vec();
+        if let Some(oeq_class) = &self.oeq_class {
+            for item in oeq_class.others() {
+                let item = item
+                    .clone()
+                    .into_iter()
+                    .map(|elem| elem.into())
+                    .collect::<Vec<_>>();
+                let ranges = get_compatible_ranges(&normalized_sort_reqs, &item);
+                let mut offset: i64 = 0;
+                for Range { start, end } in ranges {
+                    let mut head = oeq_class
+                        .head()
+                        .clone()
+                        .into_iter()
+                        .map(|elem| elem.into())
+                        .collect::<Vec<PhysicalSortRequirement>>();
+                    let updated_start = (start as i64 + offset) as usize;
+                    let updated_end = (end as i64 + offset) as usize;
+                    let range = end - start;
+                    offset += head.len() as i64 - range as i64;
+                    let all_none = normalized_sort_reqs[updated_start..updated_end]
+                        .iter()
+                        .all(|req| req.options.is_none());
+                    if all_none {
+                        for req in head.iter_mut() {
+                            req.options = None;
+                        }
+                    }
+                    normalized_sort_reqs.splice(updated_start..updated_end, head);
+                }
+            }
+        }
+        collapse_vec(normalized_sort_reqs)
     }
 }
 
@@ -363,10 +465,7 @@ impl OrderingEquivalenceBuilder {
         let mut normalized_out_ordering = vec![];
         for item in &self.existing_ordering {
             // To account for ordering equivalences, first normalize the expression:
-            let normalized = normalize_expr_with_equivalence_properties(
-                item.expr.clone(),
-                self.eq_properties.classes(),
-            );
+            let normalized = self.eq_properties.normalize_expr(item.expr.clone());
             normalized_out_ordering.push(PhysicalSortExpr {
                 expr: normalized,
                 options: item.options,
@@ -576,6 +675,43 @@ pub fn ordering_equivalence_properties_helper(
     oep
 }
 
+/// This function constructs a duplicate-free vector by filtering out duplicate
+/// entries inside the given vector `input`.
+fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
+    let mut output = vec![];
+    for item in input {
+        if !output.contains(&item) {
+            output.push(item);
+        }
+    }
+    output
+}
+
+/// This function searches for the slice `section` inside the slice `given`.
+/// It returns each range where `section` is compatible with the corresponding
+/// slice in `given`.
+fn get_compatible_ranges(
+    given: &[PhysicalSortRequirement],
+    section: &[PhysicalSortRequirement],
+) -> Vec<Range<usize>> {
+    let n_section = section.len();
+    let n_end = if given.len() >= n_section {
+        given.len() - n_section + 1
+    } else {
+        0
+    };
+    (0..n_end)
+        .filter_map(|idx| {
+            let end = idx + n_section;
+            given[idx..end]
+                .iter()
+                .zip(section)
+                .all(|(req, given)| given.compatible(req))
+                .then_some(Range { start: idx, end })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,7 +719,19 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
 
+    use arrow_schema::SortOptions;
     use std::sync::Arc;
+
+    fn convert_to_requirement(
+        in_data: &[(&Column, Option<SortOptions>)],
+    ) -> Vec<PhysicalSortRequirement> {
+        in_data
+            .iter()
+            .map(|(col, options)| {
+                PhysicalSortRequirement::new(Arc::new((*col).clone()) as _, *options)
+            })
+            .collect::<Vec<_>>()
+    }
 
     #[test]
     fn add_equal_conditions_test() -> Result<()> {
@@ -673,6 +821,55 @@ mod tests {
         assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
         assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_collapse_vec() -> Result<()> {
+        assert_eq!(collapse_vec(vec![1, 2, 3]), vec![1, 2, 3]);
+        assert_eq!(collapse_vec(vec![1, 2, 3, 2, 3]), vec![1, 2, 3]);
+        assert_eq!(collapse_vec(vec![3, 1, 2, 3, 2, 3]), vec![3, 1, 2]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_compatible_ranges() -> Result<()> {
+        let col_a = &Column::new("a", 0);
+        let col_b = &Column::new("b", 1);
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let test_data = vec![
+            (
+                vec![(col_a, Some(option1)), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1)],
+            ),
+            (
+                vec![(col_a, None), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1)],
+            ),
+            (
+                vec![
+                    (col_a, None),
+                    (col_b, Some(option1)),
+                    (col_a, Some(option1)),
+                ],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1), (2, 3)],
+            ),
+        ];
+        for (searched, to_search, expected) in test_data {
+            let searched = convert_to_requirement(&searched);
+            let to_search = convert_to_requirement(&to_search);
+            let expected = expected
+                .into_iter()
+                .map(|(start, end)| Range { start, end })
+                .collect::<Vec<_>>();
+            assert_eq!(get_compatible_ranges(&searched, &to_search), expected);
+        }
         Ok(())
     }
 }

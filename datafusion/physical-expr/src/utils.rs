@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::equivalence::{
-    EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
-    OrderingEquivalentClass,
-};
+use crate::equivalence::{EquivalenceProperties, OrderingEquivalenceProperties};
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 
@@ -36,7 +33,6 @@ use petgraph::stable_graph::StableGraph;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// Compare the two expr lists are equal no matter the order.
@@ -129,64 +125,6 @@ pub fn normalize_out_expr_with_columns_map(
         .unwrap_or(expr)
 }
 
-pub fn normalize_expr_with_equivalence_properties(
-    expr: Arc<dyn PhysicalExpr>,
-    eq_properties: &[EquivalentClass],
-) -> Arc<dyn PhysicalExpr> {
-    expr.clone()
-        .transform(&|expr| {
-            let normalized_form =
-                expr.as_any().downcast_ref::<Column>().and_then(|column| {
-                    for class in eq_properties {
-                        if class.contains(column) {
-                            return Some(Arc::new(class.head().clone()) as _);
-                        }
-                    }
-                    None
-                });
-            Ok(if let Some(normalized_form) = normalized_form {
-                Transformed::Yes(normalized_form)
-            } else {
-                Transformed::No(expr)
-            })
-        })
-        .unwrap_or(expr)
-}
-
-fn normalize_sort_requirement_with_equivalence_properties(
-    mut sort_requirement: PhysicalSortRequirement,
-    eq_properties: &[EquivalentClass],
-) -> PhysicalSortRequirement {
-    sort_requirement.expr =
-        normalize_expr_with_equivalence_properties(sort_requirement.expr, eq_properties);
-    sort_requirement
-}
-
-/// This function searches for the slice `section` inside the slice `given`.
-/// It returns each range where `section` is compatible with the corresponding
-/// slice in `given`.
-fn get_compatible_ranges(
-    given: &[PhysicalSortRequirement],
-    section: &[PhysicalSortRequirement],
-) -> Vec<Range<usize>> {
-    let n_section = section.len();
-    let n_end = if given.len() >= n_section {
-        given.len() - n_section + 1
-    } else {
-        0
-    };
-    (0..n_end)
-        .filter_map(|idx| {
-            let end = idx + n_section;
-            given[idx..end]
-                .iter()
-                .zip(section)
-                .all(|(req, given)| given.compatible(req))
-                .then_some(Range { start: idx, end })
-        })
-        .collect()
-}
-
 /// This function constructs a duplicate-free vector by filtering out duplicate
 /// entries inside the given vector `input`.
 fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
@@ -209,8 +147,8 @@ fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
 /// Standardized version `vec![d ASC]` is used in subsequent operations.
 pub fn normalize_sort_exprs(
     sort_exprs: &[PhysicalSortExpr],
-    eq_properties: &[EquivalentClass],
-    ordering_eq_properties: &[OrderingEquivalentClass],
+    eq_properties: &EquivalenceProperties,
+    ordering_eq_properties: &OrderingEquivalenceProperties,
 ) -> Vec<PhysicalSortExpr> {
     let sort_requirements = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
     let normalized_exprs = normalize_sort_requirements(
@@ -232,51 +170,11 @@ pub fn normalize_sort_exprs(
 /// Standardized version `vec![d Some(ASC)]` is used in subsequent operations.
 pub fn normalize_sort_requirements(
     sort_reqs: &[PhysicalSortRequirement],
-    eq_properties: &[EquivalentClass],
-    ordering_eq_properties: &[OrderingEquivalentClass],
+    eq_properties: &EquivalenceProperties,
+    ordering_eq_properties: &OrderingEquivalenceProperties,
 ) -> Vec<PhysicalSortRequirement> {
-    let mut normalized_exprs = sort_reqs
-        .iter()
-        .map(|sort_req| {
-            normalize_sort_requirement_with_equivalence_properties(
-                sort_req.clone(),
-                eq_properties,
-            )
-        })
-        .collect::<Vec<_>>();
-    for ordering_eq_class in ordering_eq_properties {
-        for item in ordering_eq_class.others() {
-            let item = item
-                .clone()
-                .into_iter()
-                .map(|elem| elem.into())
-                .collect::<Vec<_>>();
-            let ranges = get_compatible_ranges(&normalized_exprs, &item);
-            let mut offset: i64 = 0;
-            for Range { start, end } in ranges {
-                let mut head = ordering_eq_class
-                    .head()
-                    .clone()
-                    .into_iter()
-                    .map(|elem| elem.into())
-                    .collect::<Vec<PhysicalSortRequirement>>();
-                let updated_start = (start as i64 + offset) as usize;
-                let updated_end = (end as i64 + offset) as usize;
-                let range = end - start;
-                offset += head.len() as i64 - range as i64;
-                let all_none = normalized_exprs[updated_start..updated_end]
-                    .iter()
-                    .all(|req| req.options.is_none());
-                if all_none {
-                    for req in head.iter_mut() {
-                        req.options = None;
-                    }
-                }
-                normalized_exprs.splice(updated_start..updated_end, head);
-            }
-        }
-    }
-    collapse_vec(normalized_exprs)
+    let normalized_sort_reqs = eq_properties.normalize_sort_requirements(sort_reqs);
+    ordering_eq_properties.normalize_sort_requirements(&normalized_sort_reqs)
 }
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
@@ -313,16 +211,11 @@ pub fn ordering_satisfy_concrete<
     ordering_equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let ordering_eq_classes = oeq_properties
-        .oeq_class()
-        .map(|item| vec![item.clone()])
-        .unwrap_or(vec![]);
     let eq_properties = equal_properties();
-    let eq_classes = eq_properties.classes();
     let required_normalized =
-        normalize_sort_exprs(required, eq_classes, &ordering_eq_classes);
+        normalize_sort_exprs(required, &eq_properties, &oeq_properties);
     let provided_normalized =
-        normalize_sort_exprs(provided, eq_classes, &ordering_eq_classes);
+        normalize_sort_exprs(provided, &eq_properties, &oeq_properties);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -367,16 +260,11 @@ pub fn ordering_satisfy_requirement_concrete<
     ordering_equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let ordering_eq_classes = oeq_properties
-        .oeq_class()
-        .map(|item| vec![item.clone()])
-        .unwrap_or(vec![]);
     let eq_properties = equal_properties();
-    let eq_classes = eq_properties.classes();
     let required_normalized =
-        normalize_sort_requirements(required, eq_classes, &ordering_eq_classes);
+        normalize_sort_requirements(required, &eq_properties, &oeq_properties);
     let provided_normalized =
-        normalize_sort_exprs(provided, eq_classes, &ordering_eq_classes);
+        normalize_sort_exprs(provided, &eq_properties, &oeq_properties);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -421,17 +309,12 @@ fn requirements_compatible_concrete<
     equal_properties: F2,
 ) -> bool {
     let oeq_properties = ordering_equal_properties();
-    let ordering_eq_classes = oeq_properties
-        .oeq_class()
-        .map(|item| vec![item.clone()])
-        .unwrap_or(vec![]);
     let eq_properties = equal_properties();
-    let eq_classes = eq_properties.classes();
 
     let required_normalized =
-        normalize_sort_requirements(required, eq_classes, &ordering_eq_classes);
+        normalize_sort_requirements(required, &eq_properties, &oeq_properties);
     let provided_normalized =
-        normalize_sort_requirements(provided, eq_classes, &ordering_eq_classes);
+        normalize_sort_requirements(provided, &eq_properties, &oeq_properties);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -485,26 +368,15 @@ pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
 
 /// This function finds the indices of `targets` within `items`, taking into
 /// account equivalences according to `equal_properties`.
-pub fn get_indices_of_matching_exprs<
-    T: Borrow<Arc<dyn PhysicalExpr>>,
-    F: FnOnce() -> EquivalenceProperties,
->(
-    targets: impl IntoIterator<Item = T>,
+pub fn get_indices_of_matching_exprs<F: FnOnce() -> EquivalenceProperties>(
+    targets: &[Arc<dyn PhysicalExpr>],
     items: &[Arc<dyn PhysicalExpr>],
     equal_properties: F,
 ) -> Vec<usize> {
-    if let eq_classes @ [_, ..] = equal_properties().classes() {
-        let normalized_targets = targets.into_iter().map(|e| {
-            normalize_expr_with_equivalence_properties(e.borrow().clone(), eq_classes)
-        });
-        let normalized_items = items
-            .iter()
-            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
-            .collect::<Vec<_>>();
-        get_indices_of_exprs_strict(normalized_targets, &normalized_items)
-    } else {
-        get_indices_of_exprs_strict(targets, items)
-    }
+    let eq_properties = equal_properties();
+    let normalized_items = eq_properties.normalize_exprs(items);
+    let normalized_targets = eq_properties.normalize_exprs(targets);
+    get_indices_of_exprs_strict(normalized_targets, &normalized_items)
 }
 
 /// This function finds the indices of `targets` within `items` using strict
@@ -1247,17 +1119,16 @@ mod tests {
             (vec![(col_e, None), (col_b, None)], vec![(col_a, None)]),
         ];
         let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
-        let eq_classes = eq_properties.classes();
-        let ordering_eq_classes = ordering_eq_properties
-            .oeq_class()
-            .map(|item| vec![item.clone()])
-            .unwrap_or(vec![]);
         for (reqs, expected_normalized) in requirements.into_iter() {
             let req = convert_to_requirement(&reqs);
             let expected_normalized = convert_to_requirement(&expected_normalized);
 
             assert_eq!(
-                normalize_sort_requirements(&req, eq_classes, &ordering_eq_classes),
+                normalize_sort_requirements(
+                    &req,
+                    &eq_properties,
+                    &ordering_eq_properties
+                ),
                 expected_normalized
             );
         }
@@ -1326,10 +1197,7 @@ mod tests {
         ];
         for (expr, expected_eq) in expressions {
             assert!(
-                expected_eq.eq(&normalize_expr_with_equivalence_properties(
-                    expr.clone(),
-                    eq_properties.classes()
-                )),
+                expected_eq.eq(&eq_properties.normalize_expr(expr.clone())),
                 "error in test: expr: {expr:?}"
             );
         }
@@ -1373,10 +1241,7 @@ mod tests {
                 sort_options,
             );
             assert!(
-                expected.eq(&normalize_sort_requirement_with_equivalence_properties(
-                    arg.clone(),
-                    eq_properties.classes()
-                )),
+                expected.eq(&eq_properties.normalize_sort_requirement(arg.clone())),
                 "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
             );
         }
@@ -1472,47 +1337,6 @@ mod tests {
             || ordering_eq_properties.clone(),
         ));
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_compatible_ranges() -> Result<()> {
-        let col_a = &Column::new("a", 0);
-        let col_b = &Column::new("b", 1);
-        let option1 = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let test_data = vec![
-            (
-                vec![(col_a, Some(option1)), (col_b, Some(option1))],
-                vec![(col_a, Some(option1))],
-                vec![(0, 1)],
-            ),
-            (
-                vec![(col_a, None), (col_b, Some(option1))],
-                vec![(col_a, Some(option1))],
-                vec![(0, 1)],
-            ),
-            (
-                vec![
-                    (col_a, None),
-                    (col_b, Some(option1)),
-                    (col_a, Some(option1)),
-                ],
-                vec![(col_a, Some(option1))],
-                vec![(0, 1), (2, 3)],
-            ),
-        ];
-        for (searched, to_search, expected) in test_data {
-            let searched = convert_to_requirement(&searched);
-            let to_search = convert_to_requirement(&to_search);
-            let expected = expected
-                .into_iter()
-                .map(|(start, end)| Range { start, end })
-                .collect::<Vec<_>>();
-            assert_eq!(get_compatible_ranges(&searched, &to_search), expected);
-        }
         Ok(())
     }
 
