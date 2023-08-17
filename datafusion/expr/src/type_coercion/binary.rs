@@ -780,7 +780,7 @@ mod tests {
     use arrow::datatypes::DataType;
 
     use datafusion_common::Result;
-    use datafusion_common::{internal_err, assert_contains, DataFusionError};
+    use datafusion_common::{assert_contains, internal_err, DataFusionError};
 
     use crate::Operator;
 
