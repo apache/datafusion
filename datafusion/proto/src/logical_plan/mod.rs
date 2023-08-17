@@ -1464,7 +1464,7 @@ mod roundtrip_tests {
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{
-        plan_err, DFSchemaRef, DataFusionError, Result, ScalarValue,
+        internal_err, plan_err, DFSchemaRef, DataFusionError, Result, ScalarValue,
     };
     use datafusion_expr::expr::{
         self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
@@ -1814,14 +1814,10 @@ mod roundtrip_tests {
                         node: Arc::new(node),
                     })
                 } else {
-                    Err(DataFusionError::Internal(
-                        "invalid plan, no expr".to_string(),
-                    ))
+                    internal_err!("invalid plan, no expr")
                 }
             } else {
-                Err(DataFusionError::Internal(
-                    "invalid plan, no input".to_string(),
-                ))
+                internal_err!("invalid plan, no input")
             }
         }
 
@@ -1840,9 +1836,7 @@ mod roundtrip_tests {
 
                 Ok(())
             } else {
-                Err(DataFusionError::Internal(
-                    "unsupported plan type".to_string(),
-                ))
+                internal_err!("unsupported plan type")
             }
         }
 
@@ -1852,9 +1846,7 @@ mod roundtrip_tests {
             _schema: SchemaRef,
             _ctx: &SessionContext,
         ) -> Result<Arc<dyn TableProvider>> {
-            Err(DataFusionError::Internal(
-                "unsupported plan type".to_string(),
-            ))
+            internal_err!("unsupported plan type")
         }
 
         fn try_encode_table_provider(
@@ -1862,9 +1854,7 @@ mod roundtrip_tests {
             _node: Arc<dyn TableProvider>,
             _buf: &mut Vec<u8>,
         ) -> Result<()> {
-            Err(DataFusionError::Internal(
-                "unsupported plan type".to_string(),
-            ))
+            internal_err!("unsupported plan type")
         }
     }
 

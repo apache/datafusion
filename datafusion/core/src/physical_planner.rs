@@ -358,21 +358,19 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{expr} SIMILAR TO {pattern}{escape}"))
             }
         }
-        Expr::Sort { .. } => Err(DataFusionError::Internal(
-            "Create physical name does not support sort expression".to_string(),
-        )),
-        Expr::Wildcard => Err(DataFusionError::Internal(
-            "Create physical name does not support wildcard".to_string(),
-        )),
-        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
-            "Create physical name does not support qualified wildcard".to_string(),
-        )),
-        Expr::Placeholder(_) => Err(DataFusionError::Internal(
-            "Create physical name does not support placeholder".to_string(),
-        )),
-        Expr::OuterReferenceColumn(_, _) => Err(DataFusionError::Internal(
-            "Create physical name does not support OuterReferenceColumn".to_string(),
-        )),
+        Expr::Sort { .. } => {
+            internal_err!("Create physical name does not support sort expression")
+        }
+        Expr::Wildcard => internal_err!("Create physical name does not support wildcard"),
+        Expr::QualifiedWildcard { .. } => {
+            internal_err!("Create physical name does not support qualified wildcard")
+        }
+        Expr::Placeholder(_) => {
+            internal_err!("Create physical name does not support placeholder")
+        }
+        Expr::OuterReferenceColumn(_, _) => {
+            internal_err!("Create physical name does not support OuterReferenceColumn")
+        }
     }
 }
 
@@ -679,9 +677,9 @@ impl DefaultPhysicalPlanner {
                     input, window_expr, ..
                 }) => {
                     if window_expr.is_empty() {
-                        return Err(DataFusionError::Internal(
-                            "Impossibly got empty window expression".to_owned(),
-                        ));
+                        return internal_err!(
+                            "Impossibly got empty window expression"
+                        );
                     }
 
                     let input_exec = self.create_initial_plan(input, session_state).await?;
@@ -1276,21 +1274,21 @@ impl DefaultPhysicalPlanner {
                     ))
                 }
                 LogicalPlan::DescribeTable(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
-                    ))
+                    internal_err!(
+                        "Unsupported logical plan: DescribeTable must be root of the plan"
+                    )
                 }
-                LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
-                    "Unsupported logical plan: Explain must be root of the plan".to_string(),
-                )),
+                LogicalPlan::Explain(_) => internal_err!(
+                    "Unsupported logical plan: Explain must be root of the plan"
+                ),
                 LogicalPlan::Distinct(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: Distinct should be replaced to Aggregate".to_string(),
-                    ))
+                    internal_err!(
+                        "Unsupported logical plan: Distinct should be replaced to Aggregate"
+                    )
                 }
-                LogicalPlan::Analyze(_) => Err(DataFusionError::Internal(
-                    "Unsupported logical plan: Analyze must be root of the plan".to_string(),
-                )),
+                LogicalPlan::Analyze(_) => internal_err!(
+                    "Unsupported logical plan: Analyze must be root of the plan"
+                ),
                 LogicalPlan::Extension(e) => {
                     let physical_inputs = self.create_initial_plan_multi(e.node.inputs(), session_state).await?;
 
@@ -1871,9 +1869,7 @@ pub fn create_physical_sort_expr(
             },
         })
     } else {
-        Err(DataFusionError::Internal(
-            "Expects a sort expression".to_string(),
-        ))
+        internal_err!("Expects a sort expression")
     }
 }
 
@@ -2533,7 +2529,7 @@ mod tests {
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Err(DataFusionError::Internal("BOOM".to_string()))
+            internal_err!("BOOM")
         }
     }
     /// An example extension node that doesn't do anything

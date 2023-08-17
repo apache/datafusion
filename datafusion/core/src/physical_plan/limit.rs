@@ -170,9 +170,7 @@ impl ExecutionPlan for GlobalLimitExec {
 
         // GlobalLimitExec requires a single input partition
         if 1 != self.input.output_partitioning().partition_count() {
-            return Err(DataFusionError::Internal(
-                "GlobalLimitExec requires a single input partition".to_owned(),
-            ));
+            return internal_err!("GlobalLimitExec requires a single input partition");
         }
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -331,9 +329,7 @@ impl ExecutionPlan for LocalLimitExec {
                 children[0].clone(),
                 self.fetch,
             ))),
-            _ => Err(DataFusionError::Internal(
-                "LocalLimitExec wrong number of children".to_string(),
-            )),
+            _ => internal_err!("LocalLimitExec wrong number of children"),
         }
     }
 

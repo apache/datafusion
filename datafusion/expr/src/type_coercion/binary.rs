@@ -780,7 +780,7 @@ mod tests {
     use arrow::datatypes::DataType;
 
     use datafusion_common::Result;
-    use datafusion_common::{assert_contains, DataFusionError};
+    use datafusion_common::{internal_err, assert_contains, DataFusionError};
 
     use crate::Operator;
 
@@ -798,9 +798,7 @@ mod tests {
             );
             Ok(())
         } else {
-            Err(DataFusionError::Internal(
-                "Coercion should have returned an DataFusionError::Internal".to_string(),
-            ))
+            internal_err!("Coercion should have returned an DataFusionError::Internal")
         }
     }
 

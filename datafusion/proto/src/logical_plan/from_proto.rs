@@ -31,8 +31,8 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue,
+    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue,
 };
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
@@ -1649,9 +1649,7 @@ fn parse_escape_char(s: &str) -> Result<Option<char>> {
     match s.len() {
         0 => Ok(None),
         1 => Ok(s.chars().next()),
-        _ => Err(DataFusionError::Internal(
-            "Invalid length for escape char".to_string(),
-        )),
+        _ => internal_err!("Invalid length for escape char"),
     }
 }
 

@@ -632,6 +632,7 @@ mod tests {
     use bytes::Bytes;
     use chrono::DateTime;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::internal_err;
     use datafusion_expr::{col, lit};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
@@ -972,9 +973,7 @@ mod tests {
             }
         }
 
-        Err(DataFusionError::Internal(
-            "query contains no CsvExec".to_string(),
-        ))
+        internal_err!("query contains no CsvExec")
     }
 
     #[rstest(n_partitions, case(1), case(2), case(3), case(4))]

@@ -289,9 +289,7 @@ impl Accumulator for AvgAccumulator {
                     }
                 }
             }
-            _ => Err(DataFusionError::Internal(
-                "Sum should be f64 or decimal128 on average".to_string(),
-            )),
+            _ => internal_err!("Sum should be f64 or decimal128 on average"),
         }
     }
     fn supports_retract_batch(&self) -> bool {
