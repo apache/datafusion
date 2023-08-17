@@ -21,6 +21,7 @@ use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::{Row, Rows};
 use arrow_array::types::ByteArrayType;
 use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use std::cmp::Ordering;
 
@@ -102,6 +103,13 @@ pub trait Cursor: Ord {
 
     /// Go to reference row, returning the previous row index
     fn seek(&mut self, row: usize) -> usize;
+
+    /// Slice the cursor at a given row index, returning a new cursor
+    ///
+    /// Returns an error if the slice is out of bounds, or memory is insufficient
+    fn slice(&self, offset: usize, length: usize) -> Result<Self>
+    where
+        Self: Sized;
 }
 
 impl Cursor for RowCursor {
@@ -123,6 +131,14 @@ impl Cursor for RowCursor {
         self.cur_row = goto;
         previous
     }
+
+    #[inline]
+    fn slice(&self, offset: usize, length: usize) -> Result<Self> {
+        let rows = self.rows.slice(offset, length);
+        let mut reservation = self.reservation.new_empty();
+        reservation.try_grow(rows.size())?;
+        Ok(Self::new(rows, reservation))
+    }
 }
 
 /// An [`Array`] that can be converted into [`FieldValues`]
@@ -141,6 +157,10 @@ pub trait FieldValues {
     fn compare(a: &Self::Value, b: &Self::Value) -> Ordering;
 
     fn value(&self, idx: usize) -> &Self::Value;
+
+    fn slice(&self, offset: usize, length: usize) -> Result<Self>
+    where
+        Self: Sized;
 }
 
 impl<T: ArrowPrimitiveType> FieldArray for PrimitiveArray<T> {
@@ -169,6 +189,14 @@ impl<T: ArrowNativeTypeOp> FieldValues for PrimitiveValues<T> {
     #[inline]
     fn value(&self, idx: usize) -> &Self::Value {
         &self.0[idx]
+    }
+
+    #[inline]
+    fn slice(&self, offset: usize, length: usize) -> Result<Self> {
+        if offset + length > self.len() {
+            return Err(DataFusionError::Internal("slice out of bounds".into()));
+        }
+        Ok(Self(self.0.slice(offset, length)))
     }
 }
 
@@ -200,6 +228,14 @@ impl<T: ByteArrayType> FieldValues for GenericByteArray<T> {
     #[inline]
     fn value(&self, idx: usize) -> &Self::Value {
         self.value(idx)
+    }
+
+    #[inline]
+    fn slice(&self, offset: usize, length: usize) -> Result<Self> {
+        if offset + length > Array::len(self) {
+            return Err(DataFusionError::Internal("slice out of bounds".into()));
+        }
+        Ok(self.slice(offset, length))
     }
 }
 
@@ -290,6 +326,22 @@ impl<T: FieldValues> Cursor for FieldCursor<T> {
         let previous = self.offset;
         self.offset = goto;
         previous
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> Result<Self> {
+        let FieldCursor {
+            values,
+            offset: _,
+            null_threshold,
+            options,
+        } = self;
+
+        Ok(Self {
+            values: values.slice(offset, length)?,
+            offset: 0,
+            null_threshold: *null_threshold,
+            options: options.clone(),
+        })
     }
 }
 
