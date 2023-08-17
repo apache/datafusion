@@ -39,7 +39,6 @@ use crate::logical_expr::{
 };
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_expr::dml::{CopyTo, OutputFileFormat};
-use url::Url;
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -91,7 +90,6 @@ use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::fs;
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -565,30 +563,10 @@ impl DefaultPhysicalPlanner {
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
 
-                    // Get object store for specified output_url
-                    // if user did not pass in a url, we assume it is a local file path
-                    // this requires some special handling as copy can create non
-                    // existing file paths
-                    let is_valid_url = Url::parse(output_url).is_ok();
-
                     // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
                     // TODO: add additional configurable options for if existing files should be overwritten or
                     // appended to
-                    let parsed_url = match is_valid_url {
-                        true => ListingTableUrl::parse(output_url),
-                        false => {
-                            let path = std::path::PathBuf::from(output_url);
-                            if !path.exists(){
-                                if *per_thread_output{
-                                    fs::create_dir_all(path)?;
-                                } else{
-                                    fs::File::create(path)?;
-                                }
-                            }
-                            ListingTableUrl::parse(output_url)
-                        }
-                    }?;
-
+                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, *per_thread_output)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
