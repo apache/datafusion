@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
-    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Subqueries" href="subqueries.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -474,7 +469,7 @@
   under the License.
 -->
 <section id="select-syntax">
-<h1>SELECT syntax<a class="headerlink" href="#select-syntax" title="Permalink to this heading">¶</a></h1>
+<h1>SELECT syntax<a class="headerlink" href="#select-syntax" title="Link to this heading">¶</a></h1>
 <p>The queries in DataFusion scan data from tables and return 0 or more rows.
 Please be aware that column names in queries are made lower-case, but not on the inferred schema. Accordingly, if you
 want to query against a capitalized field, make sure to use double quotes. Please see this
@@ -495,7 +490,7 @@ In this documentation we describe the SQL syntax in DataFusion.</p>
 [ <a class="reference internal" href="#exclude-and-except-clause">EXCLUDE | EXCEPT</a> ] <br/></p>
 </code>
 <section id="with-clause">
-<h2>WITH clause<a class="headerlink" href="#with-clause" title="Permalink to this heading">¶</a></h2>
+<h2>WITH clause<a class="headerlink" href="#with-clause" title="Link to this heading">¶</a></h2>
 <p>A with clause allows to give names for queries and reference them by name.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WITH</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">)</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
@@ -503,7 +498,7 @@ In this documentation we describe the SQL syntax in DataFusion.</p>
 </div>
 </section>
 <section id="select-clause">
-<h2>SELECT clause<a class="headerlink" href="#select-clause" title="Permalink to this heading">¶</a></h2>
+<h2>SELECT clause<a class="headerlink" href="#select-clause" title="Link to this heading">¶</a></h2>
 <p>Example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span>
 </pre></div>
@@ -515,21 +510,21 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 </div>
 </section>
 <section id="from-clause">
-<h2>FROM clause<a class="headerlink" href="#from-clause" title="Permalink to this heading">¶</a></h2>
+<h2>FROM clause<a class="headerlink" href="#from-clause" title="Link to this heading">¶</a></h2>
 <p>Example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span>
 </pre></div>
 </div>
 </section>
 <section id="where-clause">
-<h2>WHERE clause<a class="headerlink" href="#where-clause" title="Permalink to this heading">¶</a></h2>
+<h2>WHERE clause<a class="headerlink" href="#where-clause" title="Link to this heading">¶</a></h2>
 <p>Example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span>
 </pre></div>
 </div>
 </section>
 <section id="join-clause">
-<h2>JOIN clause<a class="headerlink" href="#join-clause" title="Permalink to this heading">¶</a></h2>
+<h2>JOIN clause<a class="headerlink" href="#join-clause" title="Link to this heading">¶</a></h2>
 <p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code> and <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>.</p>
 <p>The following examples are based on this table:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
@@ -541,87 +536,87 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 </pre></div>
 </div>
 <section id="inner-join">
-<h3>INNER JOIN<a class="headerlink" href="#inner-join" title="Permalink to this heading">¶</a></h3>
+<h3>INNER JOIN<a class="headerlink" href="#inner-join" title="Link to this heading">¶</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code> define a join that only shows rows where there is a match in both tables.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from x inner join x y ON x.column_1 = y.column_1;
-+----------+----------+----------+----------+
-| column_1 | column_2 | column_1 | column_2 |
-+----------+----------+----------+----------+
-| 1        | 2        | 1        | 2        |
-+----------+----------+----------+----------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">inner</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_1</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 </pre></div>
 </div>
 </section>
 <section id="left-outer-join">
-<h3>LEFT OUTER JOIN<a class="headerlink" href="#left-outer-join" title="Permalink to this heading">¶</a></h3>
+<h3>LEFT OUTER JOIN<a class="headerlink" href="#left-outer-join" title="Link to this heading">¶</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that includes all rows from the left table even if there
 is not a match in the right table. When there is no match, null values are produced for the right side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from x left join x y ON x.column_1 = y.column_2;
-+----------+----------+----------+----------+
-| column_1 | column_2 | column_1 | column_2 |
-+----------+----------+----------+----------+
-| 1        | 2        |          |          |
-+----------+----------+----------+----------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">left</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span><span class="w">          </span><span class="o">|</span><span class="w">          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 </pre></div>
 </div>
 </section>
 <section id="right-outer-join">
-<h3>RIGHT OUTER JOIN<a class="headerlink" href="#right-outer-join" title="Permalink to this heading">¶</a></h3>
+<h3>RIGHT OUTER JOIN<a class="headerlink" href="#right-outer-join" title="Link to this heading">¶</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that includes all rows from the right table even if there
 is not a match in the left table. When there is no match, null values are produced for the left side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from x right join x y ON x.column_1 = y.column_2;
-+----------+----------+----------+----------+
-| column_1 | column_2 | column_1 | column_2 |
-+----------+----------+----------+----------+
-|          |          | 1        | 2        |
-+----------+----------+----------+----------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">right</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w">          </span><span class="o">|</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 </pre></div>
 </div>
 </section>
 <section id="full-outer-join">
-<h3>FULL OUTER JOIN<a class="headerlink" href="#full-outer-join" title="Permalink to this heading">¶</a></h3>
+<h3>FULL OUTER JOIN<a class="headerlink" href="#full-outer-join" title="Link to this heading">¶</a></h3>
 <p>The keywords <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">JOIN</span></code> or <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> define a join that is effectively a union of a <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code> and
 <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>. It will show all rows from the left and right side of the join and will produce null values on
 either side of the join where there is not a match.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from x full outer join x y ON x.column_1 = y.column_2;
-+----------+----------+----------+----------+
-| column_1 | column_2 | column_1 | column_2 |
-+----------+----------+----------+----------+
-| 1        | 2        |          |          |
-|          |          | 1        | 2        |
-+----------+----------+----------+----------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">full</span><span class="w"> </span><span class="k">outer</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">column_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">.</span><span class="n">column_2</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span><span class="w">          </span><span class="o">|</span><span class="w">          </span><span class="o">|</span>
+<span class="o">|</span><span class="w">          </span><span class="o">|</span><span class="w">          </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 </pre></div>
 </div>
 </section>
 <section id="natural-join">
-<h3>NATURAL JOIN<a class="headerlink" href="#natural-join" title="Permalink to this heading">¶</a></h3>
+<h3>NATURAL JOIN<a class="headerlink" href="#natural-join" title="Link to this heading">¶</a></h3>
 <p>A natural join defines an inner join based on common column names found between the input tables. When no common
 column names are found, it behaves like a cross join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from x natural join x y;
-+----------+----------+
-| column_1 | column_2 |
-+----------+----------+
-| 1        | 2        |
-+----------+----------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">natural</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+</span>
 </pre></div>
 </div>
 </section>
 <section id="cross-join">
-<h3>CROSS JOIN<a class="headerlink" href="#cross-join" title="Permalink to this heading">¶</a></h3>
+<h3>CROSS JOIN<a class="headerlink" href="#cross-join" title="Link to this heading">¶</a></h3>
 <p>A cross join produces a cartesian product that matches every row in the left side of the join with every row in the
 right side of the join.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from x cross join x y;
-+----------+----------+----------+----------+
-| column_1 | column_2 | column_1 | column_2 |
-+----------+----------+----------+----------+
-| 1        | 2        | 1        | 2        |
-+----------+----------+----------+----------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">cross</span><span class="w"> </span><span class="k">join</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">column_2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+----------+----------+----------+</span>
 </pre></div>
 </div>
 </section>
 </section>
 <section id="group-by-clause">
-<h2>GROUP BY clause<a class="headerlink" href="#group-by-clause" title="Permalink to this heading">¶</a></h2>
+<h2>GROUP BY clause<a class="headerlink" href="#group-by-clause" title="Link to this heading">¶</a></h2>
 <p>Example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span>
 </pre></div>
@@ -634,14 +629,14 @@ aggregation is calculated in the order of the requirement.</p>
 </div>
 </section>
 <section id="having-clause">
-<h2>HAVING clause<a class="headerlink" href="#having-clause" title="Permalink to this heading">¶</a></h2>
+<h2>HAVING clause<a class="headerlink" href="#having-clause" title="Link to this heading">¶</a></h2>
 <p>Example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">HAVING</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span>
 </pre></div>
 </div>
 </section>
 <section id="union-clause">
-<h2>UNION clause<a class="headerlink" href="#union-clause" title="Permalink to this heading">¶</a></h2>
+<h2>UNION clause<a class="headerlink" href="#union-clause" title="Link to this heading">¶</a></h2>
 <p>Example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
 <span class="w">    </span><span class="n">a</span><span class="p">,</span>
@@ -658,7 +653,7 @@ aggregation is calculated in the order of the requirement.</p>
 </div>
 </section>
 <section id="order-by-clause">
-<h2>ORDER BY clause<a class="headerlink" href="#order-by-clause" title="Permalink to this heading">¶</a></h2>
+<h2>ORDER BY clause<a class="headerlink" href="#order-by-clause" title="Link to this heading">¶</a></h2>
 <p>Orders the results by the referenced expression. By default it uses ascending order (<code class="docutils literal notranslate"><span class="pre">ASC</span></code>).
 This order can be changed to descending by adding <code class="docutils literal notranslate"><span class="pre">DESC</span></code> after the order-by expressions.</p>
 <p>Examples:</p>
@@ -669,7 +664,7 @@ This order can be changed to descending by adding <code class="docutils literal 
 </div>
 </section>
 <section id="limit-clause">
-<h2>LIMIT clause<a class="headerlink" href="#limit-clause" title="Permalink to this heading">¶</a></h2>
+<h2>LIMIT clause<a class="headerlink" href="#limit-clause" title="Link to this heading">¶</a></h2>
 <p>Limits the number of rows to be a maximum of <code class="docutils literal notranslate"><span class="pre">count</span></code> rows. <code class="docutils literal notranslate"><span class="pre">count</span></code> should be a non-negative integer.</p>
 <p>Example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span>
@@ -678,7 +673,7 @@ This order can be changed to descending by adding <code class="docutils literal 
 </div>
 </section>
 <section id="exclude-and-except-clause">
-<h2>EXCLUDE and EXCEPT clause<a class="headerlink" href="#exclude-and-except-clause" title="Permalink to this heading">¶</a></h2>
+<h2>EXCLUDE and EXCEPT clause<a class="headerlink" href="#exclude-and-except-clause" title="Link to this heading">¶</a></h2>
 <p>Excluded named columns from query results.</p>
 <p>Example selecting all columns except for <code class="docutils literal notranslate"><span class="pre">age</span></code> and <code class="docutils literal notranslate"><span class="pre">person</span></code>:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">EXCEPT</span><span class="p">(</span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="p">)</span>
@@ -732,7 +727,7 @@ This order can be changed to descending by adding <code class="docutils literal 
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

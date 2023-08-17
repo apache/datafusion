@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
-    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Example Usage" href="example-usage.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -429,7 +424,7 @@
   under the License.
 -->
 <section id="introduction">
-<h1>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h1>
+<h1>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h1>
 <p>DataFusion is a very fast, extensible query engine for building
 high-quality data-centric systems in <a class="reference external" href="http://rustlang.org">Rust</a>,
 using the <a class="reference external" href="https://arrow.apache.org">Apache Arrow</a> in-memory format.
@@ -437,7 +432,7 @@ DataFusion is part of the <a class="reference external" href="https://arrow.apac
 project.</p>
 <p>DataFusion offers SQL and Dataframe APIs, excellent <a class="reference external" href="https://benchmark.clickhouse.com/">performance</a>, built-in support for CSV, Parquet, JSON, and Avro, <a class="reference external" href="https://github.com/apache/arrow-datafusion-python">python bindings</a>, extensive customization, a great community, and more.</p>
 <section id="project-goals">
-<h2>Project Goals<a class="headerlink" href="#project-goals" title="Permalink to this heading">¶</a></h2>
+<h2>Project Goals<a class="headerlink" href="#project-goals" title="Link to this heading">¶</a></h2>
 <p>DataFusion aims to be the query engine of choice for new, fast
 data centric systems such as databases, dataframe libraries, machine
 learning and streaming applications by leveraging the unique features
@@ -445,7 +440,7 @@ of <a class="reference external" href="https://www.rust-lang.org/">Rust</a> and 
 Arrow</a>.</p>
 </section>
 <section id="features">
-<h2>Features<a class="headerlink" href="#features" title="Permalink to this heading">¶</a></h2>
+<h2>Features<a class="headerlink" href="#features" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Feature-rich <a class="reference external" href="https://arrow.apache.org/datafusion/user-guide/sql/index.html">SQL support</a> and <a class="reference external" href="https://arrow.apache.org/datafusion/user-guide/dataframe.html">DataFrame API</a></p></li>
 <li><p>Blazingly fast, vectorized, multi-threaded, streaming execution engine.</p></li>
@@ -472,7 +467,7 @@ easily pass plans across language and system boundaries.</p></li>
 </ul>
 </section>
 <section id="use-cases">
-<h2>Use Cases<a class="headerlink" href="#use-cases" title="Permalink to this heading">¶</a></h2>
+<h2>Use Cases<a class="headerlink" href="#use-cases" title="Link to this heading">¶</a></h2>
 <p>DataFusion can be used without modification as an embedded SQL
 engine or can be customized and used as a foundation for
 building new systems.</p>
@@ -496,7 +491,7 @@ features such as an expression representation, standard optimizations,
 parellelized streaming execution plans, file format support, etc.</p>
 </section>
 <section id="known-users">
-<h2>Known Users<a class="headerlink" href="#known-users" title="Permalink to this heading">¶</a></h2>
+<h2>Known Users<a class="headerlink" href="#known-users" title="Link to this heading">¶</a></h2>
 <p>Here are some active projects using DataFusion:</p>
  <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
 <ul class="simple">
@@ -530,11 +525,11 @@ parellelized streaming execution plans, file format support, etc.</p>
 </ul>
 </section>
 <section id="integrations-and-extensions">
-<h2>Integrations and Extensions<a class="headerlink" href="#integrations-and-extensions" title="Permalink to this heading">¶</a></h2>
+<h2>Integrations and Extensions<a class="headerlink" href="#integrations-and-extensions" title="Link to this heading">¶</a></h2>
 <p>There are a number of community projects that extend DataFusion or
 provide integrations with other systems, some of which are described below:</p>
 <section id="language-bindings">
-<h3>Language Bindings<a class="headerlink" href="#language-bindings" title="Permalink to this heading">¶</a></h3>
+<h3>Language Bindings<a class="headerlink" href="#language-bindings" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-c">datafusion-c</a></p></li>
 <li><p><a class="reference external" href="https://github.com/apache/arrow-datafusion-python">datafusion-python</a></p></li>
@@ -543,7 +538,7 @@ provide integrations with other systems, some of which are described below:</p>
 </ul>
 </section>
 <section id="integrations">
-<h3>Integrations<a class="headerlink" href="#integrations" title="Permalink to this heading">¶</a></h3>
+<h3>Integrations<a class="headerlink" href="#integrations" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-bigtable">datafusion-bigtable</a></p></li>
 <li><p><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-catalogprovider-glue">datafusion-catalogprovider-glue</a></p></li>
@@ -551,7 +546,7 @@ provide integrations with other systems, some of which are described below:</p>
 </section>
 </section>
 <section id="why-datafusion">
-<h2>Why DataFusion?<a class="headerlink" href="#why-datafusion" title="Permalink to this heading">¶</a></h2>
+<h2>Why DataFusion?<a class="headerlink" href="#why-datafusion" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><em>High Performance</em>: Leveraging Rust and Arrow’s memory model, DataFusion is very fast.</p></li>
 <li><p><em>Easy to Connect</em>: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem</p></li>
@@ -601,7 +596,7 @@ provide integrations with other systems, some of which are described below:</p>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

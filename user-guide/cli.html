@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
-    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="DataFrame API" href="dataframe.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -459,12 +454,12 @@
   under the License.
 -->
 <section id="command-line-sql-console">
-<h1>Command line SQL console<a class="headerlink" href="#command-line-sql-console" title="Permalink to this heading">¶</a></h1>
+<h1>Command line SQL console<a class="headerlink" href="#command-line-sql-console" title="Link to this heading">¶</a></h1>
 <p>The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
 try DataFusion’s SQL support with your own data.</p>
 <section id="example">
-<h2>Example<a class="headerlink" href="#example" title="Permalink to this heading">¶</a></h2>
+<h2>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h2>
 <p>Create a CSV file to query.</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;a,b&quot;</span><span class="w"> </span>&gt;<span class="w"> </span>data.csv
 $<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;1,2&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>data.csv
@@ -501,13 +496,13 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v16.0.0
 </div>
 </section>
 <section id="installation">
-<h2>Installation<a class="headerlink" href="#installation" title="Permalink to this heading">¶</a></h2>
+<h2>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h2>
 <section id="install-and-run-using-cargo">
-<h3>Install and run using Cargo<a class="headerlink" href="#install-and-run-using-cargo" title="Permalink to this heading">¶</a></h3>
+<h3>Install and run using Cargo<a class="headerlink" href="#install-and-run-using-cargo" title="Link to this heading">¶</a></h3>
 <p>The easiest way to install DataFusion CLI a spin is via <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">install</span> <span class="pre">datafusion-cli</span></code>.</p>
 </section>
 <section id="install-and-run-using-homebrew-on-macos">
-<h3>Install and run using Homebrew (on MacOS)<a class="headerlink" href="#install-and-run-using-homebrew-on-macos" title="Permalink to this heading">¶</a></h3>
+<h3>Install and run using Homebrew (on MacOS)<a class="headerlink" href="#install-and-run-using-homebrew-on-macos" title="Link to this heading">¶</a></h3>
 <p>DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>brew<span class="w"> </span>install<span class="w"> </span>datafusion
 <span class="c1"># ==&gt; Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/12.0.0</span>
@@ -523,7 +518,7 @@ datafusion-cli
 </div>
 </section>
 <section id="run-using-docker">
-<h3>Run using Docker<a class="headerlink" href="#run-using-docker" title="Permalink to this heading">¶</a></h3>
+<h3>Run using Docker<a class="headerlink" href="#run-using-docker" title="Link to this heading">¶</a></h3>
 <p>There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
 instead.</p>
 <p>Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note
@@ -539,7 +534,7 @@ docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </s
 </section>
 </section>
 <section id="usage">
-<h2>Usage<a class="headerlink" href="#usage" title="Permalink to this heading">¶</a></h2>
+<h2>Usage<a class="headerlink" href="#usage" title="Link to this heading">¶</a></h2>
 <p>See the current usage using <code class="docutils literal notranslate"><span class="pre">datafusion-cli</span> <span class="pre">--help</span></code>:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>Apache<span class="w"> </span>Arrow<span class="w"> </span>&lt;dev@arrow.apache.org&gt;
 Command<span class="w"> </span>Line<span class="w"> </span>Client<span class="w"> </span><span class="k">for</span><span class="w"> </span>DataFusion<span class="w"> </span>query<span class="w"> </span>engine.
@@ -561,14 +556,14 @@ OPTIONS:
 </div>
 </section>
 <section id="selecting-files-directly">
-<h2>Selecting files directly<a class="headerlink" href="#selecting-files-directly" title="Permalink to this heading">¶</a></h2>
+<h2>Selecting files directly<a class="headerlink" href="#selecting-files-directly" title="Link to this heading">¶</a></h2>
 <p>Files can be queried directly by enclosing the file or
 directory name in single <code class="docutils literal notranslate"><span class="pre">'</span></code> quotes as shown in the example.</p>
 <p>It is also possible to create a table backed by files by explicitly
 via <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> as shown below.</p>
 </section>
 <section id="registering-parquet-data-sources">
-<h2>Registering Parquet Data Sources<a class="headerlink" href="#registering-parquet-data-sources" title="Permalink to this heading">¶</a></h2>
+<h2>Registering Parquet Data Sources<a class="headerlink" href="#registering-parquet-data-sources" title="Link to this heading">¶</a></h2>
 <p>Parquet data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. It is not necessary to provide schema information for Parquet files.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
@@ -577,7 +572,7 @@ via <code class="docutils literal notranslate"><span class="pre">CREATE</span> <
 </div>
 </section>
 <section id="registering-csv-data-sources">
-<h2>Registering CSV Data Sources<a class="headerlink" href="#registering-csv-data-sources" title="Permalink to this heading">¶</a></h2>
+<h2>Registering CSV Data Sources<a class="headerlink" href="#registering-csv-data-sources" title="Link to this heading">¶</a></h2>
 <p>CSV data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
@@ -607,7 +602,7 @@ via <code class="docutils literal notranslate"><span class="pre">CREATE</span> <
 </div>
 </section>
 <section id="registering-s3-data-sources">
-<h2>Registering S3 Data Sources<a class="headerlink" href="#registering-s3-data-sources" title="Permalink to this heading">¶</a></h2>
+<h2>Registering S3 Data Sources<a class="headerlink" href="#registering-s3-data-sources" title="Link to this heading">¶</a></h2>
 <p><a class="reference external" href="https://aws.amazon.com/s3/">AWS S3</a> data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
@@ -657,7 +652,7 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 </ul>
 </section>
 <section id="registering-oss-data-sources">
-<h2>Registering OSS Data Sources<a class="headerlink" href="#registering-oss-data-sources" title="Permalink to this heading">¶</a></h2>
+<h2>Registering OSS Data Sources<a class="headerlink" href="#registering-oss-data-sources" title="Link to this heading">¶</a></h2>
 <p><a class="reference external" href="https://www.alibabacloud.com/product/object-storage-service">Alibaba cloud OSS</a> data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
@@ -678,7 +673,7 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 <p>Note that the <code class="docutils literal notranslate"><span class="pre">endpoint</span></code> format of oss needs to be: <code class="docutils literal notranslate"><span class="pre">https://{bucket}.{oss-region-endpoint}</span></code></p>
 </section>
 <section id="registering-gcs-data-sources">
-<h2>Registering GCS Data Sources<a class="headerlink" href="#registering-gcs-data-sources" title="Permalink to this heading">¶</a></h2>
+<h2>Registering GCS Data Sources<a class="headerlink" href="#registering-gcs-data-sources" title="Link to this heading">¶</a></h2>
 <p><a class="reference external" href="https://cloud.google.com/storage">Google Cloud Storage</a> data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
@@ -721,7 +716,7 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 </ul>
 </section>
 <section id="commands">
-<h2>Commands<a class="headerlink" href="#commands" title="Permalink to this heading">¶</a></h2>
+<h2>Commands<a class="headerlink" href="#commands" title="Link to this heading">¶</a></h2>
 <p>Available commands inside DataFusion CLI are:</p>
 <ul class="simple">
 <li><p>Quit</p></li>
@@ -791,7 +786,7 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v21.0.0
 </div>
 </section>
 <section id="changing-configuration-options">
-<h2>Changing Configuration Options<a class="headerlink" href="#changing-configuration-options" title="Permalink to this heading">¶</a></h2>
+<h2>Changing Configuration Options<a class="headerlink" href="#changing-configuration-options" title="Link to this heading">¶</a></h2>
 <p>All available configuration options can be seen using <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">ALL</span></code> as described above.</p>
 <p>You can change the configuration options using environment
 variables. <code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code> looks in the corresponding environment
@@ -883,7 +878,7 @@ DataFusion<span class="w"> </span>CLI<span class="w"> </span>v13.0.0
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

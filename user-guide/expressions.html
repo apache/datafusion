@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
-    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="SQL Reference" href="sql/index.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -474,7 +469,7 @@
   under the License.
 -->
 <section id="expression-api">
-<h1>Expression API<a class="headerlink" href="#expression-api" title="Permalink to this heading">¶</a></h1>
+<h1>Expression API<a class="headerlink" href="#expression-api" title="Link to this heading">¶</a></h1>
 <p>DataFrame methods such as <code class="docutils literal notranslate"><span class="pre">select</span></code> and <code class="docutils literal notranslate"><span class="pre">filter</span></code> accept one or more logical expressions and there are many functions
 available for creating logical expressions. These are documented below.</p>
 <p>Expressions can be chained together using a fluent-style API:</p>
@@ -483,7 +478,7 @@ available for creating logical expressions. These are documented below.</p>
 </pre></div>
 </div>
 <section id="identifiers">
-<h2>Identifiers<a class="headerlink" href="#identifiers" title="Permalink to this heading">¶</a></h2>
+<h2>Identifiers<a class="headerlink" href="#identifiers" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -498,7 +493,7 @@ available for creating logical expressions. These are documented below.</p>
 </table>
 </section>
 <section id="literal-values">
-<h2>Literal Values<a class="headerlink" href="#literal-values" title="Permalink to this heading">¶</a></h2>
+<h2>Literal Values<a class="headerlink" href="#literal-values" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -513,7 +508,7 @@ available for creating logical expressions. These are documented below.</p>
 </table>
 </section>
 <section id="boolean-expressions">
-<h2>Boolean Expressions<a class="headerlink" href="#boolean-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Boolean Expressions<a class="headerlink" href="#boolean-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -534,7 +529,7 @@ available for creating logical expressions. These are documented below.</p>
 </table>
 </section>
 <section id="bitwise-expressions">
-<h2>Bitwise expressions<a class="headerlink" href="#bitwise-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Bitwise expressions<a class="headerlink" href="#bitwise-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -561,7 +556,7 @@ available for creating logical expressions. These are documented below.</p>
 </table>
 </section>
 <section id="comparison-expressions">
-<h2>Comparison Expressions<a class="headerlink" href="#comparison-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Comparison Expressions<a class="headerlink" href="#comparison-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -591,7 +586,7 @@ available for creating logical expressions. These are documented below.</p>
 </table>
 </section>
 <section id="math-functions">
-<h2>Math Functions<a class="headerlink" href="#math-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Math Functions<a class="headerlink" href="#math-functions" title="Link to this heading">¶</a></h2>
 <p>In addition to the math functions listed here, some Rust operators are implemented for expressions, allowing
 expressions such as <code class="docutils literal notranslate"><span class="pre">col(&quot;a&quot;)</span> <span class="pre">+</span> <span class="pre">col(&quot;b&quot;)</span></code> to be used.</p>
 <table class="table">
@@ -712,7 +707,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </tbody>
 </table>
 <section id="math-functions-usage-notes">
-<h3>Math functions usage notes:<a class="headerlink" href="#math-functions-usage-notes" title="Permalink to this heading">¶</a></h3>
+<h3>Math functions usage notes:<a class="headerlink" href="#math-functions-usage-notes" title="Link to this heading">¶</a></h3>
 <p>Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select log(-1), log(0), sqrt(-1);
 +----------------+---------------+-----------------+
@@ -725,7 +720,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </section>
 </section>
 <section id="bitwise-operators">
-<h2>Bitwise Operators<a class="headerlink" href="#bitwise-operators" title="Permalink to this heading">¶</a></h2>
+<h2>Bitwise Operators<a class="headerlink" href="#bitwise-operators" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Operator</p></th>
@@ -752,7 +747,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="conditional-expressions">
-<h2>Conditional Expressions<a class="headerlink" href="#conditional-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Conditional Expressions<a class="headerlink" href="#conditional-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -773,7 +768,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="string-expressions">
-<h2>String Expressions<a class="headerlink" href="#string-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>String Expressions<a class="headerlink" href="#string-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -875,7 +870,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="array-expressions">
-<h2>Array Expressions<a class="headerlink" href="#array-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Array Expressions<a class="headerlink" href="#array-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -962,7 +957,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="regular-expressions">
-<h2>Regular Expressions<a class="headerlink" href="#regular-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Regular Expressions<a class="headerlink" href="#regular-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -980,7 +975,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="temporal-expressions">
-<h2>Temporal Expressions<a class="headerlink" href="#temporal-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Temporal Expressions<a class="headerlink" href="#temporal-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -1016,7 +1011,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="other-expressions">
-<h2>Other Expressions<a class="headerlink" href="#other-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Other Expressions<a class="headerlink" href="#other-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -1052,7 +1047,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="aggregate-functions">
-<h2>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -1121,7 +1116,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="subquery-expressions">
-<h2>Subquery Expressions<a class="headerlink" href="#subquery-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>Subquery Expressions<a class="headerlink" href="#subquery-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -1148,7 +1143,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </table>
 </section>
 <section id="user-defined-function-expressions">
-<h2>User-Defined Function Expressions<a class="headerlink" href="#user-defined-function-expressions" title="Permalink to this heading">¶</a></h2>
+<h2>User-Defined Function Expressions<a class="headerlink" href="#user-defined-function-expressions" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -1207,7 +1202,7 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

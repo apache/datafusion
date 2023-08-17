@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
-    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="prev" title="Invariants" href="invariants.html" />
@@ -251,11 +251,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -425,12 +420,12 @@
   under the License.
 -->
 <section id="output-field-name-semantics">
-<h1>Output field name semantics<a class="headerlink" href="#output-field-name-semantics" title="Permalink to this heading">¶</a></h1>
+<h1>Output field name semantics<a class="headerlink" href="#output-field-name-semantics" title="Link to this heading">¶</a></h1>
 <p>This specification documents how field names in output record batches should be
 generated based on given user queries. The filed name rules apply to
 DataFusion queries planned from both SQL queries and Dataframe APIs.</p>
 <section id="field-name-rules">
-<h2>Field name rules<a class="headerlink" href="#field-name-rules" title="Permalink to this heading">¶</a></h2>
+<h2>Field name rules<a class="headerlink" href="#field-name-rules" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>All bare column field names MUST not contain relation/table qualifier.</p>
 <ul>
@@ -470,9 +465,9 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.</p>
 </ul>
 </section>
 <section id="appendices">
-<h2>Appendices<a class="headerlink" href="#appendices" title="Permalink to this heading">¶</a></h2>
+<h2>Appendices<a class="headerlink" href="#appendices" title="Link to this heading">¶</a></h2>
 <section id="examples-and-comparison-with-other-systems">
-<h3>Examples and comparison with other systems<a class="headerlink" href="#examples-and-comparison-with-other-systems" title="Permalink to this heading">¶</a></h3>
+<h3>Examples and comparison with other systems<a class="headerlink" href="#examples-and-comparison-with-other-systems" title="Link to this heading">¶</a></h3>
 <p>Data schema for test sample queries:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">t1</span> <span class="p">(</span><span class="nb">id</span> <span class="n">INT</span><span class="p">,</span> <span class="n">a</span> <span class="n">VARCHAR</span><span class="p">(</span><span class="mi">5</span><span class="p">));</span>
 <span class="n">INSERT</span> <span class="n">INTO</span> <span class="n">t1</span> <span class="p">(</span><span class="nb">id</span><span class="p">,</span> <span class="n">a</span><span class="p">)</span> <span class="n">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;foo&#39;</span><span class="p">);</span>
@@ -484,7 +479,7 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.</p>
 </pre></div>
 </div>
 <section id="projected-columns">
-<h4>Projected columns<a class="headerlink" href="#projected-columns" title="Permalink to this heading">¶</a></h4>
+<h4>Projected columns<a class="headerlink" href="#projected-columns" title="Link to this heading">¶</a></h4>
 <p>Query:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">t1</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">t2</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">b</span>
 <span class="n">FROM</span> <span class="n">t1</span>
@@ -556,7 +551,7 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.</p>
 </table>
 </section>
 <section id="function-transformed-columns">
-<h4>Function transformed columns<a class="headerlink" href="#function-transformed-columns" title="Permalink to this heading">¶</a></h4>
+<h4>Function transformed columns<a class="headerlink" href="#function-transformed-columns" title="Link to this heading">¶</a></h4>
 <p>Query:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ABS</span><span class="p">(</span><span class="n">t1</span><span class="o">.</span><span class="n">id</span><span class="p">),</span> <span class="nb">abs</span><span class="p">(</span><span class="o">-</span><span class="nb">id</span><span class="p">)</span> <span class="n">FROM</span> <span class="n">t1</span><span class="p">;</span>
 </pre></div>
@@ -643,7 +638,7 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.</p>
 </table>
 </section>
 <section id="function-with-operators">
-<h4>Function with operators<a class="headerlink" href="#function-with-operators" title="Permalink to this heading">¶</a></h4>
+<h4>Function with operators<a class="headerlink" href="#function-with-operators" title="Link to this heading">¶</a></h4>
 <p>Query:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">t1</span><span class="o">.</span><span class="n">id</span> <span class="o">+</span> <span class="n">ABS</span><span class="p">(</span><span class="nb">id</span><span class="p">),</span> <span class="n">ABS</span><span class="p">(</span><span class="nb">id</span> <span class="o">*</span> <span class="n">t1</span><span class="o">.</span><span class="n">id</span><span class="p">)</span> <span class="n">FROM</span> <span class="n">t1</span><span class="p">;</span>
 </pre></div>
@@ -730,7 +725,7 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.</p>
 </table>
 </section>
 <section id="project-literals">
-<h4>Project literals<a class="headerlink" href="#project-literals" title="Permalink to this heading">¶</a></h4>
+<h4>Project literals<a class="headerlink" href="#project-literals" title="Link to this heading">¶</a></h4>
 <p>Query:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="o">+</span><span class="mi">5</span><span class="p">,</span> <span class="s1">&#39;foo_bar&#39;</span><span class="p">;</span>
 </pre></div>
@@ -848,7 +843,7 @@ DataFusion queries planned from both SQL queries and Dataframe APIs.</p>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,13 +28,13 @@
     
     <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
-    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Communication" href="communication.html" />
-    <link rel="prev" title="Execution Plans" href="../library-user-guide/execution-plans.html" />
+    <link rel="prev" title="Extending DataFusion’s operators: custom LogicalPlan and Execution Plans" href="../library-user-guide/extending-operators.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -250,11 +250,6 @@
  <li class="toctree-l1">
   <a class="reference internal" href="../library-user-guide/extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/execution-plans.html">
-   Execution Plans
   </a>
  </li>
 </ul>
@@ -525,7 +520,7 @@
   under the License.
 -->
 <section id="introduction">
-<h1>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading">¶</a></h1>
+<h1>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h1>
 <p>We welcome and encourage contributions of all kinds, such as:</p>
 <ol class="arabic simple">
 <li><p>Tickets with issue reports of feature requests</p></li>
@@ -538,15 +533,15 @@
 list to help you get started.</p>
 </section>
 <section id="developer-s-guide">
-<h1>Developer’s guide<a class="headerlink" href="#developer-s-guide" title="Permalink to this heading">¶</a></h1>
+<h1>Developer’s guide<a class="headerlink" href="#developer-s-guide" title="Link to this heading">¶</a></h1>
 <section id="pull-request-overview">
-<h2>Pull Request Overview<a class="headerlink" href="#pull-request-overview" title="Permalink to this heading">¶</a></h2>
+<h2>Pull Request Overview<a class="headerlink" href="#pull-request-overview" title="Link to this heading">¶</a></h2>
 <p>We welcome pull requests (PRs) from anyone from the community.</p>
 <p>DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the <a class="reference external" href="https://arrow.apache.org/committers/">many people with commit access</a> will merge your PR.</p>
 <p>Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.</p>
 </section>
 <section id="creating-pull-requests">
-<h2>Creating Pull Requests<a class="headerlink" href="#creating-pull-requests" title="Permalink to this heading">¶</a></h2>
+<h2>Creating Pull Requests<a class="headerlink" href="#creating-pull-requests" title="Link to this heading">¶</a></h2>
 <p>We recommend splitting your contributions into smaller PRs rather than large PRs (500+ lines) because:</p>
 <ol class="arabic simple">
 <li><p>The PR is more likely to be reviewed quickly – our reviewers struggle to find the contiguous time needed to review large PRs.</p></li>
@@ -557,7 +552,7 @@ list to help you get started.</p>
 </section>
 </section>
 <section id="reviewing-pull-requests">
-<h1>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Permalink to this heading">¶</a></h1>
+<h1>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Link to this heading">¶</a></h1>
 <p>When reviewing PRs, please remember our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.</p>
 <p>Please ensure any issues you raise contains a rationale and suggested alternative – it is frustrating to be told “don’t do it this way” without any clear reason or alternate provided.</p>
 <p>Some things to specifically check:</p>
@@ -566,7 +561,7 @@ list to help you get started.</p>
 <li><p>Is the code clear, and fits the style of the existing codebase?</p></li>
 </ol>
 <section id="major-and-minor-prs">
-<h2>“Major” and “Minor” PRs<a class="headerlink" href="#major-and-minor-prs" title="Permalink to this heading">¶</a></h2>
+<h2>“Major” and “Minor” PRs<a class="headerlink" href="#major-and-minor-prs" title="Link to this heading">¶</a></h2>
 <p>Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a “major” PR is approved and when it is merged.</p>
 <p>A “major” PR means there is a substantial change in design or a change in the API. Committers apply their best judgment to determine what constitutes a substantial change. A “minor” PR might be merged without a 24 hour delay, again subject to the judgment of the committer. Examples of potential “minor” PRs are:</p>
 <ol class="arabic simple">
@@ -578,10 +573,10 @@ list to help you get started.</p>
 <p>The good thing about open code and open development is that any issues in one change can almost always be fixed with a follow on PR.</p>
 </section>
 <section id="getting-started">
-<h2>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this heading">¶</a></h2>
+<h2>Getting Started<a class="headerlink" href="#getting-started" title="Link to this heading">¶</a></h2>
 <p>This section describes how you can get started at developing DataFusion.</p>
 <section id="windows-setup">
-<h3>Windows setup<a class="headerlink" href="#windows-setup" title="Permalink to this heading">¶</a></h3>
+<h3>Windows setup<a class="headerlink" href="#windows-setup" title="Link to this heading">¶</a></h3>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>wget<span class="w"> </span>https://az792536.vo.msecnd.net/vms/VMBuild_20190311/VirtualBox/MSEdge/MSEdge.Win10.VirtualBox.zip
 choco<span class="w"> </span>install<span class="w"> </span>-y<span class="w"> </span>git<span class="w"> </span>rustup.install<span class="w"> </span>visualcpp-build-tools
 git-bash.exe
@@ -590,7 +585,7 @@ cargo<span class="w"> </span>build
 </div>
 </section>
 <section id="protoc-installation">
-<h3>Protoc Installation<a class="headerlink" href="#protoc-installation" title="Permalink to this heading">¶</a></h3>
+<h3>Protoc Installation<a class="headerlink" href="#protoc-installation" title="Link to this heading">¶</a></h3>
 <p>Compiling DataFusion from sources requires an installed version of the protobuf compiler, <code class="docutils literal notranslate"><span class="pre">protoc</span></code>.</p>
 <p>On most platforms this can be installed from your system’s package manager</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>$ apt install -y protobuf-compiler
@@ -607,7 +602,7 @@ libprotoc<span class="w"> </span><span class="m">3</span>.12.4
 <p>Alternatively a binary release can be downloaded from the <a class="reference external" href="https://github.com/protocolbuffers/protobuf/releases">Release Page</a> or <a class="reference external" href="https://github.com/protocolbuffers/protobuf/blob/main/src/README.md">built from source</a>.</p>
 </section>
 <section id="bootstrap-environment">
-<h3>Bootstrap environment<a class="headerlink" href="#bootstrap-environment" title="Permalink to this heading">¶</a></h3>
+<h3>Bootstrap environment<a class="headerlink" href="#bootstrap-environment" title="Link to this heading">¶</a></h3>
 <p>DataFusion is written in Rust and it uses a standard rust toolkit:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">build</span></code></p></li>
@@ -634,7 +629,7 @@ libprotoc<span class="w"> </span><span class="m">3</span>.12.4
 </section>
 </section>
 <section id="testing">
-<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this heading">¶</a></h2>
+<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
 <p>Tests are critical to ensure that DataFusion is working properly and
 is not accidentally broken during refactorings. All new features
 should have test coverage.</p>
@@ -642,17 +637,17 @@ should have test coverage.</p>
 Pyramid</a>
 and tries to follow the Rust standard <a class="reference external" href="https://doc.rust-lang.org/book/ch11-03-test-organization.html">Testing Organization</a> in the The Book.</p>
 <section id="unit-tests">
-<h3>Unit tests<a class="headerlink" href="#unit-tests" title="Permalink to this heading">¶</a></h3>
+<h3>Unit tests<a class="headerlink" href="#unit-tests" title="Link to this heading">¶</a></h3>
 <p>Tests for code in an individual module are defined in the same source file with a <code class="docutils literal notranslate"><span class="pre">test</span></code> module, following Rust convention.</p>
 </section>
 <section id="sqllogictests-tests">
-<h3>sqllogictests Tests<a class="headerlink" href="#sqllogictests-tests" title="Permalink to this heading">¶</a></h3>
+<h3>sqllogictests Tests<a class="headerlink" href="#sqllogictests-tests" title="Link to this heading">¶</a></h3>
 <p>DataFusion’s SQL implementation is tested using <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests/sqllogictests">sqllogictest</a> which are run like any other Rust test using <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span></code>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code> tests may be less convenient for new contributors who are familiar with writing <code class="docutils literal notranslate"><span class="pre">.rs</span></code> tests as they require learning another tool. However, <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span> <span class="pre">--</span> <span class="pre">--complete</span></code>.</p>
 <p>Like similar systems such as <a class="reference external" href="https://duckdb.org/dev/testing">DuckDB</a>, DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability. While we are still in the process of <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/6195">migrating some old sql_integration tests</a>, all new tests should be written using sqllogictests if possible.</p>
 </section>
 <section id="rust-integration-tests">
-<h3>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Permalink to this heading">¶</a></h3>
+<h3>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Link to this heading">¶</a></h3>
 <p>There are several tests of the public interface of the DataFusion library in the <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
 <p>You can run these tests individually using <code class="docutils literal notranslate"><span class="pre">cargo</span></code> as normal command such as</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>dataframe
@@ -661,9 +656,9 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 </section>
 </section>
 <section id="benchmarks">
-<h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Permalink to this heading">¶</a></h2>
+<h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Link to this heading">¶</a></h2>
 <section id="criterion-benchmarks">
-<h3>Criterion Benchmarks<a class="headerlink" href="#criterion-benchmarks" title="Permalink to this heading">¶</a></h3>
+<h3>Criterion Benchmarks<a class="headerlink" href="#criterion-benchmarks" title="Link to this heading">¶</a></h3>
 <p><a class="reference external" href="https://docs.rs/criterion/latest/criterion/index.html">Criterion</a> is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.</p>
 <p>Criterion integrates with Cargo’s built-in <a class="reference external" href="https://doc.rust-lang.org/cargo/commands/cargo-bench.html">benchmark support</a> and a given benchmark can be run with</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">BENCHMARK_NAME</span>
@@ -673,7 +668,7 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <p><em><a class="reference external" href="https://github.com/bheisler/cargo-criterion">cargo-criterion</a> may also be used for more advanced reporting.</em></p>
 </section>
 <section id="parquet-sql-benchmarks">
-<h3>Parquet SQL Benchmarks<a class="headerlink" href="#parquet-sql-benchmarks" title="Permalink to this heading">¶</a></h3>
+<h3>Parquet SQL Benchmarks<a class="headerlink" href="#parquet-sql-benchmarks" title="Link to this heading">¶</a></h3>
 <p>The parquet SQL benchmarks can be run with</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span> <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">parquet_query_sql</span>
 </pre></div>
@@ -683,15 +678,15 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 <p>The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> in subsequent runs.</p>
 </section>
 <section id="upstream-benchmark-suites">
-<h3>Upstream Benchmark Suites<a class="headerlink" href="#upstream-benchmark-suites" title="Permalink to this heading">¶</a></h3>
+<h3>Upstream Benchmark Suites<a class="headerlink" href="#upstream-benchmark-suites" title="Link to this heading">¶</a></h3>
 <p>Instructions and tooling for running upstream benchmark suites against DataFusion can be found in <a class="reference external" href="https://github.com/apache/arrow-datafusion/tree/main/benchmarks">benchmarks</a>.</p>
 <p>These are valuable for comparative evaluation against alternative Arrow implementations and query engines.</p>
 </section>
 </section>
 <section id="howtos">
-<h2>HOWTOs<a class="headerlink" href="#howtos" title="Permalink to this heading">¶</a></h2>
+<h2>HOWTOs<a class="headerlink" href="#howtos" title="Link to this heading">¶</a></h2>
 <section id="how-to-add-a-new-scalar-function">
-<h3>How to add a new scalar function<a class="headerlink" href="#how-to-add-a-new-scalar-function" title="Permalink to this heading">¶</a></h3>
+<h3>How to add a new scalar function<a class="headerlink" href="#how-to-add-a-new-scalar-function" title="Link to this heading">¶</a></h3>
 <p>Below is a checklist of what you need to do to add a new scalar function to DataFusion:</p>
 <ul class="simple">
 <li><p>Add the actual implementation of the function:</p>
@@ -726,7 +721,7 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 </ul>
 </section>
 <section id="how-to-add-a-new-aggregate-function">
-<h3>How to add a new aggregate function<a class="headerlink" href="#how-to-add-a-new-aggregate-function" title="Permalink to this heading">¶</a></h3>
+<h3>How to add a new aggregate function<a class="headerlink" href="#how-to-add-a-new-aggregate-function" title="Link to this heading">¶</a></h3>
 <p>Below is a checklist of what you need to do to add a new aggregate function to DataFusion:</p>
 <ul class="simple">
 <li><p>Add the actual implementation of an <code class="docutils literal notranslate"><span class="pre">Accumulator</span></code> and <code class="docutils literal notranslate"><span class="pre">AggregateExpr</span></code>:</p>
@@ -756,7 +751,7 @@ and tries to follow the Rust standard <a class="reference external" href="https:
 </ul>
 </section>
 <section id="how-to-display-plans-graphically">
-<h3>How to display plans graphically<a class="headerlink" href="#how-to-display-plans-graphically" title="Permalink to this heading">¶</a></h3>
+<h3>How to display plans graphically<a class="headerlink" href="#how-to-display-plans-graphically" title="Link to this heading">¶</a></h3>
 <p>The query plans represented by <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> nodes can be graphically
 rendered using <a class="reference external" href="https://www.graphviz.org/">Graphviz</a>.</p>
 <p>To do so, save the output of the <code class="docutils literal notranslate"><span class="pre">display_graphviz</span></code> function to a file.:</p>
@@ -774,7 +769,7 @@ can be displayed. For example, the following command creates a
 </section>
 </section>
 <section id="specifications">
-<h2>Specifications<a class="headerlink" href="#specifications" title="Permalink to this heading">¶</a></h2>
+<h2>Specifications<a class="headerlink" href="#specifications" title="Link to this heading">¶</a></h2>
 <p>We formalize some DataFusion semantics and behaviors through specification
 documents. These specifications are useful to be used as references to help
 resolve ambiguities during development or code reviews.</p>
@@ -788,7 +783,7 @@ new specifications as you see fit.</p>
 <p>All specifications are stored in the <code class="docutils literal notranslate"><span class="pre">docs/source/specification</span></code> folder.</p>
 </section>
 <section id="how-to-format-md-document">
-<h2>How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> document<a class="headerlink" href="#how-to-format-md-document" title="Permalink to this heading">¶</a></h2>
+<h2>How to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> document<a class="headerlink" href="#how-to-format-md-document" title="Link to this heading">¶</a></h2>
 <p>We are using <code class="docutils literal notranslate"><span class="pre">prettier</span></code> to format <code class="docutils literal notranslate"><span class="pre">.md</span></code> files.</p>
 <p>You can either use <code class="docutils literal notranslate"><span class="pre">npm</span> <span class="pre">i</span> <span class="pre">-g</span> <span class="pre">prettier</span></code> to install it globally or use <code class="docutils literal notranslate"><span class="pre">npx</span></code> to run it as a standalone binary. Using <code class="docutils literal notranslate"><span class="pre">npx</span></code> required a working node environment. Upgrading to the latest prettier is recommended (by adding <code class="docutils literal notranslate"><span class="pre">--upgrade</span></code> to the <code class="docutils literal notranslate"><span class="pre">npm</span></code> command).</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$<span class="w"> </span>prettier<span class="w"> </span>--version
@@ -808,11 +803,11 @@ new specifications as you see fit.</p>
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="../library-user-guide/execution-plans.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="../library-user-guide/extending-operators.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Execution Plans</p>
+            <p class="prev-next-title">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</p>
         </div>
     </a>
     <a class='right-next' id="next-link" href="communication.html" title="next page">
@@ -842,7 +837,7 @@ new specifications as you see fit.</p>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
-    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Scalar Functions" href="scalar_functions.html" />
@@ -250,11 +250,6 @@
  <li class="toctree-l1">
   <a class="reference internal" href="../../library-user-guide/extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/execution-plans.html">
-   Execution Plans
   </a>
  </li>
 </ul>
@@ -552,7 +547,7 @@
   under the License.
 -->
 <section id="window-functions">
-<h1>Window Functions<a class="headerlink" href="#window-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Window Functions<a class="headerlink" href="#window-functions" title="Link to this heading">¶</a></h1>
 <p>A <em>window function</em> performs a calculation across a set of table rows that are somehow related to the current row. This is comparable to the type of calculation that can be done with an aggregate function. However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would. Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result</p>
 <p>Here is an example that shows how to compare each employee’s salary with the average salary in his or her department:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">depname</span><span class="p">,</span><span class="w"> </span><span class="n">empno</span><span class="p">,</span><span class="w"> </span><span class="n">salary</span><span class="p">,</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="n">salary</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">depname</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">empsalary</span><span class="p">;</span>
@@ -625,19 +620,19 @@
 </pre></div>
 </div>
 <section id="syntax">
-<h2>Syntax<a class="headerlink" href="#syntax" title="Permalink to this heading">¶</a></h2>
+<h2>Syntax<a class="headerlink" href="#syntax" title="Link to this heading">¶</a></h2>
 <p>The syntax for the OVER-clause is</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>function([expr])
-  OVER(
-    [PARTITION BY expr[, …]]
-    [ORDER BY expr [ ASC | DESC ][, …]]
-    [ frame_clause ]
-    )
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">function</span><span class="p">([</span><span class="n">expr</span><span class="p">])</span>
+<span class="w">  </span><span class="n">OVER</span><span class="p">(</span>
+<span class="w">    </span><span class="p">[</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expr</span><span class="p">[,</span><span class="w"> </span><span class="err">…</span><span class="p">]]</span>
+<span class="w">    </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="k">ASC</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">DESC</span><span class="w"> </span><span class="p">][,</span><span class="w"> </span><span class="err">…</span><span class="p">]]</span>
+<span class="w">    </span><span class="p">[</span><span class="w"> </span><span class="n">frame_clause</span><span class="w"> </span><span class="p">]</span>
+<span class="w">    </span><span class="p">)</span>
 </pre></div>
 </div>
 <p>where <strong>frame_clause</strong> is one of:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>  { RANGE | ROWS | GROUPS } frame_start
-  { RANGE | ROWS | GROUPS } BETWEEN frame_start AND frame_end
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="w">  </span><span class="err">{</span><span class="w"> </span><span class="n">RANGE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">ROWS</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">GROUPS</span><span class="w"> </span><span class="err">}</span><span class="w"> </span><span class="n">frame_start</span>
+<span class="w">  </span><span class="err">{</span><span class="w"> </span><span class="n">RANGE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">ROWS</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">GROUPS</span><span class="w"> </span><span class="err">}</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="n">frame_start</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">frame_end</span>
 </pre></div>
 </div>
 <p>and <strong>frame_start</strong> and <strong>frame_end</strong> can be one of</p>
@@ -652,11 +647,11 @@
 <p>RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).</p>
 </section>
 <section id="aggregate-functions">
-<h2>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h2>
 <p>All <a class="reference internal" href="aggregate_functions.html"><span class="std std-doc">aggregate functions</span></a> can be used as window functions.</p>
 </section>
 <section id="ranking-functions">
-<h2>Ranking functions<a class="headerlink" href="#ranking-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Ranking functions<a class="headerlink" href="#ranking-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#row-number">row_number</a></p></li>
 <li><p><a class="reference internal" href="#rank">rank</a></p></li>
@@ -664,34 +659,34 @@
 <li><p><a class="reference internal" href="#ntile">ntile</a></p></li>
 </ul>
 <section id="row-number">
-<h3><code class="docutils literal notranslate"><span class="pre">row_number</span></code><a class="headerlink" href="#row-number" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">row_number</span></code><a class="headerlink" href="#row-number" title="Link to this heading">¶</a></h3>
 <p>Number of the current row within its partition, counting from 1.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">row_number</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>
 <section id="rank">
-<h3><code class="docutils literal notranslate"><span class="pre">rank</span></code><a class="headerlink" href="#rank" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">rank</span></code><a class="headerlink" href="#rank" title="Link to this heading">¶</a></h3>
 <p>Rank of the current row with gaps; same as row_number of its first peer.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">rank</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>
 <section id="dense-rank">
-<h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Link to this heading">¶</a></h3>
 <p>Rank of the current row without gaps; this function counts peer groups.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">dense_rank</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>
 <section id="ntile">
-<h3><code class="docutils literal notranslate"><span class="pre">ntile</span></code><a class="headerlink" href="#ntile" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">ntile</span></code><a class="headerlink" href="#ntile" title="Link to this heading">¶</a></h3>
 <p>Integer ranging from 1 to the argument value, dividing the partition as equally as possible.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">ntile</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="arguments">
-<h4>Arguments<a class="headerlink" href="#arguments" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: An integer describing the number groups the partition should be split into</p></li>
 </ul>
@@ -699,7 +694,7 @@
 </section>
 </section>
 <section id="analytical-functions">
-<h2>Analytical functions<a class="headerlink" href="#analytical-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Analytical functions<a class="headerlink" href="#analytical-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#cume-dist">cume_dist</a></p></li>
 <li><p><a class="reference internal" href="#percent-rank">percent_rank</a></p></li>
@@ -710,27 +705,27 @@
 <li><p><a class="reference internal" href="#nth-value">nth_value</a></p></li>
 </ul>
 <section id="cume-dist">
-<h3><code class="docutils literal notranslate"><span class="pre">cume_dist</span></code><a class="headerlink" href="#cume-dist" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">cume_dist</span></code><a class="headerlink" href="#cume-dist" title="Link to this heading">¶</a></h3>
 <p>Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">cume_dist</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>
 <section id="percent-rank">
-<h3><code class="docutils literal notranslate"><span class="pre">percent_rank</span></code><a class="headerlink" href="#percent-rank" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">percent_rank</span></code><a class="headerlink" href="#percent-rank" title="Link to this heading">¶</a></h3>
 <p>Relative rank of the current row: (rank - 1) / (total rows - 1).</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">percent_rank</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>
 <section id="lag">
-<h3><code class="docutils literal notranslate"><span class="pre">lag</span></code><a class="headerlink" href="#lag" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">lag</span></code><a class="headerlink" href="#lag" title="Link to this heading">¶</a></h3>
 <p>Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">lag</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">offset</span><span class="p">,</span><span class="w"> </span><span class="k">default</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id1">
-<h4>Arguments<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 <li><p><strong>offset</strong>: Integer. Specifies how many rows back the value of <em>expression</em> should be retrieved. Defaults to 1.</p></li>
@@ -739,13 +734,13 @@
 </section>
 </section>
 <section id="lead">
-<h3><code class="docutils literal notranslate"><span class="pre">lead</span></code><a class="headerlink" href="#lead" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">lead</span></code><a class="headerlink" href="#lead" title="Link to this heading">¶</a></h3>
 <p>Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">lead</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">offset</span><span class="p">,</span><span class="w"> </span><span class="k">default</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id2">
-<h4>Arguments<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 <li><p><strong>offset</strong>: Integer. Specifies how many rows forward the value of <em>expression</em> should be retrieved. Defaults to 1.</p></li>
@@ -754,39 +749,39 @@
 </section>
 </section>
 <section id="first-value">
-<h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">¶</a></h3>
 <p>Returns value evaluated at the row that is the first row of the window frame.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id3">
-<h4>Arguments<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 </ul>
 </section>
 </section>
 <section id="last-value">
-<h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">¶</a></h3>
 <p>Returns value evaluated at the row that is the last row of the window frame.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id4">
-<h4>Arguments<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 </ul>
 </section>
 </section>
 <section id="nth-value">
-<h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">¶</a></h3>
 <p>Returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id5">
-<h4>Arguments<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: The name the column of which nth value to retrieve</p></li>
 <li><p><strong>n</strong>: Integer. Specifies the <em>n</em> in nth</p></li>
@@ -836,7 +831,7 @@
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

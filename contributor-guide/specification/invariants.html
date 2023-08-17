@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
-    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Output field name semantics" href="output-field-name-semantic.html" />
@@ -250,11 +250,6 @@
  <li class="toctree-l1">
   <a class="reference internal" href="../../library-user-guide/extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/execution-plans.html">
-   Execution Plans
   </a>
  </li>
 </ul>
@@ -599,13 +594,13 @@
   under the License.
 -->
 <section id="invariants">
-<h1>Invariants<a class="headerlink" href="#invariants" title="Permalink to this heading">¶</a></h1>
+<h1>Invariants<a class="headerlink" href="#invariants" title="Link to this heading">¶</a></h1>
 <p>This document enumerates invariants of DataFusion’s logical and physical planes
 (functions, and nodes). Some of these invariants are currently not enforced.
 This document assumes that the reader is familiar with some of the codebase,
 including rust arrow’s RecordBatch and Array.</p>
 <section id="rational">
-<h2>Rational<a class="headerlink" href="#rational" title="Permalink to this heading">¶</a></h2>
+<h2>Rational<a class="headerlink" href="#rational" title="Link to this heading">¶</a></h2>
 <p>DataFusion’s computational model is built on top of a dynamically typed arrow
 object, Array, that offers the interface <code class="docutils literal notranslate"><span class="pre">Array::as_any</span></code> to downcast itself to
 its statically typed versions (e.g. <code class="docutils literal notranslate"><span class="pre">Int32Array</span></code>). DataFusion uses
@@ -620,7 +615,7 @@ know what they can expect from a query in DataFusion, and DataFusion developers
 know what they need to enforce at the coding level.</p>
 </section>
 <section id="notation">
-<h2>Notation<a class="headerlink" href="#notation" title="Permalink to this heading">¶</a></h2>
+<h2>Notation<a class="headerlink" href="#notation" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p>Field or physical field: the tuple name, <code class="docutils literal notranslate"><span class="pre">arrow::DataType</span></code> and nullability flag (a bool whether values can be null), represented in this document by <code class="docutils literal notranslate"><span class="pre">PF(name,</span> <span class="pre">type,</span> <span class="pre">nullable)</span></code></p></li>
 <li><p>Logical field: Field with a relation name. Represented in this document by <code class="docutils literal notranslate"><span class="pre">LF(relation,</span> <span class="pre">name,</span> <span class="pre">type,</span> <span class="pre">nullable)</span></code></p></li>
@@ -629,9 +624,9 @@ know what they need to enforce at the coding level.</p>
 <li><p>Physical schema: a vector of physical fields, used by both physical plan and Arrow record batch.</p></li>
 </ul>
 <section id="logical">
-<h3>Logical<a class="headerlink" href="#logical" title="Permalink to this heading">¶</a></h3>
+<h3>Logical<a class="headerlink" href="#logical" title="Link to this heading">¶</a></h3>
 <section id="function">
-<h4>Function<a class="headerlink" href="#function" title="Permalink to this heading">¶</a></h4>
+<h4>Function<a class="headerlink" href="#function" title="Link to this heading">¶</a></h4>
 <p>An object that knows its valid incoming logical fields and how to derive its
 output logical field from its arguments’ logical fields. A functions’ output
 field is itself a function of its input fields:</p>
@@ -645,21 +640,21 @@ field is itself a function of its input fields:</p>
 </ul>
 </section>
 <section id="plan">
-<h4>Plan<a class="headerlink" href="#plan" title="Permalink to this heading">¶</a></h4>
+<h4>Plan<a class="headerlink" href="#plan" title="Link to this heading">¶</a></h4>
 <p>A tree composed of other plans and functions (e.g. <code class="docutils literal notranslate"><span class="pre">Projection</span> <span class="pre">c1</span> <span class="pre">+</span> <span class="pre">c2,</span> <span class="pre">c1</span> <span class="pre">-</span> <span class="pre">c2</span> <span class="pre">AS</span> <span class="pre">sum12;</span> <span class="pre">Scan</span> <span class="pre">c1</span> <span class="pre">as</span> <span class="pre">u32,</span> <span class="pre">c2</span> <span class="pre">as</span> <span class="pre">u64</span></code>)
 that knows how to derive its schema.</p>
 <p>Certain plans have a frozen schema (e.g. Scan), while others derive their
 schema from their child nodes.</p>
 </section>
 <section id="column">
-<h4>Column<a class="headerlink" href="#column" title="Permalink to this heading">¶</a></h4>
+<h4>Column<a class="headerlink" href="#column" title="Link to this heading">¶</a></h4>
 <p>An identifier in a logical plan consists of field name and relation name.</p>
 </section>
 </section>
 <section id="physical">
-<h3>Physical<a class="headerlink" href="#physical" title="Permalink to this heading">¶</a></h3>
+<h3>Physical<a class="headerlink" href="#physical" title="Link to this heading">¶</a></h3>
 <section id="id1">
-<h4>Function<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h4>
+<h4>Function<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <p>An object that knows how to derive its physical field from its arguments’
 physical fields, and also how to actually perform the computation on data. A
 functions’ output physical field is a function of its input physical fields:</p>
@@ -673,7 +668,7 @@ functions’ output physical field is a function of its input physical fields:</
 </ul>
 </section>
 <section id="id2">
-<h4>Plan<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h4>
+<h4>Plan<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <p>A tree (e.g. <code class="docutils literal notranslate"><span class="pre">Projection</span> <span class="pre">c1</span> <span class="pre">+</span> <span class="pre">c2,</span> <span class="pre">c1</span> <span class="pre">-</span> <span class="pre">c2</span> <span class="pre">AS</span> <span class="pre">sum12;</span> <span class="pre">Scan</span> <span class="pre">c1</span> <span class="pre">as</span> <span class="pre">u32,</span> <span class="pre">c2</span> <span class="pre">as</span> <span class="pre">u64</span></code>)
 that knows how to derive its metadata and compute itself.</p>
 <p>Note how the physical plane does not know how to derive field names: field
@@ -681,27 +676,27 @@ names are solely a property of the logical plane, as they are not needed in the
 physical plane.</p>
 </section>
 <section id="id3">
-<h4>Column<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h4>
+<h4>Column<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <p>A type of physical node in a physical plan consists of a field name and unique index.</p>
 </section>
 </section>
 <section id="data-sources-registry">
-<h3>Data Sources’ registry<a class="headerlink" href="#data-sources-registry" title="Permalink to this heading">¶</a></h3>
+<h3>Data Sources’ registry<a class="headerlink" href="#data-sources-registry" title="Link to this heading">¶</a></h3>
 <p>A map of source name/relation -&gt; Schema plus associated properties necessary to read data from it (e.g. file path).</p>
 </section>
 <section id="functions-registry">
-<h3>Functions’ registry<a class="headerlink" href="#functions-registry" title="Permalink to this heading">¶</a></h3>
+<h3>Functions’ registry<a class="headerlink" href="#functions-registry" title="Link to this heading">¶</a></h3>
 <p>A map of function name -&gt; logical + physical function.</p>
 </section>
 <section id="physical-planner">
-<h3>Physical Planner<a class="headerlink" href="#physical-planner" title="Permalink to this heading">¶</a></h3>
+<h3>Physical Planner<a class="headerlink" href="#physical-planner" title="Link to this heading">¶</a></h3>
 <p>A function that knows how to derive a physical plan from a logical plan:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="p">(</span><span class="n">LogicalPlan</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PhysicalPlan</span>
 </pre></div>
 </div>
 </section>
 <section id="logical-optimizer">
-<h3>Logical Optimizer<a class="headerlink" href="#logical-optimizer" title="Permalink to this heading">¶</a></h3>
+<h3>Logical Optimizer<a class="headerlink" href="#logical-optimizer" title="Link to this heading">¶</a></h3>
 <p>A function that accepts a logical plan and returns an (optimized) logical plan
 which computes the same results, but in a more efficient manner:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">optimize</span><span class="p">(</span><span class="n">LogicalPlan</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">LogicalPlan</span>
@@ -709,7 +704,7 @@ which computes the same results, but in a more efficient manner:</p>
 </div>
 </section>
 <section id="physical-optimizer">
-<h3>Physical Optimizer<a class="headerlink" href="#physical-optimizer" title="Permalink to this heading">¶</a></h3>
+<h3>Physical Optimizer<a class="headerlink" href="#physical-optimizer" title="Link to this heading">¶</a></h3>
 <p>A function that accepts a physical plan and returns an (optimized) physical
 plan which computes the same results, but may differ based on the actual
 hardware or execution environment being run:</p>
@@ -718,7 +713,7 @@ hardware or execution environment being run:</p>
 </div>
 </section>
 <section id="builder">
-<h3>Builder<a class="headerlink" href="#builder" title="Permalink to this heading">¶</a></h3>
+<h3>Builder<a class="headerlink" href="#builder" title="Link to this heading">¶</a></h3>
 <p>A function that knows how to build a new logical plan from an existing logical
 plan and some extra parameters.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">build</span><span class="p">(</span><span class="n">logical_plan</span><span class="p">,</span> <span class="n">params</span><span class="o">...</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">logical_plan</span>
@@ -727,7 +722,7 @@ plan and some extra parameters.</p>
 </section>
 </section>
 <section id="id4">
-<h2>Invariants<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h2>
+<h2>Invariants<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
 <p>The following subsections describe invariants. Since functions’ output schema
 depends on its arguments’ schema (e.g. min, plus), the resulting schema can
 only be derived based on a known set of input schemas (TableProvider).
@@ -736,44 +731,44 @@ registered (e.g. does <code class="docutils literal notranslate"><span class="pr
 wording “same schema” is understood to mean “same schema under a given registry
 of data sources and functions”.</p>
 <section id="relation-name-tuples-in-logical-fields-and-logical-columns-are-unique">
-<h3>(relation, name) tuples in logical fields and logical columns are unique<a class="headerlink" href="#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique" title="Permalink to this heading">¶</a></h3>
+<h3>(relation, name) tuples in logical fields and logical columns are unique<a class="headerlink" href="#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique" title="Link to this heading">¶</a></h3>
 <p>Every logical field’s (relation, name) tuple in a logical schema MUST be unique.
 Every logical column’s (relation, name) tuple in a logical plan MUST be unique.</p>
 <p>This invariant guarantees that <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">t1.id,</span> <span class="pre">t2.id</span> <span class="pre">FROM</span> <span class="pre">t1</span> <span class="pre">JOIN</span> <span class="pre">t2...</span></code>
 unambiguously selects the field <code class="docutils literal notranslate"><span class="pre">t1.id</span></code> and <code class="docutils literal notranslate"><span class="pre">t2.id</span></code> in a logical schema in the
 logical plane.</p>
 <section id="responsibility">
-<h4>Responsibility<a class="headerlink" href="#responsibility" title="Permalink to this heading">¶</a></h4>
+<h4>Responsibility<a class="headerlink" href="#responsibility" title="Link to this heading">¶</a></h4>
 <p>It is the logical builder and optimizer’s responsibility to guarantee this
 invariant.</p>
 </section>
 <section id="validation">
-<h4>Validation<a class="headerlink" href="#validation" title="Permalink to this heading">¶</a></h4>
+<h4>Validation<a class="headerlink" href="#validation" title="Link to this heading">¶</a></h4>
 <p>Builder and optimizer MUST error if this invariant is violated on any logical
 node that creates a new schema (e.g. scan, projection, aggregation, join, etc.).</p>
 </section>
 </section>
 <section id="physical-schema-is-consistent-with-data">
-<h3>Physical schema is consistent with data<a class="headerlink" href="#physical-schema-is-consistent-with-data" title="Permalink to this heading">¶</a></h3>
+<h3>Physical schema is consistent with data<a class="headerlink" href="#physical-schema-is-consistent-with-data" title="Link to this heading">¶</a></h3>
 <p>The contents of every Array in every RecordBatch in every partition returned by
 a physical plan MUST be consistent with RecordBatch’s schema, in that every
 Array in the RecordBatch must be downcastable to its corresponding type
 declared in the RecordBatch.</p>
 <section id="id5">
-<h4>Responsibility<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h4>
+<h4>Responsibility<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
 <p>Physical functions MUST guarantee this invariant. This is particularly
 important in aggregate functions, whose aggregating type may be different from
 the intermediary types during calculations (e.g. sum(i32) -&gt; i64).</p>
 </section>
 <section id="id6">
-<h4>Validation<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h4>
+<h4>Validation<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
 <p>Since the validation of this invariant is computationally expensive, execution
 contexts CAN validate this invariant. It is acceptable for physical nodes to
 <code class="docutils literal notranslate"><span class="pre">panic!</span></code> if their input does not satisfy this invariant.</p>
 </section>
 </section>
 <section id="physical-schema-is-consistent-in-physical-functions">
-<h3>Physical schema is consistent in physical functions<a class="headerlink" href="#physical-schema-is-consistent-in-physical-functions" title="Permalink to this heading">¶</a></h3>
+<h3>Physical schema is consistent in physical functions<a class="headerlink" href="#physical-schema-is-consistent-in-physical-functions" title="Link to this heading">¶</a></h3>
 <p>The schema of every Array returned by a physical function MUST match the
 DataType reported by the physical function itself.</p>
 <p>This ensures that when a physical function claims that it returns a type
@@ -781,7 +776,7 @@ DataType reported by the physical function itself.</p>
 corresponding type (e.g. Int32Array), as well as to write data to formats that
 have a schema with nullability flag (e.g. parquet).</p>
 <section id="id7">
-<h4>Responsibility<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h4>
+<h4>Responsibility<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
 <p>It is the responsibility of the developer that writes a physical function to
 guarantee this invariant.</p>
 <p>In particular:</p>
@@ -791,13 +786,13 @@ guarantee this invariant.</p>
 </ul>
 </section>
 <section id="id8">
-<h4>Validation<a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h4>
+<h4>Validation<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h4>
 <p>Since the validation of this invariant is computationally expensive, execution
 contexts CAN validate this invariant.</p>
 </section>
 </section>
 <section id="the-physical-schema-is-invariant-under-planning">
-<h3>The physical schema is invariant under planning<a class="headerlink" href="#the-physical-schema-is-invariant-under-planning" title="Permalink to this heading">¶</a></h3>
+<h3>The physical schema is invariant under planning<a class="headerlink" href="#the-physical-schema-is-invariant-under-planning" title="Link to this heading">¶</a></h3>
 <p>The physical schema derived by a physical plan returned by the planner MUST be
 equivalent to the physical schema derived by the logical plan passed to the
 planner. Specifically:</p>
@@ -817,19 +812,19 @@ single function, <code class="docutils literal notranslate"><span class="pre">Pr
 physical schema of every <code class="docutils literal notranslate"><span class="pre">logical</span> <span class="pre">function</span> <span class="pre">-&gt;</span> <span class="pre">physical</span> <span class="pre">function</span></code> must be
 invariant under planning.</p>
 <section id="id9">
-<h4>Responsibility<a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h4>
+<h4>Responsibility<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h4>
 <p>Developers of physical and logical plans and planners MUST guarantee this
 invariant for every triplet (logical plan, physical plan, conversion rule).</p>
 </section>
 <section id="id10">
-<h4>Validation<a class="headerlink" href="#id10" title="Permalink to this heading">¶</a></h4>
+<h4>Validation<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h4>
 <p>Planners MUST validate this invariant. In particular they MUST return an error
 when, during planning, a physical function’s derived schema does not match the
 logical functions’ derived schema.</p>
 </section>
 </section>
 <section id="the-output-schema-equals-the-physical-plan-schema">
-<h3>The output schema equals the physical plan schema<a class="headerlink" href="#the-output-schema-equals-the-physical-plan-schema" title="Permalink to this heading">¶</a></h3>
+<h3>The output schema equals the physical plan schema<a class="headerlink" href="#the-output-schema-equals-the-physical-plan-schema" title="Link to this heading">¶</a></h3>
 <p>The schema of every RecordBatch in every partition outputted by a physical plan
 MUST be equal to the schema of the physical plan. Specifically:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">physical_plan</span><span class="o">.</span><span class="n">evaluate</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span><span class="o">.</span><span class="n">schema</span> <span class="o">=</span> <span class="n">physical_plan</span><span class="o">.</span><span class="n">schema</span>
@@ -839,16 +834,16 @@ MUST be equal to the schema of the physical plan. Specifically:</p>
 batches do not need to know the output schema of the physical plan; they can
 safely rely on the record batch’s schema to perform downscaling and naming.</p>
 <section id="id11">
-<h4>Responsibility<a class="headerlink" href="#id11" title="Permalink to this heading">¶</a></h4>
+<h4>Responsibility<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h4>
 <p>Physical nodes MUST guarantee this invariant.</p>
 </section>
 <section id="id12">
-<h4>Validation<a class="headerlink" href="#id12" title="Permalink to this heading">¶</a></h4>
+<h4>Validation<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
 <p>Execution Contexts CAN validate this invariant.</p>
 </section>
 </section>
 <section id="logical-schema-is-invariant-under-logical-optimization">
-<h3>Logical schema is invariant under logical optimization<a class="headerlink" href="#logical-schema-is-invariant-under-logical-optimization" title="Permalink to this heading">¶</a></h3>
+<h3>Logical schema is invariant under logical optimization<a class="headerlink" href="#logical-schema-is-invariant-under-logical-optimization" title="Link to this heading">¶</a></h3>
 <p>The logical schema derived by a projected logical plan returned by the logical
 optimizer MUST be equivalent to the logical schema derived by the logical plan
 passed to the planner:</p>
@@ -859,16 +854,16 @@ passed to the planner:</p>
 referencing logical columns (name and index) or assumptions about their
 schemas.</p>
 <section id="id13">
-<h4>Responsibility<a class="headerlink" href="#id13" title="Permalink to this heading">¶</a></h4>
+<h4>Responsibility<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
 <p>Logical optimizers MUST guarantee this invariant.</p>
 </section>
 <section id="id14">
-<h4>Validation<a class="headerlink" href="#id14" title="Permalink to this heading">¶</a></h4>
+<h4>Validation<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h4>
 <p>Users of logical optimizers SHOULD validate this invariant.</p>
 </section>
 </section>
 <section id="physical-schema-is-invariant-under-physical-optimization">
-<h3>Physical schema is invariant under physical optimization<a class="headerlink" href="#physical-schema-is-invariant-under-physical-optimization" title="Permalink to this heading">¶</a></h3>
+<h3>Physical schema is invariant under physical optimization<a class="headerlink" href="#physical-schema-is-invariant-under-physical-optimization" title="Link to this heading">¶</a></h3>
 <p>The physical schema derived by a projected physical plan returned by the
 physical optimizer MUST match the physical schema derived by the physical plan
 passed to the planner:</p>
@@ -879,11 +874,11 @@ passed to the planner:</p>
 references of logical columns (name and index) or assumptions about their
 schemas.</p>
 <section id="id15">
-<h4>Responsibility<a class="headerlink" href="#id15" title="Permalink to this heading">¶</a></h4>
+<h4>Responsibility<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h4>
 <p>Optimizers MUST guarantee this invariant.</p>
 </section>
 <section id="id16">
-<h4>Validation<a class="headerlink" href="#id16" title="Permalink to this heading">¶</a></h4>
+<h4>Validation<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h4>
 <p>Users of optimizers SHOULD validate this invariant.</p>
 </section>
 </section>
@@ -930,7 +925,7 @@ schemas.</p>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

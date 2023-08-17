@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
-    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Adding User Defined Functions: Scalar/Window/Aggregate" href="adding-udfs.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -429,10 +424,10 @@
   under the License.
 -->
 <section id="catalogs-schemas-and-tables">
-<h1>Catalogs, Schemas, and Tables<a class="headerlink" href="#catalogs-schemas-and-tables" title="Permalink to this heading">¶</a></h1>
+<h1>Catalogs, Schemas, and Tables<a class="headerlink" href="#catalogs-schemas-and-tables" title="Link to this heading">¶</a></h1>
 <p>This section describes how to create and manage catalogs, schemas, and tables in DataFusion. For those wanting to dive into the code quickly please see the <a class="reference download internal" download="" href="../_downloads/9dc934d68aef6b44bd3235a7dbc9a8be/catalog.rs"><span class="xref download myst">example</span></a>.</p>
 <section id="general-concepts">
-<h2>General Concepts<a class="headerlink" href="#general-concepts" title="Permalink to this heading">¶</a></h2>
+<h2>General Concepts<a class="headerlink" href="#general-concepts" title="Link to this heading">¶</a></h2>
 <p>Catalogs, schemas, and tables are organized in a hierarchy. A catalog contains schemas, and a schema contains tables.</p>
 <p>DataFusion comes with a basic in memory catalog functionality in the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/index.html"><code class="docutils literal notranslate"><span class="pre">catalog</span></code> module</a>. You can use these in memory implementations as is, or extend DataFusion with your own catalog implementations, for example based on local files or files on remote object storage.</p>
 <p>Similarly to other concepts in DataFusion, you’ll implement various traits to create your own catalogs, schemas, and tables. The following sections describe the traits you’ll need to implement.</p>
@@ -440,7 +435,7 @@
 <p>In the following example, we’ll implement an in memory catalog, starting with the <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code> trait as we need one to register with the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>.</p>
 </section>
 <section id="implementing-memoryschemaprovider">
-<h2>Implementing <code class="docutils literal notranslate"><span class="pre">MemorySchemaProvider</span></code><a class="headerlink" href="#implementing-memoryschemaprovider" title="Permalink to this heading">¶</a></h2>
+<h2>Implementing <code class="docutils literal notranslate"><span class="pre">MemorySchemaProvider</span></code><a class="headerlink" href="#implementing-memoryschemaprovider" title="Link to this heading">¶</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">MemorySchemaProvider</span></code> is a simple implementation of the <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code> trait. It stores state (i.e. tables) in a <code class="docutils literal notranslate"><span class="pre">DashMap</span></code>, which then underlies the <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code> trait.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">MemorySchemaProvider</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">tables</span>: <span class="nc">DashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">TableProvider</span><span class="o">&gt;&gt;</span><span class="p">,</span>
@@ -499,7 +494,7 @@
 </pre></div>
 </div>
 <section id="asynchronous-schemaprovider">
-<h3>Asynchronous <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code><a class="headerlink" href="#asynchronous-schemaprovider" title="Permalink to this heading">¶</a></h3>
+<h3>Asynchronous <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code><a class="headerlink" href="#asynchronous-schemaprovider" title="Link to this heading">¶</a></h3>
 <p>It’s often useful to fetch metadata about which tables are in a schema, from a remote source. For example, a schema provider could fetch metadata from a remote database. To support this, the <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code> trait has an asynchronous <code class="docutils literal notranslate"><span class="pre">table</span></code> method.</p>
 <p>The trait is roughly the same except for the <code class="docutils literal notranslate"><span class="pre">table</span></code> method, and the addition of the <code class="docutils literal notranslate"><span class="pre">#[async_trait]</span></code> attribute.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[async_trait]</span>
@@ -512,7 +507,7 @@
 </div>
 </section>
 <section id="implementing-memorycatalogprovider">
-<h3>Implementing <code class="docutils literal notranslate"><span class="pre">MemoryCatalogProvider</span></code><a class="headerlink" href="#implementing-memorycatalogprovider" title="Permalink to this heading">¶</a></h3>
+<h3>Implementing <code class="docutils literal notranslate"><span class="pre">MemoryCatalogProvider</span></code><a class="headerlink" href="#implementing-memorycatalogprovider" title="Link to this heading">¶</a></h3>
 <p>As mentioned, the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> can manage the schemas in a catalog, and the <code class="docutils literal notranslate"><span class="pre">MemoryCatalogProvider</span></code> is a simple implementation of the <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> trait. It stores schemas in a <code class="docutils literal notranslate"><span class="pre">DashMap</span></code>.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span> <span class="nc">MemoryCatalogList</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="sd">/// Collection of catalogs containing schemas and ultimately TableProviders</span>
@@ -563,7 +558,7 @@
 </section>
 </section>
 <section id="recap">
-<h2>Recap<a class="headerlink" href="#recap" title="Permalink to this heading">¶</a></h2>
+<h2>Recap<a class="headerlink" href="#recap" title="Link to this heading">¶</a></h2>
 <p>To recap, you need to:</p>
 <ol class="arabic simple">
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait to create a table provider, or use an existing one.</p></li>
@@ -613,7 +608,7 @@
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

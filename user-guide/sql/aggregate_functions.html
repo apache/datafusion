@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
-    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Window Functions" href="window_functions.html" />
@@ -250,11 +250,6 @@
  <li class="toctree-l1">
   <a class="reference internal" href="../../library-user-guide/extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/execution-plans.html">
-   Execution Plans
   </a>
  </li>
 </ul>
@@ -1014,10 +1009,10 @@
   under the License.
 -->
 <section id="aggregate-functions">
-<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h1>
 <p>Aggregate functions operate on a set of values to compute a single result.</p>
 <section id="general">
-<h2>General<a class="headerlink" href="#general" title="Permalink to this heading">¶</a></h2>
+<h2>General<a class="headerlink" href="#general" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#avg">avg</a></p></li>
 <li><p><a class="reference internal" href="#bit-and">bit_and</a></p></li>
@@ -1036,33 +1031,33 @@
 <li><p><a class="reference internal" href="#last-value">last_value</a></p></li>
 </ul>
 <section id="avg">
-<h3><code class="docutils literal notranslate"><span class="pre">avg</span></code><a class="headerlink" href="#avg" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">avg</span></code><a class="headerlink" href="#avg" title="Link to this heading">¶</a></h3>
 <p>Returns the average of numeric values in the specified column.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">avg</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="arguments">
-<h4>Arguments<a class="headerlink" href="#arguments" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
 </ul>
 </section>
 <section id="aliases">
-<h4>Aliases<a class="headerlink" href="#aliases" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#aliases" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">mean</span></code></p></li>
 </ul>
 </section>
 </section>
 <section id="bit-and">
-<h3><code class="docutils literal notranslate"><span class="pre">bit_and</span></code><a class="headerlink" href="#bit-and" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">bit_and</span></code><a class="headerlink" href="#bit-and" title="Link to this heading">¶</a></h3>
 <p>Computes the bitwise AND of all non-null input values.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id1">
-<h4>Arguments<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1070,13 +1065,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="bit-or">
-<h3><code class="docutils literal notranslate"><span class="pre">bit_or</span></code><a class="headerlink" href="#bit-or" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">bit_or</span></code><a class="headerlink" href="#bit-or" title="Link to this heading">¶</a></h3>
 <p>Computes the bitwise OR of all non-null input values.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_or</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id2">
-<h4>Arguments<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1084,13 +1079,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="bit-xor">
-<h3><code class="docutils literal notranslate"><span class="pre">bit_xor</span></code><a class="headerlink" href="#bit-xor" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">bit_xor</span></code><a class="headerlink" href="#bit-xor" title="Link to this heading">¶</a></h3>
 <p>Computes the bitwise exclusive OR of all non-null input values.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_xor</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id3">
-<h4>Arguments<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1098,13 +1093,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="bool-and">
-<h3><code class="docutils literal notranslate"><span class="pre">bool_and</span></code><a class="headerlink" href="#bool-and" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">bool_and</span></code><a class="headerlink" href="#bool-and" title="Link to this heading">¶</a></h3>
 <p>Returns true if all non-null input values are true, otherwise false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bool_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id4">
-<h4>Arguments<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1112,13 +1107,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="bool-or">
-<h3><code class="docutils literal notranslate"><span class="pre">bool_or</span></code><a class="headerlink" href="#bool-or" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">bool_or</span></code><a class="headerlink" href="#bool-or" title="Link to this heading">¶</a></h3>
 <p>Returns true if any non-null input value is true, otherwise false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bool_or</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id5">
-<h4>Arguments<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1126,7 +1121,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="count">
-<h3><code class="docutils literal notranslate"><span class="pre">count</span></code><a class="headerlink" href="#count" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">count</span></code><a class="headerlink" href="#count" title="Link to this heading">¶</a></h3>
 <p>Returns the number of rows in the specified column.</p>
 <p>Count includes <em>null</em> values in the total count.
 To exclude <em>null</em> values from the total count, include <code class="docutils literal notranslate"><span class="pre">&lt;column&gt;</span> <span class="pre">IS</span> <span class="pre">NOT</span> <span class="pre">NULL</span></code>
@@ -1135,7 +1130,7 @@ in the <code class="docutils literal notranslate"><span class="pre">WHERE</span>
 </pre></div>
 </div>
 <section id="id6">
-<h4>Arguments<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1143,13 +1138,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="max">
-<h3><code class="docutils literal notranslate"><span class="pre">max</span></code><a class="headerlink" href="#max" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">max</span></code><a class="headerlink" href="#max" title="Link to this heading">¶</a></h3>
 <p>Returns the maximum value in the specified column.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">max</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id7">
-<h4>Arguments<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1157,17 +1152,17 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="mean">
-<h3><code class="docutils literal notranslate"><span class="pre">mean</span></code><a class="headerlink" href="#mean" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">mean</span></code><a class="headerlink" href="#mean" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#avg">avg</a>.</em></p>
 </section>
 <section id="median">
-<h3><code class="docutils literal notranslate"><span class="pre">median</span></code><a class="headerlink" href="#median" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">median</span></code><a class="headerlink" href="#median" title="Link to this heading">¶</a></h3>
 <p>Returns the median value in the specified column.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id8">
-<h4>Arguments<a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1175,13 +1170,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="min">
-<h3><code class="docutils literal notranslate"><span class="pre">min</span></code><a class="headerlink" href="#min" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">min</span></code><a class="headerlink" href="#min" title="Link to this heading">¶</a></h3>
 <p>Returns the minimum value in the specified column.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">min</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id9">
-<h4>Arguments<a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1189,13 +1184,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="sum">
-<h3><code class="docutils literal notranslate"><span class="pre">sum</span></code><a class="headerlink" href="#sum" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">sum</span></code><a class="headerlink" href="#sum" title="Link to this heading">¶</a></h3>
 <p>Returns the sum of all values in the specified column.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">sum</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id10">
-<h4>Arguments<a class="headerlink" href="#id10" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1203,13 +1198,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="array-agg">
-<h3><code class="docutils literal notranslate"><span class="pre">array_agg</span></code><a class="headerlink" href="#array-agg" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_agg</span></code><a class="headerlink" href="#array-agg" title="Link to this heading">¶</a></h3>
 <p>Returns an array created from the expression elements. If ordering requirement is given, elements are inserted in the order of required ordering.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_agg</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id11">
-<h4>Arguments<a class="headerlink" href="#id11" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1217,13 +1212,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="first-value">
-<h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">¶</a></h3>
 <p>Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id12">
-<h4>Arguments<a class="headerlink" href="#id12" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1231,13 +1226,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="last-value">
-<h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">¶</a></h3>
 <p>Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id13">
-<h4>Arguments<a class="headerlink" href="#id13" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1246,7 +1241,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="statistical">
-<h2>Statistical<a class="headerlink" href="#statistical" title="Permalink to this heading">¶</a></h2>
+<h2>Statistical<a class="headerlink" href="#statistical" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#corr">corr</a></p></li>
 <li><p><a class="reference internal" href="#covar">covar</a></p></li>
@@ -1269,13 +1264,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 <li><p><a class="reference internal" href="#regr-sxy">regr_sxy</a></p></li>
 </ul>
 <section id="corr">
-<h3><code class="docutils literal notranslate"><span class="pre">corr</span></code><a class="headerlink" href="#corr" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">corr</span></code><a class="headerlink" href="#corr" title="Link to this heading">¶</a></h3>
 <p>Returns the coefficient of correlation between two numeric values.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">corr</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id14">
-<h4>Arguments<a class="headerlink" href="#id14" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression1</strong>: First expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1285,13 +1280,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="covar">
-<h3><code class="docutils literal notranslate"><span class="pre">covar</span></code><a class="headerlink" href="#covar" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">covar</span></code><a class="headerlink" href="#covar" title="Link to this heading">¶</a></h3>
 <p>Returns the covariance of a set of number pairs.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">covar</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id15">
-<h4>Arguments<a class="headerlink" href="#id15" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression1</strong>: First expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1301,13 +1296,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="covar-pop">
-<h3><code class="docutils literal notranslate"><span class="pre">covar_pop</span></code><a class="headerlink" href="#covar-pop" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">covar_pop</span></code><a class="headerlink" href="#covar-pop" title="Link to this heading">¶</a></h3>
 <p>Returns the population covariance of a set of number pairs.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">covar_pop</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id16">
-<h4>Arguments<a class="headerlink" href="#id16" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression1</strong>: First expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1317,13 +1312,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="covar-samp">
-<h3><code class="docutils literal notranslate"><span class="pre">covar_samp</span></code><a class="headerlink" href="#covar-samp" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">covar_samp</span></code><a class="headerlink" href="#covar-samp" title="Link to this heading">¶</a></h3>
 <p>Returns the sample covariance of a set of number pairs.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">covar_samp</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id17">
-<h4>Arguments<a class="headerlink" href="#id17" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression1</strong>: First expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1333,13 +1328,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="stddev">
-<h3><code class="docutils literal notranslate"><span class="pre">stddev</span></code><a class="headerlink" href="#stddev" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">stddev</span></code><a class="headerlink" href="#stddev" title="Link to this heading">¶</a></h3>
 <p>Returns the standard deviation of a set of numbers.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">stddev</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id18">
-<h4>Arguments<a class="headerlink" href="#id18" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1347,13 +1342,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="stddev-pop">
-<h3><code class="docutils literal notranslate"><span class="pre">stddev_pop</span></code><a class="headerlink" href="#stddev-pop" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">stddev_pop</span></code><a class="headerlink" href="#stddev-pop" title="Link to this heading">¶</a></h3>
 <p>Returns the population standard deviation of a set of numbers.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">stddev_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id19">
-<h4>Arguments<a class="headerlink" href="#id19" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1361,13 +1356,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="stddev-samp">
-<h3><code class="docutils literal notranslate"><span class="pre">stddev_samp</span></code><a class="headerlink" href="#stddev-samp" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">stddev_samp</span></code><a class="headerlink" href="#stddev-samp" title="Link to this heading">¶</a></h3>
 <p>Returns the sample standard deviation of a set of numbers.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">stddev_samp</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id20">
-<h4>Arguments<a class="headerlink" href="#id20" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1375,13 +1370,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="var">
-<h3><code class="docutils literal notranslate"><span class="pre">var</span></code><a class="headerlink" href="#var" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">var</span></code><a class="headerlink" href="#var" title="Link to this heading">¶</a></h3>
 <p>Returns the statistical variance of a set of numbers.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id21">
-<h4>Arguments<a class="headerlink" href="#id21" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1389,13 +1384,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="var-pop">
-<h3><code class="docutils literal notranslate"><span class="pre">var_pop</span></code><a class="headerlink" href="#var-pop" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">var_pop</span></code><a class="headerlink" href="#var-pop" title="Link to this heading">¶</a></h3>
 <p>Returns the statistical population variance of a set of numbers.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id22">
-<h4>Arguments<a class="headerlink" href="#id22" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1403,13 +1398,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="var-samp">
-<h3><code class="docutils literal notranslate"><span class="pre">var_samp</span></code><a class="headerlink" href="#var-samp" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">var_samp</span></code><a class="headerlink" href="#var-samp" title="Link to this heading">¶</a></h3>
 <p>Returns the statistical sample variance of a set of numbers.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var_samp</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id23">
-<h4>Arguments<a class="headerlink" href="#id23" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1417,14 +1412,14 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-slope">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_slope</span></code><a class="headerlink" href="#regr-slope" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_slope</span></code><a class="headerlink" href="#regr-slope" title="Link to this heading">¶</a></h3>
 <p>Returns the slope of the linear regression line for non-null pairs in aggregate columns.
 Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_slope</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id24">
-<h4>Arguments<a class="headerlink" href="#id24" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1434,13 +1429,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-avgx">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_avgx</span></code><a class="headerlink" href="#regr-avgx" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_avgx</span></code><a class="headerlink" href="#regr-avgx" title="Link to this heading">¶</a></h3>
 <p>Computes the average of the independent variable (input) <code class="docutils literal notranslate"><span class="pre">expression_x</span></code> for the non-null paired data points.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_avgx</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id25">
-<h4>Arguments<a class="headerlink" href="#id25" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Dependent variable.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1450,13 +1445,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-avgy">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_avgy</span></code><a class="headerlink" href="#regr-avgy" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_avgy</span></code><a class="headerlink" href="#regr-avgy" title="Link to this heading">¶</a></h3>
 <p>Computes the average of the dependent variable (output) <code class="docutils literal notranslate"><span class="pre">expression_y</span></code> for the non-null paired data points.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_avgy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id26">
-<h4>Arguments<a class="headerlink" href="#id26" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Dependent variable.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1466,13 +1461,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-count">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_count</span></code><a class="headerlink" href="#regr-count" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_count</span></code><a class="headerlink" href="#regr-count" title="Link to this heading">¶</a></h3>
 <p>Counts the number of non-null paired data points.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_count</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id27">
-<h4>Arguments<a class="headerlink" href="#id27" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Dependent variable.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1482,13 +1477,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-intercept">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_intercept</span></code><a class="headerlink" href="#regr-intercept" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_intercept</span></code><a class="headerlink" href="#regr-intercept" title="Link to this heading">¶</a></h3>
 <p>Computes the y-intercept of the linear regression line. For the equation (y = kx + b), this function returns <code class="docutils literal notranslate"><span class="pre">b</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_intercept</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id28">
-<h4>Arguments<a class="headerlink" href="#id28" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Dependent variable.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1498,13 +1493,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-r2">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_r2</span></code><a class="headerlink" href="#regr-r2" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_r2</span></code><a class="headerlink" href="#regr-r2" title="Link to this heading">¶</a></h3>
 <p>Computes the square of the correlation coefficient between the independent and dependent variables.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_r2</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id29">
-<h4>Arguments<a class="headerlink" href="#id29" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Dependent variable.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1514,13 +1509,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-sxx">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_sxx</span></code><a class="headerlink" href="#regr-sxx" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_sxx</span></code><a class="headerlink" href="#regr-sxx" title="Link to this heading">¶</a></h3>
 <p>Computes the sum of squares of the independent variable.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_sxx</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id30">
-<h4>Arguments<a class="headerlink" href="#id30" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Dependent variable.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1530,13 +1525,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-syy">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_syy</span></code><a class="headerlink" href="#regr-syy" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_syy</span></code><a class="headerlink" href="#regr-syy" title="Link to this heading">¶</a></h3>
 <p>Computes the sum of squares of the dependent variable.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_syy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id31">
-<h4>Arguments<a class="headerlink" href="#id31" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Dependent variable.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1546,13 +1541,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="regr-sxy">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_sxy</span></code><a class="headerlink" href="#regr-sxy" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regr_sxy</span></code><a class="headerlink" href="#regr-sxy" title="Link to this heading">¶</a></h3>
 <p>Computes the sum of products of paired data points.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_sxy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id32">
-<h4>Arguments<a class="headerlink" href="#id32" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: Dependent variable.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1563,7 +1558,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="approximate">
-<h2>Approximate<a class="headerlink" href="#approximate" title="Permalink to this heading">¶</a></h2>
+<h2>Approximate<a class="headerlink" href="#approximate" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#approx-distinct">approx_distinct</a></p></li>
 <li><p><a class="reference internal" href="#approx-median">approx_median</a></p></li>
@@ -1571,14 +1566,14 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 <li><p><a class="reference internal" href="#approx-percentile-cont-with-weight">approx_percentile_cont_with_weight</a></p></li>
 </ul>
 <section id="approx-distinct">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_distinct</span></code><a class="headerlink" href="#approx-distinct" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">approx_distinct</span></code><a class="headerlink" href="#approx-distinct" title="Link to this heading">¶</a></h3>
 <p>Returns the approximate number of distinct input values calculated using the
 HyperLogLog algorithm.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_distinct</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id33">
-<h4>Arguments<a class="headerlink" href="#id33" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1586,14 +1581,14 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="approx-median">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_median</span></code><a class="headerlink" href="#approx-median" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">approx_median</span></code><a class="headerlink" href="#approx-median" title="Link to this heading">¶</a></h3>
 <p>Returns the approximate median (50th percentile) of input values.
 It is an alias of <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont(x,</span> <span class="pre">0.5)</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id34">
-<h4>Arguments<a class="headerlink" href="#id34" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1601,13 +1596,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="approx-percentile-cont">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code><a class="headerlink" href="#approx-percentile-cont" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code><a class="headerlink" href="#approx-percentile-cont" title="Link to this heading">¶</a></h3>
 <p>Returns the approximate percentile of input values using the t-digest algorithm.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">percentile</span><span class="p">,</span> <span class="n">centroids</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id35">
-<h4>Arguments<a class="headerlink" href="#id35" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id35" title="Link to this heading">¶</a></h4>
 <ul>
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1621,14 +1616,14 @@ requires more memory to compute.</p>
 </section>
 </section>
 <section id="approx-percentile-cont-with-weight">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code><a class="headerlink" href="#approx-percentile-cont-with-weight" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code><a class="headerlink" href="#approx-percentile-cont-with-weight" title="Link to this heading">¶</a></h3>
 <p>Returns the weighted approximate percentile of input values using the
 t-digest algorithm.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">percentile</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id36">
-<h4>Arguments<a class="headerlink" href="#id36" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id36" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -1681,7 +1676,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

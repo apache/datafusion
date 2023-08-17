@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
-    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="SELECT syntax" href="select.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -422,7 +417,7 @@
   under the License.
 -->
 <section id="data-types">
-<h1>Data Types<a class="headerlink" href="#data-types" title="Permalink to this heading">¶</a></h1>
+<h1>Data Types<a class="headerlink" href="#data-types" title="Link to this heading">¶</a></h1>
 <p>DataFusion uses Arrow, and thus the Arrow type system, for query
 execution. The SQL types from
 <a class="reference external" href="https://github.com/sqlparser-rs/sqlparser-rs/blob/main/src/ast/data_type.rs#L27">sqlparser-rs</a>
@@ -430,26 +425,26 @@ are mapped to <a class="reference external" href="https://docs.rs/arrow/latest/a
 This mapping occurs when defining the schema in a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> command or when performing a SQL <code class="docutils literal notranslate"><span class="pre">CAST</span></code> operation.</p>
 <p>You can see the corresponding Arrow type for any SQL expression using
 the <code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code> function. For example:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select arrow_typeof(interval &#39;1 month&#39;);
-+-------------------------------------+
-| arrowtypeof(IntervalYearMonth(&quot;1&quot;)) |
-+-------------------------------------+
-| Interval(YearMonth)                 |
-+-------------------------------------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="nb">interval</span><span class="w"> </span><span class="s1">&#39;1 month&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">arrowtypeof</span><span class="p">(</span><span class="n">IntervalYearMonth</span><span class="p">(</span><span class="ss">&quot;1&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="nb">Interval</span><span class="p">(</span><span class="n">YearMonth</span><span class="p">)</span><span class="w">                 </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------+</span>
 </pre></div>
 </div>
 <p>You can cast a SQL expression to a specific Arrow type using the <code class="docutils literal notranslate"><span class="pre">arrow_cast</span></code> function
 For example, to cast the output of <code class="docutils literal notranslate"><span class="pre">now()</span></code> to a <code class="docutils literal notranslate"><span class="pre">Timestamp</span></code> with second precision:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select arrow_cast(now(), &#39;Timestamp(Second, None)&#39;);
-+---------------------+
-| now()               |
-+---------------------+
-| 2023-03-03T17:19:21 |
-+---------------------+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">now</span><span class="p">(),</span><span class="w"> </span><span class="s1">&#39;Timestamp(Second, None)&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">now</span><span class="p">()</span><span class="w">               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">03</span><span class="n">T17</span><span class="p">:</span><span class="mi">19</span><span class="p">:</span><span class="mi">21</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------+</span>
 </pre></div>
 </div>
 <section id="character-types">
-<h2>Character Types<a class="headerlink" href="#character-types" title="Permalink to this heading">¶</a></h2>
+<h2>Character Types<a class="headerlink" href="#character-types" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>SQL DataType</p></th>
@@ -473,7 +468,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 </table>
 </section>
 <section id="numeric-types">
-<h2>Numeric Types<a class="headerlink" href="#numeric-types" title="Permalink to this heading">¶</a></h2>
+<h2>Numeric Types<a class="headerlink" href="#numeric-types" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>SQL DataType</p></th>
@@ -534,7 +529,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 </table>
 </section>
 <section id="date-time-types">
-<h2>Date/Time Types<a class="headerlink" href="#date-time-types" title="Permalink to this heading">¶</a></h2>
+<h2>Date/Time Types<a class="headerlink" href="#date-time-types" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>SQL DataType</p></th>
@@ -558,7 +553,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 </table>
 </section>
 <section id="boolean-types">
-<h2>Boolean Types<a class="headerlink" href="#boolean-types" title="Permalink to this heading">¶</a></h2>
+<h2>Boolean Types<a class="headerlink" href="#boolean-types" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>SQL DataType</p></th>
@@ -573,7 +568,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 </table>
 </section>
 <section id="binary-types">
-<h2>Binary Types<a class="headerlink" href="#binary-types" title="Permalink to this heading">¶</a></h2>
+<h2>Binary Types<a class="headerlink" href="#binary-types" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>SQL DataType</p></th>
@@ -590,7 +585,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 <code class="docutils literal notranslate"><span class="pre">X'1234</span></code> to create a <code class="docutils literal notranslate"><span class="pre">Binary</span></code> value of two bytes, <code class="docutils literal notranslate"><span class="pre">0x12</span></code> and <code class="docutils literal notranslate"><span class="pre">0x34</span></code>.</p>
 </section>
 <section id="unsupported-sql-types">
-<h2>Unsupported SQL Types<a class="headerlink" href="#unsupported-sql-types" title="Permalink to this heading">¶</a></h2>
+<h2>Unsupported SQL Types<a class="headerlink" href="#unsupported-sql-types" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>SQL Data Type</p></th>
@@ -638,7 +633,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
 </table>
 </section>
 <section id="supported-arrow-types">
-<h2>Supported Arrow Types<a class="headerlink" href="#supported-arrow-types" title="Permalink to this heading">¶</a></h2>
+<h2>Supported Arrow Types<a class="headerlink" href="#supported-arrow-types" title="Link to this heading">¶</a></h2>
 <p>The following types are supported by the <code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code> function:</p>
 <table class="table">
 <thead>
@@ -755,7 +750,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

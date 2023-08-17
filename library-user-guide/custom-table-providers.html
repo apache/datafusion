@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
-    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Extending DataFusion’s operators: custom LogicalPlan and Execution Plans" href="extending-operators.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -426,17 +421,17 @@
   under the License.
 -->
 <section id="custom-table-provider">
-<h1>Custom Table Provider<a class="headerlink" href="#custom-table-provider" title="Permalink to this heading">¶</a></h1>
+<h1>Custom Table Provider<a class="headerlink" href="#custom-table-provider" title="Link to this heading">¶</a></h1>
 <p>Like other areas of DataFusion, you extend DataFusion’s functionality by implementing a trait. The <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> and associated traits, have methods that allow you to implement a custom table provider, i.e. use DataFusion’s other functionality with your custom data source.</p>
 <p>This section will also touch on how to have DataFusion use the new <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> implementation.</p>
 <section id="table-provider-and-scan">
-<h2>Table Provider and Scan<a class="headerlink" href="#table-provider-and-scan" title="Permalink to this heading">¶</a></h2>
+<h2>Table Provider and Scan<a class="headerlink" href="#table-provider-and-scan" title="Link to this heading">¶</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">scan</span></code> method on the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> is likely its most important. It returns an <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> that DataFusion will use to read the actual data during execution o the query.</p>
 <section id="scan">
-<h3>Scan<a class="headerlink" href="#scan" title="Permalink to this heading">¶</a></h3>
+<h3>Scan<a class="headerlink" href="#scan" title="Link to this heading">¶</a></h3>
 <p>As mentioned, <code class="docutils literal notranslate"><span class="pre">scan</span></code> returns an execution plan, and in particular a <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;dyn</span> <span class="pre">ExecutionPlan&gt;&gt;</span></code>. The core of this is returning something that can be dynamically dispatched to an <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>. And as per the general DataFusion idea, we’ll need to implement it.</p>
 <section id="execution-plan">
-<h4>Execution Plan<a class="headerlink" href="#execution-plan" title="Permalink to this heading">¶</a></h4>
+<h4>Execution Plan<a class="headerlink" href="#execution-plan" title="Link to this heading">¶</a></h4>
 <p>The <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> trait at its core is a way to get a stream of batches. The aptly-named <code class="docutils literal notranslate"><span class="pre">execute</span></code> method returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;SendableRecordBatchStream&gt;</span></code>, which should be a stream of <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code>es that can be sent across threads, and has a schema that matches the data to be contained in those batches.</p>
 <p>There are many different types of <code class="docutils literal notranslate"><span class="pre">SendableRecordBatchStream</span></code> implemented in DataFusion – you can use a pre existing one, such as <code class="docutils literal notranslate"><span class="pre">MemoryStream</span></code> (if your <code class="docutils literal notranslate"><span class="pre">RecordBatch</span></code>es are all in memory) or implement your own custom logic, depending on your usecase.</p>
 <p>Looking at the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276">example in this repo</a>, the execute method:</p>
@@ -489,7 +484,7 @@
 <p>With the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> implemented, we can now implement the <code class="docutils literal notranslate"><span class="pre">scan</span></code> method of the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
 </section>
 <section id="scan-revisited">
-<h4>Scan Revisited<a class="headerlink" href="#scan-revisited" title="Permalink to this heading">¶</a></h4>
+<h4>Scan Revisited<a class="headerlink" href="#scan-revisited" title="Link to this heading">¶</a></h4>
 <p>The <code class="docutils literal notranslate"><span class="pre">scan</span></code> method of the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;dyn</span> <span class="pre">ExecutionPlan&gt;&gt;</span></code>. We can use the <code class="docutils literal notranslate"><span class="pre">Arc</span></code> to return a reference-counted pointer to the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> we implemented. In the example, this is done by:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">CustomDataSource</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">pub</span><span class="p">(</span><span class="k">crate</span><span class="p">)</span><span class="w"> </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">create_physical_plan</span><span class="p">(</span>
@@ -521,7 +516,7 @@
 </section>
 </section>
 <section id="using-the-custom-table-provider">
-<h2>Using the Custom Table Provider<a class="headerlink" href="#using-the-custom-table-provider" title="Permalink to this heading">¶</a></h2>
+<h2>Using the Custom Table Provider<a class="headerlink" href="#using-the-custom-table-provider" title="Link to this heading">¶</a></h2>
 <p>In order to use the custom table provider, we need to register it with DataFusion. This is done by creating a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> and registering it with the <code class="docutils literal notranslate"><span class="pre">ExecutionContext</span></code>.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ExecutionContext</span>::<span class="n">new</span><span class="p">();</span>
 
@@ -535,7 +530,7 @@
 </div>
 </section>
 <section id="recap">
-<h2>Recap<a class="headerlink" href="#recap" title="Permalink to this heading">¶</a></h2>
+<h2>Recap<a class="headerlink" href="#recap" title="Link to this heading">¶</a></h2>
 <p>To recap, in order to implement a custom table provider, you need to:</p>
 <ol class="arabic simple">
 <li><p>Implement the <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> trait</p></li>
@@ -544,7 +539,7 @@
 </ol>
 </section>
 <section id="next-steps">
-<h2>Next Steps<a class="headerlink" href="#next-steps" title="Permalink to this heading">¶</a></h2>
+<h2>Next Steps<a class="headerlink" href="#next-steps" title="Link to this heading">¶</a></h2>
 <p>As mentioned the <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/csv.rs#L57-L70">csv</a> and <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/parquet.rs#L77-L104">parquet</a> implementations are good examples of how to implement a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>. The <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276">example in this repo</a> is a good example of how to implement a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> that uses a custom data source.</p>
 <p>More abstractly, see the following traits for more information on how to implement a custom <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> for a file format:</p>
 <ul class="simple">
@@ -595,7 +590,7 @@
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

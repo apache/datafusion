@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
-    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Specifications" href="specification/index.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -436,12 +431,12 @@
   under the License.
 -->
 <section id="quarterly-roadmap">
-<h1>Quarterly Roadmap<a class="headerlink" href="#quarterly-roadmap" title="Permalink to this heading">¶</a></h1>
+<h1>Quarterly Roadmap<a class="headerlink" href="#quarterly-roadmap" title="Link to this heading">¶</a></h1>
 <p>A quarterly roadmap will be published to give the DataFusion community visibility into the priorities of the projects contributors. This roadmap is not binding.</p>
 <section id="q2">
-<h2>2022 Q2<a class="headerlink" href="#q2" title="Permalink to this heading">¶</a></h2>
+<h2>2022 Q2<a class="headerlink" href="#q2" title="Link to this heading">¶</a></h2>
 <section id="datafusion-core">
-<h3>DataFusion Core<a class="headerlink" href="#datafusion-core" title="Permalink to this heading">¶</a></h3>
+<h3>DataFusion Core<a class="headerlink" href="#datafusion-core" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>IO Improvements</p>
 <ul>
@@ -483,7 +478,7 @@
 </ul>
 </section>
 <section id="ballista">
-<h3>Ballista<a class="headerlink" href="#ballista" title="Permalink to this heading">¶</a></h3>
+<h3>Ballista<a class="headerlink" href="#ballista" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>Make production ready</p>
 <ul>
@@ -506,22 +501,22 @@
 </ul>
 </section>
 <section id="extensions-datafusion-contrib">
-<h3>Extensions (<a class="reference external" href="https://github.com/datafusion-contrib">datafusion-contrib</a>)<a class="headerlink" href="#extensions-datafusion-contrib" title="Permalink to this heading">¶</a></h3>
+<h3>Extensions (<a class="reference external" href="https://github.com/datafusion-contrib">datafusion-contrib</a>)<a class="headerlink" href="#extensions-datafusion-contrib" title="Link to this heading">¶</a></h3>
 <section id="datafusion-python">
-<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-python">DataFusion-Python</a><a class="headerlink" href="#datafusion-python" title="Permalink to this heading">¶</a></h4>
+<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-python">DataFusion-Python</a><a class="headerlink" href="#datafusion-python" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>Add missing functionality to DataFrame and SessionContext</p></li>
 <li><p>Improve documentation</p></li>
 </ul>
 </section>
 <section id="datafusion-s3">
-<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-objectstore-s3">DataFusion-S3</a><a class="headerlink" href="#datafusion-s3" title="Permalink to this heading">¶</a></h4>
+<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-objectstore-s3">DataFusion-S3</a><a class="headerlink" href="#datafusion-s3" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>Create Python bindings to use with datafusion-python</p></li>
 </ul>
 </section>
 <section id="datafusion-tui">
-<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-tui">DataFusion-Tui</a><a class="headerlink" href="#datafusion-tui" title="Permalink to this heading">¶</a></h4>
+<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-tui">DataFusion-Tui</a><a class="headerlink" href="#datafusion-tui" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>Create multiple SQL editors</p></li>
 <li><p>Expose more Context and query metadata</p></li>
@@ -533,7 +528,7 @@
 </ul>
 </section>
 <section id="datafusion-bigtable">
-<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-bigtable">DataFusion-BigTable</a><a class="headerlink" href="#datafusion-bigtable" title="Permalink to this heading">¶</a></h4>
+<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-bigtable">DataFusion-BigTable</a><a class="headerlink" href="#datafusion-bigtable" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>Python binding to use with datafusion-python</p></li>
 <li><p>Timestamp range predicate pushdown</p></li>
@@ -542,7 +537,7 @@
 </ul>
 </section>
 <section id="datafusion-streams">
-<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-streams">DataFusion-Streams</a><a class="headerlink" href="#datafusion-streams" title="Permalink to this heading">¶</a></h4>
+<h4><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-streams">DataFusion-Streams</a><a class="headerlink" href="#datafusion-streams" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>Create experimental implementation of <code class="docutils literal notranslate"><span class="pre">StreamProvider</span></code> trait</p></li>
 </ul>
@@ -591,7 +586,7 @@
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
-    <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Status" href="sql_status.html" />
@@ -250,11 +250,6 @@
  <li class="toctree-l1">
   <a class="reference internal" href="../../library-user-guide/extending-operators.html">
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
-  </a>
- </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../../library-user-guide/execution-plans.html">
-   Execution Plans
   </a>
  </li>
 </ul>
@@ -2828,9 +2823,9 @@
   under the License.
 -->
 <section id="scalar-functions">
-<h1>Scalar Functions<a class="headerlink" href="#scalar-functions" title="Permalink to this heading">¶</a></h1>
+<h1>Scalar Functions<a class="headerlink" href="#scalar-functions" title="Link to this heading">¶</a></h1>
 <section id="math-functions">
-<h2>Math Functions<a class="headerlink" href="#math-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Math Functions<a class="headerlink" href="#math-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#abs">abs</a></p></li>
 <li><p><a class="reference internal" href="#acos">acos</a></p></li>
@@ -2872,13 +2867,13 @@
 <li><p><a class="reference internal" href="#trunc">trunc</a></p></li>
 </ul>
 <section id="abs">
-<h3><code class="docutils literal notranslate"><span class="pre">abs</span></code><a class="headerlink" href="#abs" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">abs</span></code><a class="headerlink" href="#abs" title="Link to this heading">¶</a></h3>
 <p>Returns the absolute value of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">abs</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="arguments">
-<h4>Arguments<a class="headerlink" href="#arguments" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -2886,13 +2881,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="acos">
-<h3><code class="docutils literal notranslate"><span class="pre">acos</span></code><a class="headerlink" href="#acos" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">acos</span></code><a class="headerlink" href="#acos" title="Link to this heading">¶</a></h3>
 <p>Returns the arc cosine or inverse cosine of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">acos</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id1">
-<h4>Arguments<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -2900,13 +2895,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="acosh">
-<h3><code class="docutils literal notranslate"><span class="pre">acosh</span></code><a class="headerlink" href="#acosh" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">acosh</span></code><a class="headerlink" href="#acosh" title="Link to this heading">¶</a></h3>
 <p>Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">acosh</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id2">
-<h4>Arguments<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -2914,13 +2909,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="asin">
-<h3><code class="docutils literal notranslate"><span class="pre">asin</span></code><a class="headerlink" href="#asin" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">asin</span></code><a class="headerlink" href="#asin" title="Link to this heading">¶</a></h3>
 <p>Returns the arc sine or inverse sine of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">asin</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id3">
-<h4>Arguments<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -2928,13 +2923,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="asinh">
-<h3><code class="docutils literal notranslate"><span class="pre">asinh</span></code><a class="headerlink" href="#asinh" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">asinh</span></code><a class="headerlink" href="#asinh" title="Link to this heading">¶</a></h3>
 <p>Returns the area hyperbolic sine or inverse hyperbolic sine of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">asinh</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id4">
-<h4>Arguments<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -2942,13 +2937,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="atan">
-<h3><code class="docutils literal notranslate"><span class="pre">atan</span></code><a class="headerlink" href="#atan" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">atan</span></code><a class="headerlink" href="#atan" title="Link to this heading">¶</a></h3>
 <p>Returns the arc tangent or inverse tangent of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">atan</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id5">
-<h4>Arguments<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -2956,13 +2951,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="atanh">
-<h3><code class="docutils literal notranslate"><span class="pre">atanh</span></code><a class="headerlink" href="#atanh" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">atanh</span></code><a class="headerlink" href="#atanh" title="Link to this heading">¶</a></h3>
 <p>Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">atanh</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id6">
-<h4>Arguments<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -2970,13 +2965,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="atan2">
-<h3><code class="docutils literal notranslate"><span class="pre">atan2</span></code><a class="headerlink" href="#atan2" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">atan2</span></code><a class="headerlink" href="#atan2" title="Link to this heading">¶</a></h3>
 <p>Returns the arc tangent or inverse tangent of <code class="docutils literal notranslate"><span class="pre">expression_y</span> <span class="pre">/</span> <span class="pre">expression_x</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">atan2</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id7">
-<h4>Arguments<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_y</strong>: First numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -2986,13 +2981,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="cbrt">
-<h3><code class="docutils literal notranslate"><span class="pre">cbrt</span></code><a class="headerlink" href="#cbrt" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">cbrt</span></code><a class="headerlink" href="#cbrt" title="Link to this heading">¶</a></h3>
 <p>Returns the cube root of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cbrt</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id8">
-<h4>Arguments<a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3000,13 +2995,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="ceil">
-<h3><code class="docutils literal notranslate"><span class="pre">ceil</span></code><a class="headerlink" href="#ceil" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">ceil</span></code><a class="headerlink" href="#ceil" title="Link to this heading">¶</a></h3>
 <p>Returns the nearest integer greater than or equal to a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">ceil</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id9">
-<h4>Arguments<a class="headerlink" href="#id9" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3014,13 +3009,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="cos">
-<h3><code class="docutils literal notranslate"><span class="pre">cos</span></code><a class="headerlink" href="#cos" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">cos</span></code><a class="headerlink" href="#cos" title="Link to this heading">¶</a></h3>
 <p>Returns the cosine of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cos</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id10">
-<h4>Arguments<a class="headerlink" href="#id10" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3028,27 +3023,27 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="cosh">
-<h3><code class="docutils literal notranslate"><span class="pre">cosh</span></code><a class="headerlink" href="#cosh" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">cosh</span></code><a class="headerlink" href="#cosh" title="Link to this heading">¶</a></h3>
 <p>Returns the hyperbolic cosine of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cosh</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
 <section id="degrees">
-<h3><code class="docutils literal notranslate"><span class="pre">degrees</span></code><a class="headerlink" href="#degrees" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">degrees</span></code><a class="headerlink" href="#degrees" title="Link to this heading">¶</a></h3>
 <p>Converts radians to degrees.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">degrees</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id11">
-<h4>Arguments<a class="headerlink" href="#id11" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
 </ul>
 </section>
 <section id="id12">
-<h4>Arguments<a class="headerlink" href="#id12" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3056,13 +3051,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="exp">
-<h3><code class="docutils literal notranslate"><span class="pre">exp</span></code><a class="headerlink" href="#exp" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">exp</span></code><a class="headerlink" href="#exp" title="Link to this heading">¶</a></h3>
 <p>Returns the base-e exponential of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">exp</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id13">
-<h4>Arguments<a class="headerlink" href="#id13" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to use as the exponent.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3070,13 +3065,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="factorial">
-<h3><code class="docutils literal notranslate"><span class="pre">factorial</span></code><a class="headerlink" href="#factorial" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">factorial</span></code><a class="headerlink" href="#factorial" title="Link to this heading">¶</a></h3>
 <p>Factorial. Returns 1 if value is less than 2.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">factorial</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id14">
-<h4>Arguments<a class="headerlink" href="#id14" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3084,13 +3079,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="floor">
-<h3><code class="docutils literal notranslate"><span class="pre">floor</span></code><a class="headerlink" href="#floor" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">floor</span></code><a class="headerlink" href="#floor" title="Link to this heading">¶</a></h3>
 <p>Returns the nearest integer less than or equal to a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">floor</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id15">
-<h4>Arguments<a class="headerlink" href="#id15" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3098,13 +3093,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="gcd">
-<h3><code class="docutils literal notranslate"><span class="pre">gcd</span></code><a class="headerlink" href="#gcd" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">gcd</span></code><a class="headerlink" href="#gcd" title="Link to this heading">¶</a></h3>
 <p>Returns the greatest common divisor of <code class="docutils literal notranslate"><span class="pre">expression_x</span></code> and <code class="docutils literal notranslate"><span class="pre">expression_y</span></code>. Returns 0 if both inputs are zero.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">gcd</span><span class="p">(</span><span class="n">expression_x</span><span class="p">,</span> <span class="n">expression_y</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id16">
-<h4>Arguments<a class="headerlink" href="#id16" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_x</strong>: First numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3114,13 +3109,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="isnan">
-<h3><code class="docutils literal notranslate"><span class="pre">isnan</span></code><a class="headerlink" href="#isnan" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">isnan</span></code><a class="headerlink" href="#isnan" title="Link to this heading">¶</a></h3>
 <p>Returns true if a given number is +NaN or -NaN otherwise returns false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">isnan</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id17">
-<h4>Arguments<a class="headerlink" href="#id17" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3128,13 +3123,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="iszero">
-<h3><code class="docutils literal notranslate"><span class="pre">iszero</span></code><a class="headerlink" href="#iszero" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">iszero</span></code><a class="headerlink" href="#iszero" title="Link to this heading">¶</a></h3>
 <p>Returns true if a given number is +0.0 or -0.0 otherwise returns false.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">iszero</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id18">
-<h4>Arguments<a class="headerlink" href="#id18" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3142,13 +3137,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="lcm">
-<h3><code class="docutils literal notranslate"><span class="pre">lcm</span></code><a class="headerlink" href="#lcm" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">lcm</span></code><a class="headerlink" href="#lcm" title="Link to this heading">¶</a></h3>
 <p>Returns the least common multiple of <code class="docutils literal notranslate"><span class="pre">expression_x</span></code> and <code class="docutils literal notranslate"><span class="pre">expression_y</span></code>. Returns 0 if either input is zero.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lcm</span><span class="p">(</span><span class="n">expression_x</span><span class="p">,</span> <span class="n">expression_y</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id19">
-<h4>Arguments<a class="headerlink" href="#id19" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_x</strong>: First numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3158,13 +3153,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="ln">
-<h3><code class="docutils literal notranslate"><span class="pre">ln</span></code><a class="headerlink" href="#ln" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">ln</span></code><a class="headerlink" href="#ln" title="Link to this heading">¶</a></h3>
 <p>Returns the natural logarithm of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">ln</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id20">
-<h4>Arguments<a class="headerlink" href="#id20" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3172,7 +3167,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="log">
-<h3><code class="docutils literal notranslate"><span class="pre">log</span></code><a class="headerlink" href="#log" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">log</span></code><a class="headerlink" href="#log" title="Link to this heading">¶</a></h3>
 <p>Returns the base-x logarithm of a number.
 Can either provide a specified base, or if omitted then takes the base-10 of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">log</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">numeric_expression</span><span class="p">)</span>
@@ -3180,7 +3175,7 @@ Can either provide a specified base, or if omitted then takes the base-10 of a n
 </pre></div>
 </div>
 <section id="id21">
-<h4>Arguments<a class="headerlink" href="#id21" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>base</strong>: Base numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3190,13 +3185,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="log10">
-<h3><code class="docutils literal notranslate"><span class="pre">log10</span></code><a class="headerlink" href="#log10" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">log10</span></code><a class="headerlink" href="#log10" title="Link to this heading">¶</a></h3>
 <p>Returns the base-10 logarithm of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">log10</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id22">
-<h4>Arguments<a class="headerlink" href="#id22" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3204,13 +3199,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="log2">
-<h3><code class="docutils literal notranslate"><span class="pre">log2</span></code><a class="headerlink" href="#log2" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">log2</span></code><a class="headerlink" href="#log2" title="Link to this heading">¶</a></h3>
 <p>Returns the base-2 logarithm of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">log2</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id23">
-<h4>Arguments<a class="headerlink" href="#id23" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3218,14 +3213,14 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="nanvl">
-<h3><code class="docutils literal notranslate"><span class="pre">nanvl</span></code><a class="headerlink" href="#nanvl" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">nanvl</span></code><a class="headerlink" href="#nanvl" title="Link to this heading">¶</a></h3>
 <p>Returns the first argument if it’s not <em>NaN</em>.
 Returns the second argument otherwise.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">nanvl</span><span class="p">(</span><span class="n">expression_x</span><span class="p">,</span> <span class="n">expression_y</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id24">
-<h4>Arguments<a class="headerlink" href="#id24" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_x</strong>: Numeric expression to return if it’s not <em>NaN</em>.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3235,20 +3230,20 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="pi">
-<h3><code class="docutils literal notranslate"><span class="pre">pi</span></code><a class="headerlink" href="#pi" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">pi</span></code><a class="headerlink" href="#pi" title="Link to this heading">¶</a></h3>
 <p>Returns an approximate value of π.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">pi</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>
 <section id="power">
-<h3><code class="docutils literal notranslate"><span class="pre">power</span></code><a class="headerlink" href="#power" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">power</span></code><a class="headerlink" href="#power" title="Link to this heading">¶</a></h3>
 <p>Returns a base expression raised to the power of an exponent.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">power</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">exponent</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id25">
-<h4>Arguments<a class="headerlink" href="#id25" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>base</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3257,24 +3252,24 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </ul>
 </section>
 <section id="aliases">
-<h4>Aliases<a class="headerlink" href="#aliases" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#aliases" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>pow</p></li>
 </ul>
 </section>
 </section>
 <section id="pow">
-<h3><code class="docutils literal notranslate"><span class="pre">pow</span></code><a class="headerlink" href="#pow" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">pow</span></code><a class="headerlink" href="#pow" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#power">power</a>.</em></p>
 </section>
 <section id="radians">
-<h3><code class="docutils literal notranslate"><span class="pre">radians</span></code><a class="headerlink" href="#radians" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">radians</span></code><a class="headerlink" href="#radians" title="Link to this heading">¶</a></h3>
 <p>Converts degrees to radians.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">radians</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id26">
-<h4>Arguments<a class="headerlink" href="#id26" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3282,7 +3277,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="random">
-<h3><code class="docutils literal notranslate"><span class="pre">random</span></code><a class="headerlink" href="#random" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">random</span></code><a class="headerlink" href="#random" title="Link to this heading">¶</a></h3>
 <p>Returns a random float value in the range [0, 1).
 The random seed is unique to each row.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">random</span><span class="p">()</span>
@@ -3290,13 +3285,13 @@ The random seed is unique to each row.</p>
 </div>
 </section>
 <section id="round">
-<h3><code class="docutils literal notranslate"><span class="pre">round</span></code><a class="headerlink" href="#round" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">round</span></code><a class="headerlink" href="#round" title="Link to this heading">¶</a></h3>
 <p>Rounds a number to the nearest integer.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">round</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">[,</span> <span class="n">decimal_places</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id27">
-<h4>Arguments<a class="headerlink" href="#id27" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3306,7 +3301,7 @@ Defaults to 0.</p></li>
 </section>
 </section>
 <section id="signum">
-<h3><code class="docutils literal notranslate"><span class="pre">signum</span></code><a class="headerlink" href="#signum" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">signum</span></code><a class="headerlink" href="#signum" title="Link to this heading">¶</a></h3>
 <p>Returns the sign of a number.
 Negative numbers return <code class="docutils literal notranslate"><span class="pre">-1</span></code>.
 Zero and positive numbers return <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
@@ -3314,7 +3309,7 @@ Zero and positive numbers return <code class="docutils literal notranslate"><spa
 </pre></div>
 </div>
 <section id="id28">
-<h4>Arguments<a class="headerlink" href="#id28" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3322,13 +3317,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="sin">
-<h3><code class="docutils literal notranslate"><span class="pre">sin</span></code><a class="headerlink" href="#sin" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">sin</span></code><a class="headerlink" href="#sin" title="Link to this heading">¶</a></h3>
 <p>Returns the sine of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sin</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id29">
-<h4>Arguments<a class="headerlink" href="#id29" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3336,13 +3331,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="sinh">
-<h3><code class="docutils literal notranslate"><span class="pre">sinh</span></code><a class="headerlink" href="#sinh" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">sinh</span></code><a class="headerlink" href="#sinh" title="Link to this heading">¶</a></h3>
 <p>Returns the hyperbolic sine of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sinh</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id30">
-<h4>Arguments<a class="headerlink" href="#id30" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3350,13 +3345,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="sqrt">
-<h3><code class="docutils literal notranslate"><span class="pre">sqrt</span></code><a class="headerlink" href="#sqrt" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">sqrt</span></code><a class="headerlink" href="#sqrt" title="Link to this heading">¶</a></h3>
 <p>Returns the square root of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sqrt</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id31">
-<h4>Arguments<a class="headerlink" href="#id31" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3364,13 +3359,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="tan">
-<h3><code class="docutils literal notranslate"><span class="pre">tan</span></code><a class="headerlink" href="#tan" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">tan</span></code><a class="headerlink" href="#tan" title="Link to this heading">¶</a></h3>
 <p>Returns the tangent of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">tan</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id32">
-<h4>Arguments<a class="headerlink" href="#id32" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3378,13 +3373,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="tanh">
-<h3><code class="docutils literal notranslate"><span class="pre">tanh</span></code><a class="headerlink" href="#tanh" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">tanh</span></code><a class="headerlink" href="#tanh" title="Link to this heading">¶</a></h3>
 <p>Returns the hyperbolic tangent of a number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">tanh</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id33">
-<h4>Arguments<a class="headerlink" href="#id33" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3392,13 +3387,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="trunc">
-<h3><code class="docutils literal notranslate"><span class="pre">trunc</span></code><a class="headerlink" href="#trunc" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">trunc</span></code><a class="headerlink" href="#trunc" title="Link to this heading">¶</a></h3>
 <p>Truncates a number to a whole number or truncated to the specified decimal places.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">trunc</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">[,</span> <span class="n">decimal_places</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id34">
-<h4>Arguments<a class="headerlink" href="#id34" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3412,13 +3407,13 @@ integer, replaces digits to the left of the decimal point with <code class="docu
 </section>
 </section>
 <section id="conditional-functions">
-<h2>Conditional Functions<a class="headerlink" href="#conditional-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Conditional Functions<a class="headerlink" href="#conditional-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#coalesce">coalesce</a></p></li>
 <li><p><a class="reference internal" href="#nullif">nullif</a></p></li>
 </ul>
 <section id="coalesce">
-<h3><code class="docutils literal notranslate"><span class="pre">coalesce</span></code><a class="headerlink" href="#coalesce" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">coalesce</span></code><a class="headerlink" href="#coalesce" title="Link to this heading">¶</a></h3>
 <p>Returns the first of its arguments that is not <em>null</em>.
 Returns <em>null</em> if all arguments are <em>null</em>.
 This function is often used to substitute a default value for <em>null</em> values.</p>
@@ -3426,7 +3421,7 @@ This function is often used to substitute a default value for <em>null</em> valu
 </pre></div>
 </div>
 <section id="id35">
-<h4>Arguments<a class="headerlink" href="#id35" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id35" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression1, expression_n</strong>:
 Expression to use if previous expressions are <em>null</em>.
@@ -3436,14 +3431,14 @@ Pass as many expression arguments as necessary.</p></li>
 </section>
 </section>
 <section id="nullif">
-<h3><code class="docutils literal notranslate"><span class="pre">nullif</span></code><a class="headerlink" href="#nullif" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">nullif</span></code><a class="headerlink" href="#nullif" title="Link to this heading">¶</a></h3>
 <p>Returns <em>null</em> if <em>expression1</em> equals <em>expression2</em>; otherwise it returns <em>expression1</em>.
 This can be used to perform the inverse operation of <a class="reference internal" href="#coalesce"><code class="docutils literal notranslate"><span class="pre">coalesce</span></code></a>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">nullif</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id36">
-<h4>Arguments<a class="headerlink" href="#id36" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id36" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression1</strong>: Expression to compare and return if equal to expression2.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3454,7 +3449,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="string-functions">
-<h2>String Functions<a class="headerlink" href="#string-functions" title="Permalink to this heading">¶</a></h2>
+<h2>String Functions<a class="headerlink" href="#string-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#ascii">ascii</a></p></li>
 <li><p><a class="reference internal" href="#bit-length">bit_length</a></p></li>
@@ -3488,13 +3483,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 <li><p><a class="reference internal" href="#uuid">uuid</a></p></li>
 </ul>
 <section id="ascii">
-<h3><code class="docutils literal notranslate"><span class="pre">ascii</span></code><a class="headerlink" href="#ascii" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">ascii</span></code><a class="headerlink" href="#ascii" title="Link to this heading">¶</a></h3>
 <p>Returns the ASCII value of the first character in a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">ascii</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id37">
-<h4>Arguments<a class="headerlink" href="#id37" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id37" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3504,13 +3499,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="bit-length">
-<h3><code class="docutils literal notranslate"><span class="pre">bit_length</span></code><a class="headerlink" href="#bit-length" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">bit_length</span></code><a class="headerlink" href="#bit-length" title="Link to this heading">¶</a></h3>
 <p>Returns the bit length of a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_length</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id38">
-<h4>Arguments<a class="headerlink" href="#id38" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id38" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3521,7 +3516,7 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="btrim">
-<h3><code class="docutils literal notranslate"><span class="pre">btrim</span></code><a class="headerlink" href="#btrim" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">btrim</span></code><a class="headerlink" href="#btrim" title="Link to this heading">¶</a></h3>
 <p>Trims the specified trim string from the start and end of a string.
 If no trim string is provided, all whitespace is removed from the start and end
 of the input string.</p>
@@ -3529,7 +3524,7 @@ of the input string.</p>
 </pre></div>
 </div>
 <section id="id39">
-<h4>Arguments<a class="headerlink" href="#id39" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id39" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3544,21 +3539,21 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="char-length">
-<h3><code class="docutils literal notranslate"><span class="pre">char_length</span></code><a class="headerlink" href="#char-length" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">char_length</span></code><a class="headerlink" href="#char-length" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#length">length</a>.</em></p>
 </section>
 <section id="character-length">
-<h3><code class="docutils literal notranslate"><span class="pre">character_length</span></code><a class="headerlink" href="#character-length" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">character_length</span></code><a class="headerlink" href="#character-length" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#length">length</a>.</em></p>
 </section>
 <section id="concat">
-<h3><code class="docutils literal notranslate"><span class="pre">concat</span></code><a class="headerlink" href="#concat" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">concat</span></code><a class="headerlink" href="#concat" title="Link to this heading">¶</a></h3>
 <p>Concatenates multiple strings together.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">concat</span><span class="p">(</span><span class="nb">str</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">str_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id40">
-<h4>Arguments<a class="headerlink" href="#id40" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id40" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to concatenate.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3569,13 +3564,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="concat-ws">
-<h3><code class="docutils literal notranslate"><span class="pre">concat_ws</span></code><a class="headerlink" href="#concat-ws" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">concat_ws</span></code><a class="headerlink" href="#concat-ws" title="Link to this heading">¶</a></h3>
 <p>Concatenates multiple strings together with a specified separator.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">concat</span><span class="p">(</span><span class="n">separator</span><span class="p">,</span> <span class="nb">str</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">str_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id41">
-<h4>Arguments<a class="headerlink" href="#id41" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id41" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>separator</strong>: Separator to insert between concatenated strings.</p></li>
 <li><p><strong>str</strong>: String expression to concatenate.
@@ -3587,13 +3582,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="chr">
-<h3><code class="docutils literal notranslate"><span class="pre">chr</span></code><a class="headerlink" href="#chr" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">chr</span></code><a class="headerlink" href="#chr" title="Link to this heading">¶</a></h3>
 <p>Returns the character with the specified ASCII or Unicode code value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">chr</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id42">
-<h4>Arguments<a class="headerlink" href="#id42" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id42" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression containing the ASCII or Unicode code value to operate on.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -3604,14 +3599,14 @@ string operators.</p></li>
 </section>
 </section>
 <section id="initcap">
-<h3><code class="docutils literal notranslate"><span class="pre">initcap</span></code><a class="headerlink" href="#initcap" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">initcap</span></code><a class="headerlink" href="#initcap" title="Link to this heading">¶</a></h3>
 <p>Capitalizes the first character in each word in the input string.
 Words are delimited by non-alphanumeric characters.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">initcap</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id43">
-<h4>Arguments<a class="headerlink" href="#id43" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id43" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3622,13 +3617,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="left">
-<h3><code class="docutils literal notranslate"><span class="pre">left</span></code><a class="headerlink" href="#left" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">left</span></code><a class="headerlink" href="#left" title="Link to this heading">¶</a></h3>
 <p>Returns a specified number of characters from the left side of a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">left</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id44">
-<h4>Arguments<a class="headerlink" href="#id44" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id44" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3639,20 +3634,20 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="length">
-<h3><code class="docutils literal notranslate"><span class="pre">length</span></code><a class="headerlink" href="#length" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">length</span></code><a class="headerlink" href="#length" title="Link to this heading">¶</a></h3>
 <p>Returns the number of characters in a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">length</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id45">
-<h4>Arguments<a class="headerlink" href="#id45" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id45" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
 </ul>
 </section>
 <section id="id46">
-<h4>Aliases<a class="headerlink" href="#id46" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id46" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>char_length</p></li>
 <li><p>character_length</p></li>
@@ -3663,13 +3658,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="lower">
-<h3><code class="docutils literal notranslate"><span class="pre">lower</span></code><a class="headerlink" href="#lower" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">lower</span></code><a class="headerlink" href="#lower" title="Link to this heading">¶</a></h3>
 <p>Converts a string to lower-case.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lower</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id47">
-<h4>Arguments<a class="headerlink" href="#id47" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id47" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3680,13 +3675,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="lpad">
-<h3><code class="docutils literal notranslate"><span class="pre">lpad</span></code><a class="headerlink" href="#lpad" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">lpad</span></code><a class="headerlink" href="#lpad" title="Link to this heading">¶</a></h3>
 <p>Pads the left side of a string with another string to a specified string length.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lpad</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">n</span><span class="p">[,</span> <span class="n">padding_str</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id48">
-<h4>Arguments<a class="headerlink" href="#id48" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id48" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3700,13 +3695,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="ltrim">
-<h3><code class="docutils literal notranslate"><span class="pre">ltrim</span></code><a class="headerlink" href="#ltrim" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">ltrim</span></code><a class="headerlink" href="#ltrim" title="Link to this heading">¶</a></h3>
 <p>Removes leading spaces from a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">ltrim</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id49">
-<h4>Arguments<a class="headerlink" href="#id49" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id49" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3717,7 +3712,7 @@ Can be a constant, column, or function, and any combination of string operators.
 <a class="reference internal" href="#trim">trim</a></p>
 </section>
 <section id="id50">
-<h4>Arguments<a class="headerlink" href="#id50" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id50" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3725,13 +3720,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="octet-length">
-<h3><code class="docutils literal notranslate"><span class="pre">octet_length</span></code><a class="headerlink" href="#octet-length" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">octet_length</span></code><a class="headerlink" href="#octet-length" title="Link to this heading">¶</a></h3>
 <p>Returns the length of a string in bytes.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">octet_length</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id51">
-<h4>Arguments<a class="headerlink" href="#id51" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id51" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3742,13 +3737,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="repeat">
-<h3><code class="docutils literal notranslate"><span class="pre">repeat</span></code><a class="headerlink" href="#repeat" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">repeat</span></code><a class="headerlink" href="#repeat" title="Link to this heading">¶</a></h3>
 <p>Returns a string with an input string repeated a specified number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">repeat</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id52">
-<h4>Arguments<a class="headerlink" href="#id52" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id52" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to repeat.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3757,13 +3752,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="replace">
-<h3><code class="docutils literal notranslate"><span class="pre">replace</span></code><a class="headerlink" href="#replace" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">replace</span></code><a class="headerlink" href="#replace" title="Link to this heading">¶</a></h3>
 <p>Replaces all occurrences of a specified substring in a string with a new substring.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">replace</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">substr</span><span class="p">,</span> <span class="n">replacement</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id53">
-<h4>Arguments<a class="headerlink" href="#id53" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id53" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to repeat.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3775,13 +3770,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="reverse">
-<h3><code class="docutils literal notranslate"><span class="pre">reverse</span></code><a class="headerlink" href="#reverse" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">reverse</span></code><a class="headerlink" href="#reverse" title="Link to this heading">¶</a></h3>
 <p>Reverses the character order of a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">reverse</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id54">
-<h4>Arguments<a class="headerlink" href="#id54" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id54" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to repeat.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3789,13 +3784,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="right">
-<h3><code class="docutils literal notranslate"><span class="pre">right</span></code><a class="headerlink" href="#right" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">right</span></code><a class="headerlink" href="#right" title="Link to this heading">¶</a></h3>
 <p>Returns a specified number of characters from the right side of a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">right</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id55">
-<h4>Arguments<a class="headerlink" href="#id55" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id55" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3806,13 +3801,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="rpad">
-<h3><code class="docutils literal notranslate"><span class="pre">rpad</span></code><a class="headerlink" href="#rpad" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">rpad</span></code><a class="headerlink" href="#rpad" title="Link to this heading">¶</a></h3>
 <p>Pads the right side of a string with another string to a specified string length.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">rpad</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">n</span><span class="p">[,</span> <span class="n">padding_str</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id56">
-<h4>Arguments<a class="headerlink" href="#id56" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id56" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3826,13 +3821,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="rtrim">
-<h3><code class="docutils literal notranslate"><span class="pre">rtrim</span></code><a class="headerlink" href="#rtrim" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">rtrim</span></code><a class="headerlink" href="#rtrim" title="Link to this heading">¶</a></h3>
 <p>Removes trailing spaces from a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">rtrim</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id57">
-<h4>Arguments<a class="headerlink" href="#id57" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id57" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3844,14 +3839,14 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="split-part">
-<h3><code class="docutils literal notranslate"><span class="pre">split_part</span></code><a class="headerlink" href="#split-part" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">split_part</span></code><a class="headerlink" href="#split-part" title="Link to this heading">¶</a></h3>
 <p>Splits a string based on a specified delimiter and returns the substring in the
 specified position.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">split_part</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">delimiter</span><span class="p">,</span> <span class="n">pos</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id58">
-<h4>Arguments<a class="headerlink" href="#id58" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id58" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to spit.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3861,13 +3856,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="starts-with">
-<h3><code class="docutils literal notranslate"><span class="pre">starts_with</span></code><a class="headerlink" href="#starts-with" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">starts_with</span></code><a class="headerlink" href="#starts-with" title="Link to this heading">¶</a></h3>
 <p>Tests if a string starts with a substring.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">starts_with</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">substr</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id59">
-<h4>Arguments<a class="headerlink" href="#id59" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id59" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to test.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3876,7 +3871,7 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="strpos">
-<h3><code class="docutils literal notranslate"><span class="pre">strpos</span></code><a class="headerlink" href="#strpos" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">strpos</span></code><a class="headerlink" href="#strpos" title="Link to this heading">¶</a></h3>
 <p>Returns the starting position of a specified substring in a string.
 Positions begin at 1.
 If the substring does not exist in the string, the function returns 0.</p>
@@ -3884,7 +3879,7 @@ If the substring does not exist in the string, the function returns 0.</p>
 </pre></div>
 </div>
 <section id="id60">
-<h4>Arguments<a class="headerlink" href="#id60" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id60" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3894,14 +3889,14 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="substr">
-<h3><code class="docutils literal notranslate"><span class="pre">substr</span></code><a class="headerlink" href="#substr" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">substr</span></code><a class="headerlink" href="#substr" title="Link to this heading">¶</a></h3>
 <p>Extracts a substring of a specified number of characters from a specific
 starting position in a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">substr</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">start_pos</span><span class="p">[,</span> <span class="n">length</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id61">
-<h4>Arguments<a class="headerlink" href="#id61" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id61" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3913,7 +3908,7 @@ If not specified, returns the rest of the string after the start position.</p></
 </section>
 </section>
 <section id="translate">
-<h3><code class="docutils literal notranslate"><span class="pre">translate</span></code><a class="headerlink" href="#translate" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">translate</span></code><a class="headerlink" href="#translate" title="Link to this heading">¶</a></h3>
 <p>Translates characters in a string to specified translation characters.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">translate</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">chars</span><span class="p">,</span> <span class="n">translation</span><span class="p">)</span>
 </pre></div>
@@ -3927,13 +3922,13 @@ characters at the same position in the <strong>chars</strong> string.</p></li>
 </ul>
 </section>
 <section id="to-hex">
-<h3><code class="docutils literal notranslate"><span class="pre">to_hex</span></code><a class="headerlink" href="#to-hex" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">to_hex</span></code><a class="headerlink" href="#to-hex" title="Link to this heading">¶</a></h3>
 <p>Converts an integer to a hexadecimal string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">to_hex</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id62">
-<h4>Arguments<a class="headerlink" href="#id62" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id62" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>int</strong>: Integer expression to convert.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -3941,13 +3936,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="trim">
-<h3><code class="docutils literal notranslate"><span class="pre">trim</span></code><a class="headerlink" href="#trim" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">trim</span></code><a class="headerlink" href="#trim" title="Link to this heading">¶</a></h3>
 <p>Removes leading and trailing spaces from a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">trim</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id63">
-<h4>Arguments<a class="headerlink" href="#id63" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id63" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3959,13 +3954,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="upper">
-<h3><code class="docutils literal notranslate"><span class="pre">upper</span></code><a class="headerlink" href="#upper" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">upper</span></code><a class="headerlink" href="#upper" title="Link to this heading">¶</a></h3>
 <p>Converts a string to upper-case.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">upper</span><span class="p">(</span><span class="nb">str</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id64">
-<h4>Arguments<a class="headerlink" href="#id64" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id64" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3976,7 +3971,7 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="uuid">
-<h3><code class="docutils literal notranslate"><span class="pre">uuid</span></code><a class="headerlink" href="#uuid" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">uuid</span></code><a class="headerlink" href="#uuid" title="Link to this heading">¶</a></h3>
 <p>Returns UUID v4 string value which is unique per row.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">uuid</span><span class="p">()</span>
 </pre></div>
@@ -3984,19 +3979,19 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="binary-string-functions">
-<h2>Binary String Functions<a class="headerlink" href="#binary-string-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Binary String Functions<a class="headerlink" href="#binary-string-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#decode">decode</a></p></li>
 <li><p><a class="reference internal" href="#encode">encode</a></p></li>
 </ul>
 <section id="encode">
-<h3><code class="docutils literal notranslate"><span class="pre">encode</span></code><a class="headerlink" href="#encode" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">encode</span></code><a class="headerlink" href="#encode" title="Link to this heading">¶</a></h3>
 <p>Encode binary data into a textual representation.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">encode</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="nb">format</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id65">
-<h4>Arguments<a class="headerlink" href="#id65" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id65" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression containing string or binary data</p></li>
 <li><p><strong>format</strong>: Supported formats are: <code class="docutils literal notranslate"><span class="pre">base64</span></code>, <code class="docutils literal notranslate"><span class="pre">hex</span></code></p></li>
@@ -4006,13 +4001,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="decode">
-<h3><code class="docutils literal notranslate"><span class="pre">decode</span></code><a class="headerlink" href="#decode" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">decode</span></code><a class="headerlink" href="#decode" title="Link to this heading">¶</a></h3>
 <p>Decode binary data from textual representation in string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">decode</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="nb">format</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id66">
-<h4>Arguments<a class="headerlink" href="#id66" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id66" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression containing encoded string data</p></li>
 <li><p><strong>format</strong>: Same arguments as <a class="reference internal" href="#encode">encode</a></p></li>
@@ -4023,7 +4018,7 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="regular-expression-functions">
-<h2>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Link to this heading">¶</a></h2>
 <p>Apache DataFusion uses the POSIX regular expression syntax and
 supports the following regular expression functions:</p>
 <ul class="simple">
@@ -4031,13 +4026,13 @@ supports the following regular expression functions:</p>
 <li><p><a class="reference internal" href="#regexp-replace">regexp_replace</a></p></li>
 </ul>
 <section id="regexp-match">
-<h3><code class="docutils literal notranslate"><span class="pre">regexp_match</span></code><a class="headerlink" href="#regexp-match" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regexp_match</span></code><a class="headerlink" href="#regexp-match" title="Link to this heading">¶</a></h3>
 <p>Returns a list of regular expression matches in a string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regexp_match</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">regexp</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id67">
-<h4>Arguments<a class="headerlink" href="#id67" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id67" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -4047,13 +4042,13 @@ Can be a constant, column, or function.</p></li>
 </section>
 </section>
 <section id="regexp-replace">
-<h3><code class="docutils literal notranslate"><span class="pre">regexp_replace</span></code><a class="headerlink" href="#regexp-replace" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">regexp_replace</span></code><a class="headerlink" href="#regexp-replace" title="Link to this heading">¶</a></h3>
 <p>Replaces substrings in a string that match a regular expression.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regexp_replace</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">regexp</span><span class="p">,</span> <span class="n">replacement</span><span class="p">,</span> <span class="n">flags</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id68">
-<h4>Arguments<a class="headerlink" href="#id68" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id68" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -4073,7 +4068,7 @@ regular expression. The following flags are supported.</p>
 </section>
 </section>
 <section id="time-and-date-functions">
-<h2>Time and Date Functions<a class="headerlink" href="#time-and-date-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Time and Date Functions<a class="headerlink" href="#time-and-date-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#now">now</a></p></li>
 <li><p><a class="reference internal" href="#current-date">current_date</a></p></li>
@@ -4091,7 +4086,7 @@ regular expression. The following flags are supported.</p>
 <li><p><a class="reference internal" href="#from-unixtime">from_unixtime</a></p></li>
 </ul>
 <section id="now">
-<h3><code class="docutils literal notranslate"><span class="pre">now</span></code><a class="headerlink" href="#now" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">now</span></code><a class="headerlink" href="#now" title="Link to this heading">¶</a></h3>
 <p>Returns the current UTC timestamp.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">now()</span></code> return value is determined at query time and will return the same timestamp,
 no matter when in the query plan the function executes.</p>
@@ -4100,7 +4095,7 @@ no matter when in the query plan the function executes.</p>
 </div>
 </section>
 <section id="current-date">
-<h3><code class="docutils literal notranslate"><span class="pre">current_date</span></code><a class="headerlink" href="#current-date" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">current_date</span></code><a class="headerlink" href="#current-date" title="Link to this heading">¶</a></h3>
 <p>Returns the current UTC date.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">current_date()</span></code> return value is determined at query time and will return the same date,
 no matter when in the query plan the function executes.</p>
@@ -4109,7 +4104,7 @@ no matter when in the query plan the function executes.</p>
 </div>
 </section>
 <section id="current-time">
-<h3><code class="docutils literal notranslate"><span class="pre">current_time</span></code><a class="headerlink" href="#current-time" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">current_time</span></code><a class="headerlink" href="#current-time" title="Link to this heading">¶</a></h3>
 <p>Returns the current UTC time.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">current_time()</span></code> return value is determined at query time and will return the same time,
 no matter when in the query plan the function executes.</p>
@@ -4118,7 +4113,7 @@ no matter when in the query plan the function executes.</p>
 </div>
 </section>
 <section id="date-bin">
-<h3><code class="docutils literal notranslate"><span class="pre">date_bin</span></code><a class="headerlink" href="#date-bin" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">date_bin</span></code><a class="headerlink" href="#date-bin" title="Link to this heading">¶</a></h3>
 <p>Calculates time intervals and returns the start of the interval nearest to the specified timestamp.
 Use <code class="docutils literal notranslate"><span class="pre">date_bin</span></code> to downsample time series data by grouping rows into time-based “bins” or “windows”
 and applying an aggregate or selector function to each window.</p>
@@ -4129,7 +4124,7 @@ minute bin it is in: <code class="docutils literal notranslate"><span class="pre
 </pre></div>
 </div>
 <section id="id69">
-<h4>Arguments<a class="headerlink" href="#id69" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id69" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>interval</strong>: Bin interval.</p></li>
 <li><p><strong>expression</strong>: Time expression to operate on.
@@ -4153,13 +4148,13 @@ Can be a constant, column, or function.</p></li>
 </section>
 </section>
 <section id="date-trunc">
-<h3><code class="docutils literal notranslate"><span class="pre">date_trunc</span></code><a class="headerlink" href="#date-trunc" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">date_trunc</span></code><a class="headerlink" href="#date-trunc" title="Link to this heading">¶</a></h3>
 <p>Truncates a timestamp value to a specified precision.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">date_trunc</span><span class="p">(</span><span class="n">precision</span><span class="p">,</span> <span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id70">
-<h4>Arguments<a class="headerlink" href="#id70" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id70" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>precision</strong>: Time precision to truncate to.
 The following precisions are supported:</p>
@@ -4179,24 +4174,24 @@ Can be a constant, column, or function.</p></li>
 </ul>
 </section>
 <section id="id71">
-<h4>Aliases<a class="headerlink" href="#id71" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id71" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>datetrunc</p></li>
 </ul>
 </section>
 </section>
 <section id="datetrunc">
-<h3><code class="docutils literal notranslate"><span class="pre">datetrunc</span></code><a class="headerlink" href="#datetrunc" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">datetrunc</span></code><a class="headerlink" href="#datetrunc" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#date-trunc">date_trunc</a>.</em></p>
 </section>
 <section id="date-part">
-<h3><code class="docutils literal notranslate"><span class="pre">date_part</span></code><a class="headerlink" href="#date-part" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">date_part</span></code><a class="headerlink" href="#date-part" title="Link to this heading">¶</a></h3>
 <p>Returns the specified part of the date as an integer.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">date_part</span><span class="p">(</span><span class="n">part</span><span class="p">,</span> <span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id72">
-<h4>Arguments<a class="headerlink" href="#id72" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id72" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>part</strong>: Part of the date to return.
 The following date parts are supported:</p>
@@ -4220,25 +4215,25 @@ Can be a constant, column, or function.</p></li>
 </ul>
 </section>
 <section id="id73">
-<h4>Aliases<a class="headerlink" href="#id73" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id73" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>datepart</p></li>
 </ul>
 </section>
 </section>
 <section id="datepart">
-<h3><code class="docutils literal notranslate"><span class="pre">datepart</span></code><a class="headerlink" href="#datepart" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">datepart</span></code><a class="headerlink" href="#datepart" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#date-part">date_part</a>.</em></p>
 </section>
 <section id="extract">
-<h3><code class="docutils literal notranslate"><span class="pre">extract</span></code><a class="headerlink" href="#extract" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">extract</span></code><a class="headerlink" href="#extract" title="Link to this heading">¶</a></h3>
 <p>Returns a sub-field from a time value as an integer.
 Similar to <code class="docutils literal notranslate"><span class="pre">date_part</span></code>, but with different arguments.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">extract</span><span class="p">(</span><span class="n">field</span> <span class="n">FROM</span> <span class="n">source</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id74">
-<h4>Arguments<a class="headerlink" href="#id74" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id74" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>field</strong>: Part or field of the date to return.
 The following date fields are supported:</p>
@@ -4263,7 +4258,7 @@ Can be a constant, column, or function.</p></li>
 </section>
 </section>
 <section id="to-timestamp">
-<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code><a class="headerlink" href="#to-timestamp" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code><a class="headerlink" href="#to-timestamp" title="Link to this heading">¶</a></h3>
 <p>Converts a value to RFC3339 nanosecond timestamp format (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00.000000000Z</span></code>).
 Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
@@ -4272,7 +4267,7 @@ return the corresponding RFC3339 nanosecond timestamp.</p>
 </pre></div>
 </div>
 <section id="id75">
-<h4>Arguments<a class="headerlink" href="#id75" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id75" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -4280,7 +4275,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="to-timestamp-millis">
-<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_millis</span></code><a class="headerlink" href="#to-timestamp-millis" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_millis</span></code><a class="headerlink" href="#to-timestamp-millis" title="Link to this heading">¶</a></h3>
 <p>Converts a value to RFC3339 millisecond timestamp format (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00.000Z</span></code>).
 Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
@@ -4289,7 +4284,7 @@ return the corresponding RFC3339 timestamp.</p>
 </pre></div>
 </div>
 <section id="id76">
-<h4>Arguments<a class="headerlink" href="#id76" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id76" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -4297,7 +4292,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="to-timestamp-micros">
-<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_micros</span></code><a class="headerlink" href="#to-timestamp-micros" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_micros</span></code><a class="headerlink" href="#to-timestamp-micros" title="Link to this heading">¶</a></h3>
 <p>Converts a value to RFC3339 microsecond timestamp format (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00.000000Z</span></code>).
 Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
@@ -4306,7 +4301,7 @@ return the corresponding RFC3339 timestamp.</p>
 </pre></div>
 </div>
 <section id="id77">
-<h4>Arguments<a class="headerlink" href="#id77" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id77" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -4314,7 +4309,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="to-timestamp-seconds">
-<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_seconds</span></code><a class="headerlink" href="#to-timestamp-seconds" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">to_timestamp_seconds</span></code><a class="headerlink" href="#to-timestamp-seconds" title="Link to this heading">¶</a></h3>
 <p>Converts a value to RFC3339 second timestamp format (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00Z</span></code>).
 Supports timestamp, integer, and unsigned integer types as input.
 Integers and unsigned integers are parsed as Unix nanosecond timestamps and
@@ -4323,7 +4318,7 @@ return the corresponding RFC3339 timestamp.</p>
 </pre></div>
 </div>
 <section id="id78">
-<h4>Arguments<a class="headerlink" href="#id78" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id78" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -4331,7 +4326,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="from-unixtime">
-<h3><code class="docutils literal notranslate"><span class="pre">from_unixtime</span></code><a class="headerlink" href="#from-unixtime" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">from_unixtime</span></code><a class="headerlink" href="#from-unixtime" title="Link to this heading">¶</a></h3>
 <p>Converts an integer to RFC3339 timestamp format (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DDT00:00:00.000000000Z</span></code>).
 Input is parsed as a Unix nanosecond timestamp and returns the corresponding
 RFC3339 timestamp.</p>
@@ -4339,7 +4334,7 @@ RFC3339 timestamp.</p>
 </pre></div>
 </div>
 <section id="id79">
-<h4>Arguments<a class="headerlink" href="#id79" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id79" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
@@ -4348,7 +4343,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 </section>
 <section id="array-functions">
-<h2>Array Functions<a class="headerlink" href="#array-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Array Functions<a class="headerlink" href="#array-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#array-append">array_append</a></p></li>
 <li><p><a class="reference internal" href="#array-cat">array_cat</a></p></li>
@@ -4405,13 +4400,13 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 <li><p><a class="reference internal" href="#trim-array">trim_array</a></p></li>
 </ul>
 <section id="array-append">
-<h3><code class="docutils literal notranslate"><span class="pre">array_append</span></code><a class="headerlink" href="#array-append" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_append</span></code><a class="headerlink" href="#array-append" title="Link to this heading">¶</a></h3>
 <p>Appends an element to the end of an array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_append</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id80">
-<h4>Arguments<a class="headerlink" href="#id80" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id80" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4419,7 +4414,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="example">
-<h4>Example<a class="headerlink" href="#example" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#example" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_append([1, 2, 3], 4);
 +--------------------------------------+
 | array_append(List([1,2,3]),Int64(4)) |
@@ -4430,7 +4425,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id81">
-<h4>Aliases<a class="headerlink" href="#id81" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id81" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>array_push_back</p></li>
 <li><p>list_append</p></li>
@@ -4439,17 +4434,17 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-cat">
-<h3><code class="docutils literal notranslate"><span class="pre">array_cat</span></code><a class="headerlink" href="#array-cat" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_cat</span></code><a class="headerlink" href="#array-cat" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-concat">array_concat</a>.</em></p>
 </section>
 <section id="array-concat">
-<h3><code class="docutils literal notranslate"><span class="pre">array_concat</span></code><a class="headerlink" href="#array-concat" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_concat</span></code><a class="headerlink" href="#array-concat" title="Link to this heading">¶</a></h3>
 <p>Concatenates arrays.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_concat</span><span class="p">(</span><span class="n">array</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">array_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id82">
-<h4>Arguments<a class="headerlink" href="#id82" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id82" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression to concatenate.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4457,7 +4452,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id83">
-<h4>Example<a class="headerlink" href="#id83" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id83" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_concat([1, 2], [3, 4], [5, 6]);
 +---------------------------------------------------+
 | array_concat(List([1,2]),List([3,4]),List([5,6])) |
@@ -4468,7 +4463,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id84">
-<h4>Aliases<a class="headerlink" href="#id84" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id84" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>array_cat</p></li>
 <li><p>list_cat</p></li>
@@ -4477,13 +4472,13 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-has">
-<h3><code class="docutils literal notranslate"><span class="pre">array_has</span></code><a class="headerlink" href="#array-has" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_has</span></code><a class="headerlink" href="#array-has" title="Link to this heading">¶</a></h3>
 <p>Returns true if the array contains the element</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_has</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id85">
-<h4>Arguments<a class="headerlink" href="#id85" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id85" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4493,13 +4488,13 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-has-all">
-<h3><code class="docutils literal notranslate"><span class="pre">array_has_all</span></code><a class="headerlink" href="#array-has-all" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_has_all</span></code><a class="headerlink" href="#array-has-all" title="Link to this heading">¶</a></h3>
 <p>Returns true if all elements of sub-array exist in array</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_has_all</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">sub</span><span class="o">-</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id86">
-<h4>Arguments<a class="headerlink" href="#id86" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id86" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4509,13 +4504,13 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-has-any">
-<h3><code class="docutils literal notranslate"><span class="pre">array_has_any</span></code><a class="headerlink" href="#array-has-any" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_has_any</span></code><a class="headerlink" href="#array-has-any" title="Link to this heading">¶</a></h3>
 <p>Returns true if any elements exist in both arrays</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_has_any</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">sub</span><span class="o">-</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id87">
-<h4>Arguments<a class="headerlink" href="#id87" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id87" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4525,20 +4520,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-dims">
-<h3><code class="docutils literal notranslate"><span class="pre">array_dims</span></code><a class="headerlink" href="#array-dims" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_dims</span></code><a class="headerlink" href="#array-dims" title="Link to this heading">¶</a></h3>
 <p>Returns an array of the array’s dimensions.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_dims</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id88">
-<h4>Arguments<a class="headerlink" href="#id88" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id88" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id89">
-<h4>Example<a class="headerlink" href="#id89" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id89" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_dims([[1, 2, 3], [4, 5, 6]]);
 +---------------------------------+
 | array_dims(List([1,2,3,4,5,6])) |
@@ -4549,20 +4544,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id90">
-<h4>Aliases<a class="headerlink" href="#id90" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id90" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_dims</p></li>
 </ul>
 </section>
 </section>
 <section id="array-element">
-<h3><code class="docutils literal notranslate"><span class="pre">array_element</span></code><a class="headerlink" href="#array-element" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_element</span></code><a class="headerlink" href="#array-element" title="Link to this heading">¶</a></h3>
 <p>Extracts the element with the index n from the array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_element</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id91">
-<h4>Arguments<a class="headerlink" href="#id91" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id91" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4570,7 +4565,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id92">
-<h4>Example<a class="headerlink" href="#id92" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id92" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_element([1, 2, 3, 4], 3);
 +-----------------------------------------+
 | array_element(List([1,2,3,4]),Int64(3)) |
@@ -4581,7 +4576,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id93">
-<h4>Aliases<a class="headerlink" href="#id93" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id93" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>array_extract</p></li>
 <li><p>list_element</p></li>
@@ -4590,18 +4585,18 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-extract">
-<h3><code class="docutils literal notranslate"><span class="pre">array_extract</span></code><a class="headerlink" href="#array-extract" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_extract</span></code><a class="headerlink" href="#array-extract" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-element">array_element</a>.</em></p>
 </section>
 <section id="array-fill">
-<h3><code class="docutils literal notranslate"><span class="pre">array_fill</span></code><a class="headerlink" href="#array-fill" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_fill</span></code><a class="headerlink" href="#array-fill" title="Link to this heading">¶</a></h3>
 <p>Returns an array filled with copies of the given value.</p>
 <p>DEPRECATED: use <code class="docutils literal notranslate"><span class="pre">array_repeat</span></code> instead!</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_fill</span><span class="p">(</span><span class="n">element</span><span class="p">,</span> <span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id94">
-<h4>Arguments<a class="headerlink" href="#id94" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id94" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4610,7 +4605,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="flatten">
-<h3><code class="docutils literal notranslate"><span class="pre">flatten</span></code><a class="headerlink" href="#flatten" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">flatten</span></code><a class="headerlink" href="#flatten" title="Link to this heading">¶</a></h3>
 <p>Converts an array of arrays to a flat array</p>
 <ul class="simple">
 <li><p>Applies to any depth of nested arrays</p></li>
@@ -4618,7 +4613,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 <p>The flattened array contains all the elements from all source arrays.</p>
 <section id="id95">
-<h4>Arguments<a class="headerlink" href="#id95" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id95" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4629,21 +4624,21 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-indexof">
-<h3><code class="docutils literal notranslate"><span class="pre">array_indexof</span></code><a class="headerlink" href="#array-indexof" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_indexof</span></code><a class="headerlink" href="#array-indexof" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-position">array_position</a>.</em></p>
 </section>
 <section id="array-join">
-<h3><code class="docutils literal notranslate"><span class="pre">array_join</span></code><a class="headerlink" href="#array-join" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_join</span></code><a class="headerlink" href="#array-join" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-to-string">array_to_string</a>.</em></p>
 </section>
 <section id="array-length">
-<h3><code class="docutils literal notranslate"><span class="pre">array_length</span></code><a class="headerlink" href="#array-length" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_length</span></code><a class="headerlink" href="#array-length" title="Link to this heading">¶</a></h3>
 <p>Returns the length of the array dimension.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_length</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">dimension</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id96">
-<h4>Arguments<a class="headerlink" href="#id96" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id96" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4651,7 +4646,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id97">
-<h4>Example<a class="headerlink" href="#id97" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id97" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_length([1, 2, 3, 4, 5]);
 +---------------------------------+
 | array_length(List([1,2,3,4,5])) |
@@ -4662,27 +4657,27 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id98">
-<h4>Aliases<a class="headerlink" href="#id98" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id98" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_length</p></li>
 </ul>
 </section>
 </section>
 <section id="array-ndims">
-<h3><code class="docutils literal notranslate"><span class="pre">array_ndims</span></code><a class="headerlink" href="#array-ndims" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_ndims</span></code><a class="headerlink" href="#array-ndims" title="Link to this heading">¶</a></h3>
 <p>Returns the number of dimensions of the array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_ndims</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id99">
-<h4>Arguments<a class="headerlink" href="#id99" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id99" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id100">
-<h4>Example<a class="headerlink" href="#id100" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id100" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_ndims([[1, 2, 3], [4, 5, 6]]);
 +----------------------------------+
 | array_ndims(List([1,2,3,4,5,6])) |
@@ -4693,20 +4688,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id101">
-<h4>Aliases<a class="headerlink" href="#id101" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id101" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_ndims</p></li>
 </ul>
 </section>
 </section>
 <section id="array-prepend">
-<h3><code class="docutils literal notranslate"><span class="pre">array_prepend</span></code><a class="headerlink" href="#array-prepend" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_prepend</span></code><a class="headerlink" href="#array-prepend" title="Link to this heading">¶</a></h3>
 <p>Prepends an element to the beginning of an array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_prepend</span><span class="p">(</span><span class="n">element</span><span class="p">,</span> <span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id102">
-<h4>Arguments<a class="headerlink" href="#id102" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id102" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>element</strong>: Element to prepend to the array.</p></li>
 <li><p><strong>array</strong>: Array expression.
@@ -4714,7 +4709,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id103">
-<h4>Example<a class="headerlink" href="#id103" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id103" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_prepend(1, [2, 3, 4]);
 +---------------------------------------+
 | array_prepend(Int64(1),List([2,3,4])) |
@@ -4725,7 +4720,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id104">
-<h4>Aliases<a class="headerlink" href="#id104" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id104" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>array_push_front</p></li>
 <li><p>list_prepend</p></li>
@@ -4734,14 +4729,14 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-position">
-<h3><code class="docutils literal notranslate"><span class="pre">array_position</span></code><a class="headerlink" href="#array-position" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_position</span></code><a class="headerlink" href="#array-position" title="Link to this heading">¶</a></h3>
 <p>Returns a string with an input string repeated a specified number.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_position</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 <span class="n">array_position</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id105">
-<h4>Arguments<a class="headerlink" href="#id105" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id105" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4750,7 +4745,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id106">
-<h4>Example<a class="headerlink" href="#id106" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id106" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_position([1, 2, 2, 3, 1, 4], 2);
 +----------------------------------------------+
 | array_position(List([1,2,2,3,1,4]),Int64(2)) |
@@ -4761,7 +4756,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id107">
-<h4>Aliases<a class="headerlink" href="#id107" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id107" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>array_indexof</p></li>
 <li><p>list_indexof</p></li>
@@ -4770,13 +4765,13 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-positions">
-<h3><code class="docutils literal notranslate"><span class="pre">array_positions</span></code><a class="headerlink" href="#array-positions" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_positions</span></code><a class="headerlink" href="#array-positions" title="Link to this heading">¶</a></h3>
 <p>Searches for an element in the array, returns all occurrences.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_positions</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id108">
-<h4>Arguments<a class="headerlink" href="#id108" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id108" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4784,7 +4779,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id109">
-<h4>Example<a class="headerlink" href="#id109" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id109" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_positions([1, 2, 2, 3, 1, 4], 2);
 +-----------------------------------------------+
 | array_positions(List([1,2,2,3,1,4]),Int64(2)) |
@@ -4795,28 +4790,28 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id110">
-<h4>Aliases<a class="headerlink" href="#id110" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id110" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_positions</p></li>
 </ul>
 </section>
 </section>
 <section id="array-push-back">
-<h3><code class="docutils literal notranslate"><span class="pre">array_push_back</span></code><a class="headerlink" href="#array-push-back" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_push_back</span></code><a class="headerlink" href="#array-push-back" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-append">array_append</a>.</em></p>
 </section>
 <section id="array-push-front">
-<h3><code class="docutils literal notranslate"><span class="pre">array_push_front</span></code><a class="headerlink" href="#array-push-front" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_push_front</span></code><a class="headerlink" href="#array-push-front" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-prepend">array_prepend</a>.</em></p>
 </section>
 <section id="array-repeat">
-<h3><code class="docutils literal notranslate"><span class="pre">array_repeat</span></code><a class="headerlink" href="#array-repeat" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_repeat</span></code><a class="headerlink" href="#array-repeat" title="Link to this heading">¶</a></h3>
 <p>Returns an array containing element <code class="docutils literal notranslate"><span class="pre">count</span></code> times.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_repeat</span><span class="p">(</span><span class="n">element</span><span class="p">,</span> <span class="n">count</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id111">
-<h4>Arguments<a class="headerlink" href="#id111" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id111" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>element</strong>: Element expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4824,7 +4819,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id112">
-<h4>Example<a class="headerlink" href="#id112" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id112" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_repeat(1, 3);
 +---------------------------------+
 | array_repeat(Int64(1),Int64(3)) |
@@ -4844,13 +4839,13 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="array-remove">
-<h3><code class="docutils literal notranslate"><span class="pre">array_remove</span></code><a class="headerlink" href="#array-remove" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_remove</span></code><a class="headerlink" href="#array-remove" title="Link to this heading">¶</a></h3>
 <p>Removes the first element from the array equal to the given value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id113">
-<h4>Arguments<a class="headerlink" href="#id113" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id113" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4858,7 +4853,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id114">
-<h4>Example<a class="headerlink" href="#id114" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id114" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
 +----------------------------------------------+
 | array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
@@ -4869,20 +4864,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id115">
-<h4>Aliases<a class="headerlink" href="#id115" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id115" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_remove</p></li>
 </ul>
 </section>
 </section>
 <section id="array-remove-n">
-<h3><code class="docutils literal notranslate"><span class="pre">array_remove_n</span></code><a class="headerlink" href="#array-remove-n" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_remove_n</span></code><a class="headerlink" href="#array-remove-n" title="Link to this heading">¶</a></h3>
 <p>Removes the first <code class="docutils literal notranslate"><span class="pre">max</span></code> elements from the array equal to the given value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove_n</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">,</span> <span class="nb">max</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id116">
-<h4>Arguments<a class="headerlink" href="#id116" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id116" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4891,7 +4886,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id117">
-<h4>Example<a class="headerlink" href="#id117" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id117" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
 +---------------------------------------------------------+
 | array_remove_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(2)) |
@@ -4902,20 +4897,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id118">
-<h4>Aliases<a class="headerlink" href="#id118" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id118" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_remove_n</p></li>
 </ul>
 </section>
 </section>
 <section id="array-remove-all">
-<h3><code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code><a class="headerlink" href="#array-remove-all" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code><a class="headerlink" href="#array-remove-all" title="Link to this heading">¶</a></h3>
 <p>Removes all elements from the array equal to the given value.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove_all</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id119">
-<h4>Arguments<a class="headerlink" href="#id119" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id119" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4923,7 +4918,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id120">
-<h4>Example<a class="headerlink" href="#id120" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id120" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
 +--------------------------------------------------+
 | array_remove_all(List([1,2,2,3,2,1,4]),Int64(2)) |
@@ -4934,20 +4929,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id121">
-<h4>Aliases<a class="headerlink" href="#id121" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id121" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_remove_all</p></li>
 </ul>
 </section>
 </section>
 <section id="array-replace">
-<h3><code class="docutils literal notranslate"><span class="pre">array_replace</span></code><a class="headerlink" href="#array-replace" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_replace</span></code><a class="headerlink" href="#array-replace" title="Link to this heading">¶</a></h3>
 <p>Replaces the first occurrence of the specified element with another specified element.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_replace</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">from</span><span class="p">,</span> <span class="n">to</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id122">
-<h4>Arguments<a class="headerlink" href="#id122" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id122" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4956,7 +4951,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id123">
-<h4>Example<a class="headerlink" href="#id123" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id123" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
 +--------------------------------------------------------+
 | array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
@@ -4967,20 +4962,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id124">
-<h4>Aliases<a class="headerlink" href="#id124" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id124" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_replace</p></li>
 </ul>
 </section>
 </section>
 <section id="array-replace-n">
-<h3><code class="docutils literal notranslate"><span class="pre">array_replace_n</span></code><a class="headerlink" href="#array-replace-n" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_replace_n</span></code><a class="headerlink" href="#array-replace-n" title="Link to this heading">¶</a></h3>
 <p>Replaces the first <code class="docutils literal notranslate"><span class="pre">max</span></code> occurrences of the specified element with another specified element.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_replace_n</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">from</span><span class="p">,</span> <span class="n">to</span><span class="p">,</span> <span class="nb">max</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id125">
-<h4>Arguments<a class="headerlink" href="#id125" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id125" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -4990,7 +4985,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id126">
-<h4>Example<a class="headerlink" href="#id126" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id126" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
 +-------------------------------------------------------------------+
 | array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
@@ -5001,20 +4996,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id127">
-<h4>Aliases<a class="headerlink" href="#id127" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id127" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_replace_n</p></li>
 </ul>
 </section>
 </section>
 <section id="array-replace-all">
-<h3><code class="docutils literal notranslate"><span class="pre">array_replace_all</span></code><a class="headerlink" href="#array-replace-all" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_replace_all</span></code><a class="headerlink" href="#array-replace-all" title="Link to this heading">¶</a></h3>
 <p>Replaces all occurrences of the specified element with another specified element.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_replace_all</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">from</span><span class="p">,</span> <span class="n">to</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id128">
-<h4>Arguments<a class="headerlink" href="#id128" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id128" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -5023,7 +5018,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id129">
-<h4>Example<a class="headerlink" href="#id129" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id129" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
 +------------------------------------------------------------+
 | array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
@@ -5034,20 +5029,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id130">
-<h4>Aliases<a class="headerlink" href="#id130" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id130" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_replace_all</p></li>
 </ul>
 </section>
 </section>
 <section id="array-slice">
-<h3><code class="docutils literal notranslate"><span class="pre">array_slice</span></code><a class="headerlink" href="#array-slice" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_slice</span></code><a class="headerlink" href="#array-slice" title="Link to this heading">¶</a></h3>
 <p>Returns a slice of the array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_slice</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">begin</span><span class="p">,</span> <span class="n">end</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id131">
-<h4>Example<a class="headerlink" href="#id131" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id131" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
 +--------------------------------------------------------+
 | array_slice(List([1,2,3,4,5,6,7,8]),Int64(3),Int64(6)) |
@@ -5058,20 +5053,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id132">
-<h4>Aliases<a class="headerlink" href="#id132" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id132" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>list_slice</p></li>
 </ul>
 </section>
 </section>
 <section id="array-to-string">
-<h3><code class="docutils literal notranslate"><span class="pre">array_to_string</span></code><a class="headerlink" href="#array-to-string" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">array_to_string</span></code><a class="headerlink" href="#array-to-string" title="Link to this heading">¶</a></h3>
 <p>Converts each element to its text representation.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_to_string</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">delimeter</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id133">
-<h4>Arguments<a class="headerlink" href="#id133" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id133" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -5079,7 +5074,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </ul>
 </section>
 <section id="id134">
-<h4>Example<a class="headerlink" href="#id134" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id134" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], &#39;,&#39;);
 +----------------------------------------------------+
 | array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(&quot;,&quot;)) |
@@ -5090,7 +5085,7 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 <section id="id135">
-<h4>Aliases<a class="headerlink" href="#id135" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id135" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>array_join</p></li>
 <li><p>list_join</p></li>
@@ -5099,20 +5094,20 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="cardinality">
-<h3><code class="docutils literal notranslate"><span class="pre">cardinality</span></code><a class="headerlink" href="#cardinality" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">cardinality</span></code><a class="headerlink" href="#cardinality" title="Link to this heading">¶</a></h3>
 <p>Returns the total number of elements in the array.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cardinality</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id136">
-<h4>Arguments<a class="headerlink" href="#id136" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id136" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id137">
-<h4>Example<a class="headerlink" href="#id137" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id137" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
 +--------------------------------------+
 | cardinality(List([1,2,3,4,5,6,7,8])) |
@@ -5124,109 +5119,109 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="list-append">
-<h3><code class="docutils literal notranslate"><span class="pre">list_append</span></code><a class="headerlink" href="#list-append" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_append</span></code><a class="headerlink" href="#list-append" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-append">array_append</a>.</em></p>
 </section>
 <section id="list-cat">
-<h3><code class="docutils literal notranslate"><span class="pre">list_cat</span></code><a class="headerlink" href="#list-cat" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_cat</span></code><a class="headerlink" href="#list-cat" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-concat">array_concat</a>.</em></p>
 </section>
 <section id="list-concat">
-<h3><code class="docutils literal notranslate"><span class="pre">list_concat</span></code><a class="headerlink" href="#list-concat" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_concat</span></code><a class="headerlink" href="#list-concat" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-concat">array_concat</a>.</em></p>
 </section>
 <section id="list-dims">
-<h3><code class="docutils literal notranslate"><span class="pre">list_dims</span></code><a class="headerlink" href="#list-dims" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_dims</span></code><a class="headerlink" href="#list-dims" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-dims">array_dims</a>.</em></p>
 </section>
 <section id="list-element">
-<h3><code class="docutils literal notranslate"><span class="pre">list_element</span></code><a class="headerlink" href="#list-element" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_element</span></code><a class="headerlink" href="#list-element" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-element">array_element</a>.</em></p>
 </section>
 <section id="list-extract">
-<h3><code class="docutils literal notranslate"><span class="pre">list_extract</span></code><a class="headerlink" href="#list-extract" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_extract</span></code><a class="headerlink" href="#list-extract" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-element">array_element</a>.</em></p>
 </section>
 <section id="list-indexof">
-<h3><code class="docutils literal notranslate"><span class="pre">list_indexof</span></code><a class="headerlink" href="#list-indexof" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_indexof</span></code><a class="headerlink" href="#list-indexof" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-position">array_position</a>.</em></p>
 </section>
 <section id="list-join">
-<h3><code class="docutils literal notranslate"><span class="pre">list_join</span></code><a class="headerlink" href="#list-join" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_join</span></code><a class="headerlink" href="#list-join" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-to-string">array_to_string</a>.</em></p>
 </section>
 <section id="list-length">
-<h3><code class="docutils literal notranslate"><span class="pre">list_length</span></code><a class="headerlink" href="#list-length" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_length</span></code><a class="headerlink" href="#list-length" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-length">array_length</a>.</em></p>
 </section>
 <section id="list-ndims">
-<h3><code class="docutils literal notranslate"><span class="pre">list_ndims</span></code><a class="headerlink" href="#list-ndims" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_ndims</span></code><a class="headerlink" href="#list-ndims" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-ndims">array_ndims</a>.</em></p>
 </section>
 <section id="list-prepend">
-<h3><code class="docutils literal notranslate"><span class="pre">list_prepend</span></code><a class="headerlink" href="#list-prepend" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_prepend</span></code><a class="headerlink" href="#list-prepend" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-prepend">array_prepend</a>.</em></p>
 </section>
 <section id="list-position">
-<h3><code class="docutils literal notranslate"><span class="pre">list_position</span></code><a class="headerlink" href="#list-position" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_position</span></code><a class="headerlink" href="#list-position" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-position">array_position</a>.</em></p>
 </section>
 <section id="list-positions">
-<h3><code class="docutils literal notranslate"><span class="pre">list_positions</span></code><a class="headerlink" href="#list-positions" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_positions</span></code><a class="headerlink" href="#list-positions" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-positions">array_positions</a>.</em></p>
 </section>
 <section id="list-push-back">
-<h3><code class="docutils literal notranslate"><span class="pre">list_push_back</span></code><a class="headerlink" href="#list-push-back" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_push_back</span></code><a class="headerlink" href="#list-push-back" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-append">array_append</a>.</em></p>
 </section>
 <section id="list-push-front">
-<h3><code class="docutils literal notranslate"><span class="pre">list_push_front</span></code><a class="headerlink" href="#list-push-front" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_push_front</span></code><a class="headerlink" href="#list-push-front" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-prepend">array_prepend</a>.</em></p>
 </section>
 <section id="list-repeat">
-<h3><code class="docutils literal notranslate"><span class="pre">list_repeat</span></code><a class="headerlink" href="#list-repeat" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_repeat</span></code><a class="headerlink" href="#list-repeat" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-repeat">array_repeat</a>.</em></p>
 </section>
 <section id="list-remove">
-<h3><code class="docutils literal notranslate"><span class="pre">list_remove</span></code><a class="headerlink" href="#list-remove" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_remove</span></code><a class="headerlink" href="#list-remove" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-remove">array_remove</a>.</em></p>
 </section>
 <section id="list-remove-n">
-<h3><code class="docutils literal notranslate"><span class="pre">list_remove_n</span></code><a class="headerlink" href="#list-remove-n" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_remove_n</span></code><a class="headerlink" href="#list-remove-n" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-remove-n">array_remove_n</a>.</em></p>
 </section>
 <section id="list-remove-all">
-<h3><code class="docutils literal notranslate"><span class="pre">list_remove_all</span></code><a class="headerlink" href="#list-remove-all" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_remove_all</span></code><a class="headerlink" href="#list-remove-all" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-remove-all">array_remove_all</a>.</em></p>
 </section>
 <section id="list-replace">
-<h3><code class="docutils literal notranslate"><span class="pre">list_replace</span></code><a class="headerlink" href="#list-replace" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_replace</span></code><a class="headerlink" href="#list-replace" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-replace">array_replace</a>.</em></p>
 </section>
 <section id="list-replace-n">
-<h3><code class="docutils literal notranslate"><span class="pre">list_replace_n</span></code><a class="headerlink" href="#list-replace-n" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_replace_n</span></code><a class="headerlink" href="#list-replace-n" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-replace-n">array_replace_n</a>.</em></p>
 </section>
 <section id="list-replace-all">
-<h3><code class="docutils literal notranslate"><span class="pre">list_replace_all</span></code><a class="headerlink" href="#list-replace-all" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_replace_all</span></code><a class="headerlink" href="#list-replace-all" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-replace-all">array_replace_all</a>.</em></p>
 </section>
 <section id="list-slice">
-<h3><code class="docutils literal notranslate"><span class="pre">list_slice</span></code><a class="headerlink" href="#list-slice" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_slice</span></code><a class="headerlink" href="#list-slice" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-slice">array_slice</a>.</em></p>
 </section>
 <section id="list-to-string">
-<h3><code class="docutils literal notranslate"><span class="pre">list_to_string</span></code><a class="headerlink" href="#list-to-string" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">list_to_string</span></code><a class="headerlink" href="#list-to-string" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#list-to-string">list_to_string</a>.</em></p>
 </section>
 <section id="make-array">
-<h3><code class="docutils literal notranslate"><span class="pre">make_array</span></code><a class="headerlink" href="#make-array" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">make_array</span></code><a class="headerlink" href="#make-array" title="Link to this heading">¶</a></h3>
 <p>Returns an Arrow array using the specified input expressions.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">make_array</span><span class="p">(</span><span class="n">expression1</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">expression_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id138">
-<h4>Arguments<a class="headerlink" href="#id138" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id138" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_n</strong>: Expression to include in the output array.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -5234,7 +5229,7 @@ string operators.</p></li>
 </ul>
 </section>
 <section id="id139">
-<h4>Example<a class="headerlink" href="#id139" title="Permalink to this heading">¶</a></h4>
+<h4>Example<a class="headerlink" href="#id139" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select make_array(1, 2, 3, 4, 5);
 +----------------------------------------------------------+
 | make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
@@ -5245,25 +5240,25 @@ string operators.</p></li>
 </div>
 </section>
 <section id="id140">
-<h4>Aliases<a class="headerlink" href="#id140" title="Permalink to this heading">¶</a></h4>
+<h4>Aliases<a class="headerlink" href="#id140" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>make_list</p></li>
 </ul>
 </section>
 </section>
 <section id="make-list">
-<h3><code class="docutils literal notranslate"><span class="pre">make_list</span></code><a class="headerlink" href="#make-list" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">make_list</span></code><a class="headerlink" href="#make-list" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#make-array">make_array</a>.</em></p>
 </section>
 <section id="trim-array">
-<h3><code class="docutils literal notranslate"><span class="pre">trim_array</span></code><a class="headerlink" href="#trim-array" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">trim_array</span></code><a class="headerlink" href="#trim-array" title="Link to this heading">¶</a></h3>
 <p>Removes the last n elements from the array.</p>
 <p>DEPRECATED: use <code class="docutils literal notranslate"><span class="pre">array_slice</span></code> instead!</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">trim_array</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id141">
-<h4>Arguments<a class="headerlink" href="#id141" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id141" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -5273,12 +5268,12 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 <section id="struct-functions">
-<h2>Struct Functions<a class="headerlink" href="#struct-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Struct Functions<a class="headerlink" href="#struct-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#struct">struct</a></p></li>
 </ul>
 <section id="struct">
-<h3><code class="docutils literal notranslate"><span class="pre">struct</span></code><a class="headerlink" href="#struct" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">struct</span></code><a class="headerlink" href="#struct" title="Link to this heading">¶</a></h3>
 <p>Returns an Arrow struct using the specified input expressions.
 Fields in the returned struct use the <code class="docutils literal notranslate"><span class="pre">cN</span></code> naming convention.
 For example: <code class="docutils literal notranslate"><span class="pre">c0</span></code>, <code class="docutils literal notranslate"><span class="pre">c1</span></code>, <code class="docutils literal notranslate"><span class="pre">c2</span></code>, etc.</p>
@@ -5287,25 +5282,25 @@ For example: <code class="docutils literal notranslate"><span class="pre">c0</sp
 </div>
 <p>For example, this query converts two columns <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> to a single column with
 a struct type of fields <code class="docutils literal notranslate"><span class="pre">c0</span></code> and <code class="docutils literal notranslate"><span class="pre">c1</span></code>:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from t;
-+---+---+
-| a | b |
-+---+---+
-| 1 | 2 |
-| 3 | 4 |
-+---+---+
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---+---+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---+---+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---+---+</span>
 
-❯ select struct(a, b) from t;
-+-----------------+
-| struct(t.a,t.b) |
-+-----------------+
-| {c0: 1, c1: 2}  |
-| {c0: 3, c1: 4}  |
-+-----------------+
+<span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">a</span><span class="p">,</span><span class="n">t</span><span class="p">.</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">c0</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">c1</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w">  </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">c0</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">c1</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------+</span>
 </pre></div>
 </div>
 <section id="id142">
-<h4>Arguments<a class="headerlink" href="#id142" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id142" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_n</strong>: Expression to include in the output struct.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -5315,7 +5310,7 @@ string operators.</p></li>
 </section>
 </section>
 <section id="hashing-functions">
-<h2>Hashing Functions<a class="headerlink" href="#hashing-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Hashing Functions<a class="headerlink" href="#hashing-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#digest">digest</a></p></li>
 <li><p><a class="reference internal" href="#md5">md5</a></p></li>
@@ -5325,13 +5320,13 @@ string operators.</p></li>
 <li><p><a class="reference internal" href="#sha512">sha512</a></p></li>
 </ul>
 <section id="digest">
-<h3><code class="docutils literal notranslate"><span class="pre">digest</span></code><a class="headerlink" href="#digest" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">digest</span></code><a class="headerlink" href="#digest" title="Link to this heading">¶</a></h3>
 <p>Computes the binary hash of an expression using the specified algorithm.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">digest</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">algorithm</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id143">
-<h4>Arguments<a class="headerlink" href="#id143" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id143" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5352,13 +5347,13 @@ Must be one of:</p>
 </section>
 </section>
 <section id="md5">
-<h3><code class="docutils literal notranslate"><span class="pre">md5</span></code><a class="headerlink" href="#md5" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">md5</span></code><a class="headerlink" href="#md5" title="Link to this heading">¶</a></h3>
 <p>Computes an MD5 128-bit checksum for a string expression.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">md5</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id144">
-<h4>Arguments<a class="headerlink" href="#id144" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id144" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5366,13 +5361,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="sha224">
-<h3><code class="docutils literal notranslate"><span class="pre">sha224</span></code><a class="headerlink" href="#sha224" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">sha224</span></code><a class="headerlink" href="#sha224" title="Link to this heading">¶</a></h3>
 <p>Computes the SHA-224 hash of a binary string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha224</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id145">
-<h4>Arguments<a class="headerlink" href="#id145" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id145" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5380,13 +5375,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="sha256">
-<h3><code class="docutils literal notranslate"><span class="pre">sha256</span></code><a class="headerlink" href="#sha256" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">sha256</span></code><a class="headerlink" href="#sha256" title="Link to this heading">¶</a></h3>
 <p>Computes the SHA-256 hash of a binary string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha256</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id146">
-<h4>Arguments<a class="headerlink" href="#id146" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id146" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5394,13 +5389,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="sha384">
-<h3><code class="docutils literal notranslate"><span class="pre">sha384</span></code><a class="headerlink" href="#sha384" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">sha384</span></code><a class="headerlink" href="#sha384" title="Link to this heading">¶</a></h3>
 <p>Computes the SHA-384 hash of a binary string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha384</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id147">
-<h4>Arguments<a class="headerlink" href="#id147" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id147" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5408,13 +5403,13 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="sha512">
-<h3><code class="docutils literal notranslate"><span class="pre">sha512</span></code><a class="headerlink" href="#sha512" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">sha512</span></code><a class="headerlink" href="#sha512" title="Link to this heading">¶</a></h3>
 <p>Computes the SHA-512 hash of a binary string.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha512</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id148">
-<h4>Arguments<a class="headerlink" href="#id148" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id148" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5423,19 +5418,19 @@ Can be a constant, column, or function, and any combination of string operators.
 </section>
 </section>
 <section id="other-functions">
-<h2>Other Functions<a class="headerlink" href="#other-functions" title="Permalink to this heading">¶</a></h2>
+<h2>Other Functions<a class="headerlink" href="#other-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="#arrow-cast">arrow_cast</a></p></li>
 <li><p><a class="reference internal" href="#arrow-typeof">arrow_typeof</a></p></li>
 </ul>
 <section id="arrow-cast">
-<h3><code class="docutils literal notranslate"><span class="pre">arrow_cast</span></code><a class="headerlink" href="#arrow-cast" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">arrow_cast</span></code><a class="headerlink" href="#arrow-cast" title="Link to this heading">¶</a></h3>
 <p>Casts a value to a specific Arrow data type:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">datatype</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id149">
-<h4>Arguments<a class="headerlink" href="#id149" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id149" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to cast.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -5446,13 +5441,13 @@ to cast to.</p></li>
 </section>
 </section>
 <section id="arrow-typeof">
-<h3><code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code><a class="headerlink" href="#arrow-typeof" title="Permalink to this heading">¶</a></h3>
+<h3><code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code><a class="headerlink" href="#arrow-typeof" title="Link to this heading">¶</a></h3>
 <p>Returns the underlying Arrow data type of the expression:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id150">
-<h4>Arguments<a class="headerlink" href="#id150" title="Permalink to this heading">¶</a></h4>
+<h4>Arguments<a class="headerlink" href="#id150" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to evaluate.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -5503,7 +5498,7 @@ string operators.</p></li>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     

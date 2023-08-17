@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 
-<html lang="en">
+<html lang="en" data-content_root="../">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -28,9 +28,9 @@
     
     <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
-    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccbe24c1"></script>
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
-    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Expression API" href="expressions.html" />
@@ -252,11 +252,6 @@
    Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
   </a>
  </li>
- <li class="toctree-l1">
-  <a class="reference internal" href="../library-user-guide/execution-plans.html">
-   Execution Plans
-  </a>
- </li>
 </ul>
 <p aria-level="2" class="caption" role="heading">
  <span class="caption-text">
@@ -402,7 +397,7 @@
   under the License.
 -->
 <section id="dataframe-api">
-<h1>DataFrame API<a class="headerlink" href="#dataframe-api" title="Permalink to this heading">¶</a></h1>
+<h1>DataFrame API<a class="headerlink" href="#dataframe-api" title="Link to this heading">¶</a></h1>
 <p>A DataFrame represents a logical set of rows with the same named columns, similar to a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html">Pandas DataFrame</a> or
 <a class="reference external" href="https://spark.apache.org/docs/latest/sql-programming-guide.html">Spark DataFrame</a>.</p>
 <p>DataFrames are typically created by calling a method on
@@ -428,7 +423,7 @@ to build up a query definition.</p>
 <p>Refer to the <a class="reference internal" href="expressions.html"><span class="doc std std-doc">Expressions Reference</span></a> for available functions for building logical expressions for use with the
 DataFrame API.</p>
 <section id="dataframe-transformations">
-<h2>DataFrame Transformations<a class="headerlink" href="#dataframe-transformations" title="Permalink to this heading">¶</a></h2>
+<h2>DataFrame Transformations<a class="headerlink" href="#dataframe-transformations" title="Link to this heading">¶</a></h2>
 <p>These methods create a new DataFrame after applying a transformation to the logical plan that the DataFrame represents.</p>
 <p>DataFusion DataFrames use lazy evaluation, meaning that each transformation is just creating a new query plan and
 not actually performing any transformations. This approach allows for the overall plan to be optimized before
@@ -492,7 +487,7 @@ execution. The plan is evaluated (executed) when an action method is invoked, su
 </table>
 </section>
 <section id="dataframe-actions">
-<h2>DataFrame Actions<a class="headerlink" href="#dataframe-actions" title="Permalink to this heading">¶</a></h2>
+<h2>DataFrame Actions<a class="headerlink" href="#dataframe-actions" title="Link to this heading">¶</a></h2>
 <p>These methods execute the logical plan represented by the DataFrame and either collects the results into memory, prints them to stdout, or writes them to disk.</p>
 <table class="table">
 <thead>
@@ -535,7 +530,7 @@ execution. The plan is evaluated (executed) when an action method is invoked, su
 </table>
 </section>
 <section id="other-dataframe-methods">
-<h2>Other DataFrame Methods<a class="headerlink" href="#other-dataframe-methods" title="Permalink to this heading">¶</a></h2>
+<h2>Other DataFrame Methods<a class="headerlink" href="#other-dataframe-methods" title="Link to this heading">¶</a></h2>
 <table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Function</p></th>
@@ -603,7 +598,7 @@ execution. The plan is evaluated (executed) when an action method is invoked, su
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.1.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
 </p>
     </div>
     
