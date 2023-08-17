@@ -372,9 +372,14 @@ mod tests {
     use datafusion_execution::TaskContext;
     use datafusion_expr::{create_udaf, Accumulator, Volatility};
     use futures::FutureExt;
+    use std::path::Path;
+    use tempfile::TempDir;
 
-    fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
-        let csv = test::scan_partitioned_csv(partitions)?;
+    fn create_test_schema(
+        partitions: usize,
+        work_dir: &Path,
+    ) -> Result<(Arc<CsvExec>, SchemaRef)> {
+        let csv = test::scan_partitioned_csv(partitions, work_dir)?;
         let schema = csv.schema();
         Ok((csv, schema))
     }
@@ -547,7 +552,8 @@ mod tests {
         );
 
         let task_ctx = Arc::new(TaskContext::default());
-        let (input, schema) = create_test_schema(1)?;
+        let tmp_dir = TempDir::new()?;
+        let (input, schema) = create_test_schema(1, tmp_dir.path())?;
 
         let window_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
@@ -579,7 +585,8 @@ mod tests {
     #[tokio::test]
     async fn window_function() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let (input, schema) = create_test_schema(1)?;
+        let tmp_dir = TempDir::new()?;
+        let (input, schema) = create_test_schema(1, tmp_dir.path())?;
 
         let window_exec = Arc::new(WindowAggExec::try_new(
             vec![

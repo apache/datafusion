@@ -73,6 +73,7 @@ use crate::PhysicalExpr;
 use arrow_array::{Datum, Scalar};
 
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::internal_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::get_result_type;
@@ -253,11 +254,11 @@ macro_rules! compute_utf8_op_scalar {
         } else if $RIGHT.is_null() {
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
         } else {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "compute_utf8_op_scalar for '{}' failed to cast literal value {}",
                 stringify!($OP),
                 $RIGHT
-            )))
+            )
         }
     }};
 }
@@ -381,10 +382,10 @@ macro_rules! binary_string_array_op {
         match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
             DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for binary operation '{}' on string arrays",
                 other, stringify!($OP)
-            ))),
+            ),
         }
     }};
 }
@@ -452,10 +453,10 @@ macro_rules! binary_array_op {
                 compute_op!($LEFT, $RIGHT, $OP, IntervalMonthDayNanoArray)
             }
             DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for binary operation '{}' on dyn arrays",
                 other, stringify!($OP)
-            ))),
+            ),
         }
     }};
 }
@@ -478,10 +479,10 @@ macro_rules! binary_string_array_flag_op {
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             }
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op operation '{}' on string array",
                 other, stringify!($OP)
-            ))),
+            ),
         }
     }};
 }
@@ -520,10 +521,10 @@ macro_rules! binary_string_array_flag_op_scalar {
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             }
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
                 other, stringify!($OP)
-            ))),
+            ),
         };
         Some(result)
     }};
@@ -546,10 +547,10 @@ macro_rules! compute_utf8_flag_op_scalar {
             }
             Ok(Arc::new(array))
         } else {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
                 $RIGHT, stringify!($OP)
-            )))
+            )
         }
     }};
 }
@@ -752,9 +753,9 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::IntervalYearMonth(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::IntervalDayTime(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::IntervalMonthDayNano(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for scalar operation '{}' on dyn array",
-                other, stringify!($OP)))
+                other, stringify!($OP)
             )
         };
         Some(result)
@@ -793,9 +794,9 @@ fn to_result_type_array(
                 if value_type.as_ref() == result_type {
                     Ok(cast(&array, result_type)?)
                 } else {
-                    Err(DataFusionError::Internal(format!(
+                    internal_err!(
                             "Incompatible Dictionary value type {value_type:?} with result type {result_type:?} of Binary operator {op:?}"
-                        )))
+                        )
                 }
             }
             _ => Ok(array),
@@ -941,22 +942,24 @@ impl BinaryExpr {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)
                 } else {
-                    Err(DataFusionError::Internal(format!(
+                    internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
                         self.op,
                         left.data_type(),
                         right.data_type()
-                    )))
+                    )
                 }
             }
             Or => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, or_kleene)
                 } else {
-                    Err(DataFusionError::Internal(format!(
+                    internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                        self.op, left_data_type, right_data_type
-                    )))
+                        self.op,
+                        left_data_type,
+                        right_data_type
+                    )
                 }
             }
             RegexMatch => {

@@ -326,6 +326,30 @@ fn plan_rollback_transaction_chained() {
 }
 
 #[test]
+fn plan_copy_to() {
+    let sql = "COPY test_decimal to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+  TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_copy_to_query() {
+    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+  Limit: skip=0, fetch=10
+    Projection: test_decimal.id, test_decimal.price
+      TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
@@ -1796,11 +1820,15 @@ fn create_external_table_with_compression_type() {
 #[test]
 fn create_external_table_parquet() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS PARQUET LOCATION 'foo.parquet'";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Plan(\"Column definitions can not be specified for PARQUET files.\")",
-        format!("{err:?}")
-    );
+    let expected = "CreateExternalTable: Bare { table: \"t\" }";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_external_table_parquet_sort_order() {
+    let sql = "create external table foo(a varchar, b varchar, c timestamp) stored as parquet location '/tmp/foo' with order (c)";
+    let expected = "CreateExternalTable: Bare { table: \"foo\" }";
+    quick_test(sql, expected);
 }
 
 #[test]

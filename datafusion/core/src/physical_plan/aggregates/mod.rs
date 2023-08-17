@@ -1238,7 +1238,7 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{DataFusionError, Result, ScalarValue};
+    use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Column, Count, FirstValue, LastValue, Median,
@@ -1670,9 +1670,7 @@ mod tests {
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Err(DataFusionError::Internal(format!(
-                "Children cannot be replaced in {self:?}"
-            )))
+            internal_err!("Children cannot be replaced in {self:?}")
         }
 
         fn execute(

@@ -18,7 +18,7 @@
 //! Utility functions for expression simplification
 
 use crate::simplify_expressions::SimplifyInfo;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     expr::{Between, BinaryExpr, InList},
@@ -226,9 +226,7 @@ pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
 pub fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
     match expr {
         Expr::Literal(ScalarValue::Boolean(v)) => Ok(v),
-        _ => Err(DataFusionError::Internal(format!(
-            "Expected boolean literal, got {expr:?}"
-        ))),
+        _ => internal_err!("Expected boolean literal, got {expr:?}"),
     }
 }
 
@@ -438,9 +436,9 @@ pub fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
                 ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)),
             ) => contiguous_scalar += &v,
             Expr::Literal(x) => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                 "The scalar {x} should be casted to string type during the type coercion."
-            )))
+            )
             }
             // If the arg is not a literal, we should first push the current `contiguous_scalar`
             // to the `new_args` (if it is not empty) and reset it to empty string.
@@ -496,7 +494,7 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
                                     }
                                 }
                             }
-                            Expr::Literal(s) => return Err(DataFusionError::Internal(format!("The scalar {s} should be casted to string type during the type coercion."))),
+                            Expr::Literal(s) => return internal_err!("The scalar {s} should be casted to string type during the type coercion."),
                             // If the arg is not a literal, we should first push the current `contiguous_scalar`
                             // to the `new_args` and reset it to None.
                             // Then pushing this arg to the `new_args`.
@@ -521,9 +519,9 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
                 None => Ok(Expr::Literal(ScalarValue::Utf8(None))),
             }
         }
-        Expr::Literal(d) => Err(DataFusionError::Internal(format!(
+        Expr::Literal(d) => internal_err!(
             "The scalar {d} should be casted to string type during the type coercion."
-        ))),
+        ),
         d => Ok(concat_ws(
             d.clone(),
             args.iter()

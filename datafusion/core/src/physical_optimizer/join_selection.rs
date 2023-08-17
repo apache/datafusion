@@ -38,6 +38,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::ExecutionPlan;
 
 use arrow_schema::Schema;
+use datafusion_common::internal_err;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, JoinType};
 use datafusion_physical_expr::expressions::Column;
@@ -537,9 +538,7 @@ fn swap_join_according_to_unboundedness(
         (
             _,
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
-        ) => Err(DataFusionError::Internal(format!(
-            "{join_type} join cannot be swapped for unbounded input."
-        ))),
+        ) => internal_err!("{join_type} join cannot be swapped for unbounded input."),
         (PartitionMode::Partitioned, _) => {
             swap_hash_join(hash_join, PartitionMode::Partitioned)
         }

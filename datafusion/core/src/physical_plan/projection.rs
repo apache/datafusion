@@ -42,7 +42,7 @@ use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 
 use datafusion_physical_expr::equivalence::update_ordering_equivalence_with_cast;
-use datafusion_physical_expr::expressions::CastExpr;
+use datafusion_physical_expr::expressions::{CastExpr, Literal};
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, OrderingEquivalenceProperties,
@@ -282,14 +282,14 @@ impl ExecutionPlan for ProjectionExec {
         )?))
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        let all_column_expr = self
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        let all_simple_exprs = self
             .expr
             .iter()
-            .all(|(e, _)| e.as_any().downcast_ref::<Column>().is_some());
-        // If expressions are all column_expr, then all computations in this projection are reorder or rename,
+            .all(|(e, _)| e.as_any().is::<Column>() || e.as_any().is::<Literal>());
+        // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
-        !all_column_expr
+        vec![!all_simple_exprs]
     }
 
     fn execute(
@@ -433,6 +433,7 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::binary;
     use futures::future;
+    use tempfile::TempDir;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -451,7 +452,8 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         // pick column c1 and name it column c1 in the output schema
         let projection =
@@ -488,12 +490,13 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         // pick column c1 and name it column c1 in the output schema
         let projection =
             ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
-        assert!(!projection.benefits_from_input_partitioning());
+        assert!(!projection.benefits_from_input_partitioning()[0]);
         Ok(())
     }
 
@@ -502,7 +505,8 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         let c1 = col("c2", &schema).unwrap();
         let c2 = col("c9", &schema).unwrap();
@@ -511,7 +515,7 @@ mod tests {
         let projection =
             ProjectionExec::try_new(vec![(c1_plus_c2, "c2 + c9".to_string())], csv)?;
 
-        assert!(projection.benefits_from_input_partitioning());
+        assert!(projection.benefits_from_input_partitioning()[0]);
         Ok(())
     }
 
@@ -519,7 +523,8 @@ mod tests {
     async fn project_no_column() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
-        let csv = test::scan_partitioned_csv(1)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(1, tmp_dir.path())?;
         let expected = collect(csv.execute(0, task_ctx.clone())?).await.unwrap();
 
         let projection = ProjectionExec::try_new(vec![], csv)?;

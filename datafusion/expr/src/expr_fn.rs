@@ -811,6 +811,18 @@ scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataTy
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
 scalar_expr!(Nanvl, nanvl, x y, "returns x if x is not NaN otherwise returns y");
+scalar_expr!(
+    Isnan,
+    isnan,
+    num,
+    "returns true if a given number is +NaN or -NaN otherwise returns false"
+);
+scalar_expr!(
+    Iszero,
+    iszero,
+    num,
+    "returns true if a given number is +0.0 or -0.0 otherwise returns false"
+);
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 
@@ -1003,6 +1015,8 @@ mod test {
         test_unary_scalar_expr!(Ln, ln);
         test_scalar_expr!(Atan2, atan2, y, x);
         test_scalar_expr!(Nanvl, nanvl, x, y);
+        test_scalar_expr!(Isnan, isnan, input);
+        test_scalar_expr!(Iszero, iszero, input);
 
         test_scalar_expr!(Ascii, ascii, input);
         test_scalar_expr!(BitLength, bit_length, string);

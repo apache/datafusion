@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
-    plan_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    internal_err, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
@@ -492,9 +492,9 @@ fn coerce_window_frame(
                 } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
                 } else {
-                    return Err(DataFusionError::Internal(format!(
+                    return internal_err!(
                         "Cannot run range queries on datatype: {col_type:?}"
-                    )));
+                    );
                 }
             } else {
                 return Err(DataFusionError::Internal(
@@ -994,7 +994,7 @@ mod test {
         ));
         let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();
         assert_eq!(
-            "Plan(\"The function Avg does not support inputs of type Utf8.\")",
+            "Plan(\"No function matches the given name and argument types 'AVG(Utf8)'. You might need to add explicit type casts.\\n\\tCandidate functions:\\n\\tAVG(Int8/Int16/Int32/Int64/UInt8/UInt16/UInt32/UInt64/Float32/Float64)\")",
             &format!("{err:?}")
         );
         Ok(())

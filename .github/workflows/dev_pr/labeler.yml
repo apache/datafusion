@@ -47,4 +47,4 @@ substrait:
   - datafusion/substrait/**/*
 
 sqllogictest:
-  - datafusion/core/tests/sqllogictests/**/*
+  - datafusion/sqllogictest/**/*

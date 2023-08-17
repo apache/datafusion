@@ -58,10 +58,6 @@ pub struct RunOpt {
     #[structopt(short, long)]
     query: Option<usize>,
 
-    /// Activate debug mode to see query results
-    #[structopt(short, long)]
-    debug: bool,
-
     /// Common options
     #[structopt(flatten)]
     common: CommonOpt,
@@ -190,7 +186,7 @@ impl RunOpt {
         ctx: &SessionContext,
         sql: &str,
     ) -> Result<Vec<RecordBatch>> {
-        let debug = self.debug;
+        let debug = self.common.debug;
         let plan = ctx.sql(sql).await?;
         let (state, plan) = plan.into_parts();
 
@@ -286,11 +282,11 @@ impl RunOpt {
     }
 
     fn iterations(&self) -> usize {
-        self.common.iterations()
+        self.common.iterations
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions()
+        self.common.partitions
     }
 }
 
@@ -331,10 +327,10 @@ mod tests {
             iterations: 1,
             partitions: 2,
             batch_size: 8192,
+            debug: false,
         };
         let opt = RunOpt {
             query: Some(query),
-            debug: false,
             common,
             path: PathBuf::from(path.to_string()),
             file_format: "tbl".to_string(),
@@ -363,10 +359,10 @@ mod tests {
             iterations: 1,
             partitions: 2,
             batch_size: 8192,
+            debug: false,
         };
         let opt = RunOpt {
             query: Some(query),
-            debug: false,
             common,
             path: PathBuf::from(path.to_string()),
             file_format: "tbl".to_string(),
