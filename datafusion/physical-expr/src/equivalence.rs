@@ -157,11 +157,11 @@ impl EquivalenceProperties {
         &self,
         sort_reqs: &[PhysicalSortRequirement],
     ) -> Vec<PhysicalSortRequirement> {
-        // TODO: Move collapse logic to here from normalize_sort_exprs
-        sort_reqs
+        let normalized_sort_reqs = sort_reqs
             .iter()
             .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        collapse_vec(normalized_sort_reqs)
     }
 
     pub fn normalize_sort_exprs(
@@ -172,9 +172,7 @@ impl EquivalenceProperties {
             PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
         let normalized_sort_requirement =
             self.normalize_sort_requirements(&sort_requirements);
-        let normalized_sort_exprs =
-            PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement);
-        collapse_vec(normalized_sort_exprs)
+        PhysicalSortRequirement::to_sort_exprs(normalized_sort_requirement)
     }
 }
 
