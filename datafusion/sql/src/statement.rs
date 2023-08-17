@@ -895,7 +895,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .schema_provider
             .get_table_provider(table_name.clone())?;
         let arrow_schema = (*provider.schema()).clone();
-        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
+            table_name.clone(),
+            &arrow_schema,
+        )?);
         let values = table_schema.fields().iter().map(|f| {
             (
                 f.name().clone(),
