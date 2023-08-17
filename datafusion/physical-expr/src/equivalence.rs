@@ -688,23 +688,39 @@ fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
 fn get_compatible_ranges(
     given: &[PhysicalSortRequirement],
     section: &[PhysicalSortRequirement],
+    is_aggressive: bool,
 ) -> Vec<Range<usize>> {
-    let n_section = section.len();
-    let n_end = if given.len() >= n_section {
-        given.len() - n_section + 1
+    if is_aggressive {
+        let mut res = vec![];
+        for i in 0..section.len(){
+            let mut count = 0;
+            let mut j = 0;
+            while given[j] == section[i+j] && j < given.len() && i+j < section.len(){
+                count += 1;
+            }
+            if count > 0{
+                res.push(Range{start:i, end:i+count})
+            }
+        }
+        res
     } else {
-        0
-    };
-    (0..n_end)
-        .filter_map(|idx| {
-            let end = idx + n_section;
-            given[idx..end]
-                .iter()
-                .zip(section)
-                .all(|(req, given)| given.compatible(req))
-                .then_some(Range { start: idx, end })
-        })
-        .collect()
+        let n_section = section.len();
+        let n_end = if given.len() >= n_section {
+            given.len() - n_section + 1
+        } else {
+            0
+        };
+        (0..n_end)
+            .filter_map(|idx| {
+                let end = idx + n_section;
+                given[idx..end]
+                    .iter()
+                    .zip(section)
+                    .all(|(req, given)| given.compatible(req))
+                    .then_some(Range { start: idx, end })
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
