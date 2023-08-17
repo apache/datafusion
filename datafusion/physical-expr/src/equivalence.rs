@@ -242,15 +242,12 @@ impl OrderingEquivalenceProperties {
     pub fn normalize_sort_requirements(
         &self,
         sort_reqs: &[PhysicalSortRequirement],
+        is_aggressive: bool,
     ) -> Vec<PhysicalSortRequirement> {
         let mut normalized_sort_reqs = sort_reqs.to_vec();
         if let Some(oeq_class) = &self.oeq_class {
             for item in oeq_class.others() {
-                let item = item
-                    .clone()
-                    .into_iter()
-                    .map(|elem| elem.into())
-                    .collect::<Vec<_>>();
+                let item = PhysicalSortRequirement::from_sort_exprs(item);
                 let ranges = get_compatible_ranges(&normalized_sort_reqs, &item);
                 let mut offset: i64 = 0;
                 for Range { start, end } in ranges {

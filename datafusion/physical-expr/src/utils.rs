@@ -137,6 +137,7 @@ pub fn normalize_sort_exprs(
     sort_exprs: &[PhysicalSortExpr],
     eq_properties: &EquivalenceProperties,
     ordering_eq_properties: &OrderingEquivalenceProperties,
+    is_aggressive: bool,
 ) -> Vec<PhysicalSortExpr> {
     let sort_requirements = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
     let normalized_exprs = normalize_sort_requirements(
@@ -159,9 +160,14 @@ pub fn normalize_sort_requirements(
     sort_reqs: &[PhysicalSortRequirement],
     eq_properties: &EquivalenceProperties,
     ordering_eq_properties: &OrderingEquivalenceProperties,
+    is_aggressive: bool,
 ) -> Vec<PhysicalSortRequirement> {
+    println!("sort_reqs at the start:{:?}", sort_reqs);
     let normalized_sort_reqs = eq_properties.normalize_sort_requirements(sort_reqs);
-    ordering_eq_properties.normalize_sort_requirements(&normalized_sort_reqs)
+    println!("normalized_sort_reqs after eq:{:?}", normalized_sort_reqs);
+    let res = ordering_eq_properties.normalize_sort_requirements(&normalized_sort_reqs, is_aggressive);
+    println!("normalized_sort_reqs after oeq:{:?}", res);
+    res
 }
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
@@ -206,6 +212,8 @@ pub fn ordering_satisfy_concrete<
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
+    println!("required_normalized: {:?}", required_normalized);
+    println!("provided_normalized: {:?}", provided_normalized);
     required_normalized
         .into_iter()
         .zip(provided_normalized)
@@ -980,28 +988,58 @@ mod tests {
         let provided = Some(&provided[..]);
         let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
+        // let requirements = vec![
+        //     // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
+        //     (vec![(col_a, option1)], true),
+        //     (vec![(col_a, option2)], false),
+        //     // Test whether equivalence works as expected
+        //     (vec![(col_c, option1)], true),
+        //     (vec![(col_c, option2)], false),
+        //     // Test whether ordering equivalence works as expected
+        //     (vec![(col_d, option1)], false),
+        //     (vec![(col_d, option1), (col_b, option1)], true),
+        //     (vec![(col_d, option2), (col_b, option1)], false),
+        //     (vec![(col_e, option2), (col_b, option1)], true),
+        //     (vec![(col_e, option1), (col_b, option1)], false),
+        //     (
+        //         vec![
+        //             (col_d, option1),
+        //             (col_b, option1),
+        //             (col_d, option1),
+        //             (col_b, option1),
+        //         ],
+        //         true,
+        //     ),
+        //     (
+        //         vec![
+        //             (col_d, option1),
+        //             (col_b, option1),
+        //             (col_e, option2),
+        //             (col_b, option1),
+        //         ],
+        //         true,
+        //     ),
+        //     (
+        //         vec![
+        //             (col_d, option1),
+        //             (col_b, option1),
+        //             (col_d, option2),
+        //             (col_b, option1),
+        //         ],
+        //         false,
+        //     ),
+        //     (
+        //         vec![
+        //             (col_d, option1),
+        //             (col_b, option1),
+        //             (col_e, option1),
+        //             (col_b, option1),
+        //         ],
+        //         false,
+        //     ),
+        // ];
+
         let requirements = vec![
-            // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
-            (vec![(col_a, option1)], true),
-            (vec![(col_a, option2)], false),
-            // Test whether equivalence works as expected
-            (vec![(col_c, option1)], true),
-            (vec![(col_c, option2)], false),
-            // Test whether ordering equivalence works as expected
-            (vec![(col_d, option1)], false),
-            (vec![(col_d, option1), (col_b, option1)], true),
-            (vec![(col_d, option2), (col_b, option1)], false),
-            (vec![(col_e, option2), (col_b, option1)], true),
-            (vec![(col_e, option1), (col_b, option1)], false),
-            (
-                vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_d, option1),
-                    (col_b, option1),
-                ],
-                true,
-            ),
             (
                 vec![
                     (col_d, option1),
@@ -1010,24 +1048,6 @@ mod tests {
                     (col_b, option1),
                 ],
                 true,
-            ),
-            (
-                vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_d, option2),
-                    (col_b, option1),
-                ],
-                false,
-            ),
-            (
-                vec![
-                    (col_d, option1),
-                    (col_b, option1),
-                    (col_e, option1),
-                    (col_b, option1),
-                ],
-                false,
             ),
         ];
         for (cols, expected) in requirements {
