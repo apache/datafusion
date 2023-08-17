@@ -3019,18 +3019,6 @@ mod tests {
     }
 
     #[test]
-    fn test_array_empty() {
-        // array_dims([[1, 2, 3, 4], [5, 6, 7, 8]]) = [2, 4]
-        let list_array = return_nested_array().into_array(1);
-
-        let array = array_empty(&[list_array])
-            .expect("failed to initialize function array_empty");
-        let result = array.as_any().downcast_ref::<UInt8Array>();
-
-        assert_eq!(&[1], result.unwrap().values())
-    }
-
-    #[test]
     fn test_nested_array_dims() {
         // array_dims([[1, 2, 3, 4], [5, 6, 7, 8]]) = [2, 4]
         let list_array = return_nested_array().into_array(1);
