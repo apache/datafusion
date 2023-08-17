@@ -986,6 +986,36 @@ macro_rules! general_repeat_list {
     }};
 }
 
+/// Array_empty SQL function
+pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let array = as_list_array(&args[0])?;
+    let mut builder = UInt8Array::builder(1);
+
+    for arr in array.iter() {
+        if let Some(arr) = arr {
+            let res = match arr.data_type() {
+                DataType::List(_) => {
+                    let arr = downcast_arg!(arr, ListArray);
+                    let mut res = 1;
+                    for i in 0..arr.len() {
+                        if arr.value_length(i) > 0 {
+                            res = 0;
+                            break;
+                        }
+                    }
+                    res
+                }
+                DataType::Null => 1,
+                _ => 0,
+            };
+            builder.append_value(res);
+        } else {
+            builder.append_value(1);
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[0];
@@ -2986,6 +3016,18 @@ mod tests {
                 .unwrap()
                 .values()
         );
+    }
+
+    #[test]
+    fn test_array_empty() {
+        // array_dims([[1, 2, 3, 4], [5, 6, 7, 8]]) = [2, 4]
+        let list_array = return_nested_array().into_array(1);
+
+        let array = array_empty(&[list_array])
+            .expect("failed to initialize function array_empty");
+        let result = array.as_any().downcast_ref::<UInt8Array>();
+
+        assert_eq!(&[1], result.unwrap().values())
     }
 
     #[test]

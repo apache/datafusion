@@ -2377,6 +2377,7 @@ pub enum ScalarFunction {
     Flatten = 112,
     Isnan = 113,
     Iszero = 114,
+    ArrayEmpty = 115,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2474,6 +2475,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayAppend => "ArrayAppend",
             ScalarFunction::ArrayConcat => "ArrayConcat",
             ScalarFunction::ArrayDims => "ArrayDims",
+            ScalarFunction::ArrayEmpty => "ArrayEmpty",
             ScalarFunction::ArrayRepeat => "ArrayRepeat",
             ScalarFunction::ArrayLength => "ArrayLength",
             ScalarFunction::ArrayNdims => "ArrayNdims",
@@ -2594,6 +2596,7 @@ impl ScalarFunction {
             "ArrayAppend" => Some(Self::ArrayAppend),
             "ArrayConcat" => Some(Self::ArrayConcat),
             "ArrayDims" => Some(Self::ArrayDims),
+            "ArrayEmpty" => Some(Self::ArrayEmpty),
             "ArrayRepeat" => Some(Self::ArrayRepeat),
             "ArrayLength" => Some(Self::ArrayLength),
             "ArrayNdims" => Some(Self::ArrayNdims),

@@ -452,6 +452,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
+            ScalarFunction::ArrayEmpty => Self::ArrayEmpty,
             ScalarFunction::ArrayHasAll => Self::ArrayHasAll,
             ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
             ScalarFunction::ArrayHas => Self::ArrayHas,
