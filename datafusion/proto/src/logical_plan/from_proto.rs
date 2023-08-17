@@ -34,7 +34,6 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
     array_has, array_has_all, array_has_any, array_length, array_ndims, array_position,
@@ -58,6 +57,10 @@ use datafusion_expr::{
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+};
+use datafusion_expr::{
+    array_empty,
+    expr::{Alias, Placeholder},
 };
 use std::sync::Arc;
 
@@ -1356,6 +1359,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayEmpty => {
+                    Ok(array_empty(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
                 }
