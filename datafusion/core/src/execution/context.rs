@@ -184,17 +184,18 @@ where
 /// assert_batches_eq!(
 ///  &[
 ///    "+---+----------------+",
-///    "| a | MIN(example.b) |",
+///    "| a | MIN(?table?.b) |",
 ///    "+---+----------------+",
 ///    "| 1 | 2              |",
 ///    "+---+----------------+",
+///  ],
 ///  &results
 /// );
 /// # Ok(())
 /// # }
 /// ```
 ///
-/// # Example: SQL APU
+/// # Example: SQL API
 ///
 /// The following example demonstrates how to execute the same query using SQL:
 ///
@@ -217,6 +218,7 @@ where
 ///    "+---+----------------+",
 ///    "| 1 | 2              |",
 ///    "+---+----------------+",
+///  ],
 ///  &results
 /// );
 /// # Ok(())
