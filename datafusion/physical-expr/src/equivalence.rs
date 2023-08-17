@@ -17,8 +17,8 @@
 
 use crate::expressions::{CastExpr, Column};
 use crate::{
-    normalize_expr_with_equivalence_properties, LexOrdering, LexOrderingRef,
-    PhysicalExpr, PhysicalSortExpr,
+    normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
+    PhysicalSortExpr,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -486,7 +486,7 @@ pub fn project_ordering_equivalence_properties(
     let mut oeq_class = if let Some(oeq_class) = oeq_class {
         oeq_class.clone()
     } else {
-        return ();
+        return;
     };
     let mut oeq_alias_map = vec![];
     for (column, columns) in columns_map {
