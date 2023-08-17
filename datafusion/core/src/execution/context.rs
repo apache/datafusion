@@ -163,12 +163,14 @@ where
 /// * Register a custom data source that can be referenced from a SQL query.
 /// * Execution a SQL query
 ///
+/// # Example: DataFrame API
+///
 /// The following example demonstrates how to use the context to execute a query against a CSV
 /// data source using the DataFrame API:
 ///
 /// ```
 /// use datafusion::prelude::*;
-/// # use datafusion::error::Result;
+/// # use datafusion::{error::Result, assert_batches_eq};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
@@ -176,22 +178,47 @@ where
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
 ///            .limit(0, Some(100))?;
-/// let results = df.collect();
+/// let results = df
+///   .collect()
+///   .await?;
+/// assert_batches_eq!(
+///  &[
+///    "+---+----------------+",
+///    "| a | MIN(example.b) |",
+///    "+---+----------------+",
+///    "| 1 | 2              |",
+///    "+---+----------------+",
+///  &results
+/// );
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Example: SQL APU
 ///
 /// The following example demonstrates how to execute the same query using SQL:
 ///
 /// ```
 /// use datafusion::prelude::*;
-///
-/// # use datafusion::error::Result;
+/// # use datafusion::{error::Result, assert_batches_eq};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let mut ctx = SessionContext::new();
 /// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
-/// let results = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
+/// let results = ctx
+///   .sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")
+///   .await?
+///   .collect()
+///   .await?;
+/// assert_batches_eq!(
+///  &[
+///    "+---+----------------+",
+///    "| a | MIN(example.b) |",
+///    "+---+----------------+",
+///    "| 1 | 2              |",
+///    "+---+----------------+",
+///  &results
+/// );
 /// # Ok(())
 /// # }
 /// ```
@@ -342,16 +369,34 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Creates a [`DataFrame`] that will execute a SQL query.
+    /// Creates a [`DataFrame`] from SQL query text.
     ///
     /// Note: This API implements DDL statements such as `CREATE TABLE` and
     /// `CREATE VIEW` and DML statements such as `INSERT INTO` with in-memory
     /// default implementations.
     ///
-    /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
-    /// does not mutate the state based on such statements.
+    /// For read only SQL, use [`create_logical_plan()`] to create a
+    /// [`LogicalPlan`] and [`SessionState::create_physical_plan`] to
+    /// execute it.
+    ///
+    /// # Example: Running SQL queries
+    ///
+    /// See the example on [`Self`]
+    ///
+    /// # Example: Run SQL supporting DDL
+    /// ```
+    /// use datafusion::prelude::*;
+    /// #
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = SessionContext::new();
+    /// let results = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        // create a query planner
         let plan = self.state().create_logical_plan(sql).await?;
 
         self.execute_logical_plan(plan).await
@@ -1304,7 +1349,7 @@ impl FunctionRegistry for SessionContext {
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
 pub trait QueryPlanner {
-    /// Given a `LogicalPlan`, create an `ExecutionPlan` suitable for execution
+    /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1317,7 +1362,7 @@ struct DefaultQueryPlanner {}
 
 #[async_trait]
 impl QueryPlanner for DefaultQueryPlanner {
-    /// Given a `LogicalPlan`, create an `ExecutionPlan` suitable for execution
+    /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,

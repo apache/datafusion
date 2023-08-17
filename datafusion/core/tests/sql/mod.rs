@@ -99,6 +99,7 @@ pub mod select;
 pub mod subqueries;
 pub mod timestamp;
 pub mod udf;
+mod readonly;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where
