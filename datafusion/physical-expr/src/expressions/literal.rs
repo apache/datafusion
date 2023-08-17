@@ -89,7 +89,7 @@ impl PhysicalExpr for Literal {
         self.hash(&mut s);
     }
 
-    fn get_ordering(&self, _children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
+    fn get_ordering(&self, _children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
         ExtendedSortOptions::Singleton
     }
 }

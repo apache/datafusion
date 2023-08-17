@@ -698,13 +698,8 @@ impl PhysicalExpr for BinaryExpr {
 
     /// [`BinaryExpr`] has its own rules for each operator.
     /// TODO: There may me rules specific to some data types (such as division and multiplication on unsigned integers)
-    fn get_ordering(&self, children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
-        let (left_child, right_child) =
-            if let (Some(&left), Some(&right)) = (children.get(0), children.get(1)) {
-                (left, right)
-            } else {
-                return ExtendedSortOptions::Unordered;
-            };
+    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+        let (left_child, right_child) = (&children[0], &children[1]);
         match self.op() {
             Operator::Plus => left_child.add(right_child),
             Operator::Minus => left_child.sub(right_child),

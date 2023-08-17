@@ -130,7 +130,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 
     /// Providing children's [`ExtendedSortOptions`], returns the [`ExtendedSortOptions`] of a [`PhysicalExpr`].
-    fn get_ordering(&self, _children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
+    fn get_ordering(&self, _children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
         ExtendedSortOptions::Unordered
     }
 }

@@ -141,12 +141,8 @@ impl PhysicalExpr for CastExpr {
     }
 
     /// [`CastExpr`]'s are preserving the ordering of its child.
-    fn get_ordering(&self, children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
-        if let Some(&&child) = children.first() {
-            child
-        } else {
-            ExtendedSortOptions::Unordered
-        }
+    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+        children[0]
     }
 }
 
