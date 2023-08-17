@@ -18921,7 +18921,6 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayAppend => "ArrayAppend",
             Self::ArrayConcat => "ArrayConcat",
             Self::ArrayDims => "ArrayDims",
-            Self::ArrayEmpty => "ArrayEmpty",
             Self::ArrayRepeat => "ArrayRepeat",
             Self::ArrayLength => "ArrayLength",
             Self::ArrayNdims => "ArrayNdims",
@@ -18948,6 +18947,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Flatten => "Flatten",
             Self::Isnan => "Isnan",
             Self::Iszero => "Iszero",
+            Self::ArrayEmpty => "ArrayEmpty",
         };
         serializer.serialize_str(variant)
     }
@@ -19074,6 +19074,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Flatten",
             "Isnan",
             "Iszero",
+            "ArrayEmpty",
         ];
 
         struct GeneratedVisitor;
@@ -19231,6 +19232,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Flatten" => Ok(ScalarFunction::Flatten),
                     "Isnan" => Ok(ScalarFunction::Isnan),
                     "Iszero" => Ok(ScalarFunction::Iszero),
+                    "ArrayEmpty" => Ok(ScalarFunction::ArrayEmpty),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
