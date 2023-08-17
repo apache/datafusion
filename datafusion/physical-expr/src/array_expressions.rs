@@ -989,31 +989,41 @@ macro_rules! general_repeat_list {
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = as_list_array(&args[0])?;
-    let mut builder = UInt8Array::builder(1);
+    let builder = array
+        .iter()
+        .map(|arr| {
+            if let Some(arr) = arr {
+                Some(arr.is_empty())
+            } else {
+                Some(true)
+            }
+        })
+        .collect::<BooleanArray>();
+    // let mut builder = UInt8Array::builder(1);
 
-    for arr in array.iter() {
-        if let Some(arr) = arr {
-            let res = match arr.data_type() {
-                DataType::List(_) => {
-                    let arr = downcast_arg!(arr, ListArray);
-                    let mut res = 1;
-                    for i in 0..arr.len() {
-                        if arr.value_length(i) > 0 {
-                            res = 0;
-                            break;
-                        }
-                    }
-                    res
-                }
-                DataType::Null => 1,
-                _ => 0,
-            };
-            builder.append_value(res);
-        } else {
-            builder.append_value(1);
-        }
-    }
-    Ok(Arc::new(builder.finish()))
+    // for arr in array.iter() {
+    //     if let Some(arr) = arr {
+    //         let res = match arr.data_type() {
+    //             DataType::List(_) => {
+    //                 let arr = downcast_arg!(arr, ListArray);
+    //                 let mut res = 1;
+    //                 for i in 0..arr.len() {
+    //                     if arr.value_length(i) > 0 {
+    //                         res = 0;
+    //                         break;
+    //                     }
+    //                 }
+    //                 res
+    //             }
+    //             DataType::Null => 1,
+    //             _ => 0,
+    //         };
+    //         builder.append_value(res);
+    //     } else {
+    //         builder.append_value(1);
+    //     }
+    // }
+    Ok(Arc::new(builder))
 }
 
 /// Array_repeat SQL function

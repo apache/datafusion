@@ -541,7 +541,8 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
-            | BuiltinScalarFunction::ArrayHas => Ok(Boolean),
+            | BuiltinScalarFunction::ArrayHas
+            | BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
             BuiltinScalarFunction::ArrayDims => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
@@ -551,7 +552,6 @@ impl BuiltinScalarFunction {
                     "The {self} function can only accept list as the first argument"
                 ),
             },
-            BuiltinScalarFunction::ArrayEmpty => Ok(UInt8),
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),

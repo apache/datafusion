@@ -2363,15 +2363,28 @@ from flatten_table;
 [1, 2, 3] [1, 2, 3, 4, 5, 6] [1, 2, 3] [1.0, 2.1, 2.2, 3.2, 3.3, 3.4]
 [1, 2, 3, 4, 5, 6] [8] [1, 2, 3] [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
-query I
+# empty scalar function #1
+query B
 select empty(make_array(1));
 ----
-0
+false
 
-query I
+# empty scalar function #2
+query B
 select empty(make_array());
 ----
-1
+true
+
+query B
+select empty(column1) from arrays;
+----
+false
+false
+false
+false
+true
+false
+false
 
 ### Delete tables
 
