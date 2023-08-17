@@ -40,6 +40,7 @@ use arrow::{
 use arrow_array::{
     Array, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, PrimitiveArray,
 };
+use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -273,9 +274,9 @@ impl Accumulator for AvgAccumulator {
                         DataType::Decimal128(p, s) => {
                             Ok(ScalarValue::Decimal128(None, *p, *s))
                         }
-                        other => Err(DataFusionError::Internal(format!(
+                        other => internal_err!(
                             "Error returned data type in AvgAccumulator {other:?}"
-                        ))),
+                        ),
                     },
                     Some(value) => {
                         // now the sum_type and return type is not the same, need to convert the sum type to return type

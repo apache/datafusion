@@ -217,6 +217,22 @@ pub enum ListingTableInsertMode {
     ///Throw an error if insert into is attempted on this table
     Error,
 }
+
+impl FromStr for ListingTableInsertMode {
+    type Err = DataFusionError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s_lower = s.to_lowercase();
+        match s_lower.as_str() {
+            "append_to_file" => Ok(ListingTableInsertMode::AppendToFile),
+            "append_new_files" => Ok(ListingTableInsertMode::AppendNewFiles),
+            "error" => Ok(ListingTableInsertMode::Error),
+            _ => Err(DataFusionError::Plan(format!(
+                "Unknown or unsupported insert mode {s}. Supported options are \
+                append_to_file, append_new_files, and error."
+            ))),
+        }
+    }
+}
 /// Options for creating a [`ListingTable`]
 #[derive(Clone, Debug)]
 pub struct ListingOptions {
@@ -867,6 +883,8 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             writer_mode,
+            // TODO: when listing table is known to be backed by a single file, this should be false
+            per_thread_output: true,
             overwrite,
         };
 
@@ -1608,6 +1626,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_insert_into_sql_csv_defaults() -> Result<()> {
+        helper_test_insert_into_sql(
+            "csv",
+            FileCompressionType::UNCOMPRESSED,
+            "OPTIONS (insert_mode 'append_new_files')",
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_sql_csv_defaults_header_row() -> Result<()> {
+        helper_test_insert_into_sql(
+            "csv",
+            FileCompressionType::UNCOMPRESSED,
+            "WITH HEADER ROW \
+            OPTIONS (insert_mode 'append_new_files')",
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_sql_json_defaults() -> Result<()> {
+        helper_test_insert_into_sql(
+            "json",
+            FileCompressionType::UNCOMPRESSED,
+            "OPTIONS (insert_mode 'append_new_files')",
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_sql_parquet_defaults() -> Result<()> {
+        helper_test_insert_into_sql(
+            "parquet",
+            FileCompressionType::UNCOMPRESSED,
+            "",
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_sql_parquet_session_overrides() -> Result<()> {
+        let mut config_map: HashMap<String, String> = HashMap::new();
+        config_map.insert(
+            "datafusion.execution.parquet.compression".into(),
+            "zstd(5)".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.dictionary_enabled".into(),
+            "false".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.dictionary_page_size_limit".into(),
+            "100".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.staistics_enabled".into(),
+            "none".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.max_statistics_size".into(),
+            "10".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.max_row_group_size".into(),
+            "5".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.created_by".into(),
+            "datafusion test".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.column_index_truncate_length".into(),
+            "50".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.data_page_row_count_limit".into(),
+            "50".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_enabled".into(),
+            "true".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_fpp".into(),
+            "0.01".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.bloom_filter_ndv".into(),
+            "1000".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.writer_version".into(),
+            "2.0".into(),
+        );
+        config_map.insert(
+            "datafusion.execution.parquet.write_batch_size".into(),
+            "5".into(),
+        );
+        helper_test_insert_into_sql(
+            "parquet",
+            FileCompressionType::UNCOMPRESSED,
+            "",
+            Some(config_map),
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_insert_into_append_new_parquet_files_session_overrides() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
         config_map.insert(
@@ -2094,6 +2230,66 @@ mod tests {
         assert_eq!(num_files, 12);
 
         // Return Ok if the function
+        Ok(())
+    }
+
+    /// tests insert into with end to end sql
+    /// create external table + insert into statements
+    async fn helper_test_insert_into_sql(
+        file_type: &str,
+        // TODO test with create statement options such as compression
+        _file_compression_type: FileCompressionType,
+        external_table_options: &str,
+        session_config_map: Option<HashMap<String, String>>,
+    ) -> Result<()> {
+        // Create the initial context
+        let session_ctx = match session_config_map {
+            Some(cfg) => {
+                let config = SessionConfig::from_string_hash_map(cfg)?;
+                SessionContext::with_config(config)
+            }
+            None => SessionContext::new(),
+        };
+
+        // create table
+        let tmp_dir = TempDir::new()?;
+        let tmp_path = tmp_dir.into_path();
+        let str_path = tmp_path.to_str().expect("Temp path should convert to &str");
+        session_ctx
+            .sql(&format!(
+                "create external table foo(a varchar, b varchar, c int) \
+                        stored as {file_type} \
+                        location '{str_path}' \
+                        {external_table_options}"
+            ))
+            .await?
+            .collect()
+            .await?;
+
+        // insert data
+        session_ctx.sql("insert into foo values ('foo', 'bar', 1),('foo', 'bar', 2), ('foo', 'bar', 3)")
+           .await?
+           .collect()
+           .await?;
+
+        // check count
+        let batches = session_ctx
+            .sql("select * from foo")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+-----+-----+---+",
+            "| a   | b   | c |",
+            "+-----+-----+---+",
+            "| foo | bar | 1 |",
+            "| foo | bar | 2 |",
+            "| foo | bar | 3 |",
+            "+-----+-----+---+",
+        ];
+        assert_batches_eq!(expected, &batches);
+
         Ok(())
     }
 }

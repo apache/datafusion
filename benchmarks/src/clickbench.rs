@@ -83,7 +83,7 @@ impl RunOpt {
         let ctx = SessionContext::with_config(config);
         self.register_hits(&ctx).await?;
 
-        let iterations = self.common.iterations();
+        let iterations = self.common.iterations;
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));

@@ -38,6 +38,8 @@
 - [factorial](#factorial)
 - [floor](#floor)
 - [gcd](#gcd)
+- [isnan](#isnan)
+- [iszero](#iszero)
 - [lcm](#lcm)
 - [ln](#ln)
 - [log](#log)
@@ -281,6 +283,32 @@ gcd(expression_x, expression_y)
 - **expression_x**: First numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression_y**: Second numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `isnan`
+
+Returns true if a given number is +NaN or -NaN otherwise returns false.
+
+```
+isnan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `iszero`
+
+Returns true if a given number is +0.0 or -0.0 otherwise returns false.
+
+```
+iszero(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `lcm`

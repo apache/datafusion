@@ -47,7 +47,7 @@ use crate::datasource::physical_plan::{
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::insert::{DataSink, InsertExec};
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use rand::distributions::{Alphanumeric, DistString};
@@ -277,6 +277,7 @@ impl FileFormat for CsvFormat {
                 "Inserting compressed CSV is not implemented yet.".into(),
             ));
         }
+
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(
             conf,
@@ -285,7 +286,7 @@ impl FileFormat for CsvFormat {
             self.file_compression_type,
         ));
 
-        Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
+        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
     }
 }
 
@@ -505,12 +506,14 @@ impl DataSink for CsvSink {
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
-
         // Construct serializer and writer for each file group
         let mut serializers: Vec<Box<dyn BatchSerializer>> = vec![];
         let mut writers = vec![];
         match self.config.writer_mode {
             FileWriterMode::Append => {
+                if !self.config.per_thread_output {
+                    return Err(DataFusionError::NotImplemented("per_thread_output=false is not implemented for CsvSink in Append mode".into()));
+                }
                 for file_group in &self.config.file_groups {
                     // In append mode, consider has_header flag only when file is empty (at the start).
                     // For other modes, use has_header flag as is.
@@ -542,37 +545,72 @@ impl DataSink for CsvSink {
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
                 let base_path = &self.config.table_paths[0];
-                // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
-                let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-                for part_idx in 0..num_partitions {
-                    let header = true;
-                    let builder = WriterBuilder::new().with_delimiter(self.delimiter);
-                    let serializer = CsvSerializer::new()
-                        .with_builder(builder)
-                        .with_header(header);
-                    serializers.push(Box::new(serializer));
-                    let file_path = base_path
-                        .prefix()
-                        .child(format!("/{}_{}.csv", write_id, part_idx));
-                    let object_meta = ObjectMeta {
-                        location: file_path,
-                        last_modified: chrono::offset::Utc::now(),
-                        size: 0,
-                        e_tag: None,
-                    };
-                    let writer = create_writer(
-                        self.config.writer_mode,
-                        self.file_compression_type,
-                        object_meta.into(),
-                        object_store.clone(),
-                    )
-                    .await?;
-                    writers.push(writer);
+                match self.config.per_thread_output {
+                    true => {
+                        // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
+                        let write_id =
+                            Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                        for part_idx in 0..num_partitions {
+                            let header = self.has_header;
+                            let builder =
+                                WriterBuilder::new().with_delimiter(self.delimiter);
+                            let serializer = CsvSerializer::new()
+                                .with_builder(builder)
+                                .with_header(header);
+                            serializers.push(Box::new(serializer));
+                            let file_path = base_path
+                                .prefix()
+                                .child(format!("{}_{}.csv", write_id, part_idx));
+                            let object_meta = ObjectMeta {
+                                location: file_path,
+                                last_modified: chrono::offset::Utc::now(),
+                                size: 0,
+                                e_tag: None,
+                            };
+                            let writer = create_writer(
+                                self.config.writer_mode,
+                                self.file_compression_type,
+                                object_meta.into(),
+                                object_store.clone(),
+                            )
+                            .await?;
+                            writers.push(writer);
+                        }
+                    }
+                    false => {
+                        let header = self.has_header;
+                        let builder = WriterBuilder::new().with_delimiter(self.delimiter);
+                        let serializer = CsvSerializer::new()
+                            .with_builder(builder)
+                            .with_header(header);
+                        serializers.push(Box::new(serializer));
+                        let file_path = base_path.prefix();
+                        let object_meta = ObjectMeta {
+                            location: file_path.clone(),
+                            last_modified: chrono::offset::Utc::now(),
+                            size: 0,
+                            e_tag: None,
+                        };
+                        let writer = create_writer(
+                            self.config.writer_mode,
+                            self.file_compression_type,
+                            object_meta.into(),
+                            object_store.clone(),
+                        )
+                        .await?;
+                        writers.push(writer);
+                    }
                 }
             }
         }
 
-        stateless_serialize_and_write_files(data, serializers, writers).await
+        stateless_serialize_and_write_files(
+            data,
+            serializers,
+            writers,
+            self.config.per_thread_output,
+        )
+        .await
     }
 }
 

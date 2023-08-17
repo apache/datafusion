@@ -17,9 +17,8 @@
 
 //! DataFusion benchmark runner
 pub mod clickbench;
+pub mod parquet_filter;
+pub mod sort;
 pub mod tpch;
-
-mod options;
-mod run;
-pub use options::CommonOpt;
-pub use run::{BenchQuery, BenchmarkRun};
+mod util;
+pub use util::*;

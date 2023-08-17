@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use datafusion_common::display::StringifiedPlan;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
@@ -123,9 +123,7 @@ impl ExecutionPlan for ExplainExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "ExplainExec invalid partition {partition}"
-            )));
+            return internal_err!("ExplainExec invalid partition {partition}");
         }
 
         let mut type_builder =

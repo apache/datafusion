@@ -26,7 +26,7 @@ use crate::physical_plan::{
 use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use log::trace;
 
 use super::expressions::PhysicalSortExpr;
@@ -149,10 +149,11 @@ impl ExecutionPlan for EmptyExec {
         trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
         if partition >= self.partitions {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "EmptyExec invalid partition {} (expected less than {})",
-                partition, self.partitions
-            )));
+                partition,
+                self.partitions
+            );
         }
 
         Ok(Box::pin(MemoryStream::try_new(
