@@ -1099,13 +1099,12 @@ impl LogicalPlan {
                         per_thread_output,
                         options,
                     }) => {
-                        let mut op_str = String::new();
-                        for (key, val) in options {
-                            if !op_str.is_empty() {
-                                op_str.push_str(", ");
-                            }
-                            op_str.push_str(&format!("{key} {val}"));
-                        }
+                        let op_str = options
+                            .iter()
+                            .map(|(k, v)| format!("{k} {v}"))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+
                         write!(f, "CopyTo: format={file_format} output_url={output_url} per_thread_output={per_thread_output} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {

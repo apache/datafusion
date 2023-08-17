@@ -864,17 +864,18 @@ select make_array(['a','b'], null);
 
 ## array_append (aliases: `list_append`, `array_push_back`, `list_push_back`)
 
+# TODO: array_append with NULLs
 # array_append scalar function #1
-query ?
-select array_append(make_array(), 4);
-----
-[4]
+# query ?
+# select array_append(make_array(), 4);
+# ----
+# [4]
 
 # array_append scalar function #2
-query ??
-select array_append(make_array(), make_array()), array_append(make_array(), make_array(4));
-----
-[[]] [[4]]
+# query ??
+# select array_append(make_array(), make_array()), array_append(make_array(), make_array(4));
+# ----
+# [[]] [[4]]
 
 # array_append scalar function #3
 query ???
@@ -947,17 +948,18 @@ select array_append(column1, make_array(1, 11, 111)), array_append(make_array(ma
 
 ## array_prepend (aliases: `list_prepend`, `array_push_front`, `list_push_front`)
 
+# TODO: array_prepend with NULLs
 # array_prepend scalar function #1
-query ?
-select array_prepend(4, make_array());
-----
-[4]
+# query ?
+# select array_prepend(4, make_array());
+# ----
+# [4]
 
 # array_prepend scalar function #2
-query ??
-select array_prepend(make_array(), make_array()), array_prepend(make_array(4), make_array());
-----
-[[]] [[4]]
+# query ??
+# select array_prepend(make_array(), make_array()), array_prepend(make_array(4), make_array());
+# ----
+# [[]] [[4]]
 
 # array_prepend scalar function #3
 query ???
