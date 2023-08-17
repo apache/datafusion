@@ -18921,6 +18921,7 @@ impl serde::Serialize for ScalarFunction {
             Self::ArrayAppend => "ArrayAppend",
             Self::ArrayConcat => "ArrayConcat",
             Self::ArrayDims => "ArrayDims",
+            Self::ArrayEmpty => "ArrayEmpty",
             Self::ArrayRepeat => "ArrayRepeat",
             Self::ArrayLength => "ArrayLength",
             Self::ArrayNdims => "ArrayNdims",
