@@ -187,7 +187,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             }
 
             self.produced += self.in_progress.len();
-            return Poll::Ready(self.in_progress.build_sort_order().transpose());
+            return Poll::Ready(self.in_progress.yield_sort_order().transpose());
         }
     }
 
