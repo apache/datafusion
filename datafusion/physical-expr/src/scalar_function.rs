@@ -29,6 +29,7 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
+use crate::functions::FuncMonotonicity;
 use crate::physical_expr::down_cast_any_ref;
 use crate::utils::expr_list_eq_strict_order;
 use crate::ExtendedSortOptions;
@@ -52,9 +53,8 @@ pub struct ScalarFunctionExpr {
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
-    // This field is used to store which argument of the scalar function maintains
-    // the order information. `true` means order is maintained, `false` means order is reversed.
-    maintains_order: Option<(usize, bool)>,
+    // Keeps monotonicity information of the function
+    monotonicity: Option<FuncMonotonicity>,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -75,14 +75,14 @@ impl ScalarFunctionExpr {
         fun: ScalarFunctionImplementation,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: &DataType,
-        maintains_order: Option<(usize, bool)>,
+        monotonicity: Option<FuncMonotonicity>,
     ) -> Self {
         Self {
             fun,
             name: name.to_owned(),
             args,
             return_type: return_type.clone(),
-            maintains_order,
+            monotonicity,
         }
     }
 
@@ -163,7 +163,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             self.fun.clone(),
             children,
             self.return_type(),
-            self.maintains_order,
+            self.monotonicity.clone(),
         )))
     }
 
@@ -175,16 +175,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // Add `self.fun` when hash is available
     }
 
-    fn get_ordering(&self, children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
-        if let Some((index, opt)) = self.maintains_order {
-            return if opt {
-                *children[index]
-            } else {
-                -*children[index]
-            };
-        }
-
-        ExtendedSortOptions::Unordered
+    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+        self.monotonicity
+            .as_ref()
+            .map(|monotonicity| monotonicity.out_ordering(children))
+            .unwrap_or(ExtendedSortOptions::Unordered)
     }
 }
 

@@ -104,12 +104,8 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
-    fn get_ordering(&self, children: &[&ExtendedSortOptions]) -> ExtendedSortOptions {
-        if let Some(&&child) = children.first() {
-            -child
-        } else {
-            ExtendedSortOptions::Unordered
-        }
+    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+        -children[0]
     }
 }
 

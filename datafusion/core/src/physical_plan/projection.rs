@@ -465,9 +465,8 @@ fn update_ordering<
     }
 
     // intermediate node calculation:
-    if let Some(children) = &node.children_states {
-        let children_sort_options = children.iter().collect::<Vec<_>>();
-        let parent_sort_options = node.expr.get_ordering(&children_sort_options);
+    if let Some(children_sort_options) = &node.children_states {
+        let parent_sort_options = node.expr.get_ordering(children_sort_options);
 
         node.state = Some(parent_sort_options);
 
@@ -491,7 +490,7 @@ fn update_ordering<
             });
             return Ok(Transformed::Yes(node));
         }
-        // last opiton, literal leaf:
+        // last option, literal leaf:
         node.state = Some(node.expr.get_ordering(&[]));
         Ok(Transformed::Yes(node))
     }

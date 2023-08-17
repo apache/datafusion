@@ -34,8 +34,8 @@ use crate::execution_props::ExecutionProps;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
     expressions::{cast_column, nullif_func},
-    math_expressions, string_expressions, struct_expressions, PhysicalExpr,
-    ScalarFunctionExpr,
+    math_expressions, string_expressions, struct_expressions, ExtendedSortOptions,
+    PhysicalExpr, ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -173,14 +173,14 @@ pub fn create_physical_expr(
         _ => create_physical_fun(fun, execution_props)?,
     };
 
-    let maintains_order = get_physical_fun_order(fun);
+    let monotonicity = get_func_monotonicity(fun);
 
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{fun}"),
         fun_expr,
         input_phy_exprs.to_vec(),
         &data_type,
-        maintains_order,
+        monotonicity,
     )))
 }
 
@@ -897,11 +897,34 @@ pub fn create_physical_fun(
     })
 }
 
+/// Stores monotonicity of the ScalarFunction
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FuncMonotonicity {
+    // `true` => monotonically increasing
+    // `false` => monotonically decreasing function (e.g reverses the ordering of its argument)
+    is_ascending: bool,
+    // Index of the variable argument
+    idx: usize,
+}
+
+impl FuncMonotonicity {
+    pub fn out_ordering(
+        &self,
+        arg_orderings: &[ExtendedSortOptions],
+    ) -> ExtendedSortOptions {
+        if self.is_ascending {
+            arg_orderings[self.idx]
+        } else {
+            -arg_orderings[self.idx]
+        }
+    }
+}
+
 /// This function determines the preservation of order for a scalar function
 /// according to its arguments. It returns an Option<(usize, bool)> where
 /// the tuple contains information about the index of the function's arguments
 /// which is order-preserved and whether the order is maintained or reversed.
-pub fn get_physical_fun_order(fun: &BuiltinScalarFunction) -> Option<(usize, bool)> {
+pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
     // math_expressions and datetime_expressions are considered only for the initial implementation of this feature.
     if matches!(
         fun,
@@ -928,14 +951,20 @@ pub fn get_physical_fun_order(fun: &BuiltinScalarFunction) -> Option<(usize, boo
             | BuiltinScalarFunction::Pi
             | BuiltinScalarFunction::Log
     ) {
-        Some((0, true))
+        Some(FuncMonotonicity {
+            is_ascending: true,
+            idx: 0,
+        })
     } else if matches!(
         fun,
         BuiltinScalarFunction::Log
             | BuiltinScalarFunction::DateTrunc
             | BuiltinScalarFunction::DateBin
     ) {
-        Some((1, true))
+        Some(FuncMonotonicity {
+            is_ascending: true,
+            idx: 1,
+        })
     } else {
         None
     }
