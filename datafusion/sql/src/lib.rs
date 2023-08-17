@@ -21,7 +21,7 @@
 //! an abstract syntax tree (AST), [`Statement`].
 //!
 //! 2. A SQL query planner [`SqlToRel`] that creates [`LogicalPlan`]s
-//! from `Statements`.
+//! from [`Statement`]s.
 //!
 //! [`DFParser`]: parser::DFParser
 //! [`Statement`]: parser::Statement
