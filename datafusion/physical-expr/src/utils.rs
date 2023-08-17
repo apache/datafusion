@@ -125,18 +125,6 @@ pub fn normalize_out_expr_with_columns_map(
         .unwrap_or(expr)
 }
 
-/// This function constructs a duplicate-free vector by filtering out duplicate
-/// entries inside the given vector `input`.
-fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
-    let mut output = vec![];
-    for item in input {
-        if !output.contains(&item) {
-            output.push(item);
-        }
-    }
-    output
-}
-
 /// Transform `sort_exprs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
 /// Assume `eq_properties` states that `Column a` and `Column b` are aliases.
 /// Also assume `ordering_eq_properties` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
@@ -156,8 +144,7 @@ pub fn normalize_sort_exprs(
         eq_properties,
         ordering_eq_properties,
     );
-    let normalized_exprs = PhysicalSortRequirement::to_sort_exprs(normalized_exprs);
-    collapse_vec(normalized_exprs)
+    PhysicalSortRequirement::to_sort_exprs(normalized_exprs)
 }
 
 /// Transform `sort_reqs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
@@ -1337,14 +1324,6 @@ mod tests {
             || ordering_eq_properties.clone(),
         ));
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_collapse_vec() -> Result<()> {
-        assert_eq!(collapse_vec(vec![1, 2, 3]), vec![1, 2, 3]);
-        assert_eq!(collapse_vec(vec![1, 2, 3, 2, 3]), vec![1, 2, 3]);
-        assert_eq!(collapse_vec(vec![3, 1, 2, 3, 2, 3]), vec![3, 1, 2]);
         Ok(())
     }
 
