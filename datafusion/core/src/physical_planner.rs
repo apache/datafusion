@@ -17,6 +17,15 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
+use crate::datasource::file_format::arrow::ArrowFormat;
+use crate::datasource::file_format::avro::AvroFormat;
+use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::json::JsonFormat;
+use crate::datasource::file_format::parquet::ParquetFormat;
+use crate::datasource::file_format::write::FileWriterMode;
+use crate::datasource::file_format::FileFormat;
+use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -29,6 +38,7 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_expr::dml::{CopyTo, OutputFileFormat};
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -62,7 +72,7 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{plan_err, DFSchema, ScalarValue};
+use datafusion_common::{internal_err, plan_err, DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
@@ -346,21 +356,19 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{expr} SIMILAR TO {pattern}{escape}"))
             }
         }
-        Expr::Sort { .. } => Err(DataFusionError::Internal(
-            "Create physical name does not support sort expression".to_string(),
-        )),
-        Expr::Wildcard => Err(DataFusionError::Internal(
-            "Create physical name does not support wildcard".to_string(),
-        )),
-        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
-            "Create physical name does not support qualified wildcard".to_string(),
-        )),
-        Expr::Placeholder(_) => Err(DataFusionError::Internal(
-            "Create physical name does not support placeholder".to_string(),
-        )),
-        Expr::OuterReferenceColumn(_, _) => Err(DataFusionError::Internal(
-            "Create physical name does not support OuterReferenceColumn".to_string(),
-        )),
+        Expr::Sort { .. } => {
+            internal_err!("Create physical name does not support sort expression")
+        }
+        Expr::Wildcard => internal_err!("Create physical name does not support wildcard"),
+        Expr::QualifiedWildcard { .. } => {
+            internal_err!("Create physical name does not support qualified wildcard")
+        }
+        Expr::Placeholder(_) => {
+            internal_err!("Create physical name does not support placeholder")
+        }
+        Expr::OuterReferenceColumn(_, _) => {
+            internal_err!("Create physical name does not support OuterReferenceColumn")
+        }
     }
 }
 
@@ -544,6 +552,47 @@ impl DefaultPhysicalPlanner {
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
                     source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
                 }
+                LogicalPlan::Copy(CopyTo{
+                    input,
+                    output_url,
+                    file_format,
+                    per_thread_output,
+                    options: _,
+                }) => {
+                    let input_exec = self.create_initial_plan(input, session_state).await?;
+
+                    // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
+                    // TODO: add additional configurable options for if existing files should be overwritten or
+                    // appended to
+                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, *per_thread_output)?;
+                    let object_store_url = parsed_url.object_store();
+
+                    let schema: Schema = (**input.schema()).clone().into();
+
+                    // Set file sink related options
+                    let config = FileSinkConfig {
+                        object_store_url,
+                        table_paths: vec![parsed_url],
+                        file_groups: vec![],
+                        output_schema: Arc::new(schema),
+                        table_partition_cols: vec![],
+                        writer_mode: FileWriterMode::PutMultipart,
+                        per_thread_output: *per_thread_output,
+                        overwrite: false,
+                    };
+
+                    // TODO: implement statement level overrides for each file type
+                    // E.g. CsvFormat::from_options(options)
+                    let sink_format: Arc<dyn FileFormat> = match file_format {
+                        OutputFileFormat::CSV => Arc::new(CsvFormat::default()),
+                        OutputFileFormat::PARQUET => Arc::new(ParquetFormat::default()),
+                        OutputFileFormat::JSON => Arc::new(JsonFormat::default()),
+                        OutputFileFormat::AVRO => Arc::new(AvroFormat {} ),
+                        OutputFileFormat::ARROW => Arc::new(ArrowFormat {}),
+                    };
+
+                    sink_format.create_writer_physical_plan(input_exec, session_state, config).await
+                }
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
                     op: WriteOp::InsertInto,
@@ -606,9 +655,9 @@ impl DefaultPhysicalPlanner {
                     input, window_expr, ..
                 }) => {
                     if window_expr.is_empty() {
-                        return Err(DataFusionError::Internal(
-                            "Impossibly got empty window expression".to_owned(),
-                        ));
+                        return internal_err!(
+                            "Impossibly got empty window expression"
+                        );
                     }
 
                     let input_exec = self.create_initial_plan(input, session_state).await?;
@@ -1203,21 +1252,21 @@ impl DefaultPhysicalPlanner {
                     ))
                 }
                 LogicalPlan::DescribeTable(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
-                    ))
+                    internal_err!(
+                        "Unsupported logical plan: DescribeTable must be root of the plan"
+                    )
                 }
-                LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
-                    "Unsupported logical plan: Explain must be root of the plan".to_string(),
-                )),
+                LogicalPlan::Explain(_) => internal_err!(
+                    "Unsupported logical plan: Explain must be root of the plan"
+                ),
                 LogicalPlan::Distinct(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: Distinct should be replaced to Aggregate".to_string(),
-                    ))
+                    internal_err!(
+                        "Unsupported logical plan: Distinct should be replaced to Aggregate"
+                    )
                 }
-                LogicalPlan::Analyze(_) => Err(DataFusionError::Internal(
-                    "Unsupported logical plan: Analyze must be root of the plan".to_string(),
-                )),
+                LogicalPlan::Analyze(_) => internal_err!(
+                    "Unsupported logical plan: Analyze must be root of the plan"
+                ),
                 LogicalPlan::Extension(e) => {
                     let physical_inputs = self.create_initial_plan_multi(e.node.inputs(), session_state).await?;
 
@@ -1746,9 +1795,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
             Ok((agg_expr?, filter, order_by))
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Invalid aggregate expression '{other:?}'"
-        ))),
+        other => internal_err!("Invalid aggregate expression '{other:?}'"),
     }
 }
 
@@ -1800,9 +1847,7 @@ pub fn create_physical_sort_expr(
             },
         })
     } else {
-        Err(DataFusionError::Internal(
-            "Expects a sort expression".to_string(),
-        ))
+        internal_err!("Expects a sort expression")
     }
 }
 
@@ -2462,7 +2507,7 @@ mod tests {
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Err(DataFusionError::Internal("BOOM".to_string()))
+            internal_err!("BOOM")
         }
     }
     /// An example extension node that doesn't do anything

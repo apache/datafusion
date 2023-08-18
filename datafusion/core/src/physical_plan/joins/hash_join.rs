@@ -76,7 +76,7 @@ use arrow::{
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
-use datafusion_common::{plan_err, DataFusionError, JoinType, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
@@ -430,10 +430,10 @@ impl ExecutionPlan for HashJoinExec {
         let right_partitions = self.right.output_partitioning().partition_count();
         if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
         {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
-                 consider using RepartitionExec",
-            )));
+                 consider using RepartitionExec"
+            );
         }
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
@@ -966,9 +966,9 @@ pub fn equal_rows(
                     equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             }
@@ -980,9 +980,9 @@ pub fn equal_rows(
                     equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             }
@@ -1049,16 +1049,16 @@ pub fn equal_rows(
                             null_equals_null
                         )
                     } else {
-                        err = Some(Err(DataFusionError::Internal(
-                            "Inconsistent Decimal data type in hasher, the scale should be same".to_string(),
-                        )));
+                        err = Some(internal_err!(
+                            "Inconsistent Decimal data type in hasher, the scale should be same"
+                        ));
                         false
                     }
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             },
@@ -1148,18 +1148,18 @@ pub fn equal_rows(
                         }
                         _ => {
                             // should not happen
-                            err = Some(Err(DataFusionError::Internal(
-                                "Unsupported data type in hasher".to_string(),
-                            )));
+                            err = Some(internal_err!(
+                                "Unsupported data type in hasher"
+                            ));
                             false
                         }
                     }
                 }
             other => {
                 // This is internal because we should have caught this before.
-                err = Some(Err(DataFusionError::Internal(format!(
+                err = Some(internal_err!(
                     "Unsupported data type in hasher: {other}"
-                ))));
+                ));
                 false
             }
         });

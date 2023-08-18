@@ -19,7 +19,7 @@ use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use std::ops::Deref;
 
 use crate::{AggregateFunction, Signature, TypeSignature};
@@ -345,9 +345,9 @@ fn check_arg_count(
             }
         }
         _ => {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "Aggregate functions do not support this {signature:?}"
-            )));
+            );
         }
     }
     Ok(())

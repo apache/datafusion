@@ -31,8 +31,8 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue,
+    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue,
 };
 use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
@@ -45,7 +45,7 @@ use datafusion_expr::{
     concat_ws_expr, cos, cosh, cot, current_date, current_time, date_bin, date_part,
     date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
-    factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
+    factorial, floor, from_unixtime, gcd, isnan, iszero, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, nanvl, now, nullif, octet_length, pi, power, radians,
     random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
@@ -525,6 +525,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
             ScalarFunction::Atan2 => Self::Atan2,
             ScalarFunction::Nanvl => Self::Nanvl,
+            ScalarFunction::Isnan => Self::Isnan,
+            ScalarFunction::Iszero => Self::Iszero,
             ScalarFunction::ArrowTypeof => Self::ArrowTypeof,
         }
     }
@@ -1579,6 +1581,8 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::Isnan => Ok(isnan(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Iszero => Ok(iszero(parse_expr(&args[0], registry)?)),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),
@@ -1647,9 +1651,7 @@ fn parse_escape_char(s: &str) -> Result<Option<char>> {
     match s.len() {
         0 => Ok(None),
         1 => Ok(s.chars().next()),
-        _ => Err(DataFusionError::Internal(
-            "Invalid length for escape char".to_string(),
-        )),
+        _ => internal_err!("Invalid length for escape char"),
     }
 }
 

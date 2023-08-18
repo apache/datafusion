@@ -63,6 +63,8 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("nanvl(NULL, NULL)", "NULL");
     test_expression!("nanvl(1, NULL)", "NULL");
     test_expression!("nanvl(NULL, 1)", "NULL");
+    test_expression!("isnan(NULL)", "NULL");
+    test_expression!("iszero(NULL)", "NULL");
     Ok(())
 }
 

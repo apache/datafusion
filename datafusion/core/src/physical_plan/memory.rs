@@ -25,7 +25,7 @@ use super::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use core::fmt;
-use datafusion_common::{project_schema, Result};
+use datafusion_common::{internal_err, project_schema, Result};
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -128,9 +128,7 @@ impl ExecutionPlan for MemoryExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::Internal(format!(
-            "Children cannot be replaced in {self:?}"
-        )))
+        internal_err!("Children cannot be replaced in {self:?}")
     }
 
     fn execute(

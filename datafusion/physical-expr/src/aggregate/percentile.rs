@@ -23,7 +23,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::{Array, ArrayRef, UInt32Array};
 use arrow::compute::sort_to_indices;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::convert::TryFrom;
@@ -313,10 +313,9 @@ impl Accumulator for PercentileAccumulator {
                 }
                 ScalarValue::List(None, _) => {} // skip empty state
                 v => {
-                    return Err(DataFusionError::Internal(format!(
-                        "unexpected state in median. Expected DataType::List, got {:?}",
-                        v
-                    )))
+                    return internal_err!(
+                        "unexpected state in median. Expected DataType::List, got {v:?}"
+                    )
                 }
             }
         }
@@ -517,18 +516,19 @@ impl Accumulator for PercentileAccumulator {
                         if let ScalarValue::Decimal128(Some(v), p, s) = s1.add(s2)? {
                             ScalarValue::Decimal128(Some(v / 2), p, s)
                         } else {
-                            return Err(DataFusionError::Internal(
-                                "Unreachable".to_string(),
-                            ));
+                            return internal_err!("{}", "Unreachable".to_string());
                         }
                     } else {
-                        return Err(DataFusionError::Internal("Decimal type not supported in quantile_cont() or quantile_disc() aggregate function".to_string()));
+                        return internal_err!("{}", "Decimal type not supported in quantile_cont() or quantile_disc() aggregate function".to_string());
                     }
                 }
                 (scalar_value, _) => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported type in PercentileAccumulator: {scalar_value:?}"
-                    )));
+                    return internal_err!(
+                        "{}",
+                        format!(
+                            "Unsupported type in PercentileAccumulator: {scalar_value:?}"
+                        )
+                    );
                 }
             }
         };

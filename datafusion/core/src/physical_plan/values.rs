@@ -26,7 +26,7 @@ use crate::physical_plan::{
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{plan_err, ScalarValue};
+use datafusion_common::{internal_err, plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use std::any::Any;
@@ -147,9 +147,9 @@ impl ExecutionPlan for ValuesExec {
     ) -> Result<SendableRecordBatchStream> {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "ValuesExec invalid partition {partition} (expected 0)"
-            )));
+            );
         }
 
         Ok(Box::pin(MemoryStream::try_new(

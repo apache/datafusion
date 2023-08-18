@@ -27,6 +27,7 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
+use datafusion_common::internal_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::{downcast_value, ScalarValue};
@@ -342,9 +343,9 @@ impl ApproxPercentileAccumulator {
                     .filter_map(|v| v.try_as_f64().transpose())
                     .collect::<Result<Vec<_>>>()?)
             }
-            e => Err(DataFusionError::Internal(format!(
+            e => internal_err!(
                 "APPROX_PERCENTILE_CONT is not expected to receive the type {e:?}"
-            ))),
+            ),
         }
     }
 }

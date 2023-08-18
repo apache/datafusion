@@ -23,6 +23,7 @@ use arrow::{
     array::{ArrayRef, BooleanArray},
     datatypes::Field,
 };
+use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
@@ -51,9 +52,9 @@ macro_rules! bool_and_or_batch {
                 typed_bool_and_or_batch!($VALUES, BooleanArray, Boolean, $OP)
             }
             e => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Bool and/Bool or is not expected to receive the type {e:?}"
-                )));
+                );
             }
         }
     }};

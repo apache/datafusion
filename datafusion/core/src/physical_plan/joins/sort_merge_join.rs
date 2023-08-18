@@ -49,7 +49,7 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{plan_err, DataFusionError, JoinType, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
@@ -311,9 +311,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 self.sort_options.clone(),
                 self.null_equals_null,
             )?)),
-            _ => Err(DataFusionError::Internal(
-                "SortMergeJoin wrong number of children".to_string(),
-            )),
+            _ => internal_err!("SortMergeJoin wrong number of children"),
         }
     }
 
@@ -325,10 +323,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
         if left_partitions != right_partitions {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
-                 consider using RepartitionExec",
-            )));
+                 consider using RepartitionExec"
+            );
         }
         let (on_left, on_right) = self.on.iter().cloned().unzip();
         let (streamed, buffered, on_streamed, on_buffered) =

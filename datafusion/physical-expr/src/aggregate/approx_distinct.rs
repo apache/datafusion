@@ -30,7 +30,7 @@ use arrow::datatypes::{
     UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::convert::TryFrom;
@@ -219,10 +219,9 @@ impl<T: Hash> TryFrom<&ScalarValue> for HyperLogLog<T> {
         if let ScalarValue::Binary(Some(slice)) = v {
             slice.as_slice().try_into()
         } else {
-            Err(DataFusionError::Internal(
+            internal_err!(
                 "Impossibly got invalid scalar value while converting to HyperLogLog"
-                    .into(),
-            ))
+            )
         }
     }
 }

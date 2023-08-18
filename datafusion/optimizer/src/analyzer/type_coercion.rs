@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
-    plan_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    internal_err, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
@@ -492,14 +492,12 @@ fn coerce_window_frame(
                 } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
                 } else {
-                    return Err(DataFusionError::Internal(format!(
+                    return internal_err!(
                         "Cannot run range queries on datatype: {col_type:?}"
-                    )));
+                    );
                 }
             } else {
-                return Err(DataFusionError::Internal(
-                    "ORDER BY column cannot be empty".to_string(),
-                ));
+                return internal_err!("ORDER BY column cannot be empty");
             }
         }
         WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
