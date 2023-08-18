@@ -54,7 +54,7 @@ use super::{
 };
 
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{and, is_null, or_kleene, take, FilterBuilder};
+use arrow::compute::{and, take, FilterBuilder};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{
@@ -82,7 +82,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use ahash::RandomState;
-use arrow::compute::kernels::cmp::eq;
+use arrow::compute::kernels::cmp::{eq, not_distinct};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
 type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
@@ -1179,14 +1179,7 @@ fn eq_dyn_null(
             BooleanBuffer::collect_bool(left.len(), |_| null_equals_null),
             None,
         )),
-        _ if null_equals_null => {
-            let eq = eq(&left, &right)?;
-
-            let left_is_null = is_null(left)?;
-            let right_is_null = is_null(right)?;
-
-            or_kleene(&and(&left_is_null, &right_is_null)?, &eq)
-        }
+        _ if null_equals_null => not_distinct(&left, &right),
         _ => eq(&left, &right),
     }
 }

@@ -18,7 +18,7 @@
 use arrow::array::Array;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// Implements NULLIF(expr1, expr2)
