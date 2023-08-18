@@ -2658,6 +2658,8 @@ pub enum AggregateFunction {
     RegrSxx = 32,
     RegrSyy = 33,
     RegrSxy = 34,
+    QuantileCont = 35,
+    QuantileDisc = 36,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2703,6 +2705,8 @@ impl AggregateFunction {
             AggregateFunction::RegrSxx => "REGR_SXX",
             AggregateFunction::RegrSyy => "REGR_SYY",
             AggregateFunction::RegrSxy => "REGR_SXY",
+            AggregateFunction::QuantileCont => "QUANTILE_CONT",
+            AggregateFunction::QuantileDisc => "QUANTILE_DISC",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2745,6 +2749,8 @@ impl AggregateFunction {
             "REGR_SXX" => Some(Self::RegrSxx),
             "REGR_SYY" => Some(Self::RegrSyy),
             "REGR_SXY" => Some(Self::RegrSxy),
+            "QUANTILE_CONT" => Some(Self::QuantileCont),
+            "QUANTILE_DISC" => Some(Self::QuantileDisc),
             _ => None,
         }
     }
