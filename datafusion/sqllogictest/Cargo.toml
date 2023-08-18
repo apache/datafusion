@@ -39,7 +39,7 @@ datafusion-common = {path = "../common", version = "29.0.0"}
 half = "2.2.1"
 itertools = "0.11"
 lazy_static = {version = "^1.4.0"}
-object_store = "0.6.1"
+object_store = "0.7.0"
 rust_decimal = {version = "1.27.0"}
 log = "^0.4"
 sqllogictest = "0.15.0"

@@ -46,7 +46,7 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::{timezone::Tz, ArrowNativeTypeOp};
+use arrow_array::{timezone::Tz, ArrowNativeTypeOp, Scalar};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
@@ -2200,6 +2200,11 @@ impl ScalarValue {
     /// Converts a scalar value into an 1-row array.
     pub fn to_array(&self) -> ArrayRef {
         self.to_array_of_size(1)
+    }
+
+    /// Converts a scalar into an arrow [`Scalar`]
+    pub fn to_scalar(&self) -> Scalar<ArrayRef> {
+        Scalar::new(self.to_array_of_size(1))
     }
 
     /// Converts an iterator of references [`ScalarValue`] into an [`ArrayRef`]

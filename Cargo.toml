@@ -59,4 +59,9 @@ panic = 'unwind'
 rpath = false
 
 [patch.crates-io]
-object_store = { git = "https://github.com/apache/arrow-rs.git", rev = "979a070dc82eeb26b38a8651cac879b2c276c0ed" }
+arrow = {git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
+arrow-array = {git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
+arrow-buffer = {git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
+arrow-flight = {git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
+arrow-schema = {git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
+parquet = {git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
