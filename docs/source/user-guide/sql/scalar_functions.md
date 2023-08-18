@@ -2192,9 +2192,11 @@ cardinality(array)
 ```
 
 ### `empty`
-Returns 1 for an empty array or 0 for a non-empty array.
 
-```empty(array)```
+Returns 1 for an empty array or 0 for a non-empty array.
+```
+empty(array)
+```
 
 #### Arguments
 
