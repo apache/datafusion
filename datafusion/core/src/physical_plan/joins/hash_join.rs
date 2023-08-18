@@ -1175,10 +1175,6 @@ fn eq_dyn_null(
     null_equals_null: bool,
 ) -> Result<BooleanArray, ArrowError> {
     match (left.data_type(), right.data_type()) {
-        (DataType::Null, DataType::Null) => Ok(BooleanArray::new(
-            BooleanBuffer::collect_bool(left.len(), |_| null_equals_null),
-            None,
-        )),
         _ if null_equals_null => not_distinct(&left, &right),
         _ => eq(&left, &right),
     }

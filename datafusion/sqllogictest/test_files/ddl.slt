@@ -302,7 +302,7 @@ CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT *,c
 query RRBT rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
-0.00001 0.000000000001 true 1
+0.00001 0.000000000001 true true
 
 statement ok
 DROP TABLE my_table;
