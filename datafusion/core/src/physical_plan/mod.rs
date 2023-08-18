@@ -26,7 +26,7 @@ use self::{
 use crate::datasource::physical_plan::FileScanConfig;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use datafusion_common::Result;
-pub use datafusion_common::{ColumnStatistics, Statistics};
+pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 use arrow::datatypes::SchemaRef;
@@ -127,20 +127,21 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         vec![false; self.children().len()]
     }
 
-    /// Returns `true` if this operator would benefit from
-    /// partitioning its input (and thus from more parallelism). For
-    /// operators that do very little work the overhead of extra
-    /// parallelism may outweigh any benefits
+    /// Specifies whether the operator benefits from increased parallelization
+    /// at its input for each child. If set to `true`, this indicates that the
+    /// operator would benefit from partitioning its corresponding child
+    /// (and thus from more parallelism). For operators that do very little work
+    /// the overhead of extra parallelism may outweigh any benefits
     ///
     /// The default implementation returns `true` unless this operator
     /// has signalled it requires a single child input partition.
-    fn benefits_from_input_partitioning(&self) -> bool {
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         // By default try to maximize parallelism with more CPUs if
         // possible
-        !self
-            .required_input_distribution()
+        self.required_input_distribution()
             .into_iter()
-            .any(|dist| matches!(dist, Distribution::SinglePartition))
+            .map(|dist| !matches!(dist, Distribution::SinglePartition))
+            .collect()
     }
 
     /// Get the EquivalenceProperties within the plan
@@ -231,9 +232,7 @@ pub fn with_new_children_if_necessary(
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let old_children = plan.children();
     if children.len() != old_children.len() {
-        Err(DataFusionError::Internal(
-            "Wrong number of children".to_string(),
-        ))
+        internal_err!("Wrong number of children")
     } else if children.is_empty()
         || children
             .iter()

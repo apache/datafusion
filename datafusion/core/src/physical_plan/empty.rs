@@ -26,7 +26,7 @@ use crate::physical_plan::{
 use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use log::trace;
 
 use super::expressions::PhysicalSortExpr;
@@ -149,10 +149,11 @@ impl ExecutionPlan for EmptyExec {
         trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
         if partition >= self.partitions {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "EmptyExec invalid partition {} (expected less than {})",
-                partition, self.partitions
-            )));
+                partition,
+                self.partitions
+            );
         }
 
         Ok(Box::pin(MemoryStream::try_new(
@@ -174,13 +175,11 @@ impl ExecutionPlan for EmptyExec {
 mod tests {
     use super::*;
     use crate::physical_plan::with_new_children_if_necessary;
-    use crate::prelude::SessionContext;
     use crate::{physical_plan::common, test_util};
 
     #[tokio::test]
     async fn empty() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
 
         let empty = EmptyExec::new(false, schema.clone());
@@ -217,8 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_execute() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(false, schema);
 
@@ -230,8 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn produce_one_row() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(true, schema);
 
@@ -246,8 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn produce_one_row_multiple_partition() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let partitions = 3;
         let empty = EmptyExec::new(true, schema).with_partitions(partitions);

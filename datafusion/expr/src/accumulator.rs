@@ -18,7 +18,7 @@
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
 use arrow::array::ArrayRef;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use std::fmt::Debug;
 
 /// Describes an aggregate functions's state.
@@ -178,9 +178,9 @@ pub trait Accumulator: Send + Sync + Debug {
     /// entering the window, `[F, G, H]`.
     fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
         // TODO add retract for all accumulators
-        Err(DataFusionError::Internal(
-            "Retract should be implemented for aggregate functions when used with custom window frame queries".to_string()
-        ))
+        internal_err!(
+            "Retract should be implemented for aggregate functions when used with custom window frame queries"
+        )
     }
 
     /// Does the accumulator support incrementally updating its value

@@ -28,7 +28,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, eq_dyn, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
+use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
@@ -319,9 +319,7 @@ impl PhysicalExpr for CaseExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         if children.len() != self.children().len() {
-            Err(DataFusionError::Internal(
-                "CaseExpr: Wrong number of children".to_string(),
-            ))
+            internal_err!("CaseExpr: Wrong number of children")
         } else {
             assert_eq!(children.len() % 2, 0);
             let expr = match children[0].clone().as_any().downcast_ref::<NoOp>() {

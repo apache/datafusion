@@ -33,7 +33,7 @@ use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics}
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
@@ -127,8 +127,8 @@ impl ExecutionPlan for GlobalLimitExec {
         vec![true]
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -165,16 +165,12 @@ impl ExecutionPlan for GlobalLimitExec {
         );
         // GlobalLimitExec has a single output partition
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "GlobalLimitExec invalid partition {partition}"
-            )));
+            return internal_err!("GlobalLimitExec invalid partition {partition}");
         }
 
         // GlobalLimitExec requires a single input partition
         if 1 != self.input.output_partitioning().partition_count() {
-            return Err(DataFusionError::Internal(
-                "GlobalLimitExec requires a single input partition".to_owned(),
-            ));
+            return internal_err!("GlobalLimitExec requires a single input partition");
         }
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -303,8 +299,8 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_partitioning()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
     }
 
     // Local limit will not change the input plan's ordering
@@ -333,9 +329,7 @@ impl ExecutionPlan for LocalLimitExec {
                 children[0].clone(),
                 self.fetch,
             ))),
-            _ => Err(DataFusionError::Internal(
-                "LocalLimitExec wrong number of children".to_string(),
-            )),
+            _ => internal_err!("LocalLimitExec wrong number of children"),
         }
     }
 
@@ -528,20 +522,20 @@ impl RecordBatchStream for LimitStream {
 mod tests {
 
     use common::collect;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
-    use crate::prelude::SessionContext;
     use crate::test;
 
     #[tokio::test]
     async fn limit() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
-        let csv = test::scan_partitioned_csv(num_partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
@@ -654,11 +648,11 @@ mod tests {
 
     // test cases for "skip"
     async fn skip_and_fetch(skip: usize, fetch: Option<usize>) -> Result<usize> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
-        let csv = test::scan_partitioned_csv(num_partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
@@ -747,7 +741,8 @@ mod tests {
         fetch: Option<usize>,
     ) -> Result<Option<usize>> {
         let num_partitions = 4;
-        let csv = test::scan_partitioned_csv(num_partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
@@ -761,7 +756,8 @@ mod tests {
         num_partitions: usize,
         fetch: usize,
     ) -> Result<Option<usize>> {
-        let csv = test::scan_partitioned_csv(num_partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 

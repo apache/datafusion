@@ -76,7 +76,7 @@ use arrow::{
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
-use datafusion_common::{plan_err, DataFusionError, JoinType, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
@@ -430,10 +430,10 @@ impl ExecutionPlan for HashJoinExec {
         let right_partitions = self.right.output_partitioning().partition_count();
         if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
         {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
-                 consider using RepartitionExec",
-            )));
+                 consider using RepartitionExec"
+            );
         }
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
@@ -966,9 +966,9 @@ pub fn equal_rows(
                     equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             }
@@ -980,9 +980,9 @@ pub fn equal_rows(
                     equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             }
@@ -1049,16 +1049,16 @@ pub fn equal_rows(
                             null_equals_null
                         )
                     } else {
-                        err = Some(Err(DataFusionError::Internal(
-                            "Inconsistent Decimal data type in hasher, the scale should be same".to_string(),
-                        )));
+                        err = Some(internal_err!(
+                            "Inconsistent Decimal data type in hasher, the scale should be same"
+                        ));
                         false
                     }
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             },
@@ -1148,18 +1148,18 @@ pub fn equal_rows(
                         }
                         _ => {
                             // should not happen
-                            err = Some(Err(DataFusionError::Internal(
-                                "Unsupported data type in hasher".to_string(),
-                            )));
+                            err = Some(internal_err!(
+                                "Unsupported data type in hasher"
+                            ));
                             false
                         }
                     }
                 }
             other => {
                 // This is internal because we should have caught this before.
-                err = Some(Err(DataFusionError::Internal(format!(
+                err = Some(internal_err!(
                     "Unsupported data type in hasher: {other}"
-                ))));
+                ));
                 false
             }
         });
@@ -1402,7 +1402,6 @@ mod tests {
 
     use crate::execution::context::SessionConfig;
     use crate::physical_expr::expressions::BinaryExpr;
-    use crate::prelude::SessionContext;
     use crate::{
         assert_batches_sorted_eq,
         common::assert_contains,
@@ -1540,8 +1539,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1586,8 +1584,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_inner_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1631,8 +1628,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_one_no_shared_column_names() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1670,8 +1666,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_two() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 2]),
             ("b2", &vec![1, 2, 2]),
@@ -1718,8 +1713,7 @@ mod tests {
     /// Test where the left has 2 parts, the right with 1 part => 1 part
     #[tokio::test]
     async fn join_inner_one_two_parts_left() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let batch1 = build_table_i32(
             ("a1", &vec![1, 2]),
             ("b2", &vec![1, 2]),
@@ -1773,8 +1767,7 @@ mod tests {
     /// Test where the left has 1 part, the right has 2 parts => 2 parts
     #[tokio::test]
     async fn join_inner_one_two_parts_right() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1849,8 +1842,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_multi_batch() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1891,8 +1883,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_multi_batch() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1936,8 +1927,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_empty_right() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -1973,8 +1963,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_empty_right() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2010,8 +1999,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2054,8 +2042,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_left_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2118,8 +2105,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_semi() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left semi join right_table on left_table.b1 = right_table.b2
@@ -2153,8 +2139,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_semi_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2240,8 +2225,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_semi() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2275,8 +2259,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_semi_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2361,8 +2344,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_anti() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2
@@ -2395,8 +2377,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_anti_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2!=8
@@ -2489,8 +2470,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_anti() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         let on = vec![(
@@ -2521,8 +2501,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_anti_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and left_table.a1!=13
@@ -2618,8 +2597,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2657,8 +2635,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_right_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2697,8 +2674,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2800,8 +2776,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_with_duplicated_column_names() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![1, 2, 3]),
             ("b", &vec![4, 5, 7]),
@@ -2865,8 +2840,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -2906,8 +2880,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -2950,8 +2923,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -2993,8 +2965,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3062,8 +3033,7 @@ mod tests {
 
         let join = join(left, right, on, &JoinType::Inner, false)?;
 
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
@@ -3122,8 +3092,7 @@ mod tests {
                 false,
             )
             .unwrap();
-            let session_ctx = SessionContext::new();
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = Arc::new(TaskContext::default());
 
             let stream = join.execute(0, task_ctx).unwrap();
 
@@ -3170,9 +3139,8 @@ mod tests {
         for join_type in join_types {
             let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-            let session_ctx =
-                SessionContext::with_config_rt(SessionConfig::default(), runtime);
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = TaskContext::default().with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
 
             let join = join(left.clone(), right.clone(), on.clone(), &join_type, false)?;
 
@@ -3241,8 +3209,10 @@ mod tests {
             let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
             let session_config = SessionConfig::default().with_batch_size(50);
-            let session_ctx = SessionContext::with_config_rt(session_config, runtime);
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
 
             let join = HashJoinExec::try_new(
                 left.clone(),

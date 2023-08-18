@@ -26,6 +26,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{
+    internal_err,
     utils::{compare_rows, get_row_at_idx, search_in_slice},
     DataFusionError, Result, ScalarValue,
 };
@@ -201,24 +202,24 @@ impl WindowFrameContext {
             WindowFrameBound::CurrentRow => idx,
             // UNBOUNDED FOLLOWING
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Frame start cannot be UNBOUNDED FOLLOWING '{window_frame:?}'"
-                )))
+                )
             }
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
                 std::cmp::min(idx + n as usize, length)
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+                return internal_err!("Rows should be Uint")
             }
         };
         let end = match window_frame.end_bound {
             // UNBOUNDED PRECEDING
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Frame end cannot be UNBOUNDED PRECEDING '{window_frame:?}'"
-                )))
+                )
             }
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
                 if idx >= n as usize {
@@ -235,7 +236,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+                return internal_err!("Rows should be Uint")
             }
         };
         Ok(Range { start, end })
@@ -521,10 +522,9 @@ impl WindowFrameStateGroups {
             if let ScalarValue::UInt64(Some(value)) = delta {
                 *value as usize
             } else {
-                return Err(DataFusionError::Internal(
+                return internal_err!(
                     "Unexpectedly got a non-UInt64 value in a GROUPS mode window frame"
-                        .to_string(),
-                ));
+                );
             }
         } else {
             0

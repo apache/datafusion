@@ -24,6 +24,7 @@ use std::task::Poll;
 
 use crate::physical_plan::displayable;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::internal_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
@@ -180,9 +181,7 @@ impl RecordBatchReceiverStreamBuilder {
                             // the JoinSet were aborted, which in turn
                             // would imply that the receiver has been
                             // dropped and this code is not running
-                            return Some(Err(DataFusionError::Internal(format!(
-                                "Non Panic Task error: {e}"
-                            ))));
+                            return Some(internal_err!("Non Panic Task error: {e}"));
                         }
                     }
                 }
@@ -370,11 +369,8 @@ mod test {
     use super::*;
     use arrow_schema::{DataType, Field, Schema};
 
-    use crate::{
-        execution::context::SessionContext,
-        test::exec::{
-            assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
-        },
+    use crate::test::exec::{
+        assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
     };
 
     fn schema() -> SchemaRef {
@@ -413,8 +409,7 @@ mod test {
 
     #[tokio::test]
     async fn record_batch_receiver_stream_drop_cancel() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = schema();
 
         // Make an input that never proceeds
@@ -439,8 +434,7 @@ mod test {
     /// `RecordBatchReceiverStream` stops early and does not drive
     /// other streams to completion.
     async fn record_batch_receiver_stream_error_does_not_drive_completion() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let schema = schema();
 
         // make an input that will error twice
@@ -471,8 +465,7 @@ mod test {
     ///
     /// panic's if more than max_batches is seen,
     async fn consume(input: PanicExec, max_batches: usize) {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
 
         let input = Arc::new(input);
         let num_partitions = input.output_partitioning().partition_count();

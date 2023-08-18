@@ -27,7 +27,7 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion_expr::{Expr, TableType};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use futures::StreamExt;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -511,7 +511,7 @@ impl Scenario {
                     descending: false,
                     nulls_first: false,
                 };
-                let sort_information = vec![
+                let sort_information = vec![vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema).unwrap(),
                         options,
@@ -520,7 +520,7 @@ impl Scenario {
                         expr: col("b", &schema).unwrap(),
                         options,
                     },
-                ];
+                ]];
 
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)
@@ -633,14 +633,11 @@ impl PartitionStream for DummyStreamPartition {
 struct SortedTableProvider {
     schema: SchemaRef,
     batches: Vec<Vec<RecordBatch>>,
-    sort_information: Vec<PhysicalSortExpr>,
+    sort_information: Vec<LexOrdering>,
 }
 
 impl SortedTableProvider {
-    fn new(
-        batches: Vec<Vec<RecordBatch>>,
-        sort_information: Vec<PhysicalSortExpr>,
-    ) -> Self {
+    fn new(batches: Vec<Vec<RecordBatch>>, sort_information: Vec<LexOrdering>) -> Self {
         let schema = batches[0][0].schema();
         Self {
             schema,

@@ -17,23 +17,31 @@
 
 //! Parquet format abstractions
 
+use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+use rand::distributions::DistString;
 use std::any::Any;
+use std::fmt;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::DataFusionError;
+use datafusion_common::{plan_err, DataFusionError};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::parquet_to_arrow_schema;
+use parquet::arrow::{parquet_to_arrow_schema, AsyncArrowWriter};
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use parquet::file::statistics::Statistics as ParquetStatistics;
+use rand::distributions::Alphanumeric;
 
+use super::write::FileWriterMode;
 use super::FileFormat;
 use super::FileScanConfig;
 use crate::arrow::array::{
@@ -42,12 +50,19 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
-use crate::datasource::physical_plan::{ParquetExec, SchemaAdapter};
+use crate::datasource::physical_plan::{
+    FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
+};
+
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
+use crate::physical_plan::{
+    Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+    Statistics,
+};
 
 /// The default file extension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -207,6 +222,24 @@ impl FileFormat for ParquetFormat {
             predicate,
             self.metadata_size_hint(state.config_options()),
         )))
+    }
+
+    async fn create_writer_physical_plan(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        _state: &SessionState,
+        conf: FileSinkConfig,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if conf.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented yet for Parquet".into(),
+            ));
+        }
+
+        let sink_schema = conf.output_schema().clone();
+        let sink = Arc::new(ParquetSink::new(conf));
+
+        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
     }
 }
 
@@ -541,6 +574,375 @@ async fn fetch_statistics(
     };
 
     Ok(statistics)
+}
+
+/// Implements [`DataSink`] for writing to a parquet file.
+struct ParquetSink {
+    /// Config options for writing data
+    config: FileSinkConfig,
+}
+
+impl Debug for ParquetSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParquetSink").finish()
+    }
+}
+
+impl DisplayAs for ParquetSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "ParquetSink(writer_mode={:?}, file_groups=",
+                    self.config.writer_mode
+                )?;
+                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+/// Parses datafusion.execution.parquet.encoding String to a parquet::basic::Encoding
+fn parse_encoding_string(str_setting: &str) -> Result<parquet::basic::Encoding> {
+    let str_setting_lower: &str = &str_setting.to_lowercase();
+    match str_setting_lower {
+        "plain" => Ok(parquet::basic::Encoding::PLAIN),
+        "plain_dictionary" => Ok(parquet::basic::Encoding::PLAIN_DICTIONARY),
+        "rle" => Ok(parquet::basic::Encoding::RLE),
+        "bit_packed" => Ok(parquet::basic::Encoding::BIT_PACKED),
+        "delta_binary_packed" => Ok(parquet::basic::Encoding::DELTA_BINARY_PACKED),
+        "delta_length_byte_array" => {
+            Ok(parquet::basic::Encoding::DELTA_LENGTH_BYTE_ARRAY)
+        }
+        "delta_byte_array" => Ok(parquet::basic::Encoding::DELTA_BYTE_ARRAY),
+        "rle_dictionary" => Ok(parquet::basic::Encoding::RLE_DICTIONARY),
+        "byte_stream_split" => Ok(parquet::basic::Encoding::BYTE_STREAM_SPLIT),
+        _ => Err(DataFusionError::Plan(format!(
+            "Unknown or unsupported parquet encoding: \
+        {str_setting}. Valid values are: plain, plain_dictionary, rle, \
+        /// bit_packed, delta_binary_packed, delta_length_byte_array, \
+        /// delta_byte_array, rle_dictionary, and byte_stream_split."
+        ))),
+    }
+}
+
+/// Splits compression string into compression codec and optional compression_level
+/// I.e. gzip(2) -> gzip, 2
+fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>)> {
+    let split_setting = str_setting.split_once('(');
+
+    match split_setting {
+        Some((codec, rh)) => {
+            let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "Could not parse compression string. \
+                    Got codec: {} and unknown level from {}",
+                    codec, str_setting
+                ))
+            })?;
+            Ok((codec, Some(*level)))
+        }
+        None => Ok((str_setting, None)),
+    }
+}
+
+/// Helper to ensure compression codecs which don't support levels
+/// don't have one set. E.g. snappy(2) is invalid.
+fn check_level_is_none(codec: &str, level: &Option<u32>) -> Result<()> {
+    if level.is_some() {
+        return Err(DataFusionError::Plan(format!(
+            "Compression {codec} does not support specifying a level"
+        )));
+    }
+    Ok(())
+}
+
+/// Helper to ensure compression codecs which require a level
+/// do have one set. E.g. zstd is invalid, zstd(3) is valid
+fn require_level(codec: &str, level: Option<u32>) -> Result<u32> {
+    level.ok_or(DataFusionError::Plan(format!(
+        "{codec} compression requires specifying a level such as {codec}(4)"
+    )))
+}
+
+/// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
+fn parse_compression_string(str_setting: &str) -> Result<parquet::basic::Compression> {
+    let str_setting_lower: &str = &str_setting.to_lowercase();
+    let (codec, level) = split_compression_string(str_setting_lower)?;
+    match codec {
+        "uncompressed" => {
+            check_level_is_none(codec, &level)?;
+            Ok(parquet::basic::Compression::UNCOMPRESSED)
+        }
+        "snappy" => {
+            check_level_is_none(codec, &level)?;
+            Ok(parquet::basic::Compression::SNAPPY)
+        }
+        "gzip" => {
+            let level = require_level(codec, level)?;
+            Ok(parquet::basic::Compression::GZIP(GzipLevel::try_new(
+                level,
+            )?))
+        }
+        "lzo" => {
+            check_level_is_none(codec, &level)?;
+            Ok(parquet::basic::Compression::LZO)
+        }
+        "brotli" => {
+            let level = require_level(codec, level)?;
+            Ok(parquet::basic::Compression::BROTLI(BrotliLevel::try_new(
+                level,
+            )?))
+        }
+        "lz4" => {
+            check_level_is_none(codec, &level)?;
+            Ok(parquet::basic::Compression::LZ4)
+        }
+        "zstd" => {
+            let level = require_level(codec, level)?;
+            Ok(parquet::basic::Compression::ZSTD(ZstdLevel::try_new(
+                level as i32,
+            )?))
+        }
+        "lz4_raw" => {
+            check_level_is_none(codec, &level)?;
+            Ok(parquet::basic::Compression::LZ4_RAW)
+        }
+        _ => Err(DataFusionError::Plan(format!(
+            "Unknown or unsupported parquet compression: \
+        {str_setting}. Valid values are: uncompressed, snappy, gzip(level), \
+        lzo, brotli(level), lz4, zstd(level), and lz4_raw."
+        ))),
+    }
+}
+
+fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
+    let str_setting_lower: &str = &str_setting.to_lowercase();
+    match str_setting_lower {
+        "1.0" => Ok(WriterVersion::PARQUET_1_0),
+        "2.0" => Ok(WriterVersion::PARQUET_2_0),
+        _ => Err(DataFusionError::Plan(format!(
+            "Unknown or unsupported parquet writer version {str_setting} \
+            valid options are '1.0' and '2.0'"
+        ))),
+    }
+}
+
+fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
+    let str_setting_lower: &str = &str_setting.to_lowercase();
+    match str_setting_lower {
+        "none" => Ok(EnabledStatistics::None),
+        "chunk" => Ok(EnabledStatistics::Chunk),
+        "page" => Ok(EnabledStatistics::Page),
+        _ => Err(DataFusionError::Plan(format!(
+            "Unknown or unsupported parquet statistics setting {str_setting} \
+            valid options are 'none', 'page', and 'chunk'"
+        ))),
+    }
+}
+
+impl ParquetSink {
+    fn new(config: FileSinkConfig) -> Self {
+        Self { config }
+    }
+
+    /// Builds a parquet WriterProperties struct, setting options as appropriate from TaskContext options.
+    /// May return error if SessionContext contains invalid or unsupported options
+    fn parquet_writer_props_from_context(
+        &self,
+        context: &Arc<TaskContext>,
+    ) -> Result<WriterProperties> {
+        let parquet_context = &context.session_config().options().execution.parquet;
+        let mut builder = WriterProperties::builder()
+            .set_data_page_size_limit(parquet_context.data_pagesize_limit)
+            .set_write_batch_size(parquet_context.write_batch_size)
+            .set_writer_version(parse_version_string(&parquet_context.writer_version)?)
+            .set_dictionary_page_size_limit(parquet_context.dictionary_page_size_limit)
+            .set_max_row_group_size(parquet_context.max_row_group_size)
+            .set_created_by(parquet_context.created_by.clone())
+            .set_column_index_truncate_length(
+                parquet_context.column_index_truncate_length,
+            )
+            .set_data_page_row_count_limit(parquet_context.data_page_row_count_limit)
+            .set_bloom_filter_enabled(parquet_context.bloom_filter_enabled);
+
+        builder = match &parquet_context.encoding {
+            Some(encoding) => builder.set_encoding(parse_encoding_string(encoding)?),
+            None => builder,
+        };
+
+        builder = match &parquet_context.dictionary_enabled {
+            Some(enabled) => builder.set_dictionary_enabled(*enabled),
+            None => builder,
+        };
+
+        builder = match &parquet_context.compression {
+            Some(compression) => {
+                builder.set_compression(parse_compression_string(compression)?)
+            }
+            None => builder,
+        };
+
+        builder = match &parquet_context.statistics_enabled {
+            Some(statistics) => {
+                builder.set_statistics_enabled(parse_statistics_string(statistics)?)
+            }
+            None => builder,
+        };
+
+        builder = match &parquet_context.max_statistics_size {
+            Some(size) => builder.set_max_statistics_size(*size),
+            None => builder,
+        };
+
+        builder = match &parquet_context.bloom_filter_fpp {
+            Some(fpp) => builder.set_bloom_filter_fpp(*fpp),
+            None => builder,
+        };
+
+        builder = match &parquet_context.bloom_filter_ndv {
+            Some(ndv) => builder.set_bloom_filter_ndv(*ndv),
+            None => builder,
+        };
+
+        Ok(builder.build())
+    }
+
+    // Create a write for parquet files
+    async fn create_writer(
+        &self,
+        file_meta: FileMeta,
+        object_store: Arc<dyn ObjectStore>,
+        parquet_props: WriterProperties,
+    ) -> Result<
+        AsyncArrowWriter<Box<dyn tokio::io::AsyncWrite + std::marker::Send + Unpin>>,
+    > {
+        let object = &file_meta.object_meta;
+        match self.config.writer_mode {
+            FileWriterMode::Append => {
+                plan_err!(
+                    "Appending to Parquet files is not supported by the file format!"
+                )
+            }
+            FileWriterMode::Put => Err(DataFusionError::NotImplemented(
+                "FileWriterMode::Put is not implemented for ParquetSink".into(),
+            )),
+            FileWriterMode::PutMultipart => {
+                let (_, multipart_writer) = object_store
+                    .put_multipart(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore)?;
+                let writer = AsyncArrowWriter::try_new(
+                    multipart_writer,
+                    self.config.output_schema.clone(),
+                    10485760,
+                    Some(parquet_props),
+                )?;
+                Ok(writer)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DataSink for ParquetSink {
+    async fn write_all(
+        &self,
+        mut data: Vec<SendableRecordBatchStream>,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let num_partitions = data.len();
+        let parquet_props = self.parquet_writer_props_from_context(context)?;
+
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.config.object_store_url)?;
+
+        // Construct writer for each file group
+        let mut writers = vec![];
+        match self.config.writer_mode {
+            FileWriterMode::Append => {
+                return plan_err!(
+                    "Parquet format does not support appending to existing file!"
+                )
+            }
+            FileWriterMode::Put => {
+                return Err(DataFusionError::NotImplemented(
+                    "Put Mode is not implemented for ParquetSink yet".into(),
+                ))
+            }
+            FileWriterMode::PutMultipart => {
+                // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
+                let base_path = &self.config.table_paths[0];
+                match self.config.per_thread_output {
+                    true => {
+                        // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
+                        let write_id =
+                            Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                        for part_idx in 0..num_partitions {
+                            let file_path = base_path
+                                .prefix()
+                                .child(format!("{}_{}.parquet", write_id, part_idx));
+                            let object_meta = ObjectMeta {
+                                location: file_path,
+                                last_modified: chrono::offset::Utc::now(),
+                                size: 0,
+                                e_tag: None,
+                            };
+                            let writer = self
+                                .create_writer(
+                                    object_meta.into(),
+                                    object_store.clone(),
+                                    parquet_props.clone(),
+                                )
+                                .await?;
+                            writers.push(writer);
+                        }
+                    }
+                    false => {
+                        let file_path = base_path.prefix();
+                        let object_meta = ObjectMeta {
+                            location: file_path.clone(),
+                            last_modified: chrono::offset::Utc::now(),
+                            size: 0,
+                            e_tag: None,
+                        };
+                        let writer = self
+                            .create_writer(
+                                object_meta.into(),
+                                object_store.clone(),
+                                parquet_props.clone(),
+                            )
+                            .await?;
+                        writers.push(writer);
+                    }
+                }
+            }
+        }
+
+        let mut row_count = 0;
+        // TODO parallelize serialization accross partitions and batches within partitions
+        // see: https://github.com/apache/arrow-datafusion/issues/7079
+        for (part_idx, data_stream) in data.iter_mut().enumerate().take(num_partitions) {
+            let idx = match self.config.per_thread_output {
+                true => part_idx,
+                false => 0,
+            };
+            while let Some(batch) = data_stream.next().await.transpose()? {
+                row_count += batch.num_rows();
+                // TODO cleanup all multipart writes when any encounters an error
+                writers[idx].write(&batch).await?;
+            }
+        }
+
+        for writer in writers {
+            writer.close().await?;
+        }
+
+        Ok(row_count as u64)
+    }
 }
 
 #[cfg(test)]

@@ -47,9 +47,9 @@ use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use tempfile::TempDir;
 #[cfg(feature = "compression")]
 use xz2::write::XzEncoder;
 #[cfg(feature = "compression")]
@@ -73,7 +73,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
 }
 
 /// Returns a [`CsvExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
-pub fn scan_partitioned_csv(partitions: usize) -> Result<Arc<CsvExec>> {
+pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<CsvExec>> {
     let schema = aggr_test_schema();
     let filename = "aggregate_test_100.csv";
     let path = format!("{}/csv", arrow_test_data());
@@ -83,6 +83,7 @@ pub fn scan_partitioned_csv(partitions: usize) -> Result<Arc<CsvExec>> {
         partitions,
         FileType::CSV,
         FileCompressionType::UNCOMPRESSED,
+        work_dir,
     )?;
     let config = partitioned_csv_config(schema, file_groups)?;
     Ok(Arc::new(CsvExec::new(
@@ -102,10 +103,9 @@ pub fn partitioned_file_groups(
     partitions: usize,
     file_type: FileType,
     file_compression_type: FileCompressionType,
+    work_dir: &Path,
 ) -> Result<Vec<Vec<PartitionedFile>>> {
     let path = format!("{path}/{filename}");
-
-    let tmp_dir = TempDir::new()?.into_path();
 
     let mut writers = vec![];
     let mut files = vec![];
@@ -118,7 +118,7 @@ pub fn partitioned_file_groups(
                 .get_ext_with_compression(file_compression_type.to_owned())
                 .unwrap()
         );
-        let filename = tmp_dir.join(filename);
+        let filename = work_dir.join(filename);
 
         let file = File::create(&filename).unwrap();
 

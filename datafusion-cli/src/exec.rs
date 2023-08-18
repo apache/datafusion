@@ -119,7 +119,9 @@ pub async fn exec_from_repl(
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
-    rl.set_helper(Some(CliHelper::default()));
+    rl.set_helper(Some(CliHelper::new(
+        &ctx.task_ctx().session_config().options().sql_parser.dialect,
+    )));
     rl.load_history(".history").ok();
 
     let mut print_options = print_options.clone();
@@ -166,6 +168,10 @@ pub async fn exec_from_repl(
                     Ok(_) => {}
                     Err(err) => eprintln!("{err}"),
                 }
+                // dialect might have changed
+                rl.helper_mut().unwrap().set_dialect(
+                    &ctx.task_ctx().session_config().options().sql_parser.dialect,
+                );
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");

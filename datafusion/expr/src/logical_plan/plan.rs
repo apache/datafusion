@@ -31,6 +31,7 @@ use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
 };
 
+use super::dml::CopyTo;
 use super::DdlStatement;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -38,8 +39,9 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, plan_err, Column, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
+    aggregate_functional_dependencies, internal_err, plan_err, Column, DFField, DFSchema,
+    DFSchemaRef, DataFusionError, FunctionalDependencies, OwnedTableReference, Result,
+    ScalarValue, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -119,6 +121,8 @@ pub enum LogicalPlan {
     Dml(DmlStatement),
     /// CREATE / DROP TABLES / VIEWS / SCHEMAs
     Ddl(DdlStatement),
+    /// COPY TO
+    Copy(CopyTo),
     /// Describe the schema of table
     DescribeTable(DescribeTable),
     /// Unnest a column that contains a nested list type.
@@ -156,6 +160,7 @@ impl LogicalPlan {
                 dummy_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
+            LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
         }
@@ -202,6 +207,7 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Union(_)
@@ -342,6 +348,7 @@ impl LogicalPlan {
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
@@ -370,6 +377,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::Dml(write) => vec![&write.input],
+            LogicalPlan::Copy(copy) => vec![&copy.input],
             LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
             LogicalPlan::Prepare(Prepare { input, .. }) => vec![input],
@@ -476,6 +484,7 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Unnest(_) => Ok(None),
@@ -639,6 +648,7 @@ impl LogicalPlan {
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_)
             | LogicalPlan::Statement(_)
@@ -781,11 +791,11 @@ impl LogicalPlan {
                     })?;
                     // check if the data type of the value matches the data type of the placeholder
                     if Some(value.get_datatype()) != *data_type {
-                        return Err(DataFusionError::Internal(format!(
+                        return internal_err!(
                             "Placeholder value type mismatch: expected {:?}, got {:?}",
                             data_type,
                             value.get_datatype()
-                        )));
+                        );
                     }
                     // Replace the placeholder with the value
                     Ok(Transformed::Yes(Expr::Literal(value.clone())))
@@ -1081,6 +1091,21 @@ impl LogicalPlan {
                     }
                     LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
                         write!(f, "Dml: op=[{op}] table=[{table_name}]")
+                    }
+                    LogicalPlan::Copy(CopyTo {
+                        input: _,
+                        output_url,
+                        file_format,
+                        per_thread_output,
+                        options,
+                    }) => {
+                        let op_str = options
+                            .iter()
+                            .map(|(k, v)| format!("{k} {v}"))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+
+                        write!(f, "CopyTo: format={file_format} output_url={output_url} per_thread_output={per_thread_output} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
@@ -1850,7 +1875,8 @@ pub enum Partitioning {
     DistributeBy(Vec<Expr>),
 }
 
-/// Unnest a column that contains a nested list type.
+/// Unnest a column that contains a nested list type. See
+/// [`UnnestOptions`] for more details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Unnest {
     /// The incoming logical plan
@@ -1859,6 +1885,8 @@ pub struct Unnest {
     pub column: Column,
     /// The output schema, containing the unnested field column.
     pub schema: DFSchemaRef,
+    /// Options
+    pub options: UnnestOptions,
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@
 
 use crate::aggregate_function::AggregateFunction;
 use crate::type_coercion::functions::data_types;
+use crate::utils;
 use crate::{AggregateUDF, Signature, TypeSignature, Volatility, WindowUDF};
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, DataFusionError, Result};
@@ -187,7 +188,16 @@ impl BuiltInWindowFunction {
         // or the execution panics.
 
         // verify that this is a valid set of data types for this function
-        data_types(input_expr_types, &self.signature())?;
+        data_types(input_expr_types, &self.signature())
+            // original errors are all related to wrong function signature
+            // aggregate them for better error message
+            .map_err(|_| {
+                DataFusionError::Plan(utils::generate_signature_error_msg(
+                    &format!("{self}"),
+                    self.signature(),
+                    input_expr_types,
+                ))
+            })?;
 
         match self {
             BuiltInWindowFunction::RowNumber
