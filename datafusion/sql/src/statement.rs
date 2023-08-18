@@ -723,7 +723,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let plan = self.statement_to_plan(statement)?;
         if matches!(plan, LogicalPlan::Explain(_)) {
-            return plan_err!("Nested explain not supported");
+            return plan_err!("Nested EXPLAINs are not supported");
         }
         let plan = Arc::new(plan);
         let schema = LogicalPlan::explain_schema();
