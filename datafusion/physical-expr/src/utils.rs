@@ -47,20 +47,11 @@ pub fn expr_list_eq_any_order(
     list1: &[Arc<dyn PhysicalExpr>],
     list2: &[Arc<dyn PhysicalExpr>],
 ) -> bool {
-    if list1.len() == list2.len() {
-        let mut expr_vec1 = list1.to_vec();
-        let mut expr_vec2 = list2.to_vec();
-        while let Some(expr1) = expr_vec1.pop() {
-            if let Some(idx) = expr_vec2.iter().position(|expr2| expr1.eq(expr2)) {
-                expr_vec2.swap_remove(idx);
-            } else {
-                break;
-            }
-        }
-        expr_vec1.is_empty() && expr_vec2.is_empty()
-    } else {
-        false
+    if list1.len() != list2.len() {
+        return false;
     }
+    let set: HashSet<_> = list1.iter().collect();
+    list2.iter().all(|item| set.contains(item))
 }
 
 /// Strictly compare the two expr lists are equal in the given order.
@@ -68,7 +59,7 @@ pub fn expr_list_eq_strict_order(
     list1: &[Arc<dyn PhysicalExpr>],
     list2: &[Arc<dyn PhysicalExpr>],
 ) -> bool {
-    list1.len() == list2.len() && list1.iter().zip(list2.iter()).all(|(e1, e2)| e1.eq(e2))
+    list1 == list2
 }
 
 /// Assume the predicate is in the form of CNF, split the predicate to a Vec of PhysicalExprs.
