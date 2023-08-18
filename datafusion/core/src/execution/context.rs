@@ -450,7 +450,7 @@ impl SessionContext {
     ///
     /// If you wish to limit the type of plan that can be run from
     /// SQL, see [`Self::sql_with_options`] and
-    /// [`SqlOptions::verify_plan`].
+    /// [`SQLOptions::verify_plan`].
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Ddl(ddl) => match ddl {
@@ -2239,7 +2239,7 @@ impl SQLOptions {
 
     /// Return an error if the [`LogicalPlan`] has any nodes that are
     /// incompatible with this [`SQLOptions`].
-    fn verify_plan(&self, plan: &LogicalPlan) -> Result<()> {
+    pub fn verify_plan(&self, plan: &LogicalPlan) -> Result<()> {
         plan.visit(&mut BadPlanVisitor::new(self))?;
         Ok(())
     }
