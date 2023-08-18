@@ -1346,9 +1346,9 @@ mod tests {
         let c2 = mapped_batch.column(1).as_primitive::<Float64Type>();
         let c4 = mapped_batch.column(2).as_primitive::<Float32Type>();
 
-        assert_eq!(c1.value(0), "1");
-        assert_eq!(c1.value(1), "0");
-        assert_eq!(c1.value(2), "1");
+        assert_eq!(c1.value(0), "true");
+        assert_eq!(c1.value(1), "false");
+        assert_eq!(c1.value(2), "true");
 
         assert_eq!(c2.value(0), 2.0_f64);
         assert_eq!(c2.value(1), 7.0_f64);
