@@ -377,7 +377,7 @@ impl SessionContext {
     /// `CREATE VIEW` and DML statements such as `INSERT INTO` with in-memory
     /// default implementations.
     ///
-    /// For read only SQL, use [`create_logical_plan()`] to create a
+    /// For read only SQL, use [`SessionState::create_logical_plan()`] to create a
     /// [`LogicalPlan`] and [`SessionState::create_physical_plan`] to
     /// execute it.
     ///
@@ -385,15 +385,50 @@ impl SessionContext {
     ///
     /// See the example on [`Self`]
     ///
-    /// # Example: Run SQL supporting DDL
+    /// # Example: Creating a Table with SQL
+    ///
     /// ```
     /// use datafusion::prelude::*;
-    /// #
-    /// # use datafusion::error::Result;
+    /// # use datafusion::{error::Result, assert_batches_eq};
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let mut ctx = SessionContext::new();
-    /// let results = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
+    /// ctx
+    ///   .sql("CREATE TABLE foo (x INTEGER)")
+    ///   .await?
+    ///   .collect()
+    ///   .await?;
+    /// assert!(ctx.table_exist("foo").unwrap());
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Example: Preventing Creating a Table with SQL
+    ///
+    /// If you want to avoid creating tables, you must use a different
+    /// API:
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// # use datafusion::{error::Result};
+    /// # use datafusion::physical_plan::collect;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = SessionContext::new();
+    /// let plan = ctx
+    ///   .state()
+    ///   .create_logical_plan("CREATE TABLE foo (x INTEGER)")
+    ///   .await?;
+    /// // Cab bit create an ExecutionPlan suitable for running
+    /// let err = ctx
+    ///   .state()
+    ///   .create_physical_plan(&plan)
+    ///   .await
+    ///   .unwrap_err();
+    /// assert_eq!(
+    ///   err.to_string(),
+    ///   "This feature is not implemented: Unsupported logical plan: CreateMemoryTable"
+    /// );
     /// # Ok(())
     /// # }
     /// ```
