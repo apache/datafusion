@@ -26,29 +26,30 @@ mod file_stream;
 mod json;
 pub mod parquet;
 
-
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
-    array::{new_null_array, ArrayData, ArrayRef, BufferBuilder, DictionaryArray},
-    buffer::Buffer,
+    array::new_null_array,
     compute::can_cast_types,
-    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
+    datatypes::{DataType, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
 mod file_scan_config;
-pub use file_scan_config::{wrap_partition_type_in_dict, wrap_partition_value_in_dict, get_scan_files, FileScanConfig};
-pub (crate) use file_scan_config::{PartitionColumnProjector};
+pub(crate) use file_scan_config::PartitionColumnProjector;
+pub use file_scan_config::{
+    get_scan_files, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
+    FileScanConfig,
+};
 
-use crate::physical_plan::ExecutionPlan;
+use crate::error::{DataFusionError, Result};
 use crate::{
     datasource::file_format::write::FileWriterMode,
     physical_plan::{DisplayAs, DisplayFormatType},
@@ -60,34 +61,21 @@ use crate::{
     },
     physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay},
 };
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
 
-use datafusion_common::{
-    plan_err,
-    tree_node::{TreeNode, VisitRecursion},
-};
+use datafusion_common::plan_err;
 use datafusion_physical_expr::expressions::Column;
 
 use arrow::compute::cast;
-use itertools::Itertools;
-use log::{debug, warn};
+use log::debug;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::{
-    borrow::Cow,
-    cmp::min,
-    collections::HashMap,
     fmt::{Debug, Formatter, Result as FmtResult},
-    marker::PhantomData,
     sync::Arc,
     vec,
 };
 
-
-use super::{listing::ListingTableUrl, ColumnStatistics, Statistics};
+use super::listing::ListingTableUrl;
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
@@ -520,13 +508,10 @@ mod tests {
         BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, StringArray,
         UInt64Array,
     };
+    use arrow_schema::Field;
     use chrono::Utc;
 
     use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
-    use crate::{
-        test::{build_table_i32, columns},
-        test_util::aggr_test_schema,
-    };
 
     use super::*;
 
@@ -798,6 +783,9 @@ mod tests {
 
     /// Unit tests for `repartition_file_groups()`
     mod repartition_file_groups_test {
+        use datafusion_common::Statistics;
+        use itertools::Itertools;
+
         use super::*;
 
         /// Empty file won't get partitioned

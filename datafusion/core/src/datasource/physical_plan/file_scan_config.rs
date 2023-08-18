@@ -18,53 +18,33 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
+use crate::datasource::{
+    listing::{FileRange, PartitionedFile},
+    object_store::ObjectStoreUrl,
+};
 use crate::physical_plan::ExecutionPlan;
-use crate::{
-    datasource::file_format::write::FileWriterMode,
-    physical_plan::{DisplayAs, DisplayFormatType},
-};
-use crate::{
-    datasource::{
-        listing::{FileRange, PartitionedFile},
-        object_store::ObjectStoreUrl,
-    },
-    physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay},
-};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
 
-use arrow::array::{BufferBuilder, ArrayData};
+use arrow::array::{ArrayData, BufferBuilder};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
-use arrow_array::{RecordBatch, ArrowNativeTypeOp, ArrayRef, DictionaryArray};
-use arrow_schema::{DataType, SchemaRef, Field, Schema};
-use datafusion_common::{Statistics, ColumnStatistics};
-use datafusion_common::{
-    plan_err,
-    tree_node::{TreeNode, VisitRecursion},
-};
+use arrow_array::{ArrayRef, DictionaryArray, RecordBatch};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr::expressions::Column;
 
-use arrow::compute::cast;
 use itertools::Itertools;
-use log::{debug, warn};
-use object_store::path::Path;
-use object_store::ObjectMeta;
+use log::warn;
 use std::{
-    borrow::Cow,
-    cmp::min,
-    collections::HashMap,
-    fmt::{Debug, Formatter, Result as FmtResult},
-    marker::PhantomData,
-    sync::Arc,
-    vec,
+    borrow::Cow, cmp::min, collections::HashMap, fmt::Debug, marker::PhantomData,
+    sync::Arc, vec,
 };
 
 use super::get_projected_output_ordering;
-
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
@@ -202,7 +182,7 @@ impl FileScanConfig {
     }
 
     #[allow(unused)] // Only used by avro
-    pub fn projected_file_column_names(&self) -> Option<Vec<String>> {
+    pub(crate) fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
                 .filter(|col_idx| **col_idx < self.file_schema.fields().len())
@@ -297,8 +277,6 @@ impl FileScanConfig {
     }
 }
 
-
-
 /// A helper that projects partition columns into the file record batches.
 ///
 /// One interesting trick is the usage of a cache for the key buffers of the partition column
@@ -389,7 +367,6 @@ impl PartitionColumnProjector {
         RecordBatch::try_new(Arc::clone(&self.projected_schema), cols).map_err(Into::into)
     }
 }
-
 
 #[derive(Debug, Default)]
 struct ZeroBufferGenerators {
@@ -537,21 +514,10 @@ fn create_output_array(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float32Type, Float64Type, UInt32Type};
-    use arrow_array::{
-        BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, StringArray,
-        UInt64Array,
-    };
-    use chrono::Utc;
-
-    use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
     use crate::{
         test::{build_table_i32, columns},
         test_util::aggr_test_schema,
     };
-
-
 
     #[test]
     fn physical_plan_config_no_projection() {
@@ -634,7 +600,6 @@ mod tests {
         let col_indices = conf.file_column_projection_indices();
         assert_eq!(col_indices, Some(vec![0]));
     }
-
 
     #[test]
     fn partition_column_projector() {
