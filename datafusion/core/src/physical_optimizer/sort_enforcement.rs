@@ -34,6 +34,10 @@
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
 //! by another [`SortExec`]. Therefore, this rule removes it from the physical plan.
 
+use std::fmt;
+use std::fmt::Formatter;
+use std::sync::Arc;
+
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::replace_with_order_preserving_variants::{
@@ -53,6 +57,7 @@ use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::utils::{get_at_indices, longest_consecutive_prefix};
@@ -62,10 +67,8 @@ use datafusion_physical_expr::utils::{
     ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
+
 use itertools::{concat, izip, Itertools};
-use std::fmt;
-use std::fmt::Formatter;
-use std::sync::Arc;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
@@ -1009,6 +1012,7 @@ mod tests {
     use crate::physical_plan::{displayable, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::csv_exec_sorted;
+
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
@@ -1016,6 +1020,7 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::expressions::{col, NotExpr};
     use datafusion_physical_expr::PhysicalSortExpr;
+
     use std::sync::Arc;
 
     fn create_test_schema() -> Result<SchemaRef> {

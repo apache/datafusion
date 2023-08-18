@@ -17,6 +17,8 @@
 
 //! Collection of testing utility functions that are leveraged by the query optimizer rules
 
+use std::sync::Arc;
+
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use crate::error::Result;
@@ -35,14 +37,15 @@ use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::create_window_expr;
 use crate::physical_plan::{ExecutionPlan, Partitioning};
 use crate::prelude::{CsvReadOptions, SessionContext};
+
 use arrow_schema::{Schema, SchemaRef, SortOptions};
-use async_trait::async_trait;
 use datafusion_common::{JoinType, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{AggregateFunction, WindowFrame, WindowFunction};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use std::sync::Arc;
+
+use async_trait::async_trait;
 
 async fn register_current_csv(
     ctx: &SessionContext,

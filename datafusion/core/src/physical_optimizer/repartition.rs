@@ -25,9 +25,6 @@ fn init() {
 
 #[cfg(test)]
 mod tests {
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-
     use std::sync::Arc;
 
     use crate::datasource::file_format::file_type::FileCompressionType;
@@ -50,6 +47,9 @@ mod tests {
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::ExecutionPlan;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::config::ConfigOptions;
     use datafusion_physical_expr::PhysicalSortRequirement;
 
@@ -248,16 +248,12 @@ mod tests {
             config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
 
             let optimized = if $FIRST_ENFORCE_DIST{
-                // run optimizer
+                // Run the optimizer to first apply distribution enforcement
+                // and then sort enforcement.
                 let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-                    // EnforceDistribution is an essential rule to be applied.
-                    // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                    // Verify that distribution enforcement is idempotent by running it twice.
                     Arc::new(EnforceDistribution::new()),
-                    // re-run same rule. Rule should be idempotent
                     Arc::new(EnforceDistribution::new()),
-
-                    // EnforceSorting is an essential rule to be applied.
-                    // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
                     Arc::new(EnforceSorting::new()),
                 ];
                 let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
@@ -265,16 +261,12 @@ mod tests {
                 });
                 optimized
             } else {
-                // run optimizer
+                // Run the optimizer to first apply sort enforcement and then
+                // distribution enforcement.
                 let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-                    // EnforceSorting is an essential rule to be applied.
-                    // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
                     Arc::new(EnforceSorting::new()),
-
-                    // EnforceDistribution is an essential rule to be applied.
-                    // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                    // Verify that distribution enforcement is idempotent by running it twice.
                     Arc::new(EnforceDistribution::new()),
-                    // re-run same rule. Rule should be idempotent
                     Arc::new(EnforceDistribution::new()),
                 ];
                 let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
