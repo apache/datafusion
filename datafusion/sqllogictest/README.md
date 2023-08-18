@@ -187,7 +187,7 @@ For example, the `test_files/copy.slt` file should use scratch
 directory `test_files/scratch/copy`.
 
 Tests that need to write temporary files should write (only) to this
-directory to ensure they do not interfere with other concurrently
+directory to ensure they do not interfere with others concurrently
 running tests.
 
 #### `.slt` file format
@@ -200,7 +200,7 @@ output.
 
 [`sqllogictest`]: https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
-Tests in the `.slt` file are a sequence of query record generally
+Tests in the `.slt` file are a sequence of query records generally
 starting with `CREATE` statements to populate tables and then further
 queries to test the populated data.
 
