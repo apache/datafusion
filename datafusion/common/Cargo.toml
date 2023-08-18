@@ -34,29 +34,29 @@ path = "src/lib.rs"
 
 [features]
 avro = ["apache-avro"]
-pyarrow = ["pyo3", "arrow/pyarrow"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 default = ["compression"]
+pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
 apache-avro = { version = "0.15", default-features = false, features = ["snappy"], optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
+async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
+bytes = "1.4"
+bzip2 = { version = "0.4.3", optional = true }
 chrono = { version = "0.4", default-features = false }
+flate2 = { version = "1.0.24", optional = true }
+futures = "0.3"
 num_cpus = "1.13.0"
 object_store = { version = "0.6.1", default-features = false, optional = true }
 parquet = { workspace = true, optional = true }
 pyo3 = { version = "0.19.0", optional = true }
 sqlparser = { workspace = true }
-bytes = "1.4"
-futures = "0.3"
 tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-util = { version = "0.7.4", features = ["io"] }
-xz2 = {version = "0.1", optional=true}
-bzip2 = {version = "0.4.3", optional=true}
-flate2 = {version="1.0.24", optional=true}
-zstd = {version = "0.12", optional=true}
-async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
+xz2 = { version = "0.1", optional = true }
+zstd = { version = "0.12", optional = true }
 
 
 
