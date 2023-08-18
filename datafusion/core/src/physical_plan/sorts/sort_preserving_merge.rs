@@ -158,6 +158,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
     }

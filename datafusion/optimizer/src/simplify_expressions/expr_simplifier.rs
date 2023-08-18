@@ -412,7 +412,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if list.len() == 1
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
             {
-                let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
+                    unreachable!()
+                };
                 Expr::InSubquery(InSubquery::new(expr, subquery, negated))
             }
 
