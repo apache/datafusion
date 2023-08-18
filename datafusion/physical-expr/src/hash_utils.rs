@@ -27,7 +27,7 @@ use datafusion_common::{
     cast::{
         as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
     },
-    DataFusionError, Result,
+    internal_err, DataFusionError, Result,
 };
 use std::sync::Arc;
 
@@ -296,10 +296,10 @@ pub fn create_hashes<'a>(
             }
             _ => {
                 // This is internal because we should have caught this before.
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Unsupported data type in hasher: {}",
                     col.data_type()
-                )));
+                );
             }
         }
     }

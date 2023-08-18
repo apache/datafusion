@@ -438,8 +438,8 @@ impl ExecutionPlan for RepartitionExec {
         Ok(children[0])
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        matches!(self.partitioning, Partitioning::Hash(_, _))
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![matches!(self.partitioning, Partitioning::Hash(_, _))]
     }
 
     fn output_partitioning(&self) -> Partitioning {

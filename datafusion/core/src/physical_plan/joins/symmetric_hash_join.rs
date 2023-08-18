@@ -75,7 +75,7 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::utils::bisect;
-use datafusion_common::{plan_err, JoinType};
+use datafusion_common::{internal_err, plan_err, JoinType};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
@@ -412,8 +412,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         Ok(children.iter().any(|u| *u))
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false, false]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -498,10 +498,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
         if left_partitions != right_partitions {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "Invalid SymmetricHashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
-                 consider using RepartitionExec",
-            )));
+                 consider using RepartitionExec"
+            );
         }
         // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
         // for both sides, and build an expression graph if one is not already built.

@@ -1,0 +1,183 @@
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query TT
+explain select
+    s_name,
+    s_address
+from
+    supplier,
+    nation
+where
+        s_suppkey in (
+        select
+            ps_suppkey
+        from
+            partsupp
+        where
+                ps_partkey in (
+                select
+                    p_partkey
+                from
+                    part
+                where
+                        p_name like 'forest%'
+            )
+          and ps_availqty > (
+            select
+                    0.5 * sum(l_quantity)
+            from
+                lineitem
+            where
+                    l_partkey = ps_partkey
+              and l_suppkey = ps_suppkey
+              and l_shipdate >= date '1994-01-01'
+              and l_shipdate < date '1994-01-01' + interval '1' year
+        )
+    )
+  and s_nationkey = n_nationkey
+  and n_name = 'CANADA'
+order by
+    s_name;
+----
+logical_plan
+Sort: supplier.s_name ASC NULLS LAST
+--Projection: supplier.s_name, supplier.s_address
+----LeftSemi Join: supplier.s_suppkey = __correlated_sq_1.ps_suppkey
+------Projection: supplier.s_suppkey, supplier.s_name, supplier.s_address
+--------Inner Join: supplier.s_nationkey = nation.n_nationkey
+----------TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey]
+----------Projection: nation.n_nationkey
+------------Filter: nation.n_name = Utf8("CANADA")
+--------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8("CANADA")]
+------SubqueryAlias: __correlated_sq_1
+--------Projection: partsupp.ps_suppkey
+----------Inner Join: partsupp.ps_partkey = __scalar_sq_3.l_partkey, partsupp.ps_suppkey = __scalar_sq_3.l_suppkey Filter: CAST(partsupp.ps_availqty AS Float64) > __scalar_sq_3.Float64(0.5) * SUM(lineitem.l_quantity)
+------------LeftSemi Join: partsupp.ps_partkey = __correlated_sq_2.p_partkey
+--------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty]
+--------------SubqueryAlias: __correlated_sq_2
+----------------Projection: part.p_partkey
+------------------Filter: part.p_name LIKE Utf8("forest%")
+--------------------TableScan: part projection=[p_partkey, p_name], partial_filters=[part.p_name LIKE Utf8("forest%")]
+------------SubqueryAlias: __scalar_sq_3
+--------------Projection: Float64(0.5) * CAST(SUM(lineitem.l_quantity) AS Float64), lineitem.l_partkey, lineitem.l_suppkey
+----------------Aggregate: groupBy=[[lineitem.l_partkey, lineitem.l_suppkey]], aggr=[[SUM(lineitem.l_quantity)]]
+------------------Projection: lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity
+--------------------Filter: lineitem.l_shipdate >= Date32("8766") AND lineitem.l_shipdate < Date32("9131")
+----------------------TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("8766"), lineitem.l_shipdate < Date32("9131")]
+physical_plan
+SortPreservingMergeExec: [s_name@0 ASC NULLS LAST]
+--SortExec: expr=[s_name@0 ASC NULLS LAST]
+----ProjectionExec: expr=[s_name@1 as s_name, s_address@2 as s_address]
+------CoalesceBatchesExec: target_batch_size=8192
+--------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(s_suppkey@0, ps_suppkey@0)]
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
+--------------ProjectionExec: expr=[s_suppkey@0 as s_suppkey, s_name@1 as s_name, s_address@2 as s_address]
+----------------CoalesceBatchesExec: target_batch_size=8192
+------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)]
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([s_nationkey@3], 4), input_partitions=4
+------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_address, s_nationkey], has_header=false
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
+------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
+--------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------FilterExec: n_name@1 = CANADA
+------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
+----------CoalesceBatchesExec: target_batch_size=8192
+------------RepartitionExec: partitioning=Hash([ps_suppkey@0], 4), input_partitions=4
+--------------ProjectionExec: expr=[ps_suppkey@1 as ps_suppkey]
+----------------CoalesceBatchesExec: target_batch_size=8192
+------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_partkey@0, l_partkey@1), (ps_suppkey@1, l_suppkey@2)], filter=CAST(ps_availqty@0 AS Float64) > Float64(0.5) * SUM(lineitem.l_quantity)@1
+--------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------RepartitionExec: partitioning=Hash([ps_partkey@0, ps_suppkey@1], 4), input_partitions=4
+------------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(ps_partkey@0, p_partkey@0)]
+----------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
+--------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey, ps_availqty], has_header=false
+----------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
+--------------------------------ProjectionExec: expr=[p_partkey@0 as p_partkey]
+----------------------------------CoalesceBatchesExec: target_batch_size=8192
+------------------------------------FilterExec: p_name@1 LIKE forest%
+--------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_name], has_header=false
+--------------------ProjectionExec: expr=[0.5 * CAST(SUM(lineitem.l_quantity)@2 AS Float64) as Float64(0.5) * SUM(lineitem.l_quantity), l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey]
+----------------------AggregateExec: mode=FinalPartitioned, gby=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey], aggr=[SUM(lineitem.l_quantity)]
+------------------------CoalesceBatchesExec: target_batch_size=8192
+--------------------------RepartitionExec: partitioning=Hash([l_partkey@0, l_suppkey@1], 4), input_partitions=4
+----------------------------AggregateExec: mode=Partial, gby=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey], aggr=[SUM(lineitem.l_quantity)]
+------------------------------ProjectionExec: expr=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey, l_quantity@2 as l_quantity]
+--------------------------------CoalesceBatchesExec: target_batch_size=8192
+----------------------------------FilterExec: l_shipdate@3 >= 8766 AND l_shipdate@3 < 9131
+------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], has_header=false
+
+
+
+query TT
+select
+    s_name,
+    s_address
+from
+    supplier,
+    nation
+where
+        s_suppkey in (
+        select
+            ps_suppkey
+        from
+            partsupp
+        where
+                ps_partkey in (
+                select
+                    p_partkey
+                from
+                    part
+                where
+                        p_name like 'forest%'
+            )
+          and ps_availqty > (
+            select
+                    0.5 * sum(l_quantity)
+            from
+                lineitem
+            where
+                    l_partkey = ps_partkey
+              and l_suppkey = ps_suppkey
+              and l_shipdate >= date '1994-01-01'
+              and l_shipdate < date '1994-01-01' + interval '1' year
+        )
+    )
+  and s_nationkey = n_nationkey
+  and n_name = 'CANADA'
+order by
+    s_name;
+----
+Supplier#000000157 ,mEGorBfVIm
+Supplier#000000197 YC2Acon6kjY3zj3Fbxs2k4Vdf7X0cd2F
+Supplier#000000287 7a9SP7qW5Yku5PvSg
+Supplier#000000378 FfbhyCxWvcPrO8ltp9
+Supplier#000000530 0qwCMwobKY OcmLyfRXlagA8ukENJv,
+Supplier#000000555 TfB,a5bfl3Ah 3Z 74GqnNs6zKVGM
+Supplier#000000557 jj0wUYh9K3fG5Jhdhrkuy ,4
+Supplier#000000729 pqck2ppy758TQpZCUAjPvlU55K3QjfL7Bi
+Supplier#000000935 ij98czM 2KzWe7dDTOxB8sq0UfCdvrX
