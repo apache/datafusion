@@ -28,8 +28,8 @@ use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, ExprSchema, OwnedTableReference, Result, SchemaReference,
-    TableReference, ToDFSchema, FileType,
+    DataFusionError, ExprSchema, FileType, OwnedTableReference, Result, SchemaReference,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::Placeholder;

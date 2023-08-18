@@ -24,9 +24,6 @@ use async_trait::async_trait;
 use datafusion_common::{plan_err, DataFusionError};
 
 use crate::datasource::file_format::arrow::ArrowFormat;
-use datafusion_common::{FileCompressionType, DEFAULT_ARROW_EXTENSION, 
-    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
-    DEFAULT_AVRO_EXTENSION};
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::{ListingTableInsertMode, ListingTableUrl};
 use crate::datasource::{
@@ -38,6 +35,10 @@ use crate::datasource::{
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 use crate::logical_expr::Expr;
+use datafusion_common::{
+    FileCompressionType, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION,
+    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+};
 
 /// Options that control the reading of CSV files.
 ///

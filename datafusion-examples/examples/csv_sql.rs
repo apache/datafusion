@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::FileCompressionType;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_common::FileCompressionType;
 
 /// This example demonstrates executing a simple query against an Arrow data source (CSV) and
 /// fetching results

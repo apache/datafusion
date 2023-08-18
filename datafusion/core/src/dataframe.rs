@@ -24,7 +24,7 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, SchemaError, UnnestOptions, FileType};
+use datafusion_common::{DataFusionError, FileType, SchemaError, UnnestOptions};
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};

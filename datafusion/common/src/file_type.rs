@@ -26,20 +26,20 @@ use async_compression::tokio::bufread::{
     ZstdDecoder as AsyncZstdDecoer, ZstdEncoder as AsyncZstdEncoder,
 };
 
+use crate::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use bytes::Bytes;
 #[cfg(feature = "compression")]
 use bzip2::read::MultiBzDecoder;
-use crate::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use flate2::read::MultiGzDecoder;
 
+use core::fmt;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
-use core::fmt;
 use std::fmt::Display;
 use std::str::FromStr;
 use tokio::io::AsyncWrite;
@@ -284,7 +284,6 @@ impl Display for FileType {
     }
 }
 
-
 impl FromStr for FileType {
     type Err = DataFusionError;
 
@@ -313,7 +312,7 @@ impl FileType {
             FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
                 _ => Err(DataFusionError::Internal(
-                    "FileCompressionType can be specified for CSV/JSON FileType.".into()
+                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
                 )),
             },
         }
@@ -322,8 +321,8 @@ impl FileType {
 
 #[cfg(test)]
 mod tests {
-    use crate::file_type::{FileCompressionType, FileType};
     use crate::error::DataFusionError;
+    use crate::file_type::{FileCompressionType, FileType};
     use std::str::FromStr;
 
     #[test]

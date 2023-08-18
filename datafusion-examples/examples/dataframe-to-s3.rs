@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{FileType, GetExt};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_common::{FileType, GetExt};
 
 use object_store::aws::AmazonS3Builder;
 use std::env;

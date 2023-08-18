@@ -41,12 +41,14 @@ pub mod utils;
 
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema};
-pub use file_type::{FileType, FileCompressionType, GetExt, DEFAULT_ARROW_EXTENSION,
-    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
-    DEFAULT_AVRO_EXTENSION};
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
+};
+pub use file_type::{
+    FileCompressionType, FileType, GetExt, DEFAULT_ARROW_EXTENSION,
+    DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION,
+    DEFAULT_PARQUET_EXTENSION,
 };
 pub use functional_dependencies::{
     aggregate_functional_dependencies, get_target_functional_dependencies, Constraints,

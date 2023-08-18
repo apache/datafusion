@@ -280,11 +280,11 @@ mod tests {
 
     use crate::prelude::SessionConfig;
 
-    use datafusion_common::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_common::FileCompressionType;
 
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::{HashJoinExec, PartitionMode};

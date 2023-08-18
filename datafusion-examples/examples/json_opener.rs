@@ -18,7 +18,6 @@
 use std::{sync::Arc, vec};
 
 use arrow_schema::{DataType, Field, Schema};
-use datafusion_common::FileCompressionType;
 use datafusion::{
     assert_batches_eq,
     datasource::{
@@ -29,6 +28,7 @@ use datafusion::{
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
 };
+use datafusion_common::FileCompressionType;
 use futures::StreamExt;
 use object_store::ObjectStore;
 

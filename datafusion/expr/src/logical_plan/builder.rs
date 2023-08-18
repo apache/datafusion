@@ -45,8 +45,8 @@ use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
-    ToDFSchema, FileType
+    FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
