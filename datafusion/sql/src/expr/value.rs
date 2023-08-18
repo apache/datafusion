@@ -153,14 +153,50 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let data_types: HashSet<DataType> =
             values.iter().map(|e| e.get_datatype()).collect();
 
-        if data_types.is_empty() {
-            Ok(lit(ScalarValue::new_list(None, DataType::Utf8)))
-        } else if data_types.len() > 1 {
-            not_impl_err!("Arrays with different types are not supported: {data_types:?}")
-        } else {
-            let data_type = values[0].get_datatype();
+        match data_types.len() {
+            0 => Ok(lit(ScalarValue::new_list(None, DataType::Utf8))),
+            1 => {
+                let data_type = values[0].get_datatype();
+                Ok(lit(ScalarValue::new_list(Some(values), data_type)))
+            }
+            // Check whether one of them is null
+            2 => {
+                let has_null_type = data_types.contains(&DataType::Null);
+                if has_null_type {
+                    // convert to Vec for indexing
+                    let data_types = data_types.into_iter().collect::<Vec<_>>();
+                    let non_null_type = if data_types[0] == DataType::Null {
+                        &data_types[1]
+                    } else {
+                        &data_types[0]
+                    };
 
-            Ok(lit(ScalarValue::new_list(Some(values), data_type)))
+                    // Convert null type to the same type as the other elements
+                    let values = values
+                        .iter()
+                        .map(|e| {
+                            if e.get_datatype() == DataType::Null {
+                                // i.e. Int64 ScalarValue(Int64(None))
+                                ScalarValue::try_from(non_null_type)
+                            } else {
+                                Ok(e.clone())
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    Ok(lit(ScalarValue::new_list(
+                        Some(values),
+                        non_null_type.clone(),
+                    )))
+                } else {
+                    not_impl_err!(
+                        "Arrays with different types are not supported: {data_types:?}"
+                    )
+                }
+            }
+            _ => not_impl_err!(
+                "Arrays with different types are not supported: {data_types:?}"
+            ),
         }
     }
 

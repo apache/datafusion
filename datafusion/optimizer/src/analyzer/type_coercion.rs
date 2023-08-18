@@ -44,7 +44,7 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
     LogicalPlan, Operator, Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -601,7 +601,53 @@ fn coerce_arguments_for_fun(
             .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
             .collect();
     }
-    Ok(expressions)
+
+    // Represent NULL as element
+    // Iterate once to get non-null type
+    // Convert null type to non-null type with None
+    // i.e. ScalarValue::Int64(None)
+
+    let data_types = expressions
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut found_null = false;
+    // Assume that all the non-null types are the same
+    let mut first_non_null: Option<DataType> = None;
+
+    for data_type in data_types.iter() {
+        if *data_type == DataType::Null {
+            found_null = true;
+        } else if first_non_null.is_none() {
+            first_non_null = Some(data_type.clone());
+        }
+    }
+
+    if found_null {
+        let mut expressions = expressions;
+        match first_non_null {
+            Some(DataType::List(field)) => {
+                let arr_val_type = field.data_type().clone();
+                for expr in expressions.iter_mut() {
+                    if expr.get_type(schema)? == DataType::Null {
+                        *expr = lit(ScalarValue::try_from(arr_val_type.clone())?);
+                    }
+                }
+            }
+            Some(data_type) => {
+                for expr in expressions.iter_mut() {
+                    if expr.get_type(schema)? == DataType::Null {
+                        *expr = lit(ScalarValue::try_from(data_type.clone())?);
+                    }
+                }
+            }
+            None => {}
+        }
+        Ok(expressions)
+    } else {
+        Ok(expressions)
+    }
 }
 
 /// Cast `expr` to the specified type, if possible

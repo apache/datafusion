@@ -984,6 +984,16 @@ select list_push_back(make_array(1, 2, 3), 4), list_push_back(make_array(1.0, 2.
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
+query ?
+select array_append([1, 2, 3], null);
+----
+[1, 2, 3, ]
+
+query ?
+select array_append([1, 2, null, 4], 5);
+----
+[1, 2, , 4, 5]
+
 # array_append with columns #1
 query ?
 select array_append(column1, column2) from arrays_values;
@@ -1067,6 +1077,11 @@ query ???
 select list_push_front(1, make_array(2, 3, 4)), list_push_front(1.0, make_array(2.0, 3.0, 4.0)), list_push_front('h', make_array('e', 'l', 'l', 'o'));
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+query ?
+select array_prepend(null, make_array(1, 2, 3));
+----
+[, 1, 2, 3]
 
 # array_prepend with columns #1
 query ?
