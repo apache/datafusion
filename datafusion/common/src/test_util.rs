@@ -75,7 +75,7 @@ macro_rules! assert_not_contains {
 ///
 /// Example:
 /// ```
-/// let testdata = datafusion::test_util::arrow_test_data();
+/// let testdata = datafusion_common::test_util::arrow_test_data();
 /// let csvdata = format!("{}/csv/aggregate_test_100.csv", testdata);
 /// assert!(std::path::PathBuf::from(csvdata).exists());
 /// ```
@@ -97,7 +97,7 @@ pub fn arrow_test_data() -> String {
 ///
 /// Example:
 /// ```
-/// let testdata = datafusion::test_util::parquet_test_data();
+/// let testdata = datafusion_common::test_util::parquet_test_data();
 /// let filename = format!("{}/binary.parquet", testdata);
 /// assert!(std::path::PathBuf::from(filename).exists());
 /// ```
