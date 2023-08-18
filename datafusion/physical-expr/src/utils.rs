@@ -20,7 +20,9 @@ use crate::equivalence::{
     OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
+use crate::{
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
@@ -153,6 +155,41 @@ pub fn normalize_expr_with_equivalence_properties(
         .unwrap_or(expr)
 }
 
+/// This function returns the normalized version of `sort_expr` with respect to
+/// `eq_properties`, if possible. Otherwise, it returns its first argument as is.
+/// Note that this simply means returning the head [`PhysicalSortExpr`] in the
+/// given equivalence set.
+fn normalize_sort_expr_with_equivalence_properties(
+    mut sort_expr: PhysicalSortExpr,
+    eq_properties: &[EquivalentClass],
+) -> PhysicalSortExpr {
+    sort_expr.expr =
+        normalize_expr_with_equivalence_properties(sort_expr.expr, eq_properties);
+    sort_expr
+}
+
+/// This function returns the normalized version of every [`PhysicalSortExpr`]
+/// in `sort_exprs` w.r.t. `eq_properties`, if possible. The [`PhysicalSortExpr`]s
+/// for which this is impossible are returned as is. Basically, this function
+/// applies [`normalize_sort_expr_with_equivalence_properties`] to multiple
+/// [`PhysicalSortExpr`]s at once.
+pub fn normalize_sort_exprs_with_equivalence_properties(
+    sort_exprs: LexOrderingRef,
+    eq_properties: &EquivalenceProperties,
+) -> LexOrdering {
+    sort_exprs
+        .iter()
+        .map(|expr| {
+            normalize_sort_expr_with_equivalence_properties(
+                expr.clone(),
+                eq_properties.classes(),
+            )
+        })
+        .collect()
+}
+
+/// This function returns the head [`PhysicalSortRequirement`] of equivalence set of a [`PhysicalSortRequirement`],
+/// if there is any, otherwise; returns the same [`PhysicalSortRequirement`].
 fn normalize_sort_requirement_with_equivalence_properties(
     mut sort_requirement: PhysicalSortRequirement,
     eq_properties: &[EquivalentClass],
@@ -220,6 +257,34 @@ pub fn normalize_sort_exprs(
     );
     let normalized_exprs = PhysicalSortRequirement::to_sort_exprs(normalized_exprs);
     collapse_vec(normalized_exprs)
+}
+
+/// This function "normalizes" its argument `oeq_classes` by making sure that
+/// it only refers to representative (i.e. head) entries in the given equivlance
+/// properties (`eq_properties`).
+pub fn normalize_ordering_equivalence_classes(
+    oeq_classes: &[OrderingEquivalentClass],
+    eq_properties: &EquivalenceProperties,
+) -> Vec<OrderingEquivalentClass> {
+    oeq_classes
+        .iter()
+        .map(|class| {
+            let head = normalize_sort_exprs_with_equivalence_properties(
+                class.head(),
+                eq_properties,
+            );
+
+            let others = class
+                .others()
+                .iter()
+                .map(|other| {
+                    normalize_sort_exprs_with_equivalence_properties(other, eq_properties)
+                })
+                .collect();
+
+            EquivalentClass::new(head, others)
+        })
+        .collect()
 }
 
 /// Transform `sort_reqs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`

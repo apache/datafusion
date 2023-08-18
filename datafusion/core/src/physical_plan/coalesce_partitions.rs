@@ -125,9 +125,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
         let input_partitions = self.input.output_partitioning().partition_count();
         match input_partitions {
-            0 => Err(DataFusionError::Internal(
-                "CoalescePartitionsExec requires at least one input partition".to_owned(),
-            )),
+            0 => internal_err!(
+                "CoalescePartitionsExec requires at least one input partition"
+            ),
             1 => {
                 // bypass any threading / metrics if there is a single partition
                 self.input.execute(0, context)

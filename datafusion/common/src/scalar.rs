@@ -700,7 +700,7 @@ macro_rules! primitive_right {
     };
     ($TERM:expr, /, $SCALAR:ident) => {
         internal_err!(
-            "Can not divide an uninitialized value to a non-floating point value",
+            "Can not divide an uninitialized value to a non-floating point value"
         )
     };
     ($TERM:expr, &, $SCALAR:ident) => {
@@ -722,11 +722,10 @@ macro_rules! primitive_right {
 
 macro_rules! unsigned_subtraction_error {
     ($SCALAR:expr) => {{
-        let msg = format!(
+        _internal_err!(
             "Can not subtract a {} value from an uninitialized value",
             $SCALAR
-        );
-        Err(DataFusionError::Internal(msg))
+        )
     }};
 }
 
@@ -1404,9 +1403,7 @@ where
         DT_MODE => add_day_time(prior, interval as i64, sign),
         MDN_MODE => add_m_d_nano(prior, interval, sign),
         _ => {
-            return Err(DataFusionError::Internal(
-                "Undefined interval mode for interval calculations".to_string(),
-            ));
+            return _internal_err!("Undefined interval mode for interval calculations");
         }
     })
 }
@@ -2241,9 +2238,9 @@ impl ScalarValue {
         // figure out the type based on the first element
         let data_type = match scalars.peek() {
             None => {
-                return Err(DataFusionError::Internal(
-                    "Empty iterator passed to ScalarValue::iter_to_array".to_string(),
-                ));
+                return _internal_err!(
+                    "Empty iterator passed to ScalarValue::iter_to_array"
+                );
             }
             Some(sv) => sv.get_datatype(),
         };
@@ -3062,9 +3059,7 @@ impl ScalarValue {
                     Ok(ScalarValue::Decimal256(Some(value), precision, scale))
                 }
             }
-            _ => Err(DataFusionError::Internal(
-                "Unsupported decimal type".to_string(),
-            )),
+            _ => _internal_err!("Unsupported decimal type"),
         }
     }
 

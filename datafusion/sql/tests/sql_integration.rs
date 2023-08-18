@@ -427,7 +427,7 @@ fn plan_update() {
     let plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = Int64(1)
+    Filter: person.id = Int64(1)
       TableScan: person
       "#
     .trim();
@@ -3886,7 +3886,7 @@ fn test_prepare_statement_update_infer() {
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = $2
+    Filter: person.id = $2
       TableScan: person
         "#
         .trim();
@@ -3906,7 +3906,7 @@ Dml: op=[Update] table=[person]
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = UInt32(1)
+    Filter: person.id = UInt32(1)
       TableScan: person
         "#
         .trim();

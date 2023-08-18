@@ -126,9 +126,9 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => self.$field_name.set(rem, value),
                     )*
-                    _ => Err(DataFusionError::Internal(
-                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
-                    ))
+                    _ => _internal_err!(
+                        "Config value \"{}\" not found on {}", key, stringify!($struct_name)
+                    )
                 }
             }
 

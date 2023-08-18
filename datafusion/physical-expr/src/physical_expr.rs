@@ -23,7 +23,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use std::any::Any;
@@ -145,9 +145,7 @@ pub fn with_new_children_if_necessary(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let old_children = expr.children();
     if children.len() != old_children.len() {
-        Err(DataFusionError::Internal(
-            "PhysicalExpr: Wrong number of children".to_string(),
-        ))
+        internal_err!("PhysicalExpr: Wrong number of children")
     } else if children.is_empty()
         || children
             .iter()

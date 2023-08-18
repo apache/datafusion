@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion SQL Parser based on [`sqlparser`]
+//! [`DFParser`]: DataFusion SQL Parser based on [`sqlparser`]
 
 use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::ast::{OrderByExpr, Query, Value};
@@ -218,9 +218,13 @@ pub struct DescribeTableStmt {
     pub table_name: ObjectName,
 }
 
-/// DataFusion Statement representations.
+/// DataFusion SQL Statement.
 ///
-/// Tokens parsed by [`DFParser`] are converted into these values.
+/// This can either be a [`Statement`] from [`sqlparser`] from a
+/// standard SQL dialect, or a DataFusion extension such as `CREATE
+/// EXTERAL TABLE`. See [`DFParser`] for more information.
+///
+/// [`Statement`]: sqlparser::ast::Statement
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     /// ANSI SQL AST node (from sqlparser-rs)
@@ -249,8 +253,13 @@ impl fmt::Display for Statement {
 
 /// Datafusion1 SQL Parser based on [`sqlparser`]
 ///
-/// This parser handles DataFusion specific statements, delegating to
-/// [`Parser`](sqlparser::parser::Parser) for other SQL statements.
+/// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s
+/// [`Parser`](sqlparser::parser::Parser).
+///
+/// DataFusion mostly follows existing SQL dialects via
+/// `sqlparser`. However, certain statements such as `COPY` and
+/// `CREATE EXTERNAL TABLE` have special syntax in DataFusion. See
+/// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
     parser: Parser<'a>,
 }
