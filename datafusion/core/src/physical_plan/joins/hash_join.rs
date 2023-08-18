@@ -966,9 +966,9 @@ pub fn equal_rows(
                     equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             }
@@ -980,9 +980,9 @@ pub fn equal_rows(
                     equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             }
@@ -1049,16 +1049,16 @@ pub fn equal_rows(
                             null_equals_null
                         )
                     } else {
-                        err = Some(Err(DataFusionError::Internal(
-                            "Inconsistent Decimal data type in hasher, the scale should be same".to_string(),
-                        )));
+                        err = Some(internal_err!(
+                            "Inconsistent Decimal data type in hasher, the scale should be same"
+                        ));
                         false
                     }
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             },
@@ -1148,9 +1148,9 @@ pub fn equal_rows(
                         }
                         _ => {
                             // should not happen
-                            err = Some(Err(DataFusionError::Internal(
-                                "Unsupported data type in hasher".to_string(),
-                            )));
+                            err = Some(internal_err!(
+                                "Unsupported data type in hasher"
+                            ));
                             false
                         }
                     }

@@ -741,9 +741,7 @@ impl Accumulator for DistinctBitXorAccumulator {
                     }
                 });
             } else {
-                return Err(DataFusionError::Internal(
-                    "Unexpected accumulator state".into(),
-                ));
+                return internal_err!("Unexpected accumulator state");
             }
             Ok(())
         })

@@ -29,6 +29,7 @@ use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
+use datafusion_common::internal_err;
 use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
@@ -331,13 +332,11 @@ pub(crate) async fn stateless_serialize_and_write_files(
     per_thread_output: bool,
 ) -> Result<u64> {
     if !per_thread_output && (serializers.len() != 1 || writers.len() != 1) {
-        return Err(DataFusionError::Internal(
-            "per_thread_output is false, but got more than 1 writer!".into(),
-        ));
+        return internal_err!("per_thread_output is false, but got more than 1 writer!");
     }
     let num_partitions = data.len();
     if per_thread_output && (num_partitions != writers.len()) {
-        return Err(DataFusionError::Internal("per_thread_output is true, but did not get 1 writer for each output partition!".into()));
+        return internal_err!("per_thread_output is true, but did not get 1 writer for each output partition!");
     }
     let mut row_count = 0;
     // Map errors to DatafusionError.

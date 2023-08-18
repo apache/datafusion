@@ -211,7 +211,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+                return internal_err!("Rows should be Uint")
             }
         };
         let end = match window_frame.end_bound {
@@ -236,7 +236,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+                return internal_err!("Rows should be Uint")
             }
         };
         Ok(Range { start, end })
@@ -522,10 +522,9 @@ impl WindowFrameStateGroups {
             if let ScalarValue::UInt64(Some(value)) = delta {
                 *value as usize
             } else {
-                return Err(DataFusionError::Internal(
+                return internal_err!(
                     "Unexpectedly got a non-UInt64 value in a GROUPS mode window frame"
-                        .to_string(),
-                ));
+                );
             }
         } else {
             0

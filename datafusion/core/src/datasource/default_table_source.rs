@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::datasource::TableProvider;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraints, DataFusionError};
+use datafusion_common::{internal_err, Constraints, DataFusionError};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 
 /// DataFusion default table source, wrapping TableProvider
@@ -91,8 +91,6 @@ pub fn source_as_provider(
         .downcast_ref::<DefaultTableSource>()
     {
         Some(source) => Ok(source.table_provider.clone()),
-        _ => Err(DataFusionError::Internal(
-            "TableSource was not DefaultTableSource".to_string(),
-        )),
+        _ => internal_err!("TableSource was not DefaultTableSource"),
     }
 }
