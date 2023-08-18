@@ -16,7 +16,6 @@
 // under the License.
 
 mod kernels;
-mod kernels_arrow;
 
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
@@ -36,14 +35,6 @@ use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
-};
-use kernels_arrow::{
-    is_distinct_from, is_distinct_from_binary, is_distinct_from_bool,
-    is_distinct_from_decimal, is_distinct_from_f32, is_distinct_from_f64,
-    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
-    is_not_distinct_from_binary, is_not_distinct_from_bool, is_not_distinct_from_decimal,
-    is_not_distinct_from_f32, is_not_distinct_from_f64, is_not_distinct_from_null,
-    is_not_distinct_from_utf8,
 };
 
 use crate::array_expressions::{
@@ -128,56 +119,6 @@ impl std::fmt::Display for BinaryExpr {
     }
 }
 
-macro_rules! compute_decimal_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT.as_any().downcast_ref::<$DT>().unwrap();
-        let rr = $RIGHT.as_any().downcast_ref::<$DT>().unwrap();
-        Ok(Arc::new(paste::expr! {[<$OP _decimal>]}(ll, rr)?))
-    }};
-}
-
-macro_rules! compute_f32_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new(paste::expr! {[<$OP _f32>]}(ll, rr)?))
-    }};
-}
-
-macro_rules! compute_f64_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new(paste::expr! {[<$OP _f64>]}(ll, rr)?))
-    }};
-}
-
-macro_rules! compute_null_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new(paste::expr! {[<$OP _null>]}(&ll, &rr)?))
-    }};
-}
-
 /// Invoke a compute kernel on a pair of binary data arrays
 macro_rules! compute_utf8_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
@@ -190,21 +131,6 @@ macro_rules! compute_utf8_op {
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
-    }};
-}
-
-/// Invoke a compute kernel on a pair of binary data arrays
-macro_rules! compute_binary_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new(paste::expr! {[<$OP _binary>]}(&ll, &rr)?))
     }};
 }
 
@@ -234,54 +160,6 @@ macro_rules! compute_utf8_op_scalar {
     }};
 }
 
-/// Invoke a bool compute kernel on array(s)
-macro_rules! compute_bool_op {
-    // invoke binary operator
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new(paste::expr! {[<$OP _bool>]}(&ll, &rr)?))
-    }};
-    // invoke unary operator
-    ($OPERAND:expr, $OP:ident, $DT:ident) => {{
-        let operand = $OPERAND
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast operant array");
-        Ok(Arc::new(paste::expr! {[<$OP _bool>]}(&operand)?))
-    }};
-}
-
-/// Invoke a compute kernel on array(s)
-macro_rules! compute_op {
-    // invoke binary operator
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast left side array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast right side array");
-        Ok(Arc::new($OP(&ll, &rr)?))
-    }};
-    // invoke unary operator
-    ($OPERAND:expr, $OP:ident, $DT:ident) => {{
-        let operand = $OPERAND
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
-        Ok(Arc::new($OP(&operand)?))
-    }};
-}
-
 macro_rules! binary_string_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
@@ -289,77 +167,6 @@ macro_rules! binary_string_array_op {
             DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on string arrays",
-                other, stringify!($OP)
-            ))),
-        }
-    }};
-}
-
-/// The binary_array_op macro includes types that extend beyond the primitive,
-/// such as Utf8 strings.
-#[macro_export]
-macro_rules! binary_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        match $LEFT.data_type() {
-            DataType::Null => compute_null_op!($LEFT, $RIGHT, $OP, NullArray),
-            DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
-            DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
-            DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
-            DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
-            DataType::Int64 => compute_op!($LEFT, $RIGHT, $OP, Int64Array),
-            DataType::UInt8 => compute_op!($LEFT, $RIGHT, $OP, UInt8Array),
-            DataType::UInt16 => compute_op!($LEFT, $RIGHT, $OP, UInt16Array),
-            DataType::UInt32 => compute_op!($LEFT, $RIGHT, $OP, UInt32Array),
-            DataType::UInt64 => compute_op!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_f32_op!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_f64_op!($LEFT, $RIGHT, $OP, Float64Array),
-            DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::Binary => compute_binary_op!($LEFT, $RIGHT, $OP, BinaryArray),
-            DataType::LargeBinary => compute_binary_op!($LEFT, $RIGHT, $OP, LargeBinaryArray),
-            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
-
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                compute_op!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                compute_op!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
-            }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                compute_op!($LEFT, $RIGHT, $OP, TimestampSecondArray)
-            }
-            DataType::Date32 => {
-                compute_op!($LEFT, $RIGHT, $OP, Date32Array)
-            }
-            DataType::Date64 => {
-                compute_op!($LEFT, $RIGHT, $OP, Date64Array)
-            }
-            DataType::Time32(TimeUnit::Second) => {
-                compute_op!($LEFT, $RIGHT, $OP, Time32SecondArray)
-            }
-            DataType::Time32(TimeUnit::Millisecond) => {
-                compute_op!($LEFT, $RIGHT, $OP, Time32MillisecondArray)
-            }
-            DataType::Time64(TimeUnit::Microsecond) => {
-                compute_op!($LEFT, $RIGHT, $OP, Time64MicrosecondArray)
-            }
-            DataType::Time64(TimeUnit::Nanosecond) => {
-                compute_op!($LEFT, $RIGHT, $OP, Time64NanosecondArray)
-            }
-            DataType::Interval(IntervalUnit::YearMonth) => {
-                compute_op!($LEFT, $RIGHT, $OP, IntervalYearMonthArray)
-            }
-            DataType::Interval(IntervalUnit::DayTime) => {
-                compute_op!($LEFT, $RIGHT, $OP, IntervalDayTimeArray)
-            }
-            DataType::Interval(IntervalUnit::MonthDayNano) => {
-                compute_op!($LEFT, $RIGHT, $OP, IntervalMonthDayNanoArray)
-            }
-            DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
-            other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for binary operation '{}' on dyn arrays",
                 other, stringify!($OP)
             ))),
         }
@@ -632,8 +439,11 @@ fn to_result_type_array(
 impl BinaryExpr {
     fn is_datum_operator(&self) -> bool {
         use Operator::*;
-        self.op.is_comparison_operator()
-            || matches!(self.op, Lt | LtEq | Gt | GtEq | Eq | NotEq)
+        self.op.is_numerical_operators()
+            || matches!(
+                self.op,
+                Lt | LtEq | Gt | GtEq | Eq | NotEq | IsDistinctFrom | IsNotDistinctFrom
+            )
     }
 
     /// Evaluate the expression using [`Datum`]
@@ -655,6 +465,8 @@ impl BinaryExpr {
             Operator::Gt => Arc::new(gt(left, right)?),
             Operator::LtEq => Arc::new(lt_eq(left, right)?),
             Operator::GtEq => Arc::new(gt_eq(left, right)?),
+            Operator::IsDistinctFrom => Arc::new(distinct(left, right)?),
+            Operator::IsNotDistinctFrom => Arc::new(not_distinct(left, right)?),
             _ => unreachable!(),
         };
 
@@ -723,19 +535,8 @@ impl BinaryExpr {
     ) -> Result<ArrayRef> {
         use Operator::*;
         match &self.op {
-            IsDistinctFrom => {
-                match (left_data_type, right_data_type) {
-                    // exchange lhs and rhs when lhs is Null, since `binary_array_op` is
-                    // always try to down cast array according to $LEFT expression.
-                    (DataType::Null, _) => {
-                        binary_array_op!(right, left, is_distinct_from)
-                    }
-                    _ => binary_array_op!(left, right, is_distinct_from),
-                }
-            }
-            IsNotDistinctFrom => binary_array_op!(left, right, is_not_distinct_from),
-            Lt | LtEq | Gt | GtEq | Eq | NotEq | Plus | Minus | Multiply | Divide
-            | Modulo => unreachable!(),
+            IsDistinctFrom | IsNotDistinctFrom | Lt | LtEq | Gt | GtEq | Eq | NotEq
+            | Plus | Minus | Multiply | Divide | Modulo => unreachable!(),
             And => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)

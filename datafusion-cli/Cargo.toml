@@ -51,8 +51,8 @@ predicates = "3.0"
 rstest = "0.17"
 
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "2c487d0eba33569086887d434d971129a77db4eb" }
+arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "d55bf0c4dfff8758b517b2a8a29882f1b27f6e8a" }
+arrow-array = { git = "https://github.com/tustvold/arrow-rs.git", rev = "d55bf0c4dfff8758b517b2a8a29882f1b27f6e8a" }
+arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "d55bf0c4dfff8758b517b2a8a29882f1b27f6e8a" }
+arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "d55bf0c4dfff8758b517b2a8a29882f1b27f6e8a" }
+parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "d55bf0c4dfff8758b517b2a8a29882f1b27f6e8a" }
