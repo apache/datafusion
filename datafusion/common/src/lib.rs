@@ -23,6 +23,7 @@ pub mod delta;
 mod dfschema;
 pub mod display;
 mod error;
+pub mod file_type;
 pub mod format;
 mod functional_dependencies;
 mod join_type;
@@ -40,6 +41,9 @@ pub mod utils;
 
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema};
+pub use file_type::{FileType, FileCompressionType, GetExt, DEFAULT_ARROW_EXTENSION,
+    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+    DEFAULT_AVRO_EXTENSION};
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,

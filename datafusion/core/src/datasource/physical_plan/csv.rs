@@ -17,7 +17,7 @@
 
 //! Execution plan for reading CSV files
 
-use crate::datasource::file_format::file_type::FileCompressionType;
+use datafusion_common::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -650,7 +650,7 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::file_type::FileType;
+    use datafusion_common::FileType;
     use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};

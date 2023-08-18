@@ -23,12 +23,10 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{plan_err, DataFusionError};
 
-use crate::datasource::file_format::arrow::{ArrowFormat, DEFAULT_ARROW_EXTENSION};
-use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
-use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
-use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
-use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use crate::datasource::file_format::arrow::ArrowFormat;
+use datafusion_common::{FileCompressionType, DEFAULT_ARROW_EXTENSION, 
+    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+    DEFAULT_AVRO_EXTENSION};
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::{ListingTableInsertMode, ListingTableUrl};
 use crate::datasource::{

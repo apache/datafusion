@@ -17,10 +17,10 @@
 
 use std::{sync::Arc, vec};
 
+use datafusion_common::FileCompressionType;
 use datafusion::{
     assert_batches_eq,
     datasource::{
-        file_format::file_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
         physical_plan::{CsvConfig, CsvOpener, FileScanConfig, FileStream},

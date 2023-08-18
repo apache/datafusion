@@ -38,7 +38,8 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_expr::dml::{CopyTo, OutputFileFormat};
+use datafusion_common::FileType;
+use datafusion_expr::dml::CopyTo;
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -584,11 +585,11 @@ impl DefaultPhysicalPlanner {
                     // TODO: implement statement level overrides for each file type
                     // E.g. CsvFormat::from_options(options)
                     let sink_format: Arc<dyn FileFormat> = match file_format {
-                        OutputFileFormat::CSV => Arc::new(CsvFormat::default()),
-                        OutputFileFormat::PARQUET => Arc::new(ParquetFormat::default()),
-                        OutputFileFormat::JSON => Arc::new(JsonFormat::default()),
-                        OutputFileFormat::AVRO => Arc::new(AvroFormat {} ),
-                        OutputFileFormat::ARROW => Arc::new(ArrowFormat {}),
+                        FileType::CSV => Arc::new(CsvFormat::default()),
+                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
+                        FileType::JSON => Arc::new(JsonFormat::default()),
+                        FileType::AVRO => Arc::new(AvroFormat {} ),
+                        FileType::ARROW => Arc::new(ArrowFormat {}),
                     };
 
                     sink_format.create_writer_physical_plan(input_exec, session_state, config).await

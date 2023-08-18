@@ -19,10 +19,9 @@ use super::get_query_sql;
 use crate::{BenchmarkRun, CommonOpt};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
-use datafusion::datasource::file_format::csv::{CsvFormat, DEFAULT_CSV_EXTENSION};
-use datafusion::datasource::file_format::parquet::{
-    ParquetFormat, DEFAULT_PARQUET_EXTENSION,
-};
+use datafusion_common::{DEFAULT_PARQUET_EXTENSION, DEFAULT_CSV_EXTENSION};
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,

@@ -34,8 +34,6 @@ use std::any::Any;
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
-/// The default file extension of arrow files
-pub const DEFAULT_ARROW_EXTENSION: &str = ".arrow";
 /// Arrow `FileFormat` implementation.
 #[derive(Default, Debug)]
 pub struct ArrowFormat;

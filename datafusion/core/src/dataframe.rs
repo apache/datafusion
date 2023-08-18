@@ -24,8 +24,7 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, SchemaError, UnnestOptions};
-use datafusion_expr::dml::OutputFileFormat;
+use datafusion_common::{DataFusionError, SchemaError, UnnestOptions, FileType};
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -999,7 +998,7 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            OutputFileFormat::CSV,
+            FileType::CSV,
             true,
             // TODO implement options
             vec![],
@@ -1017,7 +1016,7 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            OutputFileFormat::PARQUET,
+            FileType::PARQUET,
             true,
             // TODO implement options
             vec![],
@@ -1034,7 +1033,7 @@ impl DataFrame {
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
-            OutputFileFormat::JSON,
+            FileType::JSON,
             true,
             // TODO implement options
             vec![],

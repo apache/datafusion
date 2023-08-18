@@ -17,7 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::dml::{CopyTo, OutputFileFormat};
+use crate::dml::CopyTo;
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -46,7 +46,7 @@ use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
-    ToDFSchema,
+    ToDFSchema, FileType
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -237,7 +237,7 @@ impl LogicalPlanBuilder {
     pub fn copy_to(
         input: LogicalPlan,
         output_url: String,
-        file_format: OutputFileFormat,
+        file_format: FileType,
         per_thread_output: bool,
         options: Vec<(String, String)>,
     ) -> Result<Self> {

@@ -17,12 +17,6 @@
 
 //! File type abstraction
 
-use crate::common::internal_err;
-use crate::datasource::file_format::arrow::DEFAULT_ARROW_EXTENSION;
-use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
-use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
-use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
-use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use crate::error::{DataFusionError, Result};
 #[cfg(feature = "compression")]
 use async_compression::tokio::bufread::{
@@ -37,7 +31,7 @@ use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEnc
 use bytes::Bytes;
 #[cfg(feature = "compression")]
 use bzip2::read::MultiBzDecoder;
-use datafusion_common::parsers::CompressionTypeVariant;
+use crate::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use flate2::read::MultiGzDecoder;
 
@@ -45,6 +39,8 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
+use core::fmt;
+use std::fmt::Display;
 use std::str::FromStr;
 use tokio::io::AsyncWrite;
 #[cfg(feature = "compression")]
@@ -54,6 +50,17 @@ use xz2::read::XzDecoder;
 #[cfg(feature = "compression")]
 use zstd::Decoder as ZstdDecoder;
 use CompressionTypeVariant::*;
+
+/// The default file extension of arrow files
+pub const DEFAULT_ARROW_EXTENSION: &str = ".arrow";
+/// The default file extension of avro files
+pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
+/// The default file extension of csv files
+pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
+/// The default file extension of json files
+pub const DEFAULT_JSON_EXTENSION: &str = ".json";
+/// The default file extension of parquet files
+pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 
 /// Define each `FileType`/`FileCompressionType`'s extension
 pub trait GetExt {
@@ -238,7 +245,7 @@ impl FileCompressionType {
 }
 
 /// Readable file type
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FileType {
     /// Apache Arrow file
     ARROW,
@@ -263,6 +270,20 @@ impl GetExt for FileType {
         }
     }
 }
+
+impl Display for FileType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let out = match self {
+            FileType::CSV => "csv",
+            FileType::JSON => "json",
+            FileType::PARQUET => "parquet",
+            FileType::AVRO => "avro",
+            FileType::ARROW => "arrow",
+        };
+        write!(f, "{}", out)
+    }
+}
+
 
 impl FromStr for FileType {
     type Err = DataFusionError;
@@ -291,9 +312,9 @@ impl FileType {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
             FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
-                _ => internal_err!(
-                    "FileCompressionType can be specified for CSV/JSON FileType."
-                ),
+                _ => Err(DataFusionError::Internal(
+                    "FileCompressionType can be specified for CSV/JSON FileType.".into()
+                )),
             },
         }
     }
@@ -301,7 +322,7 @@ impl FileType {
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
+    use crate::file_type::{FileCompressionType, FileType};
     use crate::error::DataFusionError;
     use std::str::FromStr;
 

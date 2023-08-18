@@ -33,7 +33,7 @@ use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
+use datafusion_common::{FileCompressionType, FileType};
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
     file_format::{
@@ -963,7 +963,7 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::file_type::GetExt;
+    use datafusion_common::GetExt;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;

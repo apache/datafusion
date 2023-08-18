@@ -16,7 +16,7 @@
 // under the License.
 
 //! Execution plan for reading line-delimited JSON files
-use crate::datasource::file_format::file_type::FileCompressionType;
+use datafusion_common::FileCompressionType;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -320,7 +320,7 @@ mod tests {
     use object_store::local::LocalFileSystem;
 
     use crate::assert_batches_eq;
-    use crate::datasource::file_format::file_type::FileType;
+    use datafusion_common::FileType;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
