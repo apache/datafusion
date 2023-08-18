@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL Query Planner (produces logical plan from SQL AST)
+//! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
