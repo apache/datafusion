@@ -966,11 +966,18 @@ fn add_roundrobin_on_top(
 /// Adds a hash repartition operator:
 /// - to increase parallelism, and/or
 /// - to satisfy requirements of the subsequent operators.
+/// Repartition(Hash) is added on top of operator `input`.
 fn add_hash_on_top(
     input: Arc<dyn ExecutionPlan>,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    // Repartition(Hash) will have `n_target` partitions at the output.
     n_target: usize,
+    // Stores executors starting from Repartition(RoundRobin) until
+    // current executor. When Repartition(Hash) is added, `repartition_onward`
+    // is updated such that it stores connection from Repartition(RoundRobin)
+    // until Repartition(Hash).
     repartition_onward: &mut Option<ExecTree>,
+    // If `true` SortPreservingRepartitionExec(Hash) is used.
     should_preserve_order: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Since hashing benefits from partitioning, add a round-robin repartition
