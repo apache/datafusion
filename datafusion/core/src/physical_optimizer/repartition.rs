@@ -48,6 +48,7 @@ mod tests {
     use crate::physical_plan::ExecutionPlan;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
 
+    use crate::physical_optimizer::test_utils::repartition_exec;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::config::ConfigOptions;
@@ -1039,6 +1040,24 @@ mod tests {
 
         assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
         assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn remove_redundant_roundrobins() -> Result<()> {
+        let input = parquet_exec();
+        let repartition = repartition_exec(repartition_exec(input));
+        let physical_plan = repartition_exec(filter_exec(repartition));
+
+        let expected = &[
+            "FilterExec: c1@0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true, 2, true, 10);
+        assert_optimized!(expected, physical_plan, false, 2, true, 10);
+
         Ok(())
     }
 
