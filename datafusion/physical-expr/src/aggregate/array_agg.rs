@@ -23,7 +23,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -142,9 +142,7 @@ impl Accumulator for ArrayAggAccumulator {
                 self.values.extend(values);
                 Ok(())
             } else {
-                Err(DataFusionError::Internal(
-                    "array_agg state must be list!".into(),
-                ))
+                internal_err!("array_agg state must be list!")
             }
         })
     }

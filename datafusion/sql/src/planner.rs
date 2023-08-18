@@ -22,6 +22,7 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::field_not_found;
+use datafusion_common::internal_err;
 use datafusion_expr::WindowUDF;
 use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
@@ -284,7 +285,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map_err(|_: DataFusionError| {
                     field_not_found(col.relation.clone(), col.name.as_str(), schema)
                 }),
-                _ => Err(DataFusionError::Internal("Not a column".to_string())),
+                _ => internal_err!("Not a column"),
             })
     }
 

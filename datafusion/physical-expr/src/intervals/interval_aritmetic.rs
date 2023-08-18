@@ -379,9 +379,7 @@ impl Interval {
                     upper: IntervalBound::new(ScalarValue::Boolean(Some(upper)), false),
                 })
             }
-            _ => Err(DataFusionError::Internal(
-                "Incompatible types for logical conjunction".to_string(),
-            )),
+            _ => internal_err!("Incompatible types for logical conjunction"),
         }
     }
 

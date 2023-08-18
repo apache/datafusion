@@ -249,9 +249,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             ),
                         )?))
                     }
-                    _ => Err(DataFusionError::Internal(
-                        "Invalid partitioning scheme".to_owned(),
-                    )),
+                    _ => internal_err!("Invalid partitioning scheme"),
                 }
             }
             PhysicalPlanType::GlobalLimit(limit) => {
@@ -331,9 +329,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     &physical_schema,
                                 )?)
                             }
-                            _ => Err(DataFusionError::Internal(
-                                "Invalid expression for WindowAggrExec".to_string(),
-                            )),
+                            _ => internal_err!("Invalid expression for WindowAggrExec"),
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -485,10 +481,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     proto_error("Invalid AggregateExpr, missing aggregate_function")
                                 })
                             }
-                            _ => Err(DataFusionError::Internal(
+                            _ => internal_err!(
                                 "Invalid aggregate expression for AggregateExec"
-                                    .to_string(),
-                            )),
+                            ),
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;

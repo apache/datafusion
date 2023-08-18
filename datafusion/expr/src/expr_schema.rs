@@ -27,7 +27,8 @@ use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema, Result,
+    internal_err, plan_err, Column, DFField, DFSchema, DataFusionError, ExprSchema,
+    Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -149,10 +150,9 @@ impl ExprSchemable for Expr {
                 // Wildcard do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            Expr::QualifiedWildcard { .. } => internal_err!(
                 "QualifiedWildcard expressions are not valid in a logical query plan"
-                    .to_owned(),
-            )),
+            ),
             Expr::GroupingSet(_) => {
                 // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -259,13 +259,12 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            Expr::Wildcard => Err(DataFusionError::Internal(
-                "Wildcard expressions are not valid in a logical query plan".to_owned(),
-            )),
-            Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            Expr::Wildcard => internal_err!(
+                "Wildcard expressions are not valid in a logical query plan"
+            ),
+            Expr::QualifiedWildcard { .. } => internal_err!(
                 "QualifiedWildcard expressions are not valid in a logical query plan"
-                    .to_owned(),
-            )),
+            ),
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 field_for_index(expr, field, input_schema).map(|x| x.is_nullable())
             }
@@ -573,7 +572,7 @@ mod tests {
     impl ExprSchema for MockExprSchema {
         fn nullable(&self, _col: &Column) -> Result<bool> {
             if self.error_on_nullable {
-                Err(DataFusionError::Internal("nullable error".into()))
+                internal_err!("nullable error")
             } else {
                 Ok(self.nullable)
             }

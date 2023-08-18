@@ -311,9 +311,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 self.sort_options.clone(),
                 self.null_equals_null,
             )?)),
-            _ => Err(DataFusionError::Internal(
-                "SortMergeJoin wrong number of children".to_string(),
-            )),
+            _ => internal_err!("SortMergeJoin wrong number of children"),
         }
     }
 

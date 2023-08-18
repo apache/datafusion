@@ -497,9 +497,7 @@ fn coerce_window_frame(
                     );
                 }
             } else {
-                return Err(DataFusionError::Internal(
-                    "ORDER BY column cannot be empty".to_string(),
-                ));
+                return internal_err!("ORDER BY column cannot be empty");
             }
         }
         WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,

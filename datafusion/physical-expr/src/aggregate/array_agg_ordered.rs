@@ -33,7 +33,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow_array::{Array, ListArray};
 use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use itertools::izip;
@@ -220,9 +220,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                     partition_values.push(other_values);
                     partition_ordering_values.push(other_ordering_values);
                 } else {
-                    return Err(DataFusionError::Internal(
-                        "ARRAY_AGG state must be list!".into(),
-                    ));
+                    return internal_err!("ARRAY_AGG state must be list!");
                 }
             }
             let sort_options = self

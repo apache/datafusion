@@ -40,7 +40,7 @@ use arrow::{
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_common::Result;
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::{internal_err, plan_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 use futures::stream::Stream;
@@ -326,9 +326,7 @@ impl WindowAggStream {
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         if window_expr[0].partition_by().len() != ordered_partition_by_indices.len() {
-            return Err(DataFusionError::Internal(
-                "All partition by columns should have an ordering".to_string(),
-            ));
+            return internal_err!("All partition by columns should have an ordering");
         }
         Ok(Self {
             schema,
