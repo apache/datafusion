@@ -251,7 +251,7 @@ impl fmt::Display for Statement {
     }
 }
 
-/// Datafusion1 SQL Parser based on [`sqlparser`]
+/// Datafusion SQL Parser based on [`sqlparser`]
 ///
 /// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s
 /// [`Parser`](sqlparser::parser::Parser).
