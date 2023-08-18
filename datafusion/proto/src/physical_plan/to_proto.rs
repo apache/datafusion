@@ -52,7 +52,7 @@ use datafusion::physical_expr::expressions::{GetFieldAccessExpr, GetIndexedField
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
@@ -405,9 +405,7 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 ),
             })
         } else {
-            Err(DataFusionError::Internal(format!(
-                "physical_plan::to_proto() unsupported expression {value:?}"
-            )))
+            internal_err!("physical_plan::to_proto() unsupported expression {value:?}")
         }
     }
 }

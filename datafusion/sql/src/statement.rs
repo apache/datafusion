@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::parser::{
-    CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt, LexOrdering,
-    Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
+    LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -31,6 +31,7 @@ use datafusion_common::{
     DataFusionError, ExprSchema, OwnedTableReference, Result, SchemaReference,
     TableReference, ToDFSchema,
 };
+use datafusion_expr::dml::{CopyTo, OutputFileFormat};
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -55,6 +56,8 @@ use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::plan_err;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 fn ident_to_string(ident: &Ident) -> String {
@@ -377,7 +380,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let _ = into; // optional keyword doesn't change behavior
                 self.insert_to_plan(table_name, columns, source, overwrite)
             }
-
             Statement::Update {
                 table,
                 assignments,
@@ -547,11 +549,71 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }))
     }
 
-    fn copy_to_plan(&self, _statement: CopyToStatement) -> Result<LogicalPlan> {
-        // TODO: implement as part of https://github.com/apache/arrow-datafusion/issues/5654
-        Err(DataFusionError::NotImplemented(
-            "`COPY .. TO ..` statement is not yet supported".to_string(),
-        ))
+    fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
+        // determine if source is table or query and handle accordingly
+        let copy_source = statement.source;
+        let input = match copy_source {
+            CopyToSource::Relation(object_name) => {
+                let table_ref =
+                    self.object_name_to_table_reference(object_name.clone())?;
+                let table_source = self.schema_provider.get_table_provider(table_ref)?;
+                LogicalPlanBuilder::scan(
+                    object_name_to_string(&object_name),
+                    table_source,
+                    None,
+                )?
+                .build()?
+            }
+            CopyToSource::Query(query) => {
+                self.query_to_plan(query, &mut PlannerContext::new())?
+            }
+        };
+
+        // convert options to lowercase strings, check for explicitly set "format" option
+        let mut options = vec![];
+        let mut explicit_format = None;
+        // default behavior is to assume the user is specifying a single file to which
+        // we should output all data regardless of input partitioning.
+        let mut per_thread_output: bool = false;
+        for (key, value) in statement.options {
+            let (k, v) = (key.to_lowercase(), value.to_string().to_lowercase());
+            // check for options important to planning
+            if k == "format" {
+                explicit_format = Some(OutputFileFormat::from_str(&v)?);
+            }
+            if k == "per_thread_output" {
+                per_thread_output = match v.as_str(){
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(DataFusionError::Plan(
+                        format!("Copy to option 'per_thread_output' must be true or false, got {value}")
+                    ))
+                }
+            }
+            options.push((k, v));
+        }
+        let format = match explicit_format {
+            Some(file_format) => file_format,
+            None => {
+                // try to infer file format from file extension
+                let extension: &str = &Path::new(&statement.target)
+                    .extension()
+                    .ok_or(
+                        DataFusionError::Plan("Copy To format not explicitly set and unable to get file extension!".to_string()))?
+                    .to_str()
+                    .ok_or(DataFusionError::Plan("Copy to format not explicitly set and failed to parse file extension!".to_string()))?
+                    .to_lowercase();
+
+                OutputFileFormat::from_str(extension)?
+            }
+        };
+        Ok(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(input),
+            output_url: statement.target,
+            file_format: format,
+            per_thread_output,
+            options,
+        }))
     }
 
     fn build_order_by(
@@ -833,7 +895,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .schema_provider
             .get_table_provider(table_name.clone())?;
         let arrow_schema = (*provider.schema()).clone();
-        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
+            table_name.clone(),
+            &arrow_schema,
+        )?);
         let values = table_schema.fields().iter().map(|f| {
             (
                 f.name().clone(),

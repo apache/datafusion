@@ -332,6 +332,7 @@ mod tests {
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use object_store::chunked::ChunkedStore;
     use rstest::*;
+    use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
     use url::Url;
@@ -700,11 +701,33 @@ mod tests {
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();
 
+        // get name of first part
+        let paths = fs::read_dir(&out_dir).unwrap();
+        let mut part_0_name: String = "".to_owned();
+        for path in paths {
+            let name = path
+                .unwrap()
+                .path()
+                .file_name()
+                .expect("Should be a file name")
+                .to_str()
+                .expect("Should be a str")
+                .to_owned();
+            if name.ends_with("_0.json") {
+                part_0_name = name;
+                break;
+            }
+        }
+
+        if part_0_name.is_empty() {
+            panic!("Did not find part_0 in json output files!")
+        }
+
         // register each partition as well as the top level dir
         let json_read_option = NdJsonReadOptions::default();
         ctx.register_json(
             "part0",
-            &format!("{out_dir}/part-0.json"),
+            &format!("{out_dir}/{part_0_name}"),
             json_read_option.clone(),
         )
         .await?;

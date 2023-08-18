@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
     // context will by default have MemoryCatalogList
     ctx.register_catalog_list(catlist.clone());
 
-    // intitialize our catalog and schemas
+    // initialize our catalog and schemas
     let catalog = DirCatalog::new();
     let parquet_schema = DirSchema::create(
         &state,

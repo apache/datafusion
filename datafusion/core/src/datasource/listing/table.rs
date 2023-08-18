@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::{plan_err, project_schema, SchemaExt, ToDFSchema};
+use datafusion_common::{internal_err, plan_err, project_schema, SchemaExt, ToDFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
@@ -195,9 +195,7 @@ impl ListingTableConfig {
                     options: Some(options),
                 })
             }
-            None => Err(DataFusionError::Internal(
-                "No `ListingOptions` set for inferring schema".into(),
-            )),
+            None => internal_err!("No `ListingOptions` set for inferring schema"),
         }
     }
 
@@ -883,6 +881,8 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             writer_mode,
+            // TODO: when listing table is known to be backed by a single file, this should be false
+            per_thread_output: true,
             overwrite,
         };
 

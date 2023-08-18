@@ -18,7 +18,7 @@
 use arrow::array::Array;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// Implements NULLIF(expr1, expr2)
@@ -27,10 +27,10 @@ use datafusion_expr::ColumnarValue;
 ///
 pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but NULLIF takes exactly two args",
-            args.len(),
-        )));
+            args.len()
+        );
     }
 
     let (lhs, rhs) = (&args[0], &args[1]);

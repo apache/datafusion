@@ -35,7 +35,7 @@ use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::insert::{DataSink, InsertExec};
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
@@ -219,7 +219,11 @@ impl TableProvider for MemTable {
             ));
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(InsertExec::new(input, sink, self.schema.clone())))
+        Ok(Arc::new(FileSinkExec::new(
+            input,
+            sink,
+            self.schema.clone(),
+        )))
     }
 }
 

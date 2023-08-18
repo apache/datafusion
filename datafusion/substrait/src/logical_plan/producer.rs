@@ -28,6 +28,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
+use datafusion::common::internal_err;
 use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
@@ -539,11 +540,11 @@ pub fn to_substrait_agg_measure(
         Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
         }
-        _ => Err(DataFusionError::Internal(format!(
+        _ => internal_err!(
             "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
             expr,
             expr.variant_name()
-        ))),
+        ),
     }
 }
 
@@ -960,9 +961,7 @@ pub fn to_substrait_rex(
 fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
     let default_nullability = r#type::Nullability::Required as i32;
     match dt {
-        DataType::Null => Err(DataFusionError::Internal(
-            "Null cast is not valid".to_string(),
-        )),
+        DataType::Null => internal_err!("Null cast is not valid"),
         DataType::Boolean => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Bool(r#type::Boolean {
                 type_variation_reference: DEFAULT_TYPE_REF,

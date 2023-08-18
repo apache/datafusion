@@ -43,6 +43,7 @@ use arrow_array::types::{
     Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int32Type, Int64Type,
     UInt32Type, UInt64Type,
 };
+use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
@@ -292,9 +293,7 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
         DataType::UInt16 => typed_sum_delta_batch!(values, UInt16Array, UInt16),
         DataType::UInt8 => typed_sum_delta_batch!(values, UInt8Array, UInt8),
         e => {
-            return Err(DataFusionError::Internal(format!(
-                "Sum is not expected to receive the type {e:?}"
-            )));
+            return internal_err!("Sum is not expected to receive the type {e:?}");
         }
     })
 }
