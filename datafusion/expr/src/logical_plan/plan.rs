@@ -103,7 +103,7 @@ pub enum LogicalPlan {
     /// `FROM` tables or views.
     TableScan(TableScan),
     /// Produces no rows: An empty relation with an empty schema that
-    /// produces 0 or 1 rows. This is used to implement SQL `SELECT`
+    /// produces 0 or 1 row. This is used to implement SQL `SELECT`
     /// that has no values in the `FROM` clause.
     EmptyRelation(EmptyRelation),
     /// Produces the output of running another query.  This is used to
@@ -124,7 +124,7 @@ pub enum LogicalPlan {
     /// various parts of the plan. This is used to implement SQL `EXPLAIN`.
     Explain(Explain),
     /// Runs the input, and prints annotated physical plan as a string
-    /// with with execution metric. This is used to implement SQL
+    /// with execution metric. This is used to implement SQL
     /// `EXPLAIN ANALYZE`.
     Analyze(Analyze),
     /// Extension operator defined outside of DataFusion. This is used
@@ -134,7 +134,7 @@ pub enum LogicalPlan {
     /// implement SQL `SELECT DISTINCT ...`.
     Distinct(Distinct),
     /// Prepare a statement and find any bind parameters
-    /// (e.g. `?`). This is used to implement SQL prepared statements.
+    /// (e.g. `?`). This is used to implement SQL-prepared statements.
     Prepare(Prepare),
     /// Data Manipulaton Language (DML): Insert / Update / Delete
     Dml(DmlStatement),
@@ -142,7 +142,7 @@ pub enum LogicalPlan {
     Ddl(DdlStatement),
     /// `COPY TO` for writing plan results to files
     Copy(CopyTo),
-    /// Describe the schema of table. This is used to implement the
+    /// Describe the schema of the table. This is used to implement the
     /// SQL `DESCRIBE` command from MySQL.
     DescribeTable(DescribeTable),
     /// Unnest a column that contains a nested list type such as an
