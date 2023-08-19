@@ -62,7 +62,7 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
 ///  (format parquet,
 ///   partitions 16,
 ///   row_group_limit_rows 100000,
-//    row_group_limit_bytes 200000
+///   row_group_limit_bytes 200000
 ///  )
 ///
 /// COPY (SELECT l_orderkey from lineitem) to 'lineitem.parquet';
@@ -176,7 +176,7 @@ impl fmt::Display for CreateExternalTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CREATE EXTERNAL TABLE ")?;
         if self.if_not_exists {
-            write!(f, "IF NOT EXSISTS ")?;
+            write!(f, "IF NOT EXISTS ")?;
         }
         write!(f, "{} ", self.name)?;
         write!(f, "STORED AS {} ", self.file_type)?;
