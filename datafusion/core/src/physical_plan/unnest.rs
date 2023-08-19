@@ -18,17 +18,18 @@
 //! Defines the unnest column plan for unnesting values in a column that contains a list
 //! type, conceptually is like joining each row with all the values in the list column.
 use arrow::array::{
-    new_null_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
-    FixedSizeListArray, Int32Array, LargeListArray, ListArray, PrimitiveArray,
+    Array, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, LargeListArray, ListArray,
+    PrimitiveArray,
 };
 use arrow::compute::kernels;
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNativeTypeOp, DataType, Int32Type, Int64Type, Schema, SchemaRef,
+    ArrowNativeType, DataType, Int32Type, Int64Type, Schema, SchemaRef,
 };
 use arrow::record_batch::RecordBatch;
+use arrow_array::{GenericListArray, OffsetSizeTrait};
 use async_trait::async_trait;
 use datafusion_common::UnnestOptions;
-use datafusion_common::{cast::as_primitive_array, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use futures::Stream;
 use futures::StreamExt;
@@ -156,6 +157,7 @@ impl ExecutionPlan for UnnestExec {
             input,
             schema: self.schema.clone(),
             column: self.column.clone(),
+            options: self.options.clone(),
             num_input_batches: 0,
             num_input_rows: 0,
             num_output_batches: 0,
@@ -177,6 +179,8 @@ struct UnnestStream {
     schema: Arc<Schema>,
     /// The unnest column
     column: Column,
+    /// Options
+    options: UnnestOptions,
     /// number of input batches
     num_input_batches: usize,
     /// number of input rows
@@ -219,7 +223,8 @@ impl UnnestStream {
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
                     let start = Instant::now();
-                    let result = build_batch(&batch, &self.schema, &self.column);
+                    let result =
+                        build_batch(&batch, &self.schema, &self.column, &self.options);
                     self.num_input_batches += 1;
                     self.num_input_rows += batch.num_rows();
                     if let Ok(ref batch) = result {
@@ -250,26 +255,66 @@ fn build_batch(
     batch: &RecordBatch,
     schema: &SchemaRef,
     column: &Column,
+    options: &UnnestOptions,
 ) -> Result<RecordBatch> {
     let list_array = column.evaluate(batch)?.into_array(batch.num_rows());
     match list_array.data_type() {
         DataType::List(_) => {
             let list_array = list_array.as_any().downcast_ref::<ListArray>().unwrap();
-            unnest_batch(batch, schema, column, &list_array)
+            let (unnested_column, take_indicies): (
+                Arc<dyn Array>,
+                PrimitiveArray<Int32Type>,
+            ) = unnest_and_create_take_indicies_generic(
+                &list_array,
+                &list_array.values(),
+                options,
+            )?;
+            batch_from_indices(
+                batch,
+                schema,
+                column.index(),
+                &unnested_column,
+                &take_indicies,
+            )
         }
         DataType::LargeList(_) => {
             let list_array = list_array
                 .as_any()
                 .downcast_ref::<LargeListArray>()
                 .unwrap();
-            unnest_batch(batch, schema, column, &list_array)
+            let (unnested_column, take_indicies): (
+                Arc<dyn Array>,
+                PrimitiveArray<Int64Type>,
+            ) = unnest_and_create_take_indicies_generic(
+                &list_array,
+                &list_array.values(),
+                options,
+            )?;
+            batch_from_indices(
+                batch,
+                schema,
+                column.index(),
+                &unnested_column,
+                &take_indicies,
+            )
         }
         DataType::FixedSizeList(_, _) => {
             let list_array = list_array
                 .as_any()
                 .downcast_ref::<FixedSizeListArray>()
                 .unwrap();
-            unnest_batch(batch, schema, column, list_array)
+            let (unnested_column, take_indicies) = unnest_and_create_take_indicies_fixed(
+                &list_array,
+                &list_array.values(),
+                options,
+            )?;
+            batch_from_indices(
+                batch,
+                schema,
+                column.index(),
+                &unnested_column,
+                &take_indicies,
+            )
         }
         _ => Err(DataFusionError::Execution(format!(
             "Invalid unnest column {column}"
@@ -277,99 +322,148 @@ fn build_batch(
     }
 }
 
-fn unnest_batch<T>(
-    batch: &RecordBatch,
-    schema: &SchemaRef,
-    column: &Column,
-    list_array: &T,
-) -> Result<RecordBatch>
+fn unnest_and_create_take_indicies_generic<T, P>(
+    list_array: &GenericListArray<T>,
+    values: &ArrayRef,
+    options: &UnnestOptions,
+) -> Result<(Arc<dyn Array>, PrimitiveArray<P>)>
 where
-    T: ArrayAccessor<Item = ArrayRef>,
+    T: OffsetSizeTrait,
+    P: ArrowPrimitiveType<Native = T>,
 {
-    // Create an array with the unnested values of the list array, given the list
-    // array:
-    //
-    //   [1], null, [2, 3, 4], null, [5, 6]
-    //
-    // the result array is:
-    //
-    //   1, null, 2, 3, 4, null, 5, 6
-    //
-    let unnested_array = unnest_array(list_array)?;
+    let unnested_array = unnest_generic_list::<T, P>(list_array, values, options)?;
 
-    // Create an array with the lengths of each list value in the nested array.
-    // Given the nested array:
-    //
-    //   [1], null, [2, 3, 4], null, [5, 6]
-    //
-    // the result array is:
-    //
-    //   1, null, 3, null, 2
-    //
-    // Depending on the list type the result may be Int32Array or Int64Array.
-    let list_lengths = list_lengths(list_array)?;
+    let take_indices =
+        create_take_indices_generic(list_array, unnested_array.len(), options);
 
-    // Create the indices for the take kernel and then use those indices to create
-    // the unnested record batch.
-    match list_lengths.data_type() {
-        DataType::Int32 => {
-            let list_lengths = as_primitive_array::<Int32Type>(&list_lengths)?;
-            let indices = create_take_indices(list_lengths, unnested_array.len());
-            batch_from_indices(batch, schema, column.index(), &unnested_array, &indices)
-        }
-        DataType::Int64 => {
-            let list_lengths = as_primitive_array::<Int64Type>(&list_lengths)?;
-            let indices = create_take_indices(list_lengths, unnested_array.len());
-            batch_from_indices(batch, schema, column.index(), &unnested_array, &indices)
-        }
-        dt => Err(DataFusionError::Execution(format!(
-            "Unnest: unsupported indices type {dt}"
-        ))),
+    Ok((unnested_array, take_indices))
+}
+fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
+    list_array: &GenericListArray<T>,
+    values: &ArrayRef,
+    options: &UnnestOptions,
+) -> Result<Arc<dyn Array + 'static>> {
+    if list_array.null_count() == 0 || !options.preserve_nulls {
+        Ok(values.clone())
+    } else {
+        let mut builder =
+            PrimitiveArray::<P>::builder(values.len() + list_array.null_count());
+        let mut take_offset = 0;
+        list_array.iter().for_each(|elem| match elem {
+            Some(array) => {
+                for i in 0..array.len() {
+                    //take_offset + i is always positive
+                    let take_index = P::Native::from_usize(take_offset + i).unwrap();
+                    builder.append_value(take_index);
+                    take_offset += 1;
+                }
+            }
+            None => {
+                builder.append_null();
+            }
+        });
+        Ok(kernels::take::take(&values, &builder.finish(), None)?)
     }
 }
 
-/// Create the indices for the take kernel given an array of list values lengths.
-///
-/// The indices are used to duplicate column elements so that all columns have as
-/// many rows as the unnested array.
-///
-/// Given the nested array:
-///
-/// ```ignore
-/// [1], null, [2, 3, 4], null, [5, 6]
-/// ```
-///
-/// the `list_lengths` array contains the length of each list value:
-///
-/// ```ignore
-/// 1, null,  3, null, 2
-/// ```
-///
-/// the result indices array is:
-///
-/// ```ignore
-/// 0, 1, 2, 2, 2, 3, 4, 4
-/// ```
-///
-/// where a null value count as one element.
-fn create_take_indices<T>(
-    list_lengths: &PrimitiveArray<T>,
-    capacity: usize,
-) -> PrimitiveArray<T>
-where
-    T: ArrowPrimitiveType,
+fn unnest_and_create_take_indicies_fixed(
+    list_array: &FixedSizeListArray,
+    values: &ArrayRef,
+    options: &UnnestOptions,
+) -> Result<(Arc<dyn Array + 'static>, PrimitiveArray<Int32Type>)>
+// Cases to handle : non null array, keep or remove nulls.
 {
-    let mut builder = PrimitiveArray::<T>::builder(capacity);
-    for row in 0..list_lengths.len() {
-        let repeat = if list_lengths.is_null(row) {
-            T::Native::ONE
+    let unnested_array = unnest_fixed_list(list_array, values, options)?;
+
+    let take_indices =
+        create_take_indices_fixed(list_array, unnested_array.len(), options);
+
+    Ok((unnested_array, take_indices))
+}
+
+fn unnest_fixed_list(
+    list_array: &FixedSizeListArray,
+    values: &ArrayRef,
+    options: &UnnestOptions,
+) -> Result<Arc<dyn Array + 'static>> {
+    if list_array.null_count() == 0 {
+        Ok(values.clone())
+    } else {
+        let len_without_nulls =
+            values.len() - list_array.null_count() * list_array.value_length() as usize;
+        let null_count = if options.preserve_nulls {
+            list_array.null_count()
         } else {
-            list_lengths.value(row)
+            0
+        };
+        let mut builder =
+            PrimitiveArray::<Int32Type>::builder(len_without_nulls + null_count);
+        let mut take_offset = 0;
+        let fixed_value_length = list_array.value_length() as usize;
+        list_array.iter().for_each(|elem| match elem {
+            Some(_) => {
+                for i in 0..fixed_value_length {
+                    //take_offset + i is always positive
+                    let take_index =
+                        <Int32Type as ArrowPrimitiveType>::Native::from_usize(
+                            take_offset + i,
+                        )
+                        .unwrap();
+                    builder.append_value(take_index);
+                }
+                take_offset += fixed_value_length;
+            }
+            None => {
+                if options.preserve_nulls {
+                    builder.append_null();
+                }
+                take_offset += fixed_value_length;
+            }
+        });
+        Ok(kernels::take::take(&values, &builder.finish(), None)?)
+    }
+}
+
+fn create_take_indices_generic<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
+    list_array: &GenericListArray<T>,
+    capacity: usize,
+    options: &UnnestOptions,
+) -> PrimitiveArray<P> {
+    let mut builder = PrimitiveArray::<P>::builder(capacity);
+    let null_repeat: usize = if options.preserve_nulls { 0 } else { 1 };
+
+    for row in 0..list_array.len() {
+        let repeat = if list_array.is_null(row) {
+            null_repeat
+        } else {
+            list_array.value(row).len()
         };
 
-        // Both `repeat` and `index` are positive intergers.
-        let repeat = repeat.to_usize().unwrap();
-        let index = T::Native::from_usize(row).unwrap();
+        // `index` is a positive interger.
+        let index = P::Native::from_usize(row).unwrap();
+        (0..repeat).for_each(|_| builder.append_value(index));
+    }
+
+    builder.finish()
+}
+
+fn create_take_indices_fixed(
+    list_array: &FixedSizeListArray,
+    capacity: usize,
+    options: &UnnestOptions,
+) -> PrimitiveArray<Int32Type> {
+    let mut builder = PrimitiveArray::<Int32Type>::builder(capacity);
+    let null_repeat: usize = if options.preserve_nulls { 0 } else { 1 };
+
+    for row in 0..list_array.len() {
+        let repeat = if list_array.is_null(row) {
+            null_repeat
+        } else {
+            list_array.value_length() as usize
+        };
+
+        // `index` is a positive interger.
+        let index = <Int32Type as ArrowPrimitiveType>::Native::from_usize(row).unwrap();
         (0..repeat).for_each(|_| builder.append_value(index));
     }
 
@@ -431,80 +525,4 @@ where
         .collect::<Result<Vec<_>>>()?;
 
     Ok(RecordBatch::try_new(schema.clone(), arrays.to_vec())?)
-}
-
-/// Unnest the given list array. Given the array:
-///
-/// ```ignore
-/// [1], null, [2, 3, 4], null, [5, 6]
-/// ```
-///
-/// returns:
-///
-/// ```ignore
-/// 1, null, 2, 3, 4, null, 5, 6
-/// ```
-fn unnest_array<T>(list_array: &T) -> Result<Arc<dyn Array + 'static>>
-where
-    T: ArrayAccessor<Item = ArrayRef>,
-{
-    let elem_type = match list_array.data_type() {
-        DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
-            f.data_type()
-        }
-        dt => {
-            return Err(DataFusionError::Execution(format!(
-                "Cannot unnest array of type {dt}"
-            )))
-        }
-    };
-
-    let null_row = new_null_array(elem_type, 1);
-
-    // Create a vec of ArrayRef from the list elements.
-    let arrays = (0..list_array.len())
-        .map(|row| {
-            if list_array.is_null(row) {
-                null_row.clone()
-            } else {
-                list_array.value(row)
-            }
-        })
-        .collect::<Vec<_>>();
-
-    // Create Vec<&dyn Array> from Vec<Arc<dyn Array>> for `concat`. Calling
-    // `as_ref()` in the `map` above causes the borrow checker to complain.
-    let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-
-    Ok(kernels::concat::concat(&arrays)?)
-}
-
-/// Returns an array with the lengths of each list in `list_array`. Returns null
-/// for a null value.
-fn list_lengths<T>(list_array: &T) -> Result<Arc<dyn Array + 'static>>
-where
-    T: ArrayAccessor<Item = ArrayRef>,
-{
-    match list_array.data_type() {
-        DataType::List(_) | DataType::LargeList(_) => {
-            Ok(kernels::length::length(list_array)?)
-        }
-        DataType::FixedSizeList(_, size) => {
-            // Handle FixedSizeList as it is not handled by the `length` kernel.
-            // https://github.com/apache/arrow-rs/issues/4517
-            let mut lengths = Vec::with_capacity(list_array.len());
-            for row in 0..list_array.len() {
-                if list_array.is_null(row) {
-                    lengths.push(None)
-                } else {
-                    lengths.push(Some(*size));
-                }
-            }
-
-            Ok(Arc::new(Int32Array::from(lengths)))
-        }
-        dt => Err(DataFusionError::Execution(format!(
-            "Invalid type {dt} for list_lengths"
-        ))),
-    }
 }
