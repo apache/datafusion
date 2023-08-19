@@ -3021,6 +3021,21 @@ CREATE TABLE sales_global_with_pk (zip_code INT,
           (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
 
+# create a table for testing, with primary key alternate syntax
+statement ok
+CREATE TABLE sales_global_with_pk_alternate (zip_code INT,
+          country VARCHAR(3),
+          sn INT primary key,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount FLOAT
+        ) as VALUES
+          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
+          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
+          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0)
+
 # create a table for testing, where primary key is composite
 statement ok
 CREATE TABLE sales_global_with_composite_pk (zip_code INT,
@@ -3082,6 +3097,18 @@ SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
 query IRI
 SELECT s.sn, s.amount, 2*s.sn
   FROM sales_global_with_pk AS s
+  GROUP BY sn
+  ORDER BY sn
+----
+0 30 0
+1 50 2
+2 75 4
+3 200 6
+4 100 8
+
+query IRI
+SELECT s.sn, s.amount, 2*s.sn
+  FROM sales_global_with_pk_alternate AS s
   GROUP BY sn
   ORDER BY sn
 ----

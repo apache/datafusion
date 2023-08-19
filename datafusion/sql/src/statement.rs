@@ -147,7 +147,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 is_primary,
                             })
                         }
-                        // TODO (parkma99) handle ForeignKey etc.
                     }
                 }
                 match query {
@@ -155,22 +154,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let plan = self.query_to_plan(*query, planner_context)?;
                         let input_schema = plan.schema();
 
-                    let plan = if !columns.is_empty() {
-                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                        if schema.fields().len() != input_schema.fields().len() {
-                            return plan_err!(
+                        let plan = if !columns.is_empty() {
+                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                            if schema.fields().len() != input_schema.fields().len() {
+                                return plan_err!(
                             "Mismatch: {} columns specified, but result has {} columns",
                             schema.fields().len(),
                             input_schema.fields().len()
                         );
-                        }
-                        let input_fields = input_schema.fields();
-                        let project_exprs = schema
-                            .fields()
-                            .iter()
-                            .zip(input_fields)
-                            .map(|(field, input_field)| {
-                                cast(col(input_field.name()), field.data_type().clone())
+                            }
+                            let input_fields = input_schema.fields();
+                            let project_exprs = schema
+                                .fields()
+                                .iter()
+                                .zip(input_fields)
+                                .map(|(field, input_field)| {
+                                    cast(
+                                        col(input_field.name()),
+                                        field.data_type().clone(),
+                                    )
                                     .alias(field.name())
                                 })
                                 .collect::<Vec<_>>();
