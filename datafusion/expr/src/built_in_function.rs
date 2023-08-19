@@ -1410,7 +1410,7 @@ macro_rules! make_utf8_to_return_type {
                 },
                 data_type => {
                     // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
+                    return plan_err!(
                         "The {:?} function can only accept strings, but got {:?}.",
                         name,
                         data_type
