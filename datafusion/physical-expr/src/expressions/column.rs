@@ -28,7 +28,8 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::plan_err;
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
@@ -124,10 +125,10 @@ impl Column {
         if self.index < input_schema.fields.len() {
             Ok(())
         } else {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "PhysicalExpr Column references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
                 self.name,
-                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())))
+                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())
         }
     }
 }
@@ -175,9 +176,7 @@ impl PhysicalExpr for UnKnownColumn {
 
     /// Evaluate the expression
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        Err(DataFusionError::Plan(
-            "UnKnownColumn::evaluate() should not be called".to_owned(),
-        ))
+        plan_err!("UnKnownColumn::evaluate() should not be called")
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::test_util::register_unbounded_file_with_ordering;
+
 use super::*;
 
 #[tokio::test]
@@ -73,5 +75,164 @@ async fn null_aware_left_anti_join() -> Result<()> {
         assert_batches_eq!(expected, &actual);
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_change_in_planner() -> Result<()> {
+    let config = SessionConfig::new().with_target_partitions(8);
+    let ctx = SessionContext::with_config(config);
+    let tmp_dir = TempDir::new().unwrap();
+    let left_file_path = tmp_dir.path().join("left.csv");
+    File::create(left_file_path.clone()).unwrap();
+    // Create schema
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::UInt32, false),
+        Field::new("a2", DataType::UInt32, false),
+    ]));
+    // Specify the ordering:
+    let file_sort_order = vec![[datafusion_expr::col("a1")]
+        .into_iter()
+        .map(|e| {
+            let ascending = true;
+            let nulls_first = false;
+            e.sort(ascending, nulls_first)
+        })
+        .collect::<Vec<_>>()];
+    register_unbounded_file_with_ordering(
+        &ctx,
+        schema.clone(),
+        &left_file_path,
+        "left",
+        file_sort_order.clone(),
+        true,
+    )
+    .await?;
+    let right_file_path = tmp_dir.path().join("right.csv");
+    File::create(right_file_path.clone()).unwrap();
+    register_unbounded_file_with_ordering(
+        &ctx,
+        schema,
+        &right_file_path,
+        "right",
+        file_sort_order,
+        true,
+    )
+    .await?;
+    let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
+    let dataframe = ctx.sql(sql).await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+    let expected = {
+        [
+            "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
+            "  CoalesceBatchesExec: target_batch_size=8192",
+            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
+            // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
+            "  CoalesceBatchesExec: target_batch_size=8192",
+            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
+            // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
+        ]
+    };
+    let mut actual: Vec<&str> = formatted.trim().lines().collect();
+    // Remove CSV lines
+    actual.remove(3);
+    actual.remove(5);
+
+    assert_eq!(
+        expected,
+        actual[..],
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_change_in_planner_without_sort() -> Result<()> {
+    let config = SessionConfig::new().with_target_partitions(8);
+    let ctx = SessionContext::with_config(config);
+    let tmp_dir = TempDir::new()?;
+    let left_file_path = tmp_dir.path().join("left.csv");
+    File::create(left_file_path.clone())?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::UInt32, false),
+        Field::new("a2", DataType::UInt32, false),
+    ]));
+    ctx.register_csv(
+        "left",
+        left_file_path.as_os_str().to_str().unwrap(),
+        CsvReadOptions::new().schema(&schema).mark_infinite(true),
+    )
+    .await?;
+    let right_file_path = tmp_dir.path().join("right.csv");
+    File::create(right_file_path.clone())?;
+    ctx.register_csv(
+        "right",
+        right_file_path.as_os_str().to_str().unwrap(),
+        CsvReadOptions::new().schema(&schema).mark_infinite(true),
+    )
+    .await?;
+    let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
+    let dataframe = ctx.sql(sql).await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+    let expected = {
+        [
+            "SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
+            "  CoalesceBatchesExec: target_batch_size=8192",
+            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
+            // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
+            "  CoalesceBatchesExec: target_batch_size=8192",
+            "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
+            // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
+        ]
+    };
+    let mut actual: Vec<&str> = formatted.trim().lines().collect();
+    // Remove CSV lines
+    actual.remove(3);
+    actual.remove(5);
+
+    assert_eq!(
+        expected,
+        actual[..],
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
+    let config = SessionConfig::new()
+        .with_target_partitions(8)
+        .with_allow_symmetric_joins_without_pruning(false);
+    let ctx = SessionContext::with_config(config);
+    let tmp_dir = TempDir::new()?;
+    let left_file_path = tmp_dir.path().join("left.csv");
+    File::create(left_file_path.clone())?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::UInt32, false),
+        Field::new("a2", DataType::UInt32, false),
+    ]));
+    ctx.register_csv(
+        "left",
+        left_file_path.as_os_str().to_str().unwrap(),
+        CsvReadOptions::new().schema(&schema).mark_infinite(true),
+    )
+    .await?;
+    let right_file_path = tmp_dir.path().join("right.csv");
+    File::create(right_file_path.clone())?;
+    ctx.register_csv(
+        "right",
+        right_file_path.as_os_str().to_str().unwrap(),
+        CsvReadOptions::new().schema(&schema).mark_infinite(true),
+    )
+    .await?;
+    let df = ctx.sql("SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
+    match df.create_physical_plan().await {
+        Ok(_) => panic!("Expecting error."),
+        Err(e) => {
+            assert_eq!(e.to_string(), "PipelineChecker\ncaused by\nError during planning: Join operation cannot operate on a non-prunable stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag")
+        }
+    }
     Ok(())
 }

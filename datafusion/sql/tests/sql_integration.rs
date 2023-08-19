@@ -22,6 +22,7 @@ use std::{sync::Arc, vec};
 use arrow_schema::*;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
+use datafusion_common::plan_err;
 use datafusion_common::{
     assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
     TableReference,
@@ -351,11 +352,35 @@ fn plan_rollback_transaction_chained() {
 }
 
 #[test]
+fn plan_copy_to() {
+    let sql = "COPY test_decimal to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+  TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_copy_to_query() {
+    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+  Limit: skip=0, fetch=10
+    Projection: test_decimal.id, test_decimal.price
+      TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
-Dml: op=[Insert] table=[person]
+Dml: op=[Insert Into] table=[person]
   Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name
     Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
@@ -367,7 +392,7 @@ Dml: op=[Insert] table=[person]
 fn plan_insert_no_target_columns() {
     let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
     let plan = r#"
-Dml: op=[Insert] table=[test_decimal]
+Dml: op=[Insert Into] table=[test_decimal]
   Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
     Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
     "#
@@ -416,7 +441,7 @@ fn plan_update() {
     let plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = Int64(1)
+    Filter: person.id = Int64(1)
       TableScan: person
       "#
     .trim();
@@ -1133,6 +1158,22 @@ fn select_binary_expr_nested() {
 }
 
 #[test]
+fn select_at_arrow_operator() {
+    let sql = "SELECT left @> right from array";
+    let expected = "Projection: array.left @> array.right\
+                        \n  TableScan: array";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn select_arrow_at_operator() {
+    let sql = "SELECT left <@ right from array";
+    let expected = "Projection: array.left <@ array.right\
+                        \n  TableScan: array";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn select_wildcard_with_groupby() {
     quick_test(
             r#"SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date, "😀""#,
@@ -1805,11 +1846,15 @@ fn create_external_table_with_compression_type() {
 #[test]
 fn create_external_table_parquet() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS PARQUET LOCATION 'foo.parquet'";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Plan(\"Column definitions can not be specified for PARQUET files.\")",
-        format!("{err:?}")
-    );
+    let expected = "CreateExternalTable: Bare { table: \"t\" }";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_external_table_parquet_sort_order() {
+    let sql = "create external table foo(a varchar, b varchar, c timestamp) stored as parquet location '/tmp/foo' with order (c)";
+    let expected = "CreateExternalTable: Bare { table: \"foo\" }";
+    quick_test(sql, expected);
 }
 
 #[test]
@@ -2669,6 +2714,18 @@ impl ContextProvider for MockContextProvider {
                 Field::new("price", DataType::Float64, false),
                 Field::new("delivered", DataType::Boolean, false),
             ])),
+            "array" => Ok(Schema::new(vec![
+                Field::new(
+                    "left",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+                Field::new(
+                    "right",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    false,
+                ),
+            ])),
             "lineitem" => Ok(Schema::new(vec![
                 Field::new("l_item_id", DataType::UInt32, false),
                 Field::new("l_description", DataType::Utf8, false),
@@ -2693,10 +2750,7 @@ impl ContextProvider for MockContextProvider {
                 Field::new("Id", DataType::UInt32, false),
                 Field::new("lower", DataType::UInt32, false),
             ])),
-            _ => Err(DataFusionError::Plan(format!(
-                "No table named: {} found",
-                name.table()
-            ))),
+            _ => plan_err!("No table named: {} found", name.table()),
         };
 
         match schema {
@@ -3846,7 +3900,7 @@ fn test_prepare_statement_update_infer() {
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = $2
+    Filter: person.id = $2
       TableScan: person
         "#
         .trim();
@@ -3866,7 +3920,7 @@ Dml: op=[Update] table=[person]
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = UInt32(1)
+    Filter: person.id = UInt32(1)
       TableScan: person
         "#
         .trim();
@@ -3880,7 +3934,7 @@ fn test_prepare_statement_insert_infer() {
     let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3)";
 
     let expected_plan = r#"
-Dml: op=[Insert] table=[person]
+Dml: op=[Insert Into] table=[person]
   Projection: column1 AS id, column2 AS first_name, column3 AS last_name
     Values: ($1, $2, $3)
         "#
@@ -3904,7 +3958,7 @@ Dml: op=[Insert] table=[person]
         ScalarValue::Utf8(Some("Turing".to_string())),
     ];
     let expected_plan = r#"
-Dml: op=[Insert] table=[person]
+Dml: op=[Insert Into] table=[person]
   Projection: column1 AS id, column2 AS first_name, column3 AS last_name
     Values: (UInt32(1), Utf8("Alan"), Utf8("Turing"))
         "#

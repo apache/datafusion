@@ -22,8 +22,11 @@ use arrow::{
     datatypes::DataType,
 };
 use base64::{engine::general_purpose, Engine as _};
-use datafusion_common::cast::{as_generic_binary_array, as_generic_string_array};
 use datafusion_common::ScalarValue;
+use datafusion_common::{
+    cast::{as_generic_binary_array, as_generic_string_array},
+    internal_err, plan_err,
+};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
@@ -42,9 +45,9 @@ fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
             DataType::LargeUtf8 => encoding.encode_utf8_array::<i64>(a.as_ref()),
             DataType::Binary => encoding.encode_binary_array::<i32>(a.as_ref()),
             DataType::LargeBinary => encoding.encode_binary_array::<i64>(a.as_ref()),
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function encode({encoding})",
-            ))),
+            other => internal_err!(
+                "Unsupported data type {other:?} for function encode({encoding})"
+            ),
         },
         ColumnarValue::Scalar(scalar) => {
             match scalar {
@@ -58,9 +61,9 @@ fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
                 ),
                 ScalarValue::LargeBinary(a) => Ok(encoding
                     .encode_large_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {other:?} for function encode({encoding})",
-                ))),
+                other => internal_err!(
+                    "Unsupported data type {other:?} for function encode({encoding})"
+                ),
             }
         }
     }
@@ -73,9 +76,9 @@ fn decode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
             DataType::LargeUtf8 => encoding.decode_utf8_array::<i64>(a.as_ref()),
             DataType::Binary => encoding.decode_binary_array::<i32>(a.as_ref()),
             DataType::LargeBinary => encoding.decode_binary_array::<i64>(a.as_ref()),
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function decode({encoding})",
-            ))),
+            other => internal_err!(
+                "Unsupported data type {other:?} for function decode({encoding})"
+            ),
         },
         ColumnarValue::Scalar(scalar) => {
             match scalar {
@@ -89,9 +92,9 @@ fn decode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
                 }
                 ScalarValue::LargeBinary(a) => encoding
                     .decode_large_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice())),
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {other:?} for function decode({encoding})",
-                ))),
+                other => internal_err!(
+                    "Unsupported data type {other:?} for function decode({encoding})"
+                ),
             }
         }
     }
@@ -279,9 +282,9 @@ impl FromStr for Encoding {
                     .map(|i| i.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in encoding named '{name}', currently supported encodings are: {options}",
-                )));
+                return plan_err!(
+                    "There is no built-in encoding named '{name}', currently supported encodings are: {options}"
+                );
             }
         })
     }
@@ -292,10 +295,10 @@ impl FromStr for Encoding {
 /// Standard encodings are base64 and hex.
 pub fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but encode takes exactly two arguments",
-            args.len(),
-        )));
+            args.len()
+        );
     }
     let encoding = match &args[1] {
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -318,10 +321,10 @@ pub fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 /// Standard encodings are base64 and hex.
 pub fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but decode takes exactly two arguments",
-            args.len(),
-        )));
+            args.len()
+        );
     }
     let encoding = match &args[1] {
         ColumnarValue::Scalar(scalar) => match scalar {

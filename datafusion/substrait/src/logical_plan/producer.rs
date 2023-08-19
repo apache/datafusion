@@ -28,6 +28,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
+use datafusion::common::internal_err;
 use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
@@ -62,10 +63,11 @@ use substrait::{
         join_rel, plan_rel, r#type,
         read_rel::{NamedTable, ReadType},
         rel::RelType,
+        set_rel,
         sort_field::{SortDirection, SortKind},
         AggregateFunction, AggregateRel, AggregationPhase, Expression, ExtensionLeafRel,
         ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
-        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot,
+        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot, SetRel,
         SortField, SortRel,
     },
     version,
@@ -321,6 +323,24 @@ pub fn to_substrait_rel(
             // since there is no corresponding relation type in Substrait
             to_substrait_rel(alias.input.as_ref(), ctx, extension_info)
         }
+        LogicalPlan::Union(union) => {
+            let input_rels = union
+                .inputs
+                .iter()
+                .map(|input| to_substrait_rel(input.as_ref(), ctx, extension_info))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|ptr| *ptr)
+                .collect();
+            Ok(Box::new(Rel {
+                rel_type: Some(substrait::proto::rel::RelType::Set(SetRel {
+                    common: None,
+                    inputs: input_rels,
+                    op: set_rel::SetOp::UnionAll as i32, // UNION DISTINCT gets translated to AGGREGATION + UNION ALL
+                    advanced_extension: None,
+                })),
+            }))
+        }
         LogicalPlan::Window(window) => {
             let input = to_substrait_rel(window.input.as_ref(), ctx, extension_info)?;
             // If the input is a Project relation, we can just append the WindowFunction expressions
@@ -452,7 +472,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::Gt => "gt",
         Operator::GtEq => "gte",
         Operator::Plus => "add",
-        Operator::Minus => "substract",
+        Operator::Minus => "subtract",
         Operator::Multiply => "multiply",
         Operator::Divide => "divide",
         Operator::Modulo => "mod",
@@ -467,6 +487,8 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::BitwiseAnd => "bitwise_and",
         Operator::BitwiseOr => "bitwise_or",
         Operator::StringConcat => "str_concat",
+        Operator::AtArrow => "at_arrow",
+        Operator::ArrowAt => "arrow_at",
         Operator::BitwiseXor => "bitwise_xor",
         Operator::BitwiseShiftRight => "bitwise_shift_right",
         Operator::BitwiseShiftLeft => "bitwise_shift_left",
@@ -518,11 +540,11 @@ pub fn to_substrait_agg_measure(
         Expr::Alias(Alias{expr,..})=> {
             to_substrait_agg_measure(expr, schema, extension_info)
         }
-        _ => Err(DataFusionError::Internal(format!(
+        _ => internal_err!(
             "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
             expr,
             expr.variant_name()
-        ))),
+        ),
     }
 }
 
@@ -939,9 +961,7 @@ pub fn to_substrait_rex(
 fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
     let default_nullability = r#type::Nullability::Required as i32;
     match dt {
-        DataType::Null => Err(DataFusionError::Internal(
-            "Null cast is not valid".to_string(),
-        )),
+        DataType::Null => internal_err!("Null cast is not valid"),
         DataType::Boolean => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Bool(r#type::Boolean {
                 type_variation_reference: DEFAULT_TYPE_REF,

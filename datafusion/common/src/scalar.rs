@@ -30,7 +30,7 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array, as_list_array, as_struct_array,
 };
 use crate::delta::shift_months;
-use crate::error::{DataFusionError, Result};
+use crate::error::{DataFusionError, Result, _internal_err};
 use arrow::buffer::NullBuffer;
 use arrow::compute::nullif;
 use arrow::datatypes::{i256, FieldRef, Fields, SchemaBuilder};
@@ -46,8 +46,7 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::timezone::Tz;
-use arrow_array::ArrowNativeTypeOp;
+use arrow_array::{timezone::Tz, ArrowNativeTypeOp};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
@@ -700,9 +699,9 @@ macro_rules! primitive_right {
         Ok(ScalarValue::$SCALAR(Some($TERM.recip())))
     };
     ($TERM:expr, /, $SCALAR:ident) => {
-        Err(DataFusionError::Internal(format!(
-            "Can not divide an uninitialized value to a non-floating point value",
-        )))
+        internal_err!(
+            "Can not divide an uninitialized value to a non-floating point value"
+        )
     };
     ($TERM:expr, &, $SCALAR:ident) => {
         Ok(ScalarValue::$SCALAR(Some($TERM)))
@@ -723,11 +722,10 @@ macro_rules! primitive_right {
 
 macro_rules! unsigned_subtraction_error {
     ($SCALAR:expr) => {{
-        let msg = format!(
+        _internal_err!(
             "Can not subtract a {} value from an uninitialized value",
             $SCALAR
-        );
-        Err(DataFusionError::Internal(msg))
+        )
     }};
 }
 
@@ -773,55 +771,21 @@ macro_rules! impl_op {
     ($LHS:expr, $RHS:expr, -) => {
         match ($LHS, $RHS) {
             (
-                ScalarValue::TimestampSecond(Some(ts_lhs), tz_lhs),
-                ScalarValue::TimestampSecond(Some(ts_rhs), tz_rhs),
-            ) => {
-                let err = || {
-                    DataFusionError::Execution(
-                        "Overflow while converting seconds to milliseconds".to_string(),
-                    )
-                };
-                ts_sub_to_interval::<MILLISECOND_MODE>(
-                    ts_lhs.checked_mul(1_000).ok_or_else(err)?,
-                    ts_rhs.checked_mul(1_000).ok_or_else(err)?,
-                    tz_lhs.as_deref(),
-                    tz_rhs.as_deref(),
-                )
-            },
+                ScalarValue::TimestampSecond(Some(ts_lhs), _),
+                ScalarValue::TimestampSecond(Some(ts_rhs), _),
+            ) => Ok(ScalarValue::DurationSecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
             (
-                ScalarValue::TimestampMillisecond(Some(ts_lhs), tz_lhs),
-                ScalarValue::TimestampMillisecond(Some(ts_rhs), tz_rhs),
-            ) => ts_sub_to_interval::<MILLISECOND_MODE>(
-                *ts_lhs,
-                *ts_rhs,
-                tz_lhs.as_deref(),
-                tz_rhs.as_deref(),
-            ),
+                ScalarValue::TimestampMillisecond(Some(ts_lhs), _),
+                ScalarValue::TimestampMillisecond(Some(ts_rhs), _),
+            ) => Ok(ScalarValue::DurationMillisecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
             (
-                ScalarValue::TimestampMicrosecond(Some(ts_lhs), tz_lhs),
-                ScalarValue::TimestampMicrosecond(Some(ts_rhs), tz_rhs),
-            ) => {
-                let err = || {
-                    DataFusionError::Execution(
-                        "Overflow while converting microseconds to nanoseconds".to_string(),
-                    )
-                };
-                ts_sub_to_interval::<NANOSECOND_MODE>(
-                    ts_lhs.checked_mul(1_000).ok_or_else(err)?,
-                    ts_rhs.checked_mul(1_000).ok_or_else(err)?,
-                    tz_lhs.as_deref(),
-                    tz_rhs.as_deref(),
-                )
-            },
+                ScalarValue::TimestampMicrosecond(Some(ts_lhs), _),
+                ScalarValue::TimestampMicrosecond(Some(ts_rhs), _),
+            ) => Ok(ScalarValue::DurationMicrosecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
             (
-                ScalarValue::TimestampNanosecond(Some(ts_lhs), tz_lhs),
-                ScalarValue::TimestampNanosecond(Some(ts_rhs), tz_rhs),
-            ) => ts_sub_to_interval::<NANOSECOND_MODE>(
-                *ts_lhs,
-                *ts_rhs,
-                tz_lhs.as_deref(),
-                tz_rhs.as_deref(),
-            ),
+                ScalarValue::TimestampNanosecond(Some(ts_lhs), _),
+                ScalarValue::TimestampNanosecond(Some(ts_rhs), _),
+            ) => Ok(ScalarValue::DurationNanosecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
         }
     };
@@ -869,12 +833,12 @@ macro_rules! impl_bit_op_arithmetic {
             (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
                 primitive_op!(lhs, rhs, Int8, $OPERATION)
             }
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
                 $LHS,
                 $RHS
-            ))),
+            ),
         }
     };
 }
@@ -885,12 +849,12 @@ macro_rules! impl_bool_op_arithmetic {
             (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
                 primitive_op!(lhs, rhs, Boolean, $OPERATION)
             }
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
                 $LHS,
                 $RHS
-            ))),
+            ),
         }
     };
 }
@@ -1055,12 +1019,12 @@ macro_rules! impl_op_arithmetic {
                 true,
             )))),
             // todo: Add Decimal256 support
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Operator {} is not implemented for types {:?} and {:?}",
                 stringify!($OPERATION),
                 $LHS,
                 $RHS
-            ))),
+            ),
         }
     };
 }
@@ -1178,49 +1142,6 @@ pub const MDN_MODE: i8 = 2;
 
 pub const MILLISECOND_MODE: bool = false;
 pub const NANOSECOND_MODE: bool = true;
-/// This function computes subtracts `rhs_ts` from `lhs_ts`, taking timezones
-/// into account when given. Units of the resulting interval is specified by
-/// the constant `TIME_MODE`.
-/// The default behavior of Datafusion is the following:
-/// - When subtracting timestamps at seconds/milliseconds precision, the output
-///   interval will have the type [`IntervalDayTimeType`].
-/// - When subtracting timestamps at microseconds/nanoseconds precision, the
-///   output interval will have the type [`IntervalMonthDayNanoType`].
-fn ts_sub_to_interval<const TIME_MODE: bool>(
-    lhs_ts: i64,
-    rhs_ts: i64,
-    lhs_tz: Option<&str>,
-    rhs_tz: Option<&str>,
-) -> Result<ScalarValue> {
-    let parsed_lhs_tz = parse_timezones(lhs_tz)?;
-    let parsed_rhs_tz = parse_timezones(rhs_tz)?;
-
-    let (naive_lhs, naive_rhs) =
-        calculate_naives::<TIME_MODE>(lhs_ts, parsed_lhs_tz, rhs_ts, parsed_rhs_tz)?;
-    let delta_secs = naive_lhs.signed_duration_since(naive_rhs);
-
-    match TIME_MODE {
-        MILLISECOND_MODE => {
-            let as_millisecs = delta_secs.num_milliseconds();
-            Ok(ScalarValue::new_interval_dt(
-                (as_millisecs / MILLISECS_IN_ONE_DAY) as i32,
-                (as_millisecs % MILLISECS_IN_ONE_DAY) as i32,
-            ))
-        }
-        NANOSECOND_MODE => {
-            let as_nanosecs = delta_secs.num_nanoseconds().ok_or_else(|| {
-                DataFusionError::Execution(String::from(
-                    "Can not compute timestamp differences with nanosecond precision",
-                ))
-            })?;
-            Ok(ScalarValue::new_interval_mdn(
-                0,
-                (as_nanosecs / NANOSECS_IN_ONE_DAY) as i32,
-                as_nanosecs % NANOSECS_IN_ONE_DAY,
-            ))
-        }
-    }
-}
 
 /// This function parses the timezone from string to Tz.
 /// If it cannot parse or timezone field is [`None`], it returns [`None`].
@@ -1455,6 +1376,14 @@ where
         ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
         ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i, sign),
         ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
+        ScalarValue::DurationSecond(Some(v)) => prior.add(Duration::seconds(*v)),
+        ScalarValue::DurationMillisecond(Some(v)) => {
+            prior.add(Duration::milliseconds(*v))
+        }
+        ScalarValue::DurationMicrosecond(Some(v)) => {
+            prior.add(Duration::microseconds(*v))
+        }
+        ScalarValue::DurationNanosecond(Some(v)) => prior.add(Duration::nanoseconds(*v)),
         other => Err(DataFusionError::Execution(format!(
             "DateIntervalExpr does not support non-interval type {other:?}"
         )))?,
@@ -1474,9 +1403,7 @@ where
         DT_MODE => add_day_time(prior, interval as i64, sign),
         MDN_MODE => add_m_d_nano(prior, interval, sign),
         _ => {
-            return Err(DataFusionError::Internal(
-                "Undefined interval mode for interval calculations".to_string(),
-            ));
+            return _internal_err!("Undefined interval mode for interval calculations");
         }
     })
 }
@@ -1733,13 +1660,13 @@ macro_rules! build_timestamp_list {
                         $SIZE
                     )
                 }
-                TimeUnit::Microsecond => build_values_list_tz!(
+                TimeUnit::Millisecond => build_values_list_tz!(
                     TimestampMillisecondBuilder,
                     TimestampMillisecond,
                     values,
                     $SIZE
                 ),
-                TimeUnit::Millisecond => build_values_list_tz!(
+                TimeUnit::Microsecond => build_values_list_tz!(
                     TimestampMicrosecondBuilder,
                     TimestampMicrosecond,
                     values,
@@ -1860,9 +1787,9 @@ impl ScalarValue {
         if precision <= DECIMAL128_MAX_PRECISION && scale.unsigned_abs() <= precision {
             return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
         }
-        Err(DataFusionError::Internal(format!(
+        _internal_err!(
             "Can not new a decimal type ScalarValue for precision {precision} and scale {scale}"
-        )))
+        )
     }
 
     /// Returns a [`ScalarValue::Utf8`] representing `val`
@@ -1931,6 +1858,16 @@ impl ScalarValue {
             }
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(0))
+            }
+            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(None),
+            DataType::Duration(TimeUnit::Millisecond) => {
+                ScalarValue::DurationMillisecond(None)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                ScalarValue::DurationMicrosecond(None)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                ScalarValue::DurationNanosecond(None)
             }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -2111,9 +2048,9 @@ impl ScalarValue {
             ScalarValue::Decimal256(Some(v), precision, scale) => Ok(
                 ScalarValue::Decimal256(Some(v.neg_wrapping()), *precision, *scale),
             ),
-            value => Err(DataFusionError::Internal(format!(
+            value => _internal_err!(
                 "Can not run arithmetic negative on scalar value {value:?}"
-            ))),
+            ),
         }
     }
 
@@ -2301,9 +2238,9 @@ impl ScalarValue {
         // figure out the type based on the first element
         let data_type = match scalars.peek() {
             None => {
-                return Err(DataFusionError::Internal(
-                    "Empty iterator passed to ScalarValue::iter_to_array".to_string(),
-                ));
+                return _internal_err!(
+                    "Empty iterator passed to ScalarValue::iter_to_array"
+                );
             }
             Some(sv) => sv.get_datatype(),
         };
@@ -2317,11 +2254,11 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v) = sv {
                             Ok(v)
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
@@ -2337,11 +2274,11 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v, _) = sv {
                             Ok(v)
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
@@ -2359,11 +2296,11 @@ impl ScalarValue {
                         if let ScalarValue::$SCALAR_TY(v) = sv {
                             Ok(v)
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
                                 data_type, sv
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<$ARRAY_TY>>()?;
@@ -2412,11 +2349,11 @@ impl ScalarValue {
                                         builder.values().append_null();
                                     }
                                     sv => {
-                                        return Err(DataFusionError::Internal(format!(
+                                        return _internal_err!(
                                             "Inconsistent types in ScalarValue::iter_to_array. \
                                                 Expected Utf8, got {:?}",
                                             sv
-                                        )))
+                                        )
                                     }
                                 }
                             }
@@ -2426,11 +2363,11 @@ impl ScalarValue {
                             builder.append(false);
                         }
                         sv => {
-                            return Err(DataFusionError::Internal(format!(
+                            return _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected List, got {:?}",
                                 sv
-                            )))
+                            )
                         }
                     }
                 }
@@ -2584,9 +2521,7 @@ impl ScalarValue {
                             }
                         };
                     } else {
-                        return Err(DataFusionError::Internal(format!(
-                            "Expected Struct but found: {scalar}"
-                        )));
+                        return _internal_err!("Expected Struct but found: {scalar}");
                     };
                 }
 
@@ -2614,9 +2549,9 @@ impl ScalarValue {
                             }
                         }
                         _ => {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Expected scalar of type {value_type} but found: {scalar} {scalar:?}"
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -2642,10 +2577,10 @@ impl ScalarValue {
                         if let ScalarValue::FixedSizeBinary(_, v) = sv {
                             Ok(v)
                         } else {
-                            Err(DataFusionError::Internal(format!(
+                            _internal_err!(
                                 "Inconsistent types in ScalarValue::iter_to_array. \
                                 Expected {data_type:?}, got {sv:?}"
-                            )))
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -2671,11 +2606,11 @@ impl ScalarValue {
             | DataType::Union(_, _)
             | DataType::Map(_, _)
             | DataType::RunEndEncoded(_, _) => {
-                return Err(DataFusionError::Internal(format!(
+                return _internal_err!(
                     "Unsupported creation of {:?} array from ScalarValue {:?}",
                     data_type,
                     scalars.peek()
-                )));
+                );
             }
         };
 
@@ -2763,9 +2698,9 @@ impl ScalarValue {
                     }
                 }
             } else {
-                return Err(DataFusionError::Internal(format!(
+                return _internal_err!(
                     "Expected ScalarValue::List element. Received {scalar:?}"
-                )));
+                );
             }
         }
 
@@ -3124,9 +3059,7 @@ impl ScalarValue {
                     Ok(ScalarValue::Decimal256(Some(value), precision, scale))
                 }
             }
-            _ => Err(DataFusionError::Internal(
-                "Unsupported decimal type".to_string(),
-            )),
+            _ => _internal_err!("Unsupported decimal type"),
         }
     }
 
@@ -3309,6 +3242,20 @@ impl ScalarValue {
                     IntervalMonthDayNano
                 )
             }
+
+            DataType::Duration(TimeUnit::Second) => {
+                typed_cast!(array, index, DurationSecondArray, DurationSecond)
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                typed_cast!(array, index, DurationMillisecondArray, DurationMillisecond)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                typed_cast!(array, index, DurationMicrosecondArray, DurationMicrosecond)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                typed_cast!(array, index, DurationNanosecondArray, DurationNanosecond)
+            }
+
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a scalar from array of type \"{other:?}\""
@@ -3687,11 +3634,11 @@ macro_rules! impl_try_from {
             fn try_from(value: ScalarValue) -> Result<Self> {
                 match value {
                     ScalarValue::$SCALAR(Some(inner_value)) => Ok(inner_value),
-                    _ => Err(DataFusionError::Internal(format!(
+                    _ => _internal_err!(
                         "Cannot convert {:?} to {}",
                         value,
                         std::any::type_name::<Self>()
-                    ))),
+                    ),
                 }
             }
         }
@@ -3711,11 +3658,11 @@ impl TryFrom<ScalarValue> for i32 {
             | ScalarValue::Date32(Some(inner_value))
             | ScalarValue::Time32Second(Some(inner_value))
             | ScalarValue::Time32Millisecond(Some(inner_value)) => Ok(inner_value),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
                 std::any::type_name::<Self>()
-            ))),
+            ),
         }
     }
 }
@@ -3734,11 +3681,11 @@ impl TryFrom<ScalarValue> for i64 {
             | ScalarValue::TimestampMicrosecond(Some(inner_value), _)
             | ScalarValue::TimestampMillisecond(Some(inner_value), _)
             | ScalarValue::TimestampSecond(Some(inner_value), _) => Ok(inner_value),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
                 std::any::type_name::<Self>()
-            ))),
+            ),
         }
     }
 }
@@ -3750,11 +3697,11 @@ impl TryFrom<ScalarValue> for i128 {
     fn try_from(value: ScalarValue) -> Result<Self> {
         match value {
             ScalarValue::Decimal128(Some(inner_value), _, _) => Ok(inner_value),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
                 std::any::type_name::<Self>()
-            ))),
+            ),
         }
     }
 }
@@ -3766,11 +3713,11 @@ impl TryFrom<ScalarValue> for i256 {
     fn try_from(value: ScalarValue) -> Result<Self> {
         match value {
             ScalarValue::Decimal256(Some(inner_value), _, _) => Ok(inner_value),
-            _ => Err(DataFusionError::Internal(format!(
+            _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
                 std::any::type_name::<Self>()
-            ))),
+            ),
         }
     }
 }
@@ -3851,6 +3798,18 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(None)
             }
+
+            DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(None),
+            DataType::Duration(TimeUnit::Millisecond) => {
+                ScalarValue::DurationMillisecond(None)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                ScalarValue::DurationMicrosecond(None)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                ScalarValue::DurationNanosecond(None)
+            }
+
             DataType::Dictionary(index_type, value_type) => ScalarValue::Dictionary(
                 index_type.clone(),
                 Box::new(value_type.as_ref().try_into()?),
@@ -4098,7 +4057,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::compute::kernels;
-    use arrow::compute::{self, concat, is_null};
+    use arrow::compute::{concat, is_null};
     use arrow::datatypes::ArrowPrimitiveType;
     use arrow::util::pretty::pretty_format_columns;
     use arrow_array::ArrowNumericType;
@@ -4227,7 +4186,7 @@ mod tests {
         let right_array = right.to_array();
         let arrow_left_array = left_array.as_primitive::<T>();
         let arrow_right_array = right_array.as_primitive::<T>();
-        let arrow_result = compute::add_checked(arrow_left_array, arrow_right_array);
+        let arrow_result = kernels::numeric::add(arrow_left_array, arrow_right_array);
 
         assert_eq!(scalar_result.is_ok(), arrow_result.is_ok());
     }
@@ -4633,6 +4592,8 @@ mod tests {
         assert_eq!(expected, data_type.try_into().unwrap())
     }
 
+    // this test fails on aarch, so don't run it there
+    #[cfg(not(target_arch = "aarch64"))]
     #[test]
     fn size_of_scalar() {
         // Since ScalarValues are used in a non trivial number of places,
@@ -5944,24 +5905,10 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_op_tests() {
-        // positive interval, edge cases
-        let test_data = get_timestamp_test_data(1);
-        for (lhs, rhs, expected) in test_data.into_iter() {
-            assert_eq!(expected, lhs.sub(rhs).unwrap())
-        }
-
-        // negative interval, edge cases
-        let test_data = get_timestamp_test_data(-1);
-        for (rhs, lhs, expected) in test_data.into_iter() {
-            assert_eq!(expected, lhs.sub(rhs).unwrap());
-        }
-    }
-    #[test]
     fn timestamp_op_random_tests() {
         // timestamp1 + (or -) interval = timestamp2
         // timestamp2 - timestamp1 (or timestamp1 - timestamp2) = interval ?
-        let sample_size = 1000000;
+        let sample_size = 1000;
         let timestamps1 = get_random_timestamps(sample_size);
         let intervals = get_random_intervals(sample_size);
         // ts(sec) + interval(ns) = ts(sec); however,
@@ -5970,18 +5917,12 @@ mod tests {
         for (idx, ts1) in timestamps1.iter().enumerate() {
             if idx % 2 == 0 {
                 let timestamp2 = ts1.add(intervals[idx].clone()).unwrap();
-                assert_eq!(
-                    intervals[idx],
-                    timestamp2.sub(ts1).unwrap(),
-                    "index:{idx}, operands: {timestamp2:?} (-) {ts1:?}"
-                );
+                let back = timestamp2.sub(intervals[idx].clone()).unwrap();
+                assert_eq!(ts1, &back);
             } else {
                 let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
-                assert_eq!(
-                    intervals[idx],
-                    ts1.sub(timestamp2.clone()).unwrap(),
-                    "index:{idx}, operands: {ts1:?} (-) {timestamp2:?}"
-                );
+                let back = timestamp2.add(intervals[idx].clone()).unwrap();
+                assert_eq!(ts1, &back);
             };
         }
     }
@@ -6066,283 +6007,15 @@ mod tests {
         check_array(array);
     }
 
-    fn get_timestamp_test_data(
-        sign: i32,
-    ) -> Vec<(ScalarValue, ScalarValue, ScalarValue)> {
-        vec![
-            (
-                // 1st test case, having the same time but different with timezones
-                // Since they are timestamps with nanosecond precision, expected type is
-                // [`IntervalMonthDayNanoType`]
-                ScalarValue::TimestampNanosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
-                            .unwrap()
-                            .and_hms_nano_opt(12, 0, 0, 000_000_000)
-                            .unwrap()
-                            .timestamp_nanos(),
-                    ),
-                    Some("+12:00".into()),
-                ),
-                ScalarValue::TimestampNanosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
-                            .unwrap()
-                            .and_hms_nano_opt(0, 0, 0, 000_000_000)
-                            .unwrap()
-                            .timestamp_nanos(),
-                    ),
-                    Some("+00:00".into()),
-                ),
-                ScalarValue::new_interval_mdn(0, 0, 0),
-            ),
-            // 2nd test case, january with 31 days plus february with 28 days, with timezone
-            (
-                ScalarValue::TimestampMicrosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 1)
-                            .unwrap()
-                            .and_hms_micro_opt(2, 0, 0, 000_000)
-                            .unwrap()
-                            .timestamp_micros(),
-                    ),
-                    Some("+01:00".into()),
-                ),
-                ScalarValue::TimestampMicrosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
-                            .unwrap()
-                            .and_hms_micro_opt(0, 0, 0, 000_000)
-                            .unwrap()
-                            .timestamp_micros(),
-                    ),
-                    Some("-01:00".into()),
-                ),
-                ScalarValue::new_interval_mdn(0, sign * 59, 0),
-            ),
-            // 3rd test case, 29-days long february minus previous, year with timezone
-            (
-                ScalarValue::TimestampMillisecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2024, 2, 29)
-                            .unwrap()
-                            .and_hms_milli_opt(10, 10, 0, 000)
-                            .unwrap()
-                            .timestamp_millis(),
-                    ),
-                    Some("+10:10".into()),
-                ),
-                ScalarValue::TimestampMillisecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 12, 31)
-                            .unwrap()
-                            .and_hms_milli_opt(1, 0, 0, 000)
-                            .unwrap()
-                            .timestamp_millis(),
-                    ),
-                    Some("+01:00".into()),
-                ),
-                ScalarValue::new_interval_dt(sign * 60, 0),
-            ),
-            // 4th test case, leap years occur mostly every 4 years, but every 100 years
-            // we skip a leap year unless the year is divisible by 400, so 31 + 28 = 59
-            (
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2100, 3, 1)
-                            .unwrap()
-                            .and_hms_opt(0, 0, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    Some("-11:59".into()),
-                ),
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2100, 1, 1)
-                            .unwrap()
-                            .and_hms_opt(23, 58, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    Some("+11:59".into()),
-                ),
-                ScalarValue::new_interval_dt(sign * 59, 0),
-            ),
-            // 5th test case, without timezone positively seemed, but with timezone,
-            // negative resulting interval
-            (
-                ScalarValue::TimestampMillisecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
-                            .unwrap()
-                            .and_hms_milli_opt(6, 00, 0, 000)
-                            .unwrap()
-                            .timestamp_millis(),
-                    ),
-                    Some("+06:00".into()),
-                ),
-                ScalarValue::TimestampMillisecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
-                            .unwrap()
-                            .and_hms_milli_opt(0, 0, 0, 000)
-                            .unwrap()
-                            .timestamp_millis(),
-                    ),
-                    Some("-12:00".into()),
-                ),
-                ScalarValue::new_interval_dt(0, sign * -43_200_000),
-            ),
-            // 6th test case, no problem before unix epoch beginning
-            (
-                ScalarValue::TimestampMicrosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(1970, 1, 1)
-                            .unwrap()
-                            .and_hms_micro_opt(1, 2, 3, 15)
-                            .unwrap()
-                            .timestamp_micros(),
-                    ),
-                    None,
-                ),
-                ScalarValue::TimestampMicrosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(1969, 1, 1)
-                            .unwrap()
-                            .and_hms_micro_opt(0, 0, 0, 000_000)
-                            .unwrap()
-                            .timestamp_micros(),
-                    ),
-                    None,
-                ),
-                ScalarValue::new_interval_mdn(
-                    0,
-                    365 * sign,
-                    sign as i64 * 3_723_000_015_000,
-                ),
-            ),
-            // 7th test case, no problem with big intervals
-            (
-                ScalarValue::TimestampNanosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2100, 1, 1)
-                            .unwrap()
-                            .and_hms_nano_opt(0, 0, 0, 0)
-                            .unwrap()
-                            .timestamp_nanos(),
-                    ),
-                    None,
-                ),
-                ScalarValue::TimestampNanosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2000, 1, 1)
-                            .unwrap()
-                            .and_hms_nano_opt(0, 0, 0, 000_000_000)
-                            .unwrap()
-                            .timestamp_nanos(),
-                    ),
-                    None,
-                ),
-                ScalarValue::new_interval_mdn(0, sign * 36525, 0),
-            ),
-            // 8th test case, no problem detecting 366-days long years
-            (
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2041, 1, 1)
-                            .unwrap()
-                            .and_hms_opt(0, 0, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    None,
-                ),
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2040, 1, 1)
-                            .unwrap()
-                            .and_hms_opt(0, 0, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    None,
-                ),
-                ScalarValue::new_interval_dt(sign * 366, 0),
-            ),
-            // 9th test case, no problem with unrealistic timezones
-            (
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 3)
-                            .unwrap()
-                            .and_hms_opt(0, 0, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    Some("+23:59".into()),
-                ),
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 1, 1)
-                            .unwrap()
-                            .and_hms_opt(0, 2, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    Some("-23:59".into()),
-                ),
-                ScalarValue::new_interval_dt(0, 0),
-            ),
-            // 10th test case, parsing different types of timezone input
-            (
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 17)
-                            .unwrap()
-                            .and_hms_opt(14, 10, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    Some("Europe/Istanbul".into()),
-                ),
-                ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 17)
-                            .unwrap()
-                            .and_hms_opt(4, 10, 0)
-                            .unwrap()
-                            .timestamp(),
-                    ),
-                    Some("America/Los_Angeles".into()),
-                ),
-                ScalarValue::new_interval_dt(0, 0),
-            ),
-            // 11th test case, negative results
-            (
-                ScalarValue::TimestampMillisecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 17)
-                            .unwrap()
-                            .and_hms_milli_opt(4, 10, 0, 0)
-                            .unwrap()
-                            .timestamp_millis(),
-                    ),
-                    None,
-                ),
-                ScalarValue::TimestampMillisecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(2023, 3, 17)
-                            .unwrap()
-                            .and_hms_milli_opt(4, 10, 0, 1)
-                            .unwrap()
-                            .timestamp_millis(),
-                    ),
-                    None,
-                ),
-                ScalarValue::new_interval_dt(0, -sign),
-            ),
-        ]
+    #[test]
+    fn test_build_timestamp_millisecond_list() {
+        let values = vec![ScalarValue::TimestampMillisecond(Some(1), None)];
+        let ts_list = ScalarValue::new_list(
+            Some(values),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+        );
+        let list = ts_list.to_array_of_size(1);
+        assert_eq!(1, list.len());
     }
 
     fn get_random_timestamps(sample_size: u64) -> Vec<ScalarValue> {

@@ -411,6 +411,21 @@ async fn roundtrip_outer_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_arithmetic_ops() -> Result<()> {
+    roundtrip("SELECT a - a FROM data").await?;
+    roundtrip("SELECT a + a FROM data").await?;
+    roundtrip("SELECT a * a FROM data").await?;
+    roundtrip("SELECT a / a FROM data").await?;
+    roundtrip("SELECT a = a FROM data").await?;
+    roundtrip("SELECT a != a FROM data").await?;
+    roundtrip("SELECT a > a FROM data").await?;
+    roundtrip("SELECT a >= a FROM data").await?;
+    roundtrip("SELECT a < a FROM data").await?;
+    roundtrip("SELECT a <= a FROM data").await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_like() -> Result<()> {
     roundtrip("SELECT f FROM data WHERE f LIKE 'a%b'").await
 }
@@ -418,6 +433,24 @@ async fn roundtrip_like() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_ilike() -> Result<()> {
     roundtrip("SELECT f FROM data WHERE f ILIKE 'a%b'").await
+}
+
+#[tokio::test]
+async fn roundtrip_union() -> Result<()> {
+    roundtrip("SELECT a, e FROM data UNION SELECT a, e FROM data").await
+}
+
+#[tokio::test]
+async fn roundtrip_union2() -> Result<()> {
+    roundtrip(
+        "SELECT a, b FROM data UNION SELECT a, b FROM data UNION SELECT a, b FROM data",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_union_all() -> Result<()> {
+    roundtrip("SELECT a, e FROM data UNION ALL SELECT a, e FROM data").await
 }
 
 #[tokio::test]

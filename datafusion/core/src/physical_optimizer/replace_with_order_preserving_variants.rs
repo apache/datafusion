@@ -28,6 +28,7 @@ use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 
 use super::utils::is_repartition;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_physical_expr::utils::ordering_satisfy;
 
@@ -177,7 +178,7 @@ fn get_updated_plan(
         let child = plan.children()[0].clone();
         plan = Arc::new(
             RepartitionExec::try_new(child, plan.output_partitioning())?
-                .with_preserve_order(),
+                .with_preserve_order(true),
         ) as _
     }
     // When the input of a `CoalescePartitionsExec` has an ordering, replace it
@@ -203,6 +204,10 @@ fn get_updated_plan(
 ///
 /// If this replacement is helpful for removing a `SortExec`, it updates the plan.
 /// Otherwise, it leaves the plan unchanged.
+///
+/// Note: this optimizer sub-rule will only produce `SortPreservingRepartitionExec`s
+/// if the query is bounded or if the config option `bounded_order_preserving_variants`
+/// is set to `true`.
 ///
 /// The algorithm flow is simply like this:
 /// 1. Visit nodes of the physical plan bottom-up and look for `SortExec` nodes.
@@ -232,6 +237,7 @@ pub(crate) fn replace_with_order_preserving_variants(
     // a `SortExec` from the plan. If this flag is `false`, this replacement
     // should only be made to fix the pipeline (streaming).
     is_spm_better: bool,
+    config: &ConfigOptions,
 ) -> Result<Transformed<OrderPreservationContext>> {
     let plan = &requirements.plan;
     let ordering_onwards = &requirements.ordering_onwards;
@@ -243,11 +249,13 @@ pub(crate) fn replace_with_order_preserving_variants(
         };
         // For unbounded cases, replace with the order-preserving variant in
         // any case, as doing so helps fix the pipeline.
-        let is_unbounded = unbounded_output(plan);
+        // Also do the replacement if opted-in via config options.
+        let use_order_preserving_variant =
+            config.optimizer.bounded_order_preserving_variants || unbounded_output(plan);
         let updated_sort_input = get_updated_plan(
             exec_tree,
-            is_spr_better || is_unbounded,
-            is_spm_better || is_unbounded,
+            is_spr_better || use_order_preserving_variant,
+            is_spm_better || use_order_preserving_variant,
         )?;
         // If this sort is unnecessary, we should remove it and update the plan:
         if ordering_satisfy(
@@ -269,6 +277,8 @@ pub(crate) fn replace_with_order_preserving_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::prelude::SessionConfig;
 
     use crate::datasource::file_format::file_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
@@ -299,8 +309,17 @@ mod tests {
     /// `$EXPECTED_PLAN_LINES`: input plan
     /// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
     /// `$PLAN`: the plan to optimized
+    /// `$ALLOW_BOUNDED`: whether to allow the plan to be optimized for bounded cases
     macro_rules! assert_optimized {
         ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr) => {
+            assert_optimized!(
+                $EXPECTED_PLAN_LINES,
+                $EXPECTED_OPTIMIZED_PLAN_LINES,
+                $PLAN,
+                false
+            );
+        };
+        ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $ALLOW_BOUNDED: expr) => {
             let physical_plan = $PLAN;
             let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -317,8 +336,9 @@ mod tests {
 
             // Run the rule top-down
             // let optimized_physical_plan = physical_plan.transform_down(&replace_repartition_execs)?;
+            let config = SessionConfig::new().with_bounded_order_preserving_variants($ALLOW_BOUNDED);
             let plan_with_pipeline_fixer = OrderPreservationContext::new(physical_plan);
-            let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false))?;
+            let parallel = plan_with_pipeline_fixer.transform_up(&|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options()))?;
             let optimized_physical_plan = parallel.plan;
 
             // Get string representation of the plan
@@ -748,6 +768,34 @@ mod tests {
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_bounded_input() -> Result<()> {
+        let schema = create_test_schema()?;
+        let sort_exprs = vec![sort_expr("a", &schema)];
+        let source = csv_exec_sorted(&schema, sort_exprs, false);
+        let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
+        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition, true);
+
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+
+        let expected_input = vec![
+            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
+            "  SortExec: expr=[a@0 ASC NULLS LAST]",
+            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+        ];
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
+            "  SortPreservingRepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
+            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
         Ok(())
     }
 

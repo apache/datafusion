@@ -28,7 +28,7 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
-use datafusion_common::alias::AliasGenerator;
+use datafusion_common::{alias::AliasGenerator, plan_err};
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
@@ -955,10 +955,9 @@ impl SessionContext {
             (Some(s), _) => s,
             (None, false) => options.infer_schema(&self.state(), &table_path).await?,
             (None, true) => {
-                return Err(DataFusionError::Plan(
+                return plan_err!(
                     "Schema inference for infinite data sources is not supported."
-                        .to_string(),
-                ))
+                )
             }
         };
         let config = ListingTableConfig::new(table_path)
@@ -1025,8 +1024,14 @@ impl SessionContext {
     ) -> Result<()> {
         let listing_options = options.to_listing_options(&self.state.read().config);
 
-        self.register_listing_table(name, table_path, listing_options, None, None)
-            .await?;
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema.map(|s| Arc::new(s.to_owned())),
+            None,
+        )
+        .await?;
         Ok(())
     }
 
@@ -1179,7 +1184,7 @@ impl SessionContext {
         let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(&table).await {
             Some(ref provider) => Ok(Arc::clone(provider)),
-            _ => Err(DataFusionError::Plan(format!("No table named '{table}'"))),
+            _ => plan_err!("No table named '{table}'"),
         }
     }
 

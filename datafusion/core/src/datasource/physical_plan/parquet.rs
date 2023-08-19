@@ -32,11 +32,13 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
-        Partitioning, SendableRecordBatchStream, Statistics,
+        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+        Statistics,
     },
 };
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{
+    ordering_equivalence_properties_helper, PhysicalSortExpr,
+};
 use fmt::Debug;
 use object_store::path::Path;
 use std::any::Any;
@@ -387,6 +389,10 @@ impl ExecutionPlan for ParquetExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+
+    fn file_scan_config(&self) -> Option<&FileScanConfig> {
+        Some(&self.base_config)
     }
 }
 
@@ -762,7 +768,7 @@ mod tests {
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
@@ -1950,31 +1956,46 @@ mod tests {
         df.write_parquet(out_dir_url, None).await?;
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
-        // create a new context and verify that the results were saved to a partitioned csv file
+        // create a new context and verify that the results were saved to a partitioned parquet file
         let ctx = SessionContext::new();
+
+        // get write_id
+        let mut paths = fs::read_dir(&out_dir).unwrap();
+        let path = paths.next();
+        let name = path
+            .unwrap()?
+            .path()
+            .file_name()
+            .expect("Should be a file name")
+            .to_str()
+            .expect("Should be a str")
+            .to_owned();
+        println!("{name}");
+        let (parsed_id, _) = name.split_once('_').expect("File should contain _ !");
+        let write_id = parsed_id.to_owned();
 
         // register each partition as well as the top level dir
         ctx.register_parquet(
             "part0",
-            &format!("{out_dir}/part-0.parquet"),
+            &format!("{out_dir}/{write_id}_0.parquet"),
             ParquetReadOptions::default(),
         )
         .await?;
         ctx.register_parquet(
             "part1",
-            &format!("{out_dir}/part-1.parquet"),
+            &format!("{out_dir}/{write_id}_1.parquet"),
             ParquetReadOptions::default(),
         )
         .await?;
         ctx.register_parquet(
             "part2",
-            &format!("{out_dir}/part-2.parquet"),
+            &format!("{out_dir}/{write_id}_2.parquet"),
             ParquetReadOptions::default(),
         )
         .await?;
         ctx.register_parquet(
             "part3",
-            &format!("{out_dir}/part-3.parquet"),
+            &format!("{out_dir}/{write_id}_3.parquet"),
             ParquetReadOptions::default(),
         )
         .await?;

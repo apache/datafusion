@@ -35,7 +35,7 @@ use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::{
     cast::{as_boolean_array, as_generic_binary_array, as_string_array},
-    DataFusionError, Result, ScalarValue,
+    internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use hashbrown::hash_map::RawEntryMut;
@@ -356,9 +356,9 @@ pub fn in_list(
     for list_expr in list.iter() {
         let list_expr_data_type = list_expr.data_type(schema)?;
         if !expr_data_type.eq(&list_expr_data_type) {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            )));
+            );
         }
     }
     let static_filter = try_cast_static_filter_to_set(&list, schema).ok();
@@ -377,6 +377,7 @@ mod tests {
     use super::*;
     use crate::expressions;
     use crate::expressions::{col, lit, try_cast};
+    use datafusion_common::plan_err;
     use datafusion_common::Result;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
 
@@ -396,9 +397,9 @@ mod tests {
             .collect();
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
-            None => Err(DataFusionError::Plan(format!(
+            None => plan_err!(
                 "Can not find compatible types to compare {expr_type:?} with {list_types:?}"
-            ))),
+            ),
             Some(data_type) => {
                 // find the coerced type
                 let cast_expr = try_cast(expr, input_schema, data_type.clone())?;

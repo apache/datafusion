@@ -27,13 +27,15 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayAs, DisplayFormatType, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+use datafusion_physical_expr::{
+    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+};
 use tokio::io::AsyncWriteExt;
 
 use super::FileScanConfig;
@@ -240,6 +242,10 @@ impl ExecutionPlan for CsvExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn file_scan_config(&self) -> Option<&FileScanConfig> {
+        Some(&self.base_config)
+    }
 }
 
 /// A Config for [`CsvOpener`]
@@ -434,7 +440,7 @@ impl FileOpener for CsvOpener {
     /// Consider the following partitions enclosed by braces `{}`:
     ///
     /// {A,1,2,3,4,5,6,7,8,9\n
-    ///  A,1,2,3,4,5,6,7,8,9\n}                           
+    ///  A,1,2,3,4,5,6,7,8,9\n}
     ///  A,1,2,3,4,5,6,7,8,9\n
     ///  The lines read would be: [0, 1]
     ///
@@ -654,7 +660,7 @@ mod tests {
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use rstest::*;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
@@ -667,6 +673,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_projection(
         file_compression_type: FileCompressionType,
@@ -676,6 +683,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -683,6 +691,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -730,6 +739,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_mixed_order_projection(
         file_compression_type: FileCompressionType,
@@ -739,6 +749,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -746,6 +757,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -793,6 +805,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_limit(
         file_compression_type: FileCompressionType,
@@ -802,6 +815,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -809,6 +823,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -856,6 +871,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_missing_column(
         file_compression_type: FileCompressionType,
@@ -865,6 +881,7 @@ mod tests {
         let file_schema = aggr_test_schema_with_missing_col();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -872,6 +889,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -907,6 +925,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn csv_exec_with_partition(
         file_compression_type: FileCompressionType,
@@ -916,6 +935,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -923,6 +943,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )?;
 
         let mut config = partitioned_csv_config(file_schema, file_groups)?;
@@ -1010,7 +1031,7 @@ mod tests {
     async fn test_additional_stores(
         file_compression_type: FileCompressionType,
         store: Arc<dyn ObjectStore>,
-    ) {
+    ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
         ctx.runtime_env().register_object_store(&url, store.clone());
@@ -1020,6 +1041,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
+        let tmp_dir = TempDir::new()?;
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -1027,6 +1049,7 @@ mod tests {
             1,
             FileType::CSV,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )
         .unwrap();
 
@@ -1046,6 +1069,7 @@ mod tests {
         let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
 
         assert_eq!(total_rows, 100);
+        Ok(())
     }
 
     #[rstest(
@@ -1056,11 +1080,12 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn test_chunked_csv(
         file_compression_type: FileCompressionType,
         #[values(10, 20, 30, 40)] chunk_size: usize,
-    ) {
+    ) -> Result<()> {
         test_additional_stores(
             file_compression_type,
             Arc::new(ChunkedStore::new(
@@ -1068,7 +1093,8 @@ mod tests {
                 chunk_size,
             )),
         )
-        .await;
+        .await?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -1165,11 +1191,32 @@ mod tests {
             Field::new("c2", DataType::UInt64, false),
         ]));
 
+        // get name of first part
+        let paths = fs::read_dir(&out_dir).unwrap();
+        let mut part_0_name: String = "".to_owned();
+        for path in paths {
+            let path = path.unwrap();
+            let name = path
+                .path()
+                .file_name()
+                .expect("Should be a file name")
+                .to_str()
+                .expect("Should be a str")
+                .to_owned();
+            if name.ends_with("_0.csv") {
+                part_0_name = name;
+                break;
+            }
+        }
+
+        if part_0_name.is_empty() {
+            panic!("Did not find part_0 in csv output files!")
+        }
         // register each partition as well as the top level dir
         let csv_read_option = CsvReadOptions::new().schema(&schema);
         ctx.register_csv(
             "part0",
-            &format!("{out_dir}/part-0.csv"),
+            &format!("{out_dir}/{part_0_name}"),
             csv_read_option.clone(),
         )
         .await?;

@@ -26,7 +26,10 @@ use arrow::array::{
     OffsetSizeTrait,
 };
 use arrow::compute;
-use datafusion_common::{cast::as_generic_string_array, DataFusionError, Result};
+use datafusion_common::plan_err;
+use datafusion_common::{
+    cast::as_generic_string_array, internal_err, DataFusionError, Result,
+};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
@@ -65,14 +68,14 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             match flags {
                 Some(f) if f.iter().any(|s| s == Some("g")) => {
-                    Err(DataFusionError::Plan("regexp_match() does not support the \"global\" option".to_owned()))
+                    plan_err!("regexp_match() does not support the \"global\" option")
                 },
                 _ => compute::regexp_match(values, regex, flags).map_err(DataFusionError::ArrowError),
             }
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => internal_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
-        ))),
+        ),
     }
 }
 
@@ -185,9 +188,9 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => internal_err!(
             "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
-        ))),
+        ),
     }
 }
 
@@ -218,9 +221,9 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         3 => None,
         4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort)),
         other => {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
-            )))
+            )
         }
     };
 

@@ -40,6 +40,8 @@ use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
+use super::listing::ListingTableInsertMode;
+
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 pub struct ListingTableFactory {}
 
@@ -131,15 +133,57 @@ impl TableProviderFactory for ListingTableFactory {
         // look for 'infinite' as an option
         let infinite_source = cmd.unbounded;
 
+        let explicit_insert_mode = cmd.options.get("insert_mode");
+        let insert_mode = match explicit_insert_mode {
+            Some(mode) => ListingTableInsertMode::from_str(mode),
+            None => match file_type {
+                FileType::CSV => Ok(ListingTableInsertMode::AppendToFile),
+                FileType::PARQUET => Ok(ListingTableInsertMode::AppendNewFiles),
+                FileType::AVRO => Ok(ListingTableInsertMode::AppendNewFiles),
+                FileType::JSON => Ok(ListingTableInsertMode::AppendToFile),
+                FileType::ARROW => Ok(ListingTableInsertMode::AppendNewFiles),
+            },
+        }?;
+
+        let create_local_path_mode = cmd
+            .options
+            .get("create_local_path")
+            .map(|s| s.as_str())
+            .unwrap_or("false");
+        let single_file = cmd
+            .options
+            .get("single_file")
+            .map(|s| s.as_str())
+            .unwrap_or("false");
+
+        let single_file = match single_file {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(DataFusionError::Plan(
+                "Invalid option single_file, must be 'true' or 'false'".into(),
+            )),
+        }?;
+
+        let table_path = match create_local_path_mode {
+            "true" => ListingTableUrl::parse_create_local_if_not_exists(
+                &cmd.location,
+                !single_file,
+            ),
+            "false" => ListingTableUrl::parse(&cmd.location),
+            _ => Err(DataFusionError::Plan(
+                "Invalid option create_local_path, must be 'true' or 'false'".into(),
+            )),
+        }?;
+
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_infinite_source(infinite_source)
-            .with_file_sort_order(cmd.order_exprs.clone());
+            .with_file_sort_order(cmd.order_exprs.clone())
+            .with_insert_mode(insert_mode);
 
-        let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,
             Some(s) => s,

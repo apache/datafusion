@@ -32,11 +32,12 @@ if ! [ git rev-parse --is-inside-work-tree ]; then
   cd datafusion/common && cargo publish
   cd datafusion/expr && cargo publish
   cd datafusion/sql && cargo publish
-  cd datafusion/row && cargo publish
   cd datafusion/physical-expr && cargo publish
   cd datafusion/optimizer && cargo publish
   cd datafusion/core && cargo publish
   cd datafusion/proto && cargo publish
+  cd datafusion/execution && cargo publish
+  cd datafusion/substrait && cargo publish
   cd datafusion-cli && cargo publish --no-verify
 else
     echo "Crates must be released from the source tarball that was voted on, not from the repo"

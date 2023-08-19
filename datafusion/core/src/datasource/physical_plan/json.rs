@@ -26,14 +26,16 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayAs, DisplayFormatType, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use datafusion_execution::TaskContext;
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+use datafusion_physical_expr::{
+    ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
+};
 
 use bytes::{Buf, Bytes};
 use futures::{ready, stream, StreamExt, TryStreamExt};
@@ -168,6 +170,10 @@ impl ExecutionPlan for NdJsonExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn file_scan_config(&self) -> Option<&FileScanConfig> {
+        Some(&self.base_config)
+    }
 }
 
 /// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]
@@ -273,6 +279,7 @@ pub async fn plan_to_json(
         let mut stream = plan.execute(i, task_ctx.clone())?;
         join_set.spawn(async move {
             let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
+
             let mut buffer = Vec::with_capacity(1024);
             while let Some(batch) = stream.next().await.transpose()? {
                 let mut writer = json::LineDelimitedWriter::new(buffer);
@@ -281,6 +288,7 @@ pub async fn plan_to_json(
                 multipart_writer.write_all(&buffer).await?;
                 buffer.clear();
             }
+
             multipart_writer
                 .shutdown()
                 .await
@@ -323,6 +331,7 @@ mod tests {
     use crate::test::partitioned_file_groups;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use rstest::*;
+    use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
     use url::Url;
@@ -334,6 +343,7 @@ mod tests {
     async fn prepare_store(
         state: &SessionState,
         file_compression_type: FileCompressionType,
+        work_dir: &Path,
     ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
         let store_url = ObjectStoreUrl::local_filesystem();
         let store = state.runtime_env().object_store(&store_url).unwrap();
@@ -345,6 +355,7 @@ mod tests {
             1,
             FileType::JSON,
             file_compression_type.to_owned(),
+            work_dir,
         )
         .unwrap();
         let meta = file_groups
@@ -366,17 +377,19 @@ mod tests {
     async fn test_additional_stores(
         file_compression_type: FileCompressionType,
         store: Arc<dyn ObjectStore>,
-    ) {
+    ) -> Result<()> {
         let ctx = SessionContext::new();
         let url = Url::parse("file://").unwrap();
         ctx.runtime_env().register_object_store(&url, store.clone());
         let filename = "1.json";
+        let tmp_dir = TempDir::new()?;
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
             filename,
             1,
             FileType::JSON,
             file_compression_type.to_owned(),
+            tmp_dir.path(),
         )
         .unwrap();
         let path = file_groups
@@ -416,6 +429,7 @@ mod tests {
             ],
             &results
         );
+        Ok(())
     }
 
     #[rstest(
@@ -426,6 +440,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn nd_json_exec_file_without_projection(
         file_compression_type: FileCompressionType,
@@ -435,8 +450,9 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
 
+        let tmp_dir = TempDir::new()?;
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&state, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -497,6 +513,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn nd_json_exec_file_with_missing_column(
         file_compression_type: FileCompressionType,
@@ -505,8 +522,10 @@ mod tests {
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
+
+        let tmp_dir = TempDir::new()?;
         let (object_store_url, file_groups, actual_schema) =
-            prepare_store(&state, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let mut builder = SchemaBuilder::from(actual_schema.fields());
         builder.push(Field::new("missing_col", DataType::Int32, true));
@@ -550,6 +569,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn nd_json_exec_file_projection(
         file_compression_type: FileCompressionType,
@@ -557,8 +577,9 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
+        let tmp_dir = TempDir::new()?;
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&state, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -601,6 +622,7 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn nd_json_exec_file_mixed_order_projection(
         file_compression_type: FileCompressionType,
@@ -608,8 +630,9 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
+        let tmp_dir = TempDir::new()?;
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&state, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -677,11 +700,33 @@ mod tests {
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();
 
+        // get name of first part
+        let paths = fs::read_dir(&out_dir).unwrap();
+        let mut part_0_name: String = "".to_owned();
+        for path in paths {
+            let name = path
+                .unwrap()
+                .path()
+                .file_name()
+                .expect("Should be a file name")
+                .to_str()
+                .expect("Should be a str")
+                .to_owned();
+            if name.ends_with("_0.json") {
+                part_0_name = name;
+                break;
+            }
+        }
+
+        if part_0_name.is_empty() {
+            panic!("Did not find part_0 in json output files!")
+        }
+
         // register each partition as well as the top level dir
         let json_read_option = NdJsonReadOptions::default();
         ctx.register_json(
             "part0",
-            &format!("{out_dir}/part-0.json"),
+            &format!("{out_dir}/{part_0_name}"),
             json_read_option.clone(),
         )
         .await?;
@@ -712,11 +757,12 @@ mod tests {
         case(FileCompressionType::XZ),
         case(FileCompressionType::ZSTD)
     )]
+    #[cfg(feature = "compression")]
     #[tokio::test]
     async fn test_chunked_json(
         file_compression_type: FileCompressionType,
         #[values(10, 20, 30, 40)] chunk_size: usize,
-    ) {
+    ) -> Result<()> {
         test_additional_stores(
             file_compression_type,
             Arc::new(ChunkedStore::new(
@@ -724,7 +770,8 @@ mod tests {
                 chunk_size,
             )),
         )
-        .await;
+        .await?;
+        Ok(())
     }
 
     #[tokio::test]

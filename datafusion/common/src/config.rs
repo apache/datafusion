@@ -16,7 +16,7 @@
 // under the License.
 
 //! Runtime configuration, via [`ConfigOptions`]
-
+use crate::error::_internal_err;
 use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -65,10 +65,10 @@ use std::fmt::Display;
 ///             "field1" => self.field1.set(rem, value),
 ///             "field2" => self.field2.set(rem, value),
 ///             "field3" => self.field3.set(rem, value),
-///             _ => Err(DataFusionError::Internal(format!(
+///             _ => _internal_err!(
 ///                 "Config value \"{}\" not found on MyConfig",
 ///                 key
-///             ))),
+///             ),
 ///         }
 ///     }
 ///
@@ -126,9 +126,9 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => self.$field_name.set(rem, value),
                     )*
-                    _ => Err(DataFusionError::Internal(
-                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
-                    ))
+                    _ => _internal_err!(
+                        "Config value \"{}\" not found on {}", key, stringify!($struct_name)
+                    )
                 }
             }
 
@@ -235,11 +235,27 @@ config_namespace! {
         ///
         /// Defaults to the number of CPU cores on the system
         pub planning_concurrency: usize, default = num_cpus::get()
+
+        /// Specifies the reserved memory for each spillable sort operation to
+        /// facilitate an in-memory merge.
+        ///
+        /// When a sort operation spills to disk, the in-memory data must be
+        /// sorted and merged before being written to a file. This setting reserves
+        /// a specific amount of memory for that in-memory sort/merge process.
+        ///
+        /// Note: This setting is irrelevant if the sort operation cannot spill
+        /// (i.e., if there's no `DiskManager` configured).
+        pub sort_spill_reservation_bytes: usize, default = 10 * 1024 * 1024
+
+        /// When sorting, below what size should data be concatenated
+        /// and sorted in a single RecordBatch rather than sorted in
+        /// batches and merged.
+        pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
     }
 }
 
 config_namespace! {
-    /// Options related to reading of parquet files
+    /// Options related to parquet files
     pub struct ParquetOptions {
         /// If true, reads the Parquet data page level metadata (the
         /// Page Index), if present, to reduce the I/O and number of
@@ -270,6 +286,73 @@ config_namespace! {
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
+
+        // The following map to parquet::file::properties::WriterProperties
+
+        /// Sets best effort maximum size of data page in bytes
+        pub data_pagesize_limit: usize, default = 1024 * 1024
+
+        /// Sets write_batch_size in bytes
+        pub write_batch_size: usize, default = 1024
+
+        /// Sets parquet writer version
+        /// valid values are "1.0" and "2.0"
+        pub writer_version: String, default = "1.0".into()
+
+        /// Sets default parquet compression codec
+        /// Valid values are: uncompressed, snappy, gzip(level),
+        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// These values are not case sensitive. If NULL, uses
+        /// default parquet writer setting
+        pub compression: Option<String>, default = None
+
+        /// Sets if dictionary encoding is enabled. If NULL, uses
+        /// default parquet writer setting
+        pub dictionary_enabled: Option<bool>, default = None
+
+        /// Sets best effort maximum dictionary page size, in bytes
+        pub dictionary_page_size_limit: usize, default = 1024 * 1024
+
+        /// Sets if statistics are enabled for any column
+        /// Valid values are: "none", "chunk", and "page"
+        /// These values are not case sensitive. If NULL, uses
+        /// default parquet writer setting
+        pub statistics_enabled: Option<String>, default = None
+
+        /// Sets max statistics size for any column. If NULL, uses
+        /// default parquet writer setting
+        pub max_statistics_size: Option<usize>, default = None
+
+        /// Sets maximum number of rows in a row group
+        pub max_row_group_size: usize, default = 1024 * 1024
+
+        /// Sets "created by" property
+        pub created_by: String, default = concat!("datafusion version ", env!("CARGO_PKG_VERSION")).into()
+
+        /// Sets column index trucate length
+        pub column_index_truncate_length: Option<usize>, default = None
+
+        /// Sets best effort maximum number of rows in data page
+        pub data_page_row_count_limit: usize, default = usize::MAX
+
+        /// Sets default encoding for any column
+        /// Valid values are: plain, plain_dictionary, rle,
+        /// bit_packed, delta_binary_packed, delta_length_byte_array,
+        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// These values are not case sensitive. If NULL, uses
+        /// default parquet writer setting
+        pub encoding: Option<String>, default = None
+
+        /// Sets if bloom filter is enabled for any column
+        pub bloom_filter_enabled: bool, default = false
+
+        /// Sets bloom filter false positive probability. If NULL, uses
+        /// default parquet writer setting
+        pub bloom_filter_fpp: Option<f64>, default = None
+
+        /// Sets bloom filter number of distinct values. If NULL, uses
+        /// default parquet writer setting
+        pub bloom_filter_ndv: Option<u64>, default = None
     }
 }
 
@@ -354,6 +437,12 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
+        /// When true, DataFusion will opportunistically remove sorts by replacing
+        /// `RepartitionExec` with `SortPreservingRepartitionExec`, and
+        /// `CoalescePartitionsExec` with `SortPreservingMergeExec`,
+        /// even when the query is bounded.
+        pub bounded_order_preserving_variants: bool, default = false
+
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
         /// rule. When set to false, any rules that produce errors will cause the query to fail
@@ -428,9 +517,7 @@ impl ConfigField for ConfigOptions {
             "optimizer" => self.optimizer.set(rem, value),
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
-            _ => Err(DataFusionError::Internal(format!(
-                "Config value \"{key}\" not found on ConfigOptions"
-            ))),
+            _ => _internal_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
 
@@ -723,6 +810,8 @@ macro_rules! config_field {
 config_field!(String);
 config_field!(bool);
 config_field!(usize);
+config_field!(f64);
+config_field!(u64);
 
 /// An implementation trait used to recursively walk configuration
 trait Visit {

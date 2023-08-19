@@ -23,7 +23,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
-use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -215,12 +215,10 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
                 let subqry_alias = self.alias_gen.next("__scalar_sq");
                 self.sub_query_info
                     .push((subquery.clone(), subqry_alias.clone()));
-                let scalar_expr = subquery.subquery.head_output_expr()?.map_or(
-                    Err(DataFusionError::Plan(
-                        "single expression required.".to_string(),
-                    )),
-                    Ok,
-                )?;
+                let scalar_expr = subquery
+                    .subquery
+                    .head_output_expr()?
+                    .map_or(plan_err!("single expression required."), Ok)?;
                 Ok(Expr::Column(create_col_from_scalar_expr(
                     &scalar_expr,
                     subqry_alias,

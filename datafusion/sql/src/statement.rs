@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::parser::{
-    CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt, LexOrdering,
-    Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
+    LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -31,6 +31,7 @@ use datafusion_common::{
     DataFusionError, ExprSchema, OwnedTableReference, Result, SchemaReference,
     TableReference, ToDFSchema,
 };
+use datafusion_expr::dml::{CopyTo, OutputFileFormat};
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -53,7 +54,10 @@ use sqlparser::ast::{
 };
 use sqlparser::parser::ParserError::ParserError;
 
+use datafusion_common::plan_err;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 fn ident_to_string(ident: &Ident) -> String {
@@ -151,25 +155,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let plan = self.query_to_plan(*query, planner_context)?;
                         let input_schema = plan.schema();
 
-                        let plan = if !columns.is_empty() {
-                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                            if schema.fields().len() != input_schema.fields().len() {
-                                return Err(DataFusionError::Plan(format!(
+                    let plan = if !columns.is_empty() {
+                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                        if schema.fields().len() != input_schema.fields().len() {
+                            return plan_err!(
                             "Mismatch: {} columns specified, but result has {} columns",
                             schema.fields().len(),
                             input_schema.fields().len()
-                        )));
-                            }
-                            let input_fields = input_schema.fields();
-                            let project_exprs = schema
-                                .fields()
-                                .iter()
-                                .zip(input_fields)
-                                .map(|(field, input_field)| {
-                                    cast(
-                                        col(input_field.name()),
-                                        field.data_type().clone(),
-                                    )
+                        );
+                        }
+                        let input_fields = input_schema.fields();
+                        let project_exprs = schema
+                            .fields()
+                            .iter()
+                            .zip(input_fields)
+                            .map(|(field, input_field)| {
+                                cast(col(input_field.name()), field.data_type().clone())
                                     .alias(field.name())
                                 })
                                 .collect::<Vec<_>>();
@@ -374,44 +375,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 returning,
             } => {
                 if or.is_some() {
-                    Err(DataFusionError::Plan(
-                        "Inserts with or clauses not supported".to_owned(),
-                    ))?;
-                }
-                if overwrite {
-                    Err(DataFusionError::Plan(
-                        "Insert overwrite is not supported".to_owned(),
-                    ))?;
+                    plan_err!("Inserts with or clauses not supported")?;
                 }
                 if partitioned.is_some() {
-                    Err(DataFusionError::Plan(
-                        "Partitioned inserts not yet supported".to_owned(),
-                    ))?;
+                    plan_err!("Partitioned inserts not yet supported")?;
                 }
                 if !after_columns.is_empty() {
-                    Err(DataFusionError::Plan(
-                        "After-columns clause not supported".to_owned(),
-                    ))?;
+                    plan_err!("After-columns clause not supported")?;
                 }
                 if table {
-                    Err(DataFusionError::Plan(
-                        "Table clause not supported".to_owned(),
-                    ))?;
+                    plan_err!("Table clause not supported")?;
                 }
                 if on.is_some() {
-                    Err(DataFusionError::Plan(
-                        "Insert-on clause not supported".to_owned(),
-                    ))?;
+                    plan_err!("Insert-on clause not supported")?;
                 }
                 if returning.is_some() {
-                    Err(DataFusionError::Plan(
-                        "Insert-returning clause not yet supported".to_owned(),
-                    ))?;
+                    plan_err!("Insert-returning clause not supported")?;
                 }
                 let _ = into; // optional keyword doesn't change behavior
-                self.insert_to_plan(table_name, columns, source)
+                self.insert_to_plan(table_name, columns, source, overwrite)
             }
-
             Statement::Update {
                 table,
                 assignments,
@@ -420,9 +403,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 returning,
             } => {
                 if returning.is_some() {
-                    Err(DataFusionError::Plan(
-                        "Update-returning clause not yet supported".to_owned(),
-                    ))?;
+                    plan_err!("Update-returning clause not yet supported")?;
                 }
                 self.update_to_plan(table, assignments, from, selection)
             }
@@ -435,20 +416,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 from,
             } => {
                 if !tables.is_empty() {
-                    return Err(DataFusionError::NotImplemented(
-                        "DELETE <TABLE> not supported".to_string(),
-                    ));
+                    plan_err!("DELETE <TABLE> not supported")?;
                 }
 
                 if using.is_some() {
-                    Err(DataFusionError::Plan(
-                        "Using clause not supported".to_owned(),
-                    ))?;
+                    plan_err!("Using clause not supported")?;
                 }
+
                 if returning.is_some() {
-                    Err(DataFusionError::Plan(
-                        "Delete-returning clause not yet supported".to_owned(),
-                    ))?;
+                    plan_err!("Delete-returning clause not yet supported")?;
                 }
                 let table_name = self.get_delete_target(from)?;
                 self.delete_to_plan(table_name, selection)
@@ -559,9 +535,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // we only support the basic "SHOW TABLES"
             // https://github.com/apache/arrow-datafusion/issues/3188
             if db_name.is_some() || filter.is_some() || full || extended {
-                Err(DataFusionError::Plan(
-                    "Unsupported parameters to SHOW TABLES".to_string(),
-                ))
+                plan_err!("Unsupported parameters to SHOW TABLES")
             } else {
                 let query = "SELECT * FROM information_schema.tables;";
                 let mut rewrite = DFParser::parse_sql(query)?;
@@ -569,10 +543,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
             }
         } else {
-            Err(DataFusionError::Plan(
-                "SHOW TABLES is not supported unless information_schema is enabled"
-                    .to_string(),
-            ))
+            plan_err!("SHOW TABLES is not supported unless information_schema is enabled")
         }
     }
 
@@ -593,11 +564,71 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }))
     }
 
-    fn copy_to_plan(&self, _statement: CopyToStatement) -> Result<LogicalPlan> {
-        // TODO: implement as part of https://github.com/apache/arrow-datafusion/issues/5654
-        Err(DataFusionError::NotImplemented(
-            "`COPY .. TO ..` statement is not yet supported".to_string(),
-        ))
+    fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
+        // determine if source is table or query and handle accordingly
+        let copy_source = statement.source;
+        let input = match copy_source {
+            CopyToSource::Relation(object_name) => {
+                let table_ref =
+                    self.object_name_to_table_reference(object_name.clone())?;
+                let table_source = self.schema_provider.get_table_provider(table_ref)?;
+                LogicalPlanBuilder::scan(
+                    object_name_to_string(&object_name),
+                    table_source,
+                    None,
+                )?
+                .build()?
+            }
+            CopyToSource::Query(query) => {
+                self.query_to_plan(query, &mut PlannerContext::new())?
+            }
+        };
+
+        // convert options to lowercase strings, check for explicitly set "format" option
+        let mut options = vec![];
+        let mut explicit_format = None;
+        // default behavior is to assume the user is specifying a single file to which
+        // we should output all data regardless of input partitioning.
+        let mut per_thread_output: bool = false;
+        for (key, value) in statement.options {
+            let (k, v) = (key.to_lowercase(), value.to_string().to_lowercase());
+            // check for options important to planning
+            if k == "format" {
+                explicit_format = Some(OutputFileFormat::from_str(&v)?);
+            }
+            if k == "per_thread_output" {
+                per_thread_output = match v.as_str(){
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(DataFusionError::Plan(
+                        format!("Copy to option 'per_thread_output' must be true or false, got {value}")
+                    ))
+                }
+            }
+            options.push((k, v));
+        }
+        let format = match explicit_format {
+            Some(file_format) => file_format,
+            None => {
+                // try to infer file format from file extension
+                let extension: &str = &Path::new(&statement.target)
+                    .extension()
+                    .ok_or(
+                        DataFusionError::Plan("Copy To format not explicitly set and unable to get file extension!".to_string()))?
+                    .to_str()
+                    .ok_or(DataFusionError::Plan("Copy to format not explicitly set and failed to parse file extension!".to_string()))?
+                    .to_lowercase();
+
+                OutputFileFormat::from_str(extension)?
+            }
+        };
+        Ok(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(input),
+            output_url: statement.target,
+            file_format: format,
+            per_thread_output,
+            options,
+        }))
     }
 
     fn build_order_by(
@@ -608,10 +639,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Vec<Vec<datafusion_expr::Expr>>> {
         // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "Provide a schema before specifying the order while creating a table."
-                    .to_owned(),
-            ));
+            );
         }
 
         let mut all_results = vec![];
@@ -623,9 +653,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 for column in expr.to_columns()?.iter() {
                     if !schema.has_column(column) {
                         // Return an error if any column is not in the schema:
-                        return Err(DataFusionError::Plan(format!(
-                            "Column {column} is not in schema"
-                        )));
+                        return plan_err!("Column {column} is not in schema");
                     }
                 }
             }
@@ -656,20 +684,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options,
         } = statement;
 
-        // semantic checks
-        if file_type == "PARQUET" && !columns.is_empty() {
-            Err(DataFusionError::Plan(
-                "Column definitions can not be specified for PARQUET files.".into(),
-            ))?;
-        }
-
         if file_type != "CSV"
             && file_type != "JSON"
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
         {
-            Err(DataFusionError::Plan(
-                "File compression type can be specified for CSV/JSON files.".into(),
-            ))?;
+            plan_err!("File compression type can be specified for CSV/JSON files.")?;
         }
 
         let schema = self.build_schema(columns)?;
@@ -736,10 +755,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let variable = object_name_to_string(&ObjectName(variable.to_vec()));
 
         if !self.has_table("information_schema", "df_settings") {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "SHOW [VARIABLE] is not supported unless information_schema is enabled"
-                    .to_string(),
-            ));
+            );
         }
 
         let variable_lower = variable.to_lowercase();
@@ -808,10 +826,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 | Value::HexStringLiteral(_)
                 | Value::Null
                 | Value::Placeholder(_) => {
-                    return Err(DataFusionError::Plan(format!(
-                        "Unsupported Value {}",
-                        value[0]
-                    )));
+                    return plan_err!("Unsupported Value {}", value[0]);
                 }
             },
             // for capture signed number e.g. +8, -8
@@ -819,17 +834,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 UnaryOperator::Plus => format!("+{expr}"),
                 UnaryOperator::Minus => format!("-{expr}"),
                 _ => {
-                    return Err(DataFusionError::Plan(format!(
-                        "Unsupported Value {}",
-                        value[0]
-                    )));
+                    return plan_err!("Unsupported Value {}", value[0]);
                 }
             },
             _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "Unsupported Value {}",
-                    value[0]
-                )));
+                return plan_err!("Unsupported Value {}", value[0]);
             }
         };
 
@@ -892,9 +901,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let table_name = match &table.relation {
             TableFactor::Table { name, .. } => name.clone(),
-            _ => Err(DataFusionError::Plan(
-                "Cannot update non-table relation!".to_string(),
-            ))?,
+            _ => plan_err!("Cannot update non-table relation!")?,
         };
 
         // Do a table lookup to verify the table exists
@@ -903,7 +910,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .schema_provider
             .get_table_provider(table_name.clone())?;
         let arrow_schema = (*provider.schema()).clone();
-        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
+            table_name.clone(),
+            &arrow_schema,
+        )?);
         let values = table_schema.fields().iter().map(|f| {
             (
                 f.name().clone(),
@@ -996,6 +1006,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         table_name: ObjectName,
         columns: Vec<Ident>,
         source: Box<Query>,
+        overwrite: bool,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
@@ -1071,9 +1082,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
-            Err(DataFusionError::Plan(
-                "Column count doesn't match insert query!".to_owned(),
-            ))?;
+            plan_err!("Column count doesn't match insert query!")?;
         }
 
         let exprs = index_mapping
@@ -1091,10 +1100,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<datafusion_expr::Expr>>>()?;
         let source = project(source, exprs)?;
 
+        let op = if overwrite {
+            WriteOp::InsertOverwrite
+        } else {
+            WriteOp::InsertInto
+        };
+
         let plan = LogicalPlan::Dml(DmlStatement {
             table_name,
             table_schema: Arc::new(table_schema),
-            op: WriteOp::Insert,
+            op,
             input: Arc::new(source),
         });
         Ok(plan)
@@ -1108,16 +1123,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         filter: Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
         if filter.is_some() {
-            return Err(DataFusionError::Plan(
-                "SHOW COLUMNS with WHERE or LIKE is not supported".to_string(),
-            ));
+            return plan_err!("SHOW COLUMNS with WHERE or LIKE is not supported");
         }
 
         if !self.has_table("information_schema", "columns") {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "SHOW COLUMNS is not supported unless information_schema is enabled"
-                    .to_string(),
-            ));
+            );
         }
         // Figure out the where clause
         let where_clause = object_name_to_qualifier(
@@ -1150,10 +1162,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         sql_table_name: ObjectName,
     ) -> Result<LogicalPlan> {
         if !self.has_table("information_schema", "tables") {
-            return Err(DataFusionError::Plan(
+            return plan_err!(
                 "SHOW CREATE TABLE is not supported unless information_schema is enabled"
-                    .to_string(),
-            ));
+            );
         }
         // Figure out the where clause
         let where_clause = object_name_to_qualifier(

@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL Query Planner (produces logical plan from SQL AST)
+//! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::field_not_found;
+use datafusion_common::internal_err;
 use datafusion_expr::WindowUDF;
 use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
@@ -29,6 +30,7 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::plan_err;
 use datafusion_common::{unqualified_field_not_found, DFSchema, DataFusionError, Result};
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
@@ -243,11 +245,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if idents.is_empty() {
             Ok(plan)
         } else if idents.len() != plan.schema().fields().len() {
-            Err(DataFusionError::Plan(format!(
+            plan_err!(
                 "Source table contains {} columns but only {} names given as column alias",
                 plan.schema().fields().len(),
-                idents.len(),
-            )))
+                idents.len()
+            )
         } else {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
@@ -283,7 +285,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map_err(|_: DataFusionError| {
                     field_not_found(col.relation.clone(), col.name.as_str(), schema)
                 }),
-                _ => Err(DataFusionError::Internal("Not a column".to_string())),
+                _ => internal_err!("Not a column"),
             })
     }
 
@@ -461,10 +463,7 @@ pub(crate) fn idents_to_table_reference(
             let catalog = taker.take(enable_normalization);
             Ok(OwnedTableReference::full(catalog, schema, table))
         }
-        _ => Err(DataFusionError::Plan(format!(
-            "Unsupported compound identifier '{:?}'",
-            taker.0,
-        ))),
+        _ => plan_err!("Unsupported compound identifier '{:?}'", taker.0),
     }
 }
 

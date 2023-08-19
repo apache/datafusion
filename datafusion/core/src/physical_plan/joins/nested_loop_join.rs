@@ -73,6 +73,7 @@ type JoinLeftData = (RecordBatch, MemoryReservation);
 /// |--------------------------------|--------------------------------------------|-------------|
 /// | Inner/Left/LeftSemi/LeftAnti   | (UnspecifiedDistribution, SinglePartition) | right       |
 /// | Right/RightSemi/RightAnti/Full | (SinglePartition, UnspecifiedDistribution) | left        |
+/// | Full                           | (SinglePartition, SinglePartition)         | left        |
 ///
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
@@ -119,12 +120,12 @@ impl NestedLoopJoinExec {
         })
     }
 
-    /// left (build) side which gets hashed
+    /// left side
     pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
         &self.left
     }
 
-    /// right (probe) side which are filtered by the hash table
+    /// right side
     pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
         &self.right
     }
@@ -743,10 +744,7 @@ mod tests {
     use crate::{
         assert_batches_sorted_eq,
         common::assert_contains,
-        execution::{
-            context::SessionConfig,
-            runtime_env::{RuntimeConfig, RuntimeEnv},
-        },
+        execution::runtime_env::{RuntimeConfig, RuntimeEnv},
         physical_plan::{
             common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         },
@@ -756,7 +754,6 @@ mod tests {
     use datafusion_expr::Operator;
 
     use crate::physical_plan::joins::utils::JoinSide;
-    use crate::prelude::SessionContext;
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::PhysicalExpr;
@@ -883,8 +880,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_left_table();
         let right = build_right_table();
         let filter = prepare_join_filter();
@@ -912,8 +908,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_left_table();
         let right = build_right_table();
 
@@ -944,8 +939,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_left_table();
         let right = build_right_table();
 
@@ -976,8 +970,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1010,8 +1003,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_semi_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1040,8 +1032,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_anti_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1071,8 +1062,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_semi_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1101,8 +1091,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_anti_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_left_table();
         let right = build_right_table();
 
@@ -1158,9 +1147,8 @@ mod tests {
         for join_type in join_types {
             let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-            let session_ctx =
-                SessionContext::with_config_rt(SessionConfig::default(), runtime);
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = TaskContext::default().with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
 
             let err = multi_partitioned_join_collect(
                 left.clone(),

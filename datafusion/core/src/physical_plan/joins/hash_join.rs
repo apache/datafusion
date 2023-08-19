@@ -25,10 +25,9 @@ use std::task::Poll;
 use std::{any::Any, usize, vec};
 
 use crate::physical_plan::joins::utils::{
-    add_offset_to_ordering_equivalence_classes, adjust_indices_by_join_type,
-    apply_join_filter_to_indices, build_batch_from_indices,
-    calculate_hash_join_output_order, get_final_indices_from_bit_map,
-    need_produce_result_in_final, JoinSide,
+    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
+    calculate_join_output_ordering, combine_join_ordering_equivalence_properties,
+    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
 };
 use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
@@ -77,7 +76,7 @@ use arrow::{
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
-use datafusion_common::{DataFusionError, JoinType, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
@@ -139,9 +138,7 @@ impl HashJoinExec {
         let left_schema = left.schema();
         let right_schema = right.schema();
         if on.is_empty() {
-            return Err(DataFusionError::Plan(
-                "On constraints in HashJoinExec should be non-empty".to_string(),
-            ));
+            return plan_err!("On constraints in HashJoinExec should be non-empty");
         }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
@@ -151,11 +148,14 @@ impl HashJoinExec {
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
-        let output_order = calculate_hash_join_output_order(
-            join_type,
-            left.output_ordering(),
-            right.output_ordering(),
-            left.schema().fields().len(),
+        let output_order = calculate_join_output_ordering(
+            left.output_ordering().unwrap_or(&[]),
+            right.output_ordering().unwrap_or(&[]),
+            *join_type,
+            &on,
+            left_schema.fields.len(),
+            &Self::maintains_input_order(*join_type),
+            Some(Self::probe_side()),
         )?;
 
         Ok(HashJoinExec {
@@ -208,6 +208,23 @@ impl HashJoinExec {
     /// Get null_equals_null
     pub fn null_equals_null(&self) -> bool {
         self.null_equals_null
+    }
+
+    /// Calculate order preservation flags for this hash join.
+    fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
+        vec![
+            false,
+            matches!(
+                join_type,
+                JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
+            ),
+        ]
+    }
+
+    /// Get probe side information for the hash join.
+    pub fn probe_side() -> JoinSide {
+        // In current implementation right side is always probe side.
+        JoinSide::Right
     }
 }
 
@@ -291,14 +308,14 @@ impl ExecutionPlan for HashJoinExec {
                 ));
 
         if breaking {
-            Err(DataFusionError::Plan(format!(
+            plan_err!(
                 "Join Error: The join with cannot be executed with unbounded inputs. {}",
                 if left && right {
                     "Currently, we do not support unbounded inputs on both sides."
                 } else {
                     "Please consider a different type of join or sources."
                 }
-            )))
+            )
         } else {
             Ok(left || right)
         }
@@ -355,13 +372,7 @@ impl ExecutionPlan for HashJoinExec {
     // are processed sequentially in the probe phase, and unmatched rows are directly output
     // as results, these results tend to retain the order of the probe side table.
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![
-            false,
-            matches!(
-                self.join_type,
-                JoinType::Inner | JoinType::RightAnti | JoinType::RightSemi
-            ),
-        ]
+        Self::maintains_input_order(self.join_type)
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -377,31 +388,16 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
-        let left_columns_len = self.left.schema().fields.len();
-        let right_oeq_properties = self.right.ordering_equivalence_properties();
-        match self.join_type {
-            JoinType::RightAnti | JoinType::RightSemi => {
-                // For `RightAnti` and `RightSemi` joins, the right table schema remains valid.
-                // Hence, its ordering equivalence properties can be used as is.
-                new_properties.extend(right_oeq_properties.classes().iter().cloned());
-            }
-            JoinType::Inner => {
-                // For `Inner` joins, the right table schema is no longer valid.
-                // Size of the left table is added as an offset to the right table
-                // columns when constructing the join output schema.
-                let updated_right_classes = add_offset_to_ordering_equivalence_classes(
-                    right_oeq_properties.classes(),
-                    left_columns_len,
-                )
-                .unwrap();
-                new_properties.extend(updated_right_classes);
-            }
-            // In other cases, we cannot propagate ordering equivalences as
-            // the output ordering is not preserved.
-            _ => {}
-        }
-        new_properties
+        combine_join_ordering_equivalence_properties(
+            &self.join_type,
+            &self.left,
+            &self.right,
+            self.schema(),
+            &self.maintains_input_order(),
+            Some(Self::probe_side()),
+            self.equivalence_properties(),
+        )
+        .unwrap()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -434,10 +430,10 @@ impl ExecutionPlan for HashJoinExec {
         let right_partitions = self.right.output_partitioning().partition_count();
         if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
         {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
-                 consider using RepartitionExec",
-            )));
+                 consider using RepartitionExec"
+            );
         }
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
@@ -471,10 +467,10 @@ impl ExecutionPlan for HashJoinExec {
                 ))
             }
             PartitionMode::Auto => {
-                return Err(DataFusionError::Plan(format!(
+                return plan_err!(
                     "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
                     PartitionMode::Auto
-                )));
+                );
             }
         };
 
@@ -718,14 +714,14 @@ impl RecordBatchStream for HashJoinStream {
 // "+----+----+-----+----+----+-----+",
 // "| a1 | b1 | c1  | a2 | b2 | c2  |",
 // "+----+----+-----+----+----+-----+",
+// "| 9  | 8  | 90  | 8  | 8  | 80  |",
 // "| 11 | 8  | 110 | 8  | 8  | 80  |",
 // "| 13 | 10 | 130 | 10 | 10 | 100 |",
 // "| 13 | 10 | 130 | 12 | 10 | 120 |",
-// "| 9  | 8  | 90  | 8  | 8  | 80  |",
 // "+----+----+-----+----+----+-----+"
 // And the result of build and probe indices are:
-// Build indices:  5, 6, 6, 4
-// Probe indices: 3, 4, 5, 3
+// Build indices: 4, 5, 6, 6
+// Probe indices: 3, 3, 4, 5
 #[allow(clippy::too_many_arguments)]
 pub fn build_equal_condition_join_indices(
     build_hashmap: &JoinHashMap,
@@ -756,8 +752,36 @@ pub fn build_equal_condition_join_indices(
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
-    // Visit all of the probe rows
-    for (row, hash_value) in hash_values.iter().enumerate() {
+    // The chained list algorithm generates build indices for each probe row in a reversed sequence as such:
+    // Build Indices: [5, 4, 3]
+    // Probe Indices: [1, 1, 1]
+    //
+    // This affects the output sequence. Hypothetically, it's possible to preserve the lexicographic order on the build side.
+    // Let's consider probe rows [0,1] as an example:
+    //
+    // When the probe iteration sequence is reversed, the following pairings can be derived:
+    //
+    // For probe row 1:
+    //     (5, 1)
+    //     (4, 1)
+    //     (3, 1)
+    //
+    // For probe row 0:
+    //     (5, 0)
+    //     (4, 0)
+    //     (3, 0)
+    //
+    // After reversing both sets of indices, we obtain reversed indices:
+    //
+    //     (3,0)
+    //     (4,0)
+    //     (5,0)
+    //     (3,1)
+    //     (4,1)
+    //     (5,1)
+    //
+    // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+    for (row, hash_value) in hash_values.iter().enumerate().rev() {
         // Get the hash and find it in the build index
 
         // For every item on the build and probe we check if it matches
@@ -781,6 +805,9 @@ pub fn build_equal_condition_join_indices(
             }
         }
     }
+    // Reversing both sets of indices
+    build_indices.as_slice_mut().reverse();
+    probe_indices.as_slice_mut().reverse();
 
     let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
     let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
@@ -939,9 +966,9 @@ pub fn equal_rows(
                     equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             }
@@ -953,9 +980,9 @@ pub fn equal_rows(
                     equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             }
@@ -1022,16 +1049,16 @@ pub fn equal_rows(
                             null_equals_null
                         )
                     } else {
-                        err = Some(Err(DataFusionError::Internal(
-                            "Inconsistent Decimal data type in hasher, the scale should be same".to_string(),
-                        )));
+                        err = Some(internal_err!(
+                            "Inconsistent Decimal data type in hasher, the scale should be same"
+                        ));
                         false
                     }
                 }
                 _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
+                    err = Some(internal_err!(
+                        "Unsupported data type in hasher"
+                    ));
                     false
                 }
             },
@@ -1121,18 +1148,18 @@ pub fn equal_rows(
                         }
                         _ => {
                             // should not happen
-                            err = Some(Err(DataFusionError::Internal(
-                                "Unsupported data type in hasher".to_string(),
-                            )));
+                            err = Some(internal_err!(
+                                "Unsupported data type in hasher"
+                            ));
                             false
                         }
                     }
                 }
             other => {
                 // This is internal because we should have caught this before.
-                err = Some(Err(DataFusionError::Internal(format!(
+                err = Some(internal_err!(
                     "Unsupported data type in hasher: {other}"
-                ))));
+                ));
                 false
             }
         });
@@ -1375,7 +1402,6 @@ mod tests {
 
     use crate::execution::context::SessionConfig;
     use crate::physical_expr::expressions::BinaryExpr;
-    use crate::prelude::SessionContext;
     use crate::{
         assert_batches_sorted_eq,
         common::assert_contains,
@@ -1513,8 +1539,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1559,8 +1584,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_inner_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1604,8 +1628,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_one_no_shared_column_names() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1643,8 +1666,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_two() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 2]),
             ("b2", &vec![1, 2, 2]),
@@ -1691,8 +1713,7 @@ mod tests {
     /// Test where the left has 2 parts, the right with 1 part => 1 part
     #[tokio::test]
     async fn join_inner_one_two_parts_left() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let batch1 = build_table_i32(
             ("a1", &vec![1, 2]),
             ("b2", &vec![1, 2]),
@@ -1746,8 +1767,7 @@ mod tests {
     /// Test where the left has 1 part, the right has 2 parts => 2 parts
     #[tokio::test]
     async fn join_inner_one_two_parts_right() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1822,8 +1842,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_multi_batch() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1864,8 +1883,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_multi_batch() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1909,8 +1927,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_empty_right() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -1946,8 +1963,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_empty_right() {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -1983,8 +1999,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2027,8 +2042,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_left_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2091,8 +2105,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_semi() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left semi join right_table on left_table.b1 = right_table.b2
@@ -2126,8 +2139,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_semi_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2213,8 +2225,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_semi() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2248,8 +2259,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_semi_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2334,8 +2344,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_anti() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2
@@ -2368,8 +2377,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_anti_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2!=8
@@ -2462,8 +2470,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_anti() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         let on = vec![(
@@ -2494,8 +2501,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_anti_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and left_table.a1!=13
@@ -2591,8 +2597,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2630,8 +2635,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_right_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2670,8 +2674,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_one() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2773,8 +2776,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_with_duplicated_column_names() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![1, 2, 3]),
             ("b", &vec![4, 5, 7]),
@@ -2838,8 +2840,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -2879,8 +2880,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -2923,8 +2923,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -2966,8 +2965,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_with_filter() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3035,8 +3033,7 @@ mod tests {
 
         let join = join(left, right, on, &JoinType::Inner, false)?;
 
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let task_ctx = Arc::new(TaskContext::default());
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
@@ -3095,8 +3092,7 @@ mod tests {
                 false,
             )
             .unwrap();
-            let session_ctx = SessionContext::new();
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = Arc::new(TaskContext::default());
 
             let stream = join.execute(0, task_ctx).unwrap();
 
@@ -3143,9 +3139,8 @@ mod tests {
         for join_type in join_types {
             let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
-            let session_ctx =
-                SessionContext::with_config_rt(SessionConfig::default(), runtime);
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = TaskContext::default().with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
 
             let join = join(left.clone(), right.clone(), on.clone(), &join_type, false)?;
 
@@ -3214,8 +3209,10 @@ mod tests {
             let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
             let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
             let session_config = SessionConfig::default().with_batch_size(50);
-            let session_ctx = SessionContext::with_config_rt(session_config, runtime);
-            let task_ctx = session_ctx.task_ctx();
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime);
+            let task_ctx = Arc::new(task_ctx);
 
             let join = HashJoinExec::try_new(
                 left.clone(),

@@ -102,6 +102,13 @@ impl DiskManager {
         }
     }
 
+    /// Return true if this disk manager supports creating temporary
+    /// files. If this returns false, any call to `create_tmp_file`
+    /// will error.
+    pub fn tmp_files_enabled(&self) -> bool {
+        self.local_dirs.lock().is_some()
+    }
+
     /// Return a temporary file from a randomized choice in the configured locations
     ///
     /// If the file can not be created for some reason, returns an
@@ -198,6 +205,7 @@ mod tests {
         );
 
         let dm = DiskManager::try_new(config)?;
+        assert!(dm.tmp_files_enabled());
         let actual = dm.create_tmp_file("Testing")?;
 
         // the file should be in one of the specified local directories
@@ -210,6 +218,7 @@ mod tests {
     fn test_disabled_disk_manager() {
         let config = DiskManagerConfig::Disabled;
         let manager = DiskManager::try_new(config).unwrap();
+        assert!(!manager.tmp_files_enabled());
         assert_eq!(
             manager.create_tmp_file("Testing").unwrap_err().to_string(),
             "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)",

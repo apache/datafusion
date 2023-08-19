@@ -69,7 +69,7 @@ pub enum Operator {
     BitwiseAnd,
     /// Bitwise or, like `|`
     BitwiseOr,
-    /// Bitwise xor, like `#`
+    /// Bitwise xor, such as `^` in MySQL or `#` in PostgreSQL
     BitwiseXor,
     /// Bitwise right, like `>>`
     BitwiseShiftRight,
@@ -77,6 +77,10 @@ pub enum Operator {
     BitwiseShiftLeft,
     /// String concat
     StringConcat,
+    /// At arrow, like `@>`
+    AtArrow,
+    /// Arrow at, like `<@`
+    ArrowAt,
 }
 
 impl Operator {
@@ -108,7 +112,9 @@ impl Operator {
             | Operator::BitwiseXor
             | Operator::BitwiseShiftRight
             | Operator::BitwiseShiftLeft
-            | Operator::StringConcat => None,
+            | Operator::StringConcat
+            | Operator::AtArrow
+            | Operator::ArrowAt => None,
         }
     }
 
@@ -167,6 +173,8 @@ impl Operator {
             Operator::LtEq => Some(Operator::GtEq),
             Operator::Gt => Some(Operator::Lt),
             Operator::GtEq => Some(Operator::LtEq),
+            Operator::AtArrow => Some(Operator::ArrowAt),
+            Operator::ArrowAt => Some(Operator::AtArrow),
             Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
             | Operator::Plus
@@ -214,7 +222,9 @@ impl Operator {
             | Operator::BitwiseShiftLeft
             | Operator::BitwiseShiftRight
             | Operator::BitwiseXor
-            | Operator::StringConcat => 0,
+            | Operator::StringConcat
+            | Operator::AtArrow
+            | Operator::ArrowAt => 0,
         }
     }
 }
@@ -243,10 +253,12 @@ impl fmt::Display for Operator {
             Operator::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
             Operator::BitwiseAnd => "&",
             Operator::BitwiseOr => "|",
-            Operator::BitwiseXor => "#",
+            Operator::BitwiseXor => "BIT_XOR",
             Operator::BitwiseShiftRight => ">>",
             Operator::BitwiseShiftLeft => "<<",
             Operator::StringConcat => "||",
+            Operator::AtArrow => "@>",
+            Operator::ArrowAt => "<@",
         };
         write!(f, "{display}")
     }
@@ -431,7 +443,7 @@ mod tests {
         // BitXor
         assert_eq!(
             format!("{}", lit(1u32) ^ lit(2u32)),
-            "UInt32(1) # UInt32(2)"
+            "UInt32(1) BIT_XOR UInt32(2)"
         );
         // Shl
         assert_eq!(

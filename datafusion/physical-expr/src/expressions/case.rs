@@ -28,7 +28,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, eq_dyn, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
+use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
@@ -319,9 +319,7 @@ impl PhysicalExpr for CaseExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         if children.len() != self.children().len() {
-            Err(DataFusionError::Internal(
-                "CaseExpr: Wrong number of children".to_string(),
-            ))
+            internal_err!("CaseExpr: Wrong number of children")
         } else {
             assert_eq!(children.len() % 2, 0);
             let expr = match children[0].clone().as_any().downcast_ref::<NoOp>() {
@@ -404,6 +402,7 @@ mod tests {
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TreeNode};
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
@@ -966,9 +965,9 @@ mod tests {
         let coerce_type =
             get_case_common_type(&when_thens, else_expr.clone(), input_schema);
         let (when_thens, else_expr) = match coerce_type {
-            None => Err(DataFusionError::Plan(format!(
+            None => plan_err!(
                 "Can't get a common type for then {when_thens:?} and else {else_expr:?} expression"
-            ))),
+            ),
             Some(data_type) => {
                 // cast then expr
                 let left = when_thens

@@ -17,13 +17,13 @@
 
 //! File type abstraction
 
-use crate::error::{DataFusionError, Result};
-
+use crate::common::internal_err;
 use crate::datasource::file_format::arrow::DEFAULT_ARROW_EXTENSION;
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use crate::error::{DataFusionError, Result};
 #[cfg(feature = "compression")]
 use async_compression::tokio::bufread::{
     BzDecoder as AsyncBzDecoder, BzEncoder as AsyncBzEncoder,
@@ -62,7 +62,7 @@ pub trait GetExt {
 }
 
 /// Readable file compression type
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileCompressionType {
     variant: CompressionTypeVariant,
 }
@@ -291,9 +291,9 @@ impl FileType {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
             FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
-                _ => Err(DataFusionError::Internal(
-                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
-                )),
+                _ => internal_err!(
+                    "FileCompressionType can be specified for CSV/JSON FileType."
+                ),
             },
         }
     }

@@ -36,8 +36,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
-use crate::physical_plan::Distribution;
-use datafusion_common::DataFusionError;
+use datafusion_common::{internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
@@ -57,7 +56,7 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     /// or rollback required.
     async fn write_all(
         &self,
-        data: SendableRecordBatchStream,
+        data: Vec<SendableRecordBatchStream>,
         context: &Arc<TaskContext>,
     ) -> Result<u64>;
 }
@@ -65,7 +64,7 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
 /// Execution plan for writing record batches to a [`DataSink`]
 ///
 /// Returns a single row with the number of values written
-pub struct InsertExec {
+pub struct FileSinkExec {
     /// Input plan that produces the record batches to be written.
     input: Arc<dyn ExecutionPlan>,
     /// Sink to which to write
@@ -76,13 +75,13 @@ pub struct InsertExec {
     count_schema: SchemaRef,
 }
 
-impl fmt::Debug for InsertExec {
+impl fmt::Debug for FileSinkExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "InsertExec schema: {:?}", self.count_schema)
+        write!(f, "FileSinkExec schema: {:?}", self.count_schema)
     }
 }
 
-impl InsertExec {
+impl FileSinkExec {
     /// Create a plan to write to `sink`
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
@@ -97,7 +96,7 @@ impl InsertExec {
         }
     }
 
-    fn make_input_stream(
+    fn execute_input_stream(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -136,9 +135,21 @@ impl InsertExec {
             )))
         }
     }
+
+    fn execute_all_input_streams(
+        &self,
+        context: Arc<TaskContext>,
+    ) -> Result<Vec<SendableRecordBatchStream>> {
+        let n_input_parts = self.input.output_partitioning().partition_count();
+        let mut streams = Vec::with_capacity(n_input_parts);
+        for part in 0..n_input_parts {
+            streams.push(self.execute_input_stream(part, context.clone())?);
+        }
+        Ok(streams)
+    }
 }
 
-impl DisplayAs for InsertExec {
+impl DisplayAs for FileSinkExec {
     fn fmt_as(
         &self,
         t: DisplayFormatType,
@@ -153,7 +164,7 @@ impl DisplayAs for InsertExec {
     }
 }
 
-impl ExecutionPlan for InsertExec {
+impl ExecutionPlan for FileSinkExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -172,8 +183,12 @@ impl ExecutionPlan for InsertExec {
         None
     }
 
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // Incoming number of partitions is taken to be the
+        // number of files the query is required to write out.
+        // The optimizer should not change this number.
+        // Parrallelism is handled within the appropriate DataSink
+        vec![false]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
@@ -217,21 +232,9 @@ impl ExecutionPlan for InsertExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
-            return Err(DataFusionError::Internal(
-                format!("Invalid requested partition {partition}. InsertExec requires a single input partition."
-                )));
+            return internal_err!("FileSinkExec can only be called on partition 0!");
         }
-
-        // Execute each of our own input's partitions and pass them to the sink
-        let input_partition_count = self.input.output_partitioning().partition_count();
-        if input_partition_count != 1 {
-            return Err(DataFusionError::Internal(format!(
-                "Invalid input partition count {input_partition_count}. \
-                         InsertExec needs only a single partition."
-            )));
-        }
-
-        let data = self.make_input_stream(0, context.clone())?;
+        let data = self.execute_all_input_streams(context.clone())?;
 
         let count_schema = self.count_schema.clone();
         let sink = self.sink.clone();
