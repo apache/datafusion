@@ -1455,7 +1455,8 @@ mod roundtrip_tests {
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{
-        internal_err, plan_err, DFSchemaRef, DataFusionError, Result, ScalarValue, not_impl_err,
+        internal_err, not_impl_err, plan_err, DFSchemaRef, DataFusionError, Result,
+        ScalarValue,
     };
     use datafusion_expr::expr::{
         self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
