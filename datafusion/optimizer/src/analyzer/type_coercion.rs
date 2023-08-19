@@ -44,7 +44,7 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
     LogicalPlan, Operator, Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -561,9 +561,29 @@ fn get_list_base_type(data_type: &DataType) -> Result<DataType> {
             base_type => Ok(base_type.clone()),
         },
 
-        _ => Err(DataFusionError::Internal(
-            "Only List type is supported".to_string(),
-        )),
+        _ => Ok(data_type.clone()),
+    }
+}
+
+fn get_list_from_base_type(
+    data_type: &DataType,
+    base_type: &DataType,
+) -> Result<DataType> {
+    match data_type {
+        DataType::List(field) => match field.data_type() {
+            DataType::List(inner_field) => Ok(DataType::List(Arc::new(Field::new(
+                field.name(),
+                get_list_from_base_type(inner_field.data_type(), base_type)?,
+                field.is_nullable(),
+            )))),
+            _ => Ok(DataType::List(Arc::new(Field::new(
+                field.name(),
+                base_type.clone(),
+                field.is_nullable(),
+            )))),
+        },
+
+        _ => Ok(base_type.clone()),
     }
 }
 
@@ -577,17 +597,19 @@ fn coerce_nulls_for_array_append(
         expressions.iter().map(|e| e.get_type(schema)).collect();
     let data_types = data_types?;
 
-    if data_types[1] == DataType::Null {
-        let to_type = get_list_base_type(&data_types[0])?;
-        let arg1 = lit(ScalarValue::try_from(to_type)?);
+    if get_list_base_type(&data_types[1])? == DataType::Null {
+        let base_type = get_list_base_type(&data_types[0])?;
+        let to_type = get_list_from_base_type(&data_types[1], &base_type)?;
+
+        let arg1 = cast_expr(&expressions[1], &to_type, schema)?;
+
         return Ok(vec![expressions[0].clone(), arg1]);
     }
 
     if let DataType::List(ref field) = data_types[0] {
         if field.data_type() == &DataType::Null {
-            let arg0 = cast_array_expr(
+            let arg0 = cast_expr(
                 &expressions[0],
-                &data_types[0],
                 &DataType::List(Arc::new(Field::new(
                     field.name(),
                     data_types[1].clone(),
@@ -596,41 +618,6 @@ fn coerce_nulls_for_array_append(
                 schema,
             )?;
             return Ok(vec![arg0, expressions[1].clone()]);
-        }
-    }
-
-    Ok(expressions)
-}
-
-fn coerce_nulls_for_array_prepend(
-    expressions: Vec<Expr>,
-    schema: &DFSchema,
-) -> Result<Vec<Expr>> {
-    assert_eq!(expressions.len(), 2);
-
-    let data_types: Result<Vec<_>> =
-        expressions.iter().map(|e| e.get_type(schema)).collect();
-    let data_types = data_types?;
-
-    if data_types[0] == DataType::Null {
-        let to_type = get_list_base_type(&data_types[1])?;
-        let arg0 = lit(ScalarValue::try_from(to_type)?);
-        return Ok(vec![arg0, expressions[1].clone()]);
-    }
-
-    if let DataType::List(ref field) = data_types[1] {
-        if field.data_type() == &DataType::Null {
-            let arg1 = cast_array_expr(
-                &expressions[1],
-                &data_types[1],
-                &DataType::List(Arc::new(Field::new(
-                    field.name(),
-                    data_types[0].clone(),
-                    field.is_nullable(),
-                ))),
-                schema,
-            )?;
-            return Ok(vec![expressions[0].clone(), arg1]);
         }
     }
 
@@ -678,10 +665,10 @@ fn coerce_arguments_for_fun(
             .fold(current_types.first().unwrap().clone(), |acc, x| {
                 comparison_coercion(&acc, x).unwrap_or(acc)
             });
+
         return expressions
             .iter()
-            .zip(current_types)
-            .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
+            .map(|expr| cast_expr(expr, &new_type, schema))
             .collect::<Result<Vec<_>>>();
     }
 
@@ -692,7 +679,9 @@ fn coerce_arguments_for_fun(
             coerce_nulls_for_array_append(expressions, schema)
         }
         BuiltinScalarFunction::ArrayPrepend => {
-            coerce_nulls_for_array_prepend(expressions, schema)
+            let expressions = vec![expressions[1].clone(), expressions[0].clone()];
+            let expressions = coerce_nulls_for_array_append(expressions, schema)?;
+            Ok(vec![expressions[1].clone(), expressions[0].clone()])
         }
 
         _ => Ok(expressions),
@@ -702,20 +691,6 @@ fn coerce_arguments_for_fun(
 /// Cast `expr` to the specified type, if possible
 fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
     expr.clone().cast_to(to_type, schema)
-}
-
-/// Cast array `expr` to the specified type, if possible
-fn cast_array_expr(
-    expr: &Expr,
-    from_type: &DataType,
-    to_type: &DataType,
-    schema: &DFSchema,
-) -> Result<Expr> {
-    if from_type.equals_datatype(&DataType::Null) {
-        ScalarValue::try_from(to_type.clone()).map(lit)
-    } else {
-        cast_expr(expr, to_type, schema)
-    }
 }
 
 /// Returns the coerced exprs for each `input_exprs`.
