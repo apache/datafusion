@@ -20,6 +20,7 @@
 use std::any::Any;
 
 use bytes::Bytes;
+use datafusion_common::not_impl_err;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use rand::distributions::Alphanumeric;
@@ -174,15 +175,11 @@ impl FileFormat for JsonFormat {
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented yet for Json".into(),
-            ));
+            return not_impl_err!("Overwrites are not implemented yet for Json");
         }
 
         if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
-            return Err(DataFusionError::NotImplemented(
-                "Inserting compressed JSON is not implemented yet.".into(),
-            ));
+            return not_impl_err!("Inserting compressed JSON is not implemented yet.");
         }
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(JsonSink::new(conf, self.file_compression_type));
@@ -281,7 +278,7 @@ impl DataSink for JsonSink {
         match self.config.writer_mode {
             FileWriterMode::Append => {
                 if !self.config.per_thread_output {
-                    return Err(DataFusionError::NotImplemented("per_thread_output=false is not implemented for JsonSink in Append mode".into()));
+                    return not_impl_err!("per_thread_output=false is not implemented for JsonSink in Append mode");
                 }
                 for file_group in &self.config.file_groups {
                     let serializer = JsonSerializer::new();
@@ -299,9 +296,7 @@ impl DataSink for JsonSink {
                 }
             }
             FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented(
-                    "Put Mode is not implemented for Json Sink yet".into(),
-                ))
+                return not_impl_err!("Put Mode is not implemented for Json Sink yet")
             }
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)

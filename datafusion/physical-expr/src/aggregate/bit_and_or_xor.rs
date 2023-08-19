@@ -34,8 +34,9 @@ use arrow::{
     },
     datatypes::Field,
 };
-use datafusion_common::internal_err;
-use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 use std::collections::HashSet;
 
@@ -218,11 +219,11 @@ impl AggregateExpr for BitAnd {
                     .bitand_assign(y))
             }
 
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 self.name(),
                 self.data_type
-            ))),
+            ),
         }
     }
 
@@ -376,11 +377,11 @@ impl AggregateExpr for BitOr {
                 instantiate_accumulator!(self, 0, UInt64Type, |x, y| x.bitor_assign(y))
             }
 
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 self.name(),
                 self.data_type
-            ))),
+            ),
         }
     }
 
@@ -534,11 +535,11 @@ impl AggregateExpr for BitXor {
                 instantiate_accumulator!(self, 0, UInt64Type, |x, y| x.bitxor_assign(y))
             }
 
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 self.name(),
                 self.data_type
-            ))),
+            ),
         }
     }
 

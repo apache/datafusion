@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::{Constraints, DataFusionError, Statistics};
+use datafusion_common::{not_impl_err, Constraints, DataFusionError, Statistics};
 use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
@@ -129,8 +129,7 @@ pub trait TableProvider: Sync + Send {
         _input: Arc<dyn ExecutionPlan>,
         _overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let msg = "Insert into not implemented for this table".to_owned();
-        Err(DataFusionError::NotImplemented(msg))
+        not_impl_err!("Insert into not implemented for this table")
     }
 }
 

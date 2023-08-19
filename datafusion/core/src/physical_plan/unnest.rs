@@ -28,7 +28,9 @@ use arrow::datatypes::{
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion_common::UnnestOptions;
-use datafusion_common::{cast::as_primitive_array, DataFusionError, Result};
+use datafusion_common::{
+    cast::as_primitive_array, not_impl_err, DataFusionError, Result,
+};
 use datafusion_execution::TaskContext;
 use futures::Stream;
 use futures::StreamExt;
@@ -147,9 +149,7 @@ impl ExecutionPlan for UnnestExec {
         let input = self.input.execute(partition, context)?;
 
         if !self.options.preserve_nulls {
-            return Err(DataFusionError::NotImplemented(
-                "Unnest with preserve_nulls=false".to_string(),
-            ));
+            return not_impl_err!("Unnest with preserve_nulls=false");
         }
 
         Ok(Box::pin(UnnestStream {
