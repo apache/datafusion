@@ -416,6 +416,9 @@ NULL
 statement error The "substr" function can only accept strings, but got Int64.
 SELECT substr(1, 3)
 
+statement error The "substr" function can only accept strings, but got Int64.
+SELECT substr(1, 3, 4)
+
 query T
 SELECT translate('12345', '143', 'ax')
 ----
