@@ -48,9 +48,11 @@ use datafusion_common::{
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
+use datafusion_physical_expr::utils::normalize_sort_exprs;
 use datafusion_physical_expr::{
-    EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalenceProperties,
-    OrderingEquivalentClass, PhysicalExpr, PhysicalSortExpr,
+    normalize_ordering_equivalence_classes, EquivalentClass, LexOrdering, LexOrderingRef,
+    OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalExpr,
+    PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -1993,7 +1995,7 @@ mod tests {
 
         let result = get_updated_right_ordering_equivalence_properties(
             &join_type,
-            &[right_oeq_classes.clone()],
+            &[right_oeq_classes],
             left_columns_len,
             &join_eq_properties,
         )?;

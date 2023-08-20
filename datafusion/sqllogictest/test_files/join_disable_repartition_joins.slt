@@ -42,7 +42,7 @@ CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS orders (
                 o_rev VARCHAR,
         ) STORED AS CSV DELIMITER '|'
         WITH ORDER (o_orderkey ASC)
-        LOCATION 'tests/tpch-csv/orders.csv';
+        LOCATION '../core/tests/tpch-csv/orders.csv';
 
 statement ok
 CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS lineitem (
@@ -65,7 +65,7 @@ CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS lineitem (
                     l_rev VARCHAR,
             ) STORED AS CSV DELIMITER '|'
             WITH ORDER (l_orderkey)
-            LOCATION 'tests/tpch-csv/lineitem.csv';
+            LOCATION '../core/tests/tpch-csv/lineitem.csv';
 
 statement ok
 CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS customer (
@@ -78,7 +78,7 @@ CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS customer (
                 c_mktsegment VARCHAR,
                 c_comment VARCHAR,
                 c_rev VARCHAR,
-                    ) STORED AS CSV DELIMITER '|' LOCATION 'tests/tpch-csv/customer.csv'
+                    ) STORED AS CSV DELIMITER '|' LOCATION '../core/tests/tpch-csv/customer.csv'
                     WITH ORDER (c_custkey ASC);
 
 statement ok
@@ -90,7 +90,7 @@ CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS nation (
                     n_rev VARCHAR,
             ) STORED AS CSV DELIMITER '|'
             WITH ORDER (n_nationkey ASC)
-            LOCATION 'tests/tpch-csv/nation.csv';
+            LOCATION '../core/tests/tpch-csv/nation.csv';
 
 # explain multiple sort merge join replacement
 query TT
@@ -381,13 +381,11 @@ Limit: skip=0, fetch=5
 ----------TableScan: annotated_data projection=[a, c]
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
---SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=5
-----ProjectionExec: expr=[a@1 as a]
-------CoalesceBatchesExec: target_batch_size=8192
---------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]
-----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
-----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+--ProjectionExec: expr=[a@1 as a]
+----CoalesceBatchesExec: target_batch_size=8192
+------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c@0, c@1)]
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], has_header=true
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # preserve_inner_join
 query IIII nosort

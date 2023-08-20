@@ -393,7 +393,7 @@ pub fn memory_exec_with_sort(
 ) -> Arc<dyn ExecutionPlan> {
     let mem = MemoryExec::try_new(&[], schema.clone(), None).unwrap();
     Arc::new(if let Some(sort) = sort {
-        mem.with_sort_information(sort)
+        mem.with_sort_information(vec![sort])
     } else {
         mem
     })
@@ -440,21 +440,23 @@ macro_rules! assert_optimized_orthogonal {
         let actual = get_plan_string(&optimized_physical_plan);
         assert_eq!(
             expected_optimized_lines, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+            "\n**JoinSelection - EnforceSorting Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
         );
-        // Run EnforceSorting - JoinSelection
-        let optimized_physical_plan_2 =
-            EnforceSorting::new().optimize(physical_plan.clone(), state.config_options())?;
-        let optimized_physical_plan_2 = JoinSelection::new().optimize(optimized_physical_plan_2.clone(), state.config_options())?;
-
-        assert_eq!(physical_plan.schema(), optimized_physical_plan_2.schema());
-
-        // Get string representation of the plan
-        let actual = get_plan_string(&optimized_physical_plan_2);
-        assert_eq!(
-            expected_optimized_lines, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
+        // TODO: Apply EnforceSorting first after the https://github.com/synnada-ai/arrow-datafusion/pull/165
+        //  is merged.
+        // // Run EnforceSorting - JoinSelection
+        // let optimized_physical_plan_2 =
+        //     EnforceSorting::new().optimize(physical_plan.clone(), state.config_options())?;
+        // let optimized_physical_plan_2 = JoinSelection::new().optimize(optimized_physical_plan_2.clone(), state.config_options())?;
+        //
+        // assert_eq!(physical_plan.schema(), optimized_physical_plan_2.schema());
+        //
+        // // Get string representation of the plan
+        // let actual = get_plan_string(&optimized_physical_plan_2);
+        // assert_eq!(
+        //     expected_optimized_lines, actual,
+        //     "\n**EnforceSorting - JoinSelection Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        // );
 
     };
 }

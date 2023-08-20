@@ -391,8 +391,8 @@ impl ExecutionPlan for SlidingHashJoinExec {
         ]
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false; 2]
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -1242,8 +1242,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             batch_size,
         )?;
 
@@ -1300,8 +1300,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1365,8 +1365,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1429,8 +1429,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1510,8 +1510,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
@@ -1590,8 +1590,8 @@ mod tests {
         let (left, right) = create_memory_table(
             left_batch,
             right_batch,
-            Some(left_sorted),
-            Some(right_sorted),
+            vec![left_sorted],
+            vec![right_sorted],
             13,
         )?;
 
