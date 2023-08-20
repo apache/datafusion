@@ -21,11 +21,26 @@
 
 ## COPY
 
-Copy a table to file(s)
+Copy a table to file(s). Supported file formats are `parquet`, `csv`, and `json`.
 
-<!---
-only COPY <table> TO is supported in v29.0.0 -- COPY <table> FROM is not
--->
+<pre>
+COPY <i><b>table_name</i></b> TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
+
+where <i><b>option</i></b> can be one of:
+    FORMAT <i><b>format_name</i></b>
+    PER_THREAD_OUTPUT <i><b>boolean</i></b>
+    ROW_GROUP_SIZE <i><b>integer</i></b>
+    ROW_GROUP_LIMIT_BYTES <i><b>integer</i></b>
+</pre>
+
+```sql
+> COPY source_table TO 'table' (FORMAT parquet, PER_THREAD_OUTPUT true);
++-------+
+| count |
++-------+
+| 2     |
++-------+
+```
 
 ## INSERT
 
