@@ -213,6 +213,7 @@ mod tests {
         Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::datatypes::DataType;
+    use datafusion_common::internal_err;
 
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
@@ -445,9 +446,9 @@ mod tests {
                 ScalarValue::Int64(c) => c.ok_or_else(|| {
                     DataFusionError::Internal("Found None count".to_string())
                 }),
-                scalar => Err(DataFusionError::Internal(format!(
-                    "Found non int64 scalar value from count: {scalar}"
-                ))),
+                scalar => {
+                    internal_err!("Found non int64 scalar value from count: {scalar}")
+                }
             }?;
             Ok((state_vec, count))
         };

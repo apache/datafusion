@@ -23,6 +23,7 @@ use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PREC
 use arrow_array::cast::AsArray;
 use arrow_array::types::Decimal128Type;
 use arrow_schema::{DataType, Field};
+use datafusion_common::internal_err;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
@@ -141,9 +142,7 @@ pub fn calculate_result_decimal_for_avg(
                 *target_scale,
             ))
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Invalid target type in AvgAccumulator {other:?}"
-        ))),
+        other => internal_err!("Invalid target type in AvgAccumulator {other:?}"),
     }
 }
 

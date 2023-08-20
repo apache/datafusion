@@ -1298,6 +1298,96 @@ async fn unnest_aggregate_columns() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn unnest_array_agg() -> Result<()> {
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut tag_id_builder = UInt32Builder::new();
+
+    for shape_id in 1..=3 {
+        for tag_id in 1..=3 {
+            shape_id_builder.append_value(shape_id as u32);
+            tag_id_builder.append_value((shape_id * 10 + tag_id) as u32);
+        }
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("tag_id", Arc::new(tag_id_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df.clone().collect().await?;
+    let expected = vec![
+        "+----------+--------+",
+        "| shape_id | tag_id |",
+        "+----------+--------+",
+        "| 1        | 11     |",
+        "| 1        | 12     |",
+        "| 1        | 13     |",
+        "| 2        | 21     |",
+        "| 2        | 22     |",
+        "| 2        | 23     |",
+        "| 3        | 31     |",
+        "| 3        | 32     |",
+        "| 3        | 33     |",
+        "+----------+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Doing an `array_agg` by `shape_id` produces:
+    let results = df
+        .clone()
+        .aggregate(
+            vec![col("shape_id")],
+            vec![array_agg(col("tag_id")).alias("tag_id")],
+        )?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----------+--------------+",
+        "| shape_id | tag_id       |",
+        "+----------+--------------+",
+        "| 1        | [11, 12, 13] |",
+        "| 2        | [21, 22, 23] |",
+        "| 3        | [31, 32, 33] |",
+        "+----------+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Unnesting again should produce the original batch.
+    let results = ctx
+        .table("shapes")
+        .await?
+        .aggregate(
+            vec![col("shape_id")],
+            vec![array_agg(col("tag_id")).alias("tag_id")],
+        )?
+        .unnest_column("tag_id")?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----------+--------+",
+        "| shape_id | tag_id |",
+        "+----------+--------+",
+        "| 1        | 11     |",
+        "| 1        | 12     |",
+        "| 1        | 13     |",
+        "| 2        | 21     |",
+        "| 2        | 22     |",
+        "| 2        | 23     |",
+        "| 3        | 31     |",
+        "| 3        | 32     |",
+        "| 3        | 33     |",
+        "+----------+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
 async fn create_test_table(name: &str) -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),

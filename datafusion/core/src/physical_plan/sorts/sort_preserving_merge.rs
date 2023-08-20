@@ -33,7 +33,7 @@ use crate::physical_plan::{
 use datafusion_execution::memory_pool::MemoryConsumer;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
@@ -202,9 +202,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
             partition
         );
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "SortPreservingMergeExec invalid partition {partition}"
-            )));
+            );
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();

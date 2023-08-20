@@ -34,7 +34,7 @@ use datafusion_common::{
     },
     ScalarValue,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::iter;
 use std::sync::Arc;
@@ -58,11 +58,11 @@ where
     F: Fn(&'a str) -> R,
 {
     if args.len() != 1 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but {} takes exactly one argument",
             args.len(),
-            name,
-        )));
+            name
+        );
     }
 
     let string_array = as_generic_string_array::<T>(args[0])?;
@@ -98,9 +98,7 @@ where
                     &[a.as_ref()], op, name
                 )?)))
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function {name}",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
@@ -111,9 +109,7 @@ where
                 let result = a.as_ref().map(|x| (op)(x).as_ref().to_string());
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function {name}",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
 }
@@ -177,9 +173,9 @@ pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => internal_err!(
             "btrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ))),
+        ),
     }
 }
 
@@ -219,10 +215,10 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "concat was called with {} arguments. It requires at least 1.",
             args.len()
-        )));
+        );
     }
 
     // first, decide whether to return a scalar or a vector.
@@ -285,10 +281,10 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     // do not accept 0 or 1 arguments.
     if args.len() < 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "concat_ws was called with {} arguments. It requires at least 2.",
             args.len()
-        )));
+        );
     }
 
     // first map is the iterator, second is for the `Option<_>`
@@ -383,9 +379,9 @@ pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => internal_err!(
             "ltrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ))),
+        ),
     }
 }
 
@@ -459,9 +455,9 @@ pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => internal_err!(
             "rtrim was called with {other} arguments. It requires at least 1 and at most 2."
-        ))),
+        ),
     }
 }
 
@@ -531,9 +527,7 @@ where
                 } else if let Some(value_isize) = value.to_isize() {
                     Ok(Some(format!("{value_isize:x}")))
                 } else {
-                    Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {integer:?} for function to_hex",
-                    )))
+                    internal_err!("Unsupported data type {integer:?} for function to_hex")
                 }
             } else {
                 Ok(None)

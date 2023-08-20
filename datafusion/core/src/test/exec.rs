@@ -44,6 +44,8 @@ use crate::{
     execution::context::TaskContext, physical_plan::stream::RecordBatchStreamAdapter,
 };
 
+use datafusion_common::internal_err;
+
 /// Index into the data that has been returned so far
 #[derive(Debug, Default, Clone)]
 pub struct BatchIndex {
@@ -444,9 +446,7 @@ impl ExecutionPlan for ErrorExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        Err(DataFusionError::Internal(format!(
-            "ErrorExec, unsurprisingly, errored in partition {partition}"
-        )))
+        internal_err!("ErrorExec, unsurprisingly, errored in partition {partition}")
     }
 
     fn statistics(&self) -> Statistics {
@@ -612,9 +612,7 @@ impl ExecutionPlan for BlockingExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::Internal(format!(
-            "Children cannot be replaced in {self:?}"
-        )))
+        internal_err!("Children cannot be replaced in {self:?}")
     }
 
     fn execute(
@@ -749,10 +747,7 @@ impl ExecutionPlan for PanicExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::Internal(format!(
-            "Children cannot be replaced in {:?}",
-            self
-        )))
+        internal_err!("Children cannot be replaced in {:?}", self)
     }
 
     fn execute(

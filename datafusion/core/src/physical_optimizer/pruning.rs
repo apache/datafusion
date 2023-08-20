@@ -46,7 +46,7 @@ use arrow::{
 };
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{
-    plan_err,
+    internal_err, plan_err,
     tree_node::{Transformed, TreeNode},
 };
 use datafusion_physical_expr::utils::collect_columns;
@@ -186,10 +186,10 @@ impl PruningPredicate {
                 Ok(vec![v; statistics.num_containers()])
             }
             other => {
-                Err(DataFusionError::Internal(format!(
+                internal_err!(
                     "Unexpected result of pruning predicate evaluation. Expected Boolean array \
                      or scalar but got {other:?}"
-                )))
+                )
             }
         }
     }
@@ -399,11 +399,11 @@ fn build_statistics_record_batch<S: PruningStatistics>(
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
         if num_containers != array.len() {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "mismatched statistics length. Expected {}, got {}",
                 num_containers,
                 array.len()
-            )));
+            );
         }
 
         // cast statistics array to required data type (e.g. parquet
