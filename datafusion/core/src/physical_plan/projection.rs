@@ -26,30 +26,31 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::expressions::{Column, PhysicalSortExpr};
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
+
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::utils::get_indices_of_matching_sort_exprs_with_order_eq;
-use futures::stream::{Stream, StreamExt};
-use log::trace;
-
-use super::expressions::{Column, PhysicalSortExpr};
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
-
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
+use datafusion_physical_expr::utils::get_indices_of_matching_sort_exprs_with_order_eq;
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, ExtendedSortOptions,
     OrderingEquivalenceProperties,
 };
+
+use futures::stream::{Stream, StreamExt};
+use itertools::Itertools;
+use log::trace;
 
 /// Execution plan for a projection
 #[derive(Debug)]
@@ -67,8 +68,9 @@ pub struct ProjectionExec {
     columns_map: HashMap<Column, Vec<Column>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Expressions' orderings calculated by output ordering and equivalence classes of input plan.
-    /// The projected expressions are mapped by their indices to this vector.
+    /// Expressions' normalized orderings (as given by the output ordering API
+    /// and normalized with respect to equivalence classes of input plan). The
+    /// projected expressions are mapped by their indices to this vector.
     orderings: Vec<Option<PhysicalSortExpr>>,
 }
 
@@ -352,8 +354,8 @@ fn find_orderings_of_exprs(
                 update_ordering(
                     expr,
                     leading_ordering,
-                    || input.equivalence_properties().clone(),
-                    || input.ordering_equivalence_properties().clone(),
+                    || input.equivalence_properties(),
+                    || input.ordering_equivalence_properties(),
                 )
             })?;
             if let Some(ExtendedSortOptions::Ordered(sort_options)) = transformed.state {
@@ -369,19 +371,20 @@ fn find_orderings_of_exprs(
     Ok(orderings)
 }
 
-// If the output ordering corresponds to an UnKnownColumn, it means that the column
-// having the input output ordering is not found in any of the projected expressions.
-// In that case, we set the new output ordering to be the column constructed by
-// the expression residing at the leftmost side of the expressions that have an ordering.
+// If the output ordering corresponds to an UnKnownColumn, it means that the
+// column having the input output ordering is not found in any of the projected
+// expressions. In that case, we set the new output ordering to be the column
+// constructed by the expression residing at the leftmost side of the expressions
+// that have an ordering.
 fn validate_output_ordering(
     output_ordering: Option<Vec<PhysicalSortExpr>>,
     orderings: &[Option<PhysicalSortExpr>],
     expr: &[(Arc<dyn PhysicalExpr>, String)],
 ) -> Option<Vec<PhysicalSortExpr>> {
     output_ordering.and_then(|ordering| {
-        // If leading expression is is invalid column.
-        // Change output ordering of the projection so that it refers to valid
-        // Columns if possible.
+        // If the leading expression is is invalid column, change output
+        // ordering of the projection so that it refers to valid columns if
+        // possible.
         if ordering[0].expr.as_any().is::<UnKnownColumn>() {
             for (idx, order) in orderings.iter().enumerate() {
                 if let Some(sort_expr) = order {
@@ -399,8 +402,9 @@ fn validate_output_ordering(
     })
 }
 
-/// Each expression in a PhysicalExpr is stated with [`ExprOrdering`] struct.
-/// Parent expression's [`ExprOrdering`] is set according to [`ExprOrdering`] of its children.
+/// Each expression in a [`PhysicalExpr`] is associated with a state with type
+/// [`ExprOrdering`]. A parent expression's [`ExprOrdering`] is set according
+/// to the [`ExprOrdering`] state of its children.
 #[derive(Debug)]
 struct ExprOrdering {
     expr: Arc<dyn PhysicalExpr>,
@@ -447,44 +451,38 @@ fn update_ordering<
     equal_properties: F,
     ordering_equal_properties: F2,
 ) -> Result<Transformed<ExprOrdering>> {
-    // if we can directly match a sort expr with the current node, we can set its state and return early.
-    // TODO: If there is a PhysicalExpr other than Column at the node (let's say a+b), and there is an
-    // ordering equivalence of it (let's say c+d), we actually can find it at this step.
+    // If we can directly match a sort expr with the current node, we can set
+    // its state and return early.
+    // TODO: If there is a PhysicalExpr other than a Column at this node (e.g.
+    //       a BinaryExpr like a + b), and there is an ordering equivalence of
+    //       it (let's say like c + d), we actually can find it at this step.
     if sort_expr.expr.eq(&node.expr) {
         node.state = Some(ExtendedSortOptions::Ordered(sort_expr.options));
         return Ok(Transformed::Yes(node));
     }
 
-    // intermediate node calculation:
     if let Some(children_sort_options) = &node.children_states {
-        let parent_sort_options = node.expr.get_ordering(children_sort_options);
-
-        node.state = Some(parent_sort_options);
-
-        Ok(Transformed::Yes(node))
-    }
-    // leaf node: (only Column and Literal do not have a child)
-    else {
-        // column leaf:
-        if let Some(column) = node.expr.as_any().downcast_ref::<Column>() {
-            node.state = get_indices_of_matching_sort_exprs_with_order_eq(
-                &[sort_expr.clone()],
-                &[column.clone()],
-                equal_properties,
-                ordering_equal_properties,
-            )
-            .map(|(sort_options, _)| {
-                ExtendedSortOptions::Ordered(SortOptions {
-                    descending: sort_options[0].descending,
-                    nulls_first: sort_options[0].nulls_first,
-                })
-            });
-            return Ok(Transformed::Yes(node));
-        }
-        // last option, literal leaf:
+        // We have an intermediate (non-leaf) node, account for its children:
+        node.state = Some(node.expr.get_ordering(children_sort_options));
+    } else if let Some(column) = node.expr.as_any().downcast_ref::<Column>() {
+        // We have a Column, which is one of the two possible leaf node types:
+        node.state = get_indices_of_matching_sort_exprs_with_order_eq(
+            &[sort_expr.clone()],
+            &[column.clone()],
+            equal_properties,
+            ordering_equal_properties,
+        )
+        .map(|(sort_options, _)| {
+            ExtendedSortOptions::Ordered(SortOptions {
+                descending: sort_options[0].descending,
+                nulls_first: sort_options[0].nulls_first,
+            })
+        });
+    } else {
+        // We have a Literal, which is the other possible leaf node type:
         node.state = Some(node.expr.get_ordering(&[]));
-        Ok(Transformed::Yes(node))
     }
+    Ok(Transformed::Yes(node))
 }
 
 impl TreeNode for ExprOrdering {
@@ -492,15 +490,13 @@ impl TreeNode for ExprOrdering {
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
-        let children = self.children();
-        for child in children {
+        for child in self.children() {
             match op(&child)? {
                 VisitRecursion::Continue => {}
                 VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
                 VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
             }
         }
-
         Ok(VisitRecursion::Continue)
     }
 
@@ -512,15 +508,12 @@ impl TreeNode for ExprOrdering {
         if children.is_empty() {
             Ok(self)
         } else {
-            let children_nodes = children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<Vec<_>>>()?;
             Ok(ExprOrdering::new_with_children(
-                children_nodes
-                    .iter()
-                    .map(|c| c.state.unwrap_or(ExtendedSortOptions::Unordered))
-                    .collect(),
+                children
+                    .into_iter()
+                    .map(transform)
+                    .map_ok(|c| c.state.unwrap_or(ExtendedSortOptions::Unordered))
+                    .collect::<Result<Vec<_>>>()?,
                 self.expr,
             ))
         }

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::expressions::Column;
+use crate::utils::collect_columns;
 use crate::{
     normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
     PhysicalSortExpr,
@@ -24,7 +25,6 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
 
-use crate::utils::collect_columns;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -134,7 +134,8 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
 pub type OrderingEquivalenceProperties = EquivalenceProperties<LexOrdering>;
 
 impl OrderingEquivalenceProperties {
-    /// Check whether leading_ordering is contained in either of the ordering equivalent classes.
+    /// Checks whether `leading_ordering` is contained in any of the ordering
+    /// equivalence classes.
     pub fn satisfies_leading_ordering(
         &self,
         leading_ordering: &PhysicalSortExpr,
@@ -467,7 +468,7 @@ pub fn project_ordering_equivalence_properties(
         class.update_with_aliases(&oeq_alias_map, fields);
     }
 
-    // Prune columns that no longer is in the schema from the OrderingEquivalenceProperties.
+    // Prune columns that are no longer in the schema from the OrderingEquivalenceProperties.
     for class in eq_classes.iter_mut() {
         let sort_exprs_to_remove = class
             .iter()

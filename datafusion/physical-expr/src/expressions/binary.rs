@@ -22,6 +22,15 @@ mod kernels_arrow;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
+use crate::array_expressions::{
+    array_append, array_concat, array_has_all, array_prepend,
+};
+use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use crate::intervals::{apply_operator, Interval};
+use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
+use crate::PhysicalExpr;
+
+use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::array::*;
 use arrow::compute::cast;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
@@ -43,14 +52,15 @@ use arrow::compute::kernels::comparison::{
     eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
+use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
-
-use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
-
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow_array::{Datum, Scalar};
 use arrow_schema::SortOptions;
-
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::get_result_type;
+use datafusion_expr::{ColumnarValue, Operator};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -64,21 +74,6 @@ use kernels_arrow::{
     is_not_distinct_from_f32, is_not_distinct_from_f64, is_not_distinct_from_null,
     is_not_distinct_from_utf8,
 };
-
-use crate::array_expressions::{
-    array_append, array_concat, array_has_all, array_prepend,
-};
-use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::intervals::{apply_operator, Interval};
-use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
-use crate::PhysicalExpr;
-use arrow_array::{Datum, Scalar};
-
-use datafusion_common::cast::as_boolean_array;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::binary::get_result_type;
-use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
 #[derive(Debug, Hash, Clone)]
@@ -696,8 +691,8 @@ impl PhysicalExpr for BinaryExpr {
         self.hash(&mut s);
     }
 
-    /// [`BinaryExpr`] has its own rules for each operator.
-    /// TODO: There may me rules specific to some data types (such as division and multiplication on unsigned integers)
+    /// For each operator, [`BinaryExpr`] has distinct ordering rules.
+    /// TODO: There may be rules specific to some data types (such as division and multiplication on unsigned integers)
     fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
         let (left_child, right_child) = (&children[0], &children[1]);
         match self.op() {

@@ -129,7 +129,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// directly because it must remain object safe.
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 
-    /// Providing children's [`ExtendedSortOptions`], returns the [`ExtendedSortOptions`] of a [`PhysicalExpr`].
+    /// Given children's [`ExtendedSortOptions`], returns the
+    /// [`ExtendedSortOptions`] of this [`PhysicalExpr`].
     fn get_ordering(&self, _children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
         ExtendedSortOptions::Unordered
     }
@@ -141,22 +142,24 @@ impl Hash for dyn PhysicalExpr {
     }
 }
 
-/// To propagate [`SortOptions`] across the [`PhysicalExpr`], using the [`Option<SortOptions>`]
-/// structure is insufficient. There must be a differentiation between unordered columns
-/// and literal values since literals may not break the ordering when they are used as a child
-/// of a binary expression, if the other child has some ordering. On the other hand, unordered
-/// columns cannot maintain the ordering when they take part in such operations.
-// Ex.: ((a_orderedd + b_unordered) + c_ordered) expression cannot end up with sorted data,
-// However, ((a_orderedd + 999) + c_ordered) expression can. Therefore, we need two different
-// variants for literals and unordered columns since literals may not break the order of
-// the other child under some mathematical operations.
+/// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
+/// to simply use `Option<SortOptions>`: There must be a differentiation between
+/// unordered columns and literal values, since literals may not break the ordering
+/// when they are used as a child of some binary expression when the other child has
+/// some ordering. On the other hand, unordered columns cannot maintain ordering when
+/// they take part in such operations.
+///
+/// Example: ((a_ordered + b_unordered) + c_ordered) expression cannot end up with
+/// sorted data; however the ((a_ordered + 999) + c_ordered) expression can. Therefore,
+/// we need two different variants for literals and unordered columns as literals are
+/// often more ordering-friendly under most mathematical operations.
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ExtendedSortOptions {
-    // For an ordered data, we use ordinary [`SortOptions`]
+    /// Use the ordinary [`SortOptions`] struct to represent ordered data:
     Ordered(SortOptions),
-    // Unordered data are represented as Unordered
+    // This alternative represents unordered data:
     Unordered,
-    // Singleton is used for single-valued literal numbers
+    // Singleton is used for single-valued literal numbers:
     Singleton,
 }
 

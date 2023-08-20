@@ -21,14 +21,14 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
+use crate::PhysicalExpr;
+
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
-use crate::PhysicalExpr;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},

@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::intervals::Interval;
 use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
 use crate::PhysicalExpr;
+
 use arrow::compute;
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, Schema};
@@ -140,7 +141,7 @@ impl PhysicalExpr for CastExpr {
         // https://github.com/apache/arrow-rs/pull/4395
     }
 
-    /// [`CastExpr`]'s are preserving the ordering of its child.
+    /// A [`CastExpr`] preserves the ordering of its child.
     fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
         children[0]
     }
