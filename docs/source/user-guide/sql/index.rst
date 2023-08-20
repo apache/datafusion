@@ -25,6 +25,7 @@ SQL Reference
    select
    subqueries
    ddl
+   dml
    explain
    information_schema
    operators
