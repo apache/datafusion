@@ -34,7 +34,6 @@ use datafusion_common::{
     internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
     OwnedTableReference, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_element,
     array_has, array_has_all, array_has_any, array_length, array_ndims, array_position,
@@ -58,6 +57,10 @@ use datafusion_expr::{
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+};
+use datafusion_expr::{
+    array_pop_back,
+    expr::{Alias, Placeholder},
 };
 use std::sync::Arc;
 
@@ -460,6 +463,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
+            ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
@@ -1268,6 +1272,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayPopBack => {
+                    Ok(array_pop_back(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayPrepend => Ok(array_prepend(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
