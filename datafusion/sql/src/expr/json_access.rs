@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::Operator;
 use sqlparser::ast::JsonOperator;
 
@@ -25,9 +25,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match op {
             JsonOperator::AtArrow => Ok(Operator::AtArrow),
             JsonOperator::ArrowAt => Ok(Operator::ArrowAt),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported SQL json operator {op:?}"
-            ))),
+            _ => not_impl_err!("Unsupported SQL json operator {op:?}"),
         }
     }
 }

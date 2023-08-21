@@ -30,8 +30,10 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::plan_err;
-use datafusion_common::{unqualified_field_not_found, DFSchema, DataFusionError, Result};
+use datafusion_common::{
+    not_impl_err, plan_err, unqualified_field_not_found, DFSchema, DataFusionError,
+    Result,
+};
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
@@ -298,9 +300,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     "field", data_type, true,
                 ))))
             }
-            SQLDataType::Array(None) => Err(DataFusionError::NotImplemented(
-                "Arrays with unspecified type is not supported".to_string(),
-            )),
+            SQLDataType::Array(None) => {
+                not_impl_err!("Arrays with unspecified type is not supported")
+            }
             other => self.convert_simple_data_type(other),
         }
     }
@@ -347,9 +349,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {
                     // We dont support TIMETZ and TIME WITH TIME ZONE for now
-                    Err(DataFusionError::NotImplemented(format!(
+                    not_impl_err!(
                         "Unsupported SQL type {sql_type:?}"
-                    )))
+                    )
                 }
             }
             SQLDataType::Numeric(exact_number_info)
@@ -394,9 +396,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
             | SQLDataType::BigDecimal(_)
-            | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
+            | SQLDataType::Clob(_) => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
-            ))),
+            ),
         }
     }
 
