@@ -18,6 +18,7 @@
 //! This file contains common subroutines for regular and symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
+use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{fmt, usize};
@@ -112,58 +113,77 @@ impl JoinHashMap {
     }
 }
 
+/// Trait defining methods that must be implemented by a hash map type to be used for joins.
 pub trait JoinHashMapType {
-    type ListType: IndexMut<usize, Output = u64>;
+    /// The type of list used to store the hash values.
+    type NextType: IndexMut<usize, Output = u64>;
+    /// Returns a mutable reference to `self` as a `dyn Any` for dynamic downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    /// Returns a mutable reference to the hash map.
     fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)>;
-    fn extend(&mut self, len: usize, value: u64);
+    /// Returns a reference to the hash map.
     fn get_map(&self) -> &RawTable<(u64, u64)>;
-    fn get_mut_list(&mut self) -> &mut Self::ListType;
-    fn get_list(&self) -> &Self::ListType;
+    /// Returns a mutable reference to the next.
+    fn get_mut_list(&mut self) -> &mut Self::NextType;
+    /// Returns a reference to the next.
+    fn get_list(&self) -> &Self::NextType;
 }
 
+/// Implementation of `JoinHashMapType` for `JoinHashMap`.
 impl JoinHashMapType for JoinHashMap {
-    type ListType = Vec<u64>;
+    type NextType = Vec<u64>;
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Get a mutable reference to the hash map.
     fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)> {
         &mut self.map
     }
 
-    fn extend(&mut self, _: usize, _: u64) {
-        unimplemented!()
-    }
-
+    /// Get a reference to the hash map.
     fn get_map(&self) -> &RawTable<(u64, u64)> {
         &self.map
     }
 
-    fn get_mut_list(&mut self) -> &mut Self::ListType {
+    /// Get a mutable reference to the next.
+    fn get_mut_list(&mut self) -> &mut Self::NextType {
         &mut self.next
     }
 
-    fn get_list(&self) -> &Self::ListType {
+    /// Get a reference to the next.
+    fn get_list(&self) -> &Self::NextType {
         &self.next
     }
 }
 
+/// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {
-    type ListType = VecDeque<u64>;
+    type NextType = VecDeque<u64>;
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Get a mutable reference to the hash map.
     fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)> {
         &mut self.map
     }
 
-    fn extend(&mut self, len: usize, value: u64) {
-        self.list.resize(self.list.len() + len, value)
-    }
-
+    /// Get a reference to the hash map.
     fn get_map(&self) -> &RawTable<(u64, u64)> {
         &self.map
     }
 
-    fn get_mut_list(&mut self) -> &mut Self::ListType {
-        &mut self.list
+    /// Get a mutable reference to the next.
+    fn get_mut_list(&mut self) -> &mut Self::NextType {
+        &mut self.next
     }
 
-    fn get_list(&self) -> &Self::ListType {
-        &self.list
+    /// Get a reference to the next.
+    fn get_list(&self) -> &Self::NextType {
+        &self.next
     }
 }
 
@@ -210,7 +230,7 @@ pub struct PruningJoinHashMap {
     /// Stores hash value to last row index
     pub map: RawTable<(u64, u64)>,
     /// Stores indices in chained list data structure
-    pub list: VecDeque<u64>,
+    pub next: VecDeque<u64>,
 }
 
 impl PruningJoinHashMap {
@@ -225,7 +245,7 @@ impl PruningJoinHashMap {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         PruningJoinHashMap {
             map: RawTable::with_capacity(capacity),
-            list: VecDeque::with_capacity(capacity),
+            next: VecDeque::with_capacity(capacity),
         }
     }
 
@@ -257,7 +277,7 @@ impl PruningJoinHashMap {
     /// The size of the hash map in bytes.
     pub(crate) fn size(&self) -> usize {
         self.map.allocation_info().1.size()
-            + self.list.capacity() * std::mem::size_of::<u64>()
+            + self.next.capacity() * std::mem::size_of::<u64>()
     }
 
     /// Removes hash values from the map and list based on the given pruning length and deleting offset.
@@ -277,7 +297,7 @@ impl PruningJoinHashMap {
         shrink_factor: usize,
     ) -> Result<()> {
         // Remove elements from the list based on the pruning length.
-        self.list.drain(0..prune_length);
+        self.next.drain(0..prune_length);
 
         // Calculate the keys that should be removed from the map.
         let removable_keys = unsafe {

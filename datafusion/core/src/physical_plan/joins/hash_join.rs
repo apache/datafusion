@@ -71,7 +71,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
-use crate::physical_plan::joins::hash_join_utils::JoinHashMapType;
+use crate::physical_plan::joins::hash_join_utils::{JoinHashMapType, PruningJoinHashMap};
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -582,7 +582,7 @@ async fn collect_left_input(
     for batch in batches.iter() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash::<false, _>(
+        update_hash(
             &on_left,
             batch,
             &mut hashmap,
@@ -602,7 +602,7 @@ async fn collect_left_input(
 
 /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
 /// assuming that the [RecordBatch] corresponds to the `index`th
-pub fn update_hash<const EXTEND_CHAIN: bool, T: JoinHashMapType>(
+pub fn update_hash<T>(
     on: &[Column],
     batch: &RecordBatch,
     hash_map: &mut T,
@@ -610,7 +610,10 @@ pub fn update_hash<const EXTEND_CHAIN: bool, T: JoinHashMapType>(
     random_state: &RandomState,
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: usize,
-) -> Result<()> {
+) -> Result<()>
+where
+    T: JoinHashMapType,
+{
     // evaluate the keys
     let keys_values = on
         .iter()
@@ -619,8 +622,11 @@ pub fn update_hash<const EXTEND_CHAIN: bool, T: JoinHashMapType>(
 
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-    if EXTEND_CHAIN {
-        hash_map.extend(batch.num_rows(), 0)
+
+    if let Some(hash_map) = hash_map.as_any_mut().downcast_mut::<PruningJoinHashMap>() {
+        hash_map
+            .next
+            .resize(hash_map.next.len() + batch.num_rows(), 0);
     }
 
     // insert hashes to key of the hashmap

@@ -943,7 +943,7 @@ impl OneSideHashJoiner {
         self.hashes_buffer.resize(batch.num_rows(), 0);
         // Get allocation_info before adding the item
         // Update the hashmap with the join key values and hashes of the incoming batch:
-        update_hash::<true, _>(
+        update_hash(
             &self.on,
             batch,
             &mut self.hashmap,
