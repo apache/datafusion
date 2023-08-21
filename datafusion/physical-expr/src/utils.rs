@@ -845,13 +845,13 @@ fn get_lexicographical_match_indices(
         .then_some(indices_of_equality)
 }
 
-/// This function attempts to find a full match between required and provided
-/// sorts, returning the indices and sort options of the matches found.
+/// Attempts to find a full match between the required columns to be ordered (lexicographically), and
+/// the provided sort options (lexicographically), while considering equivalence properties.
 ///
-/// First, it normalizes the sort expressions and then checks for matches.
-/// If no full match is found, it then checks against ordering equivalence properties.
-/// If still no full match is found, it returns `None`.
-/// required_columns columns of lexicographical ordering.
+/// It starts by normalizing members of both the required columns and the provided sort options.
+/// If a full match is found, returns the sort options and indices of the matches. If no full match is found,
+/// the function proceeds to check against ordering equivalence properties. If still no full match is found,
+/// the function returns `None`.
 pub fn get_indices_of_matching_sort_exprs_with_order_eq<
     F: Fn() -> EquivalenceProperties,
     F2: Fn() -> OrderingEquivalenceProperties,

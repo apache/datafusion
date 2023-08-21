@@ -129,8 +129,15 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// directly because it must remain object safe.
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 
-    /// Given children's [`ExtendedSortOptions`], returns the
-    /// [`ExtendedSortOptions`] of this [`PhysicalExpr`].
+    /// The order information of a PhysicalExpr can be estimated from its children.
+    /// This is especially helpful for projection expressions. If we can ensure that the
+    /// order of a PhysicalExpr to project matches with the order of SortExec, we can
+    /// eliminate that SortExecs.
+    ///
+    /// By recursively calling this function, we can obtain the overall order
+    /// information of the PhysicalExpr. Since `SortOptions` cannot fully handle
+    /// the propagation of unordered columns and literals, the `ExtendedSortOptions`
+    /// struct is used.
     fn get_ordering(&self, _children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
         ExtendedSortOptions::Unordered
     }

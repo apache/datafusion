@@ -339,6 +339,25 @@ impl ExecutionPlan for ProjectionExec {
     }
 }
 
+/// Calculates the output orderings for a set of expressions within the context of a given
+/// execution plan. The resulting orderings are all in the type of [`Column`], since these
+/// expressions become [`Column`] after the projection step. The expressions having an alias
+/// are renamed with those aliases in the returned [`PhysicalSortExpr`]'s. If an expression
+/// is found to be unordered, the corresponding entry in the output vector is `None`.
+///
+/// # Arguments
+///
+/// * `expr` - A slice of tuples containing expressions and their corresponding aliases.
+///
+/// * `input` - A reference to an execution plan that provides output ordering and equivalence
+/// properties.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of optional [`PhysicalSortExpr`]'s. Each element of the
+/// vector corresponds to an expression from the input slice. If an expression can be ordered,
+/// the corresponding entry is `Some(PhysicalSortExpr)`. If an expression cannot be ordered,
+/// the entry is `None`.
 fn find_orderings_of_exprs(
     expr: &[(Arc<dyn PhysicalExpr>, String)],
     input: &Arc<dyn ExecutionPlan>,
@@ -371,18 +390,21 @@ fn find_orderings_of_exprs(
     Ok(orderings)
 }
 
-// If the output ordering corresponds to an UnKnownColumn, it means that the
-// column having the input output ordering is not found in any of the projected
-// expressions. In that case, we set the new output ordering to be the column
-// constructed by the expression residing at the leftmost side of the expressions
-// that have an ordering.
+/// This function takes the current `output_ordering`, the `orderings` based on projected expressions,
+/// and the `expr` representing the projected expressions themselves. It aims to ensure that the output
+/// ordering is valid and correctly corresponds to the projected columns.
+///
+/// If the leading expression in the `output_ordering` is an [`UnKnownColumn`], it indicates that the column
+/// referenced in the ordering is not found among the projected expressions. In such cases, this function
+/// attempts to create a new output ordering by referring to valid columns from the leftmost side of the
+/// expressions that have an ordering specified.
 fn validate_output_ordering(
     output_ordering: Option<Vec<PhysicalSortExpr>>,
     orderings: &[Option<PhysicalSortExpr>],
     expr: &[(Arc<dyn PhysicalExpr>, String)],
 ) -> Option<Vec<PhysicalSortExpr>> {
     output_ordering.and_then(|ordering| {
-        // If the leading expression is is invalid column, change output
+        // If the leading expression is invalid column, change output
         // ordering of the projection so that it refers to valid columns if
         // possible.
         if ordering[0].expr.as_any().is::<UnKnownColumn>() {
@@ -402,9 +424,16 @@ fn validate_output_ordering(
     })
 }
 
-/// Each expression in a [`PhysicalExpr`] is associated with a state with type
-/// [`ExprOrdering`]. A parent expression's [`ExprOrdering`] is set according
-/// to the [`ExprOrdering`] state of its children.
+/// The `ExprOrdering` struct is designed to aid in the determination of ordering (represented
+/// by [`ExtendedSortOptions`]) for a given [`PhysicalExpr`]. When analyzing the orderings
+/// of a [`PhysicalExpr`], the process begins by assigning the ordering of its leaf nodes.
+/// By propagating these leaf node orderings upwards in the expression tree, the overall
+/// ordering of the entire [`PhysicalExpr`] can be derived.
+///
+/// This struct holds the necessary state information for each expression in the [`PhysicalExpr`].
+/// It encapsulates the orderings (`state`) associated with the expression (`expr`), and
+/// orderings of the children expressions (`children_states`). The [`ExprOrdering`] of a parent
+/// expression is determined based on the [`ExprOrdering`] states of its children expressions.
 #[derive(Debug)]
 struct ExprOrdering {
     expr: Arc<dyn PhysicalExpr>,
@@ -441,7 +470,19 @@ impl ExprOrdering {
     }
 }
 
-/// Calculates the a [`PhysicalExpr`] node's [`ExprOrdering`] from its children.
+/// Calculates the [`ExtendedSortOptions`] of a given [`ExprOrdering`] node.
+/// The node is either a leaf node, or an intermediate node:
+/// - If it is a leaf node, the children states are `None`. We directly find
+/// the order of the node by looking at the given sort expression and equivalence
+/// properties if it is a `Column` leaf, or we mark it as unordered. In the case
+/// of a `Literal` leaf, we mark it as singleton so that it can cooperate with
+/// some ordered columns at the upper steps.
+/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
+/// and operator has its own rules about how to propagate the children orderings.
+/// However, before the children order propagation, it is checked that whether
+/// the intermediate node can be directly matched with the sort expression. If there
+/// is a match, the sort expression emerges at that node immediately, discarding
+/// the order coming from the children.
 fn update_ordering<
     F: Fn() -> EquivalenceProperties,
     F2: Fn() -> OrderingEquivalenceProperties,

@@ -435,7 +435,9 @@ pub fn project_equivalence_properties(
 
     eq_classes.retain(|props| {
         props.len() > 1
-            && !(props.len() == 2 && props.head.eq(props.others().iter().next().unwrap()))
+            &&
+            // A column should not give an equivalence with itself.
+             !(props.len() == 2 && props.head.eq(props.others().iter().next().unwrap()))
     });
 
     output_eq.extend(eq_classes);
