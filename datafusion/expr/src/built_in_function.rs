@@ -525,7 +525,7 @@ impl BuiltinScalarFunction {
                             }
                         }
                         _ => {
-                            return internal_err!(
+                            return plan_err!(
                                 "The {self} function can only accept list as the args."
                             )
                         }
@@ -542,7 +542,7 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field) => Ok(field.data_type().clone()),
-                _ => internal_err!(
+                _ => plan_err!(
                     "The {self} function can only accept list as the first argument"
                 ),
             },
@@ -608,7 +608,7 @@ impl BuiltinScalarFunction {
                     Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
                     Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
                     Timestamp(Second, _) => Ok(Timestamp(Second, None)),
-                    _ => internal_err!(
+                    _ => plan_err!(
                     "The {self} function can only accept timestamp as the second arg."
                 ),
                 }
@@ -677,8 +677,7 @@ impl BuiltinScalarFunction {
                 LargeBinary => LargeUtf8,
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
+                    return plan_err!(
                         "The encode function can only accept utf8 or binary."
                     );
                 }
@@ -690,8 +689,7 @@ impl BuiltinScalarFunction {
                 LargeBinary => LargeBinary,
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
+                    return plan_err!(
                         "The decode function can only accept utf8 or binary."
                     );
                 }
@@ -709,10 +707,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ToHex => Ok(match input_expr_types[0] {
                 Int8 | Int16 | Int32 | Int64 => Utf8,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
-                        "The to_hex function can only accept integers."
-                    );
+                    return plan_err!("The to_hex function can only accept integers.");
                 }
             }),
             BuiltinScalarFunction::ToTimestamp => Ok(Timestamp(Nanosecond, None)),
@@ -737,8 +732,7 @@ impl BuiltinScalarFunction {
                 Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
+                    return plan_err!(
                         "The regexp_extract function can only accept strings."
                     );
                 }
@@ -1400,7 +1394,6 @@ macro_rules! make_utf8_to_return_type {
                     DataType::Utf8 => $utf8Type,
                     DataType::Null => DataType::Null,
                     _ => {
-                        // this error is internal as `data_types` should have captured this.
                         return plan_err!(
                             "The {:?} function can only accept strings, but got {:?}.",
                             name,
@@ -1409,7 +1402,6 @@ macro_rules! make_utf8_to_return_type {
                     }
                 },
                 data_type => {
-                    // this error is internal as `data_types` should have captured this.
                     return plan_err!(
                         "The {:?} function can only accept strings, but got {:?}.",
                         name,
@@ -1432,8 +1424,7 @@ fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<Data
         | DataType::LargeBinary => DataType::Binary,
         DataType::Null => DataType::Null,
         _ => {
-            // this error is internal as `data_types` should have captured this.
-            return internal_err!(
+            return plan_err!(
                 "The {name:?} function can only accept strings or binary arrays."
             );
         }
