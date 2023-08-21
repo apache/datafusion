@@ -40,6 +40,10 @@ select decode(12, 'hex')
 query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
 select decode(hex_field, 'non_encoding') from test;
 
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: Candidate"\)
+	Candidate functions:
+	to_hex\(Int64\)
+select to_hex(hex_field) from test;
 
 # Arrays tests
 query T
@@ -62,3 +66,10 @@ SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test ORDER BY num;
 abc
 qweqwe
 NULL
+
+query T
+select to_hex(num) from test ORDER BY num;
+----
+0
+1
+2
