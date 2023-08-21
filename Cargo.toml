@@ -32,12 +32,12 @@ rust-version = "1.70"
 version = "29.0.0"
 
 [workspace.dependencies]
-arrow = { version = "45.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
-arrow-array = { version = "45.0.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = { version = "45.0.0", default-features = false }
-arrow-flight = { version = "45.0.0", features = ["flight-sql-experimental"] }
-arrow-schema = { version = "45.0.0", default-features = false }
-parquet = { version = "45.0.0", features = ["arrow", "async", "object_store"] }
+arrow = { version = "46.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow-array = { version = "46.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-buffer = { version = "46.0.0", default-features = false }
+arrow-flight = { version = "46.0.0", features = ["flight-sql-experimental"] }
+arrow-schema = { version = "46.0.0", default-features = false }
+parquet = { version = "46.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.36.1", features = ["visitor"] }
 
 [profile.release]
@@ -59,9 +59,9 @@ panic = 'unwind'
 rpath = false
 
 [patch.crates-io]
-arrow = {git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-arrow-array = {git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-arrow-buffer = {git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-arrow-flight = {git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-arrow-schema = {git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-parquet = {git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
+arrow = {git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+arrow-array = {git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+arrow-buffer = {git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+arrow-flight = {git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+arrow-schema = {git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+parquet = {git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }

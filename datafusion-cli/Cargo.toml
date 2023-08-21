@@ -29,7 +29,7 @@ rust-version = "1.70"
 readme = "README.md"
 
 [dependencies]
-arrow = "45.0.0"
+arrow = "46.0.0"
 async-trait = "0.1.41"
 aws-config = "0.55"
 aws-credential-types = "0.55"
@@ -51,8 +51,8 @@ predicates = "3.0"
 rstest = "0.17"
 
 [patch.crates-io]
-arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-arrow-array = { git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-arrow-buffer = { git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-arrow-schema = { git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
-parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "2aff33df7a91e5d46b784ed38cba4263683b5f4e" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
