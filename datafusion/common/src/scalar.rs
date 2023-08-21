@@ -30,7 +30,7 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array, as_list_array, as_struct_array,
 };
 use crate::delta::shift_months;
-use crate::error::{DataFusionError, Result, _internal_err};
+use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use arrow::buffer::NullBuffer;
 use arrow::compute::nullif;
 use arrow::datatypes::{i256, FieldRef, Fields, SchemaBuilder};
@@ -618,9 +618,7 @@ macro_rules! decimal_right {
         -$TERM
     };
     ($TERM:expr, /) => {
-        Err(DataFusionError::NotImplemented(format!(
-            "Decimal reciprocation not yet supported",
-        )))
+        _not_impl_err!("Decimal reciprocation not yet supported",)
     };
 }
 
@@ -1890,9 +1888,9 @@ impl ScalarValue {
                 ScalarValue::DurationNanosecond(None)
             }
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -1912,9 +1910,9 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(1.0)),
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create an one scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -1930,9 +1928,9 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a negative one scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -1951,9 +1949,9 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(10.0)),
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a negative one scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -3279,9 +3277,9 @@ impl ScalarValue {
             }
 
             other => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a scalar from array of type \"{other:?}\""
-                )));
+                );
             }
         })
     }
@@ -3842,9 +3840,9 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }

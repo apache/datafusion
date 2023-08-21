@@ -25,7 +25,7 @@ use base64::{engine::general_purpose, Engine as _};
 use datafusion_common::ScalarValue;
 use datafusion_common::{
     cast::{as_generic_binary_array, as_generic_string_array},
-    internal_err, plan_err,
+    internal_err, not_impl_err, plan_err,
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -305,13 +305,13 @@ pub fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
                 method.parse::<Encoding>()
             }
-            _ => Err(DataFusionError::NotImplemented(
-                "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported".into(),
-            )),
+            _ => not_impl_err!(
+                "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported"
+            ),
         },
-        ColumnarValue::Array(_) => Err(DataFusionError::NotImplemented(
-            "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported".into(),
-        )),
+        ColumnarValue::Array(_) => not_impl_err!(
+            "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported"
+        ),
     }?;
     encode_process(&args[0], encoding)
 }
@@ -331,13 +331,13 @@ pub fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
                 method.parse::<Encoding>()
             }
-            _ => Err(DataFusionError::NotImplemented(
-                "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported".into(),
-            )),
+            _ => not_impl_err!(
+                "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported"
+            ),
         },
-        ColumnarValue::Array(_) => Err(DataFusionError::NotImplemented(
-            "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported".into(),
-        )),
+        ColumnarValue::Array(_) => not_impl_err!(
+            "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported"
+        ),
     }?;
     decode_process(&args[0], encoding)
 }

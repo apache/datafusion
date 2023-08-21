@@ -1395,25 +1395,25 @@ macro_rules! make_utf8_to_return_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
                 DataType::Null => DataType::Null,
-                DataType::Dictionary(_, value_type) => {
-                    match **value_type {
-                        DataType::LargeUtf8 => $largeUtf8Type,
-                        DataType::Utf8 => $utf8Type,
-                        DataType::Null => DataType::Null,
-                        _ => {
-                            // this error is internal as `data_types` should have captured this.
-                            return internal_err!(
-                                "The {:?} function can only accept strings.",
-                                name
-                            );
-                        }
+                DataType::Dictionary(_, value_type) => match **value_type {
+                    DataType::LargeUtf8 => $largeUtf8Type,
+                    DataType::Utf8 => $utf8Type,
+                    DataType::Null => DataType::Null,
+                    _ => {
+                        // this error is internal as `data_types` should have captured this.
+                        return plan_err!(
+                            "The {:?} function can only accept strings, but got {:?}.",
+                            name,
+                            **value_type
+                        );
                     }
-                }
-                _ => {
+                },
+                data_type => {
                     // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
-                        "The {:?} function can only accept strings.",
-                        name
+                    return plan_err!(
+                        "The {:?} function can only accept strings, but got {:?}.",
+                        name,
+                        data_type
                     );
                 }
             })

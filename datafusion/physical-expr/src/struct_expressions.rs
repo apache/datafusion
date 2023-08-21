@@ -19,7 +19,7 @@
 
 use arrow::array::*;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
@@ -57,9 +57,9 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
                     )),
                     arg.clone(),
                 )),
-                data_type => Err(DataFusionError::NotImplemented(format!(
-                    "Struct is not implemented for type '{data_type:?}'."
-                ))),
+                data_type => {
+                    not_impl_err!("Struct is not implemented for type '{data_type:?}'.")
+                }
             }
         })
         .collect::<Result<Vec<_>>>()?;

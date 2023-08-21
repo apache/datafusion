@@ -42,8 +42,9 @@ use datafusion_common::cast::{
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_common::{ScalarType, ScalarValue};
+use datafusion_common::{
+    internal_err, not_impl_err, DataFusionError, Result, ScalarType, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
@@ -544,9 +545,9 @@ fn date_bin_impl(
             if months != 0 {
                 // Return error if days or nanos is not zero
                 if days != 0 || nanos != 0 {
-                    return Err(DataFusionError::NotImplemented(
-                        "DATE_BIN stride does not support combination of month, day and nanosecond intervals".to_string(),
-                    ));
+                    return not_impl_err!(
+                        "DATE_BIN stride does not support combination of month, day and nanosecond intervals"
+                    );
                 } else {
                     Interval::Months(months as i64)
                 }
@@ -569,10 +570,11 @@ fn date_bin_impl(
                 v.get_datatype()
             )))
         }
-        ColumnarValue::Array(_) => return Err(DataFusionError::NotImplemented(
+        ColumnarValue::Array(_) => {
+            return not_impl_err!(
             "DATE_BIN only supports literal values for the stride argument, not arrays"
-                .to_string(),
-        )),
+        )
+        }
     };
 
     let origin = match origin {
@@ -583,10 +585,9 @@ fn date_bin_impl(
                 v.get_datatype()
             )))
         }
-        ColumnarValue::Array(_) => return Err(DataFusionError::NotImplemented(
+        ColumnarValue::Array(_) => return not_impl_err!(
             "DATE_BIN only supports literal values for the origin argument, not arrays"
-                .to_string(),
-        )),
+        ),
     };
 
     let (stride, stride_fn) = stride.bin_fn();

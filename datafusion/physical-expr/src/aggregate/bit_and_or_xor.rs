@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
 use datafusion_expr::Accumulator;
 use std::collections::HashSet;
 
@@ -130,11 +130,11 @@ impl AggregateExpr for BitAnd {
         let data_type = &self.data_type;
         downcast_integer! {
             data_type => (helper, data_type),
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 self.name(),
                 self.data_type
-            ))),
+            ),
         }
     }
 
@@ -291,11 +291,11 @@ impl AggregateExpr for BitOr {
         let data_type = &self.data_type;
         downcast_integer! {
             data_type => (helper, data_type),
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 self.name(),
                 self.data_type
-            ))),
+            ),
         }
     }
 
@@ -452,11 +452,11 @@ impl AggregateExpr for BitXor {
         let data_type = &self.data_type;
         downcast_integer! {
             data_type => (helper, data_type),
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 self.name(),
                 self.data_type
-            ))),
+            ),
         }
     }
 

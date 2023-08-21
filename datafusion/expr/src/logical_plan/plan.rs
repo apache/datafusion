@@ -1917,7 +1917,7 @@ mod tests {
     use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
-    use datafusion_common::{DFSchema, TableReference};
+    use datafusion_common::{not_impl_err, DFSchema, TableReference};
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
@@ -2050,9 +2050,7 @@ digraph {
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
                 LogicalPlan::TableScan { .. } => "pre_visit TableScan",
                 _ => {
-                    return Err(DataFusionError::NotImplemented(
-                        "unknown plan type".to_string(),
-                    ));
+                    return not_impl_err!("unknown plan type");
                 }
             };
 
@@ -2066,9 +2064,7 @@ digraph {
                 LogicalPlan::Filter { .. } => "post_visit Filter",
                 LogicalPlan::TableScan { .. } => "post_visit TableScan",
                 _ => {
-                    return Err(DataFusionError::NotImplemented(
-                        "unknown plan type".to_string(),
-                    ));
+                    return not_impl_err!("unknown plan type");
                 }
             };
 
@@ -2202,9 +2198,7 @@ digraph {
 
         fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_pre_in.dec() {
-                return Err(DataFusionError::NotImplemented(
-                    "Error in pre_visit".to_string(),
-                ));
+                return not_impl_err!("Error in pre_visit");
             }
 
             self.inner.pre_visit(plan)
@@ -2212,9 +2206,7 @@ digraph {
 
         fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_post_in.dec() {
-                return Err(DataFusionError::NotImplemented(
-                    "Error in post_visit".to_string(),
-                ));
+                return not_impl_err!("Error in post_visit");
             }
 
             self.inner.post_visit(plan)

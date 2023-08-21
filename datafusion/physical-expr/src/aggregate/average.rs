@@ -40,9 +40,9 @@ use arrow::{
 use arrow_array::{
     Array, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, PrimitiveArray,
 };
-use datafusion_common::internal_err;
-use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 
 use super::groups_accumulator::EmitTo;
@@ -184,10 +184,11 @@ impl AggregateExpr for Avg {
                 )))
             }
 
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "AvgGroupsAccumulator for ({} --> {})",
-                self.sum_data_type, self.rt_data_type,
-            ))),
+                self.sum_data_type,
+                self.rt_data_type
+            ),
         }
     }
 }
