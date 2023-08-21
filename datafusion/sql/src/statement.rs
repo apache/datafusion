@@ -17,7 +17,7 @@
 
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
-    LexOrdering, Statement as DFStatement,
+    ExplainStatement, LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -93,6 +93,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
+            DFStatement::Explain(ExplainStatement {
+                verbose,
+                analyze,
+                statement,
+            }) => self.explain_to_plan(verbose, analyze, *statement),
         }
     }
 
@@ -127,7 +132,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 format: _,
                 describe_alias: _,
                 ..
-            } => self.explain_statement_to_plan(verbose, analyze, *statement),
+            } => {
+                self.explain_to_plan(verbose, analyze, DFStatement::Statement(statement))
+            }
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::SetVariable {
@@ -712,13 +719,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Generate a plan for EXPLAIN ... that will print out a plan
     ///
-    fn explain_statement_to_plan(
+    /// Note this is the sqlparser explain statement, not the
+    /// datafusion `EXPLAIN` statement.
+    fn explain_to_plan(
         &self,
         verbose: bool,
         analyze: bool,
-        statement: Statement,
+        statement: DFStatement,
     ) -> Result<LogicalPlan> {
-        let plan = self.sql_statement_to_plan(statement)?;
+        let plan = self.statement_to_plan(statement)?;
+        if matches!(plan, LogicalPlan::Explain(_)) {
+            return plan_err!("Nested EXPLAINs are not supported");
+        }
         let plan = Arc::new(plan);
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
