@@ -179,7 +179,7 @@ where
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = bit_and(values[0].as_primitive::<T>()) {
-            let v = self.value.insert(x);
+            let v = self.value.get_or_insert(x);
             *v = *v & x;
         }
         Ok(())
