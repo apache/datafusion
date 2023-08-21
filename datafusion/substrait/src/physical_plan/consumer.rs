@@ -18,6 +18,7 @@
 use async_recursion::async_recursion;
 use chrono::DateTime;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::common::not_impl_err;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
@@ -42,19 +43,13 @@ pub async fn from_substrait_rel(
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
             if read.filter.is_some() || read.best_effort_filter.is_some() {
-                return Err(DataFusionError::NotImplemented(
-                    "Read with filter is not supported".to_string(),
-                ));
+                return not_impl_err!("Read with filter is not supported");
             }
             if read.base_schema.is_some() {
-                return Err(DataFusionError::NotImplemented(
-                    "Read with schema is not supported".to_string(),
-                ));
+                return not_impl_err!("Read with schema is not supported");
             }
             if read.advanced_extension.is_some() {
-                return Err(DataFusionError::NotImplemented(
-                    "Read with AdvancedExtension is not supported".to_string(),
-                ));
+                return not_impl_err!("Read with AdvancedExtension is not supported");
             }
             match &read.as_ref().read_type {
                 Some(ReadType::LocalFiles(files)) => {
@@ -131,15 +126,11 @@ pub async fn from_substrait_rel(
                     Ok(Arc::new(ParquetExec::new(base_config, None, None))
                         as Arc<dyn ExecutionPlan>)
                 }
-                _ => Err(DataFusionError::NotImplemented(
+                _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"
-                        .to_string(),
-                )),
+                ),
             }
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported RelType: {:?}",
-            rel.rel_type
-        ))),
+        _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
     }
 }

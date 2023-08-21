@@ -1092,9 +1092,9 @@ mod tests {
         test_function!(
             CharacterLength,
             &[lit("josé")],
-            Err(DataFusionError::Internal(
-                "function character_length requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function character_length requires compilation with feature flag: unicode_expressions."
+            ),
             i32,
             Int32,
             Int32Array
@@ -1369,9 +1369,9 @@ mod tests {
                 lit("abcde"),
                 lit(ScalarValue::Int8(Some(2))),
             ],
-            Err(DataFusionError::Internal(
-                "function left requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function left requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1520,9 +1520,9 @@ mod tests {
                 lit("josé"),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            Err(DataFusionError::Internal(
-                "function lpad requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function lpad requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1606,9 +1606,9 @@ mod tests {
         test_function!(
             MD5,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function md5 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function md5 requires compilation with feature flag: crypto_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1756,9 +1756,9 @@ mod tests {
                 lit("b.."),
                 lit("X"),
             ],
-            Err(DataFusionError::Internal(
-                "function regexp_replace requires compilation with feature flag: regex_expressions.".to_string()
-            )),
+            internal_err!(
+                "function regexp_replace requires compilation with feature flag: regex_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1830,9 +1830,9 @@ mod tests {
         test_function!(
             Reverse,
             &[lit("abcde")],
-            Err(DataFusionError::Internal(
-                "function reverse requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function reverse requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1928,9 +1928,9 @@ mod tests {
                 lit("abcde"),
                 lit(ScalarValue::Int8(Some(2))),
             ],
-            Err(DataFusionError::Internal(
-                "function right requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function right requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2079,9 +2079,9 @@ mod tests {
                 lit("josé"),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            Err(DataFusionError::Internal(
-                "function rpad requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function rpad requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2173,9 +2173,9 @@ mod tests {
         test_function!(
             SHA224,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha224 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha224 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2219,9 +2219,9 @@ mod tests {
         test_function!(
             SHA256,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha256 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha256 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2269,9 +2269,9 @@ mod tests {
         test_function!(
             SHA384,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha384 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha384 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2321,9 +2321,9 @@ mod tests {
         test_function!(
             SHA512,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha512 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha512 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2459,9 +2459,9 @@ mod tests {
                 lit("joséésoj"),
                 lit(ScalarValue::Utf8(None)),
             ],
-            Err(DataFusionError::Internal(
-                "function strpos requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function strpos requires compilation with feature flag: unicode_expressions."
+            ),
             i32,
             Int32,
             Int32Array
@@ -2689,9 +2689,9 @@ mod tests {
                 lit("alphabet"),
                 lit(ScalarValue::Int64(Some(0))),
             ],
-            Err(DataFusionError::Internal(
-                "function substr requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function substr requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2749,9 +2749,9 @@ mod tests {
                 lit("143"),
                 lit("ax"),
             ],
-            Err(DataFusionError::Internal(
-                "function translate requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function translate requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -3004,9 +3004,7 @@ mod tests {
         if let ColumnarValue::Array(array) = col? {
             Ok(as_uint64_array(&array)?.values().to_vec())
         } else {
-            Err(DataFusionError::Internal(
-                "Unexpected scalar created by a test function".to_string(),
-            ))
+            internal_err!("Unexpected scalar created by a test function")
         }
     }
 

@@ -26,7 +26,7 @@ use self::{
 use crate::datasource::physical_plan::FileScanConfig;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use datafusion_common::Result;
-pub use datafusion_common::{ColumnStatistics, Statistics};
+pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 use arrow::datatypes::SchemaRef;
@@ -232,9 +232,7 @@ pub fn with_new_children_if_necessary(
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let old_children = plan.children();
     if children.len() != old_children.len() {
-        Err(DataFusionError::Internal(
-            "Wrong number of children".to_string(),
-        ))
+        internal_err!("Wrong number of children")
     } else if children.is_empty()
         || children
             .iter()

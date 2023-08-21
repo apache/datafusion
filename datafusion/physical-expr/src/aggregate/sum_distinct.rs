@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 /// Expression for a SUM(DISTINCT) aggregation.
@@ -168,9 +168,7 @@ impl Accumulator for DistinctSumAccumulator {
                     }
                 });
             } else {
-                return Err(DataFusionError::Internal(
-                    "Unexpected accumulator state".into(),
-                ));
+                return internal_err!("Unexpected accumulator state");
             }
             Ok(())
         })

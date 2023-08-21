@@ -25,8 +25,9 @@ use crate::{
     PhysicalExpr,
 };
 use arrow::datatypes::Schema;
-use datafusion_common::plan_err;
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
@@ -443,8 +444,8 @@ pub fn create_physical_expr(
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
-        other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {other:?}"
-        ))),
+        other => {
+            not_impl_err!("Physical plan does not support logical expression {other:?}")
+        }
     }
 }

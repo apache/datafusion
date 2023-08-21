@@ -550,19 +550,19 @@ scalar_expr!(
     ArrayHas,
     array_has,
     first_array second_array,
-"Returns true, if the element appears in the first array, otherwise false."
+    "returns true, if the element appears in the first array, otherwise false."
 );
 scalar_expr!(
     ArrayHasAll,
     array_has_all,
     first_array second_array,
-"Returns true if each element of the second array appears in the first array; otherwise, it returns false."
+    "returns true if each element of the second array appears in the first array; otherwise, it returns false."
 );
 scalar_expr!(
     ArrayHasAny,
     array_has_any,
     first_array second_array,
-"Returns true if at least one element of the second array appears in the first array; otherwise, it returns false."
+    "returns true if at least one element of the second array appears in the first array; otherwise, it returns false."
 );
 scalar_expr!(
     Flatten,

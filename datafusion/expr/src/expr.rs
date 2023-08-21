@@ -27,6 +27,7 @@ use crate::window_frame;
 use crate::window_function;
 use crate::Operator;
 use arrow::datatypes::DataType;
+use datafusion_common::internal_err;
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
@@ -1553,13 +1554,13 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(format!("{expr} BETWEEN {low} AND {high}"))
             }
         }
-        Expr::Sort { .. } => Err(DataFusionError::Internal(
-            "Create name does not support sort expression".to_string(),
-        )),
+        Expr::Sort { .. } => {
+            internal_err!("Create name does not support sort expression")
+        }
         Expr::Wildcard => Ok("*".to_string()),
-        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
-            "Create name does not support qualified wildcard".to_string(),
-        )),
+        Expr::QualifiedWildcard { .. } => {
+            internal_err!("Create name does not support qualified wildcard")
+        }
         Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
     }
 }

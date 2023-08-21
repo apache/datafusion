@@ -93,9 +93,7 @@ impl ExecutionPlan for AnalyzeExec {
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Err(DataFusionError::Internal(
-            "Optimization not supported for ANALYZE".to_string(),
-        ))
+        internal_err!("Optimization not supported for ANALYZE")
     }
 
     /// Get the output partitioning of this plan
