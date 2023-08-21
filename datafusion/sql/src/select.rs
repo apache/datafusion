@@ -24,9 +24,9 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs,
 };
 
-use datafusion_common::plan_err;
 use datafusion_common::{
-    get_target_functional_dependencies, DFSchemaRef, DataFusionError, Result,
+    get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef,
+    DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
@@ -52,19 +52,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
         if !select.cluster_by.is_empty() {
-            return Err(DataFusionError::NotImplemented("CLUSTER BY".to_string()));
+            return not_impl_err!("CLUSTER BY");
         }
         if !select.lateral_views.is_empty() {
-            return Err(DataFusionError::NotImplemented("LATERAL VIEWS".to_string()));
+            return not_impl_err!("LATERAL VIEWS");
         }
         if select.qualify.is_some() {
-            return Err(DataFusionError::NotImplemented("QUALIFY".to_string()));
+            return not_impl_err!("QUALIFY");
         }
         if select.top.is_some() {
-            return Err(DataFusionError::NotImplemented("TOP".to_string()));
+            return not_impl_err!("TOP");
         }
         if !select.sort_by.is_empty() {
-            return Err(DataFusionError::NotImplemented("SORT BY".to_string()));
+            return not_impl_err!("SORT BY");
         }
 
         // process `from` clause
@@ -209,9 +209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .distinct
             .map(|distinct| match distinct {
                 Distinct::Distinct => Ok(true),
-                Distinct::On(_) => Err(DataFusionError::NotImplemented(
-                    "DISTINCT ON Exprs not supported".to_string(),
-                )),
+                Distinct::On(_) => not_impl_err!("DISTINCT ON Exprs not supported"),
             })
             .transpose()?
             .unwrap_or(false);
@@ -386,9 +384,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = options;
 
         if opt_rename.is_some() || opt_replace.is_some() {
-            Err(DataFusionError::NotImplemented(
-                "wildcard * with RENAME or REPLACE not supported ".to_string(),
-            ))
+            not_impl_err!("wildcard * with RENAME or REPLACE not supported ")
         } else {
             Ok(())
         }

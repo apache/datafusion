@@ -18,7 +18,7 @@
 use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Field;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
@@ -114,9 +114,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        Err(DataFusionError::NotImplemented(format!(
-            "GroupsAccumulator hasn't been implemented for {self:?} yet"
-        )))
+        not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
     }
 
     /// Construct an expression that calculates the aggregate in reverse.
@@ -129,9 +127,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 
     /// Creates accumulator implementation that supports retract
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Err(DataFusionError::NotImplemented(format!(
-            "Retractable Accumulator hasn't been implemented for {self:?} yet"
-        )))
+        not_impl_err!("Retractable Accumulator hasn't been implemented for {self:?} yet")
     }
 }
 

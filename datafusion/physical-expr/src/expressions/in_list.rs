@@ -35,7 +35,7 @@ use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::{
     cast::{as_boolean_array, as_generic_binary_array, as_string_array},
-    internal_err, DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use hashbrown::hash_map::RawEntryMut;
@@ -194,7 +194,7 @@ fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
             Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
-        d => return Err(DataFusionError::NotImplemented(format!("DataType::{d} not supported in InList")))
+        d => return not_impl_err!("DataType::{d} not supported in InList")
     })
 }
 
