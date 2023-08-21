@@ -58,13 +58,10 @@ use arrow::compute::{and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{
-        Array, ArrayRef, BooleanArray, BooleanBufferBuilder,
-        PrimitiveArray, UInt32Array, UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
+        Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
+        UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
     },
-    datatypes::{
-        DataType, Schema,
-        SchemaRef
-    },
+    datatypes::{DataType, Schema, SchemaRef},
     util::bit_util,
 };
 use arrow_array::cast::downcast_array;
@@ -74,6 +71,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
+use crate::physical_plan::joins::hash_join_utils::JoinHashMapType;
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -584,13 +582,14 @@ async fn collect_left_input(
     for batch in batches.iter() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash(
+        update_hash::<false, _>(
             &on_left,
             batch,
             &mut hashmap,
             offset,
             &random_state,
             &mut hashes_buffer,
+            0,
         )?;
         offset += batch.num_rows();
     }
@@ -603,13 +602,14 @@ async fn collect_left_input(
 
 /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
 /// assuming that the [RecordBatch] corresponds to the `index`th
-pub fn update_hash(
+pub fn update_hash<const EXTEND_CHAIN: bool, T: JoinHashMapType>(
     on: &[Column],
     batch: &RecordBatch,
-    hash_map: &mut JoinHashMap,
+    hash_map: &mut T,
     offset: usize,
     random_state: &RandomState,
     hashes_buffer: &mut Vec<u64>,
+    deleted_offset: usize,
 ) -> Result<()> {
     // evaluate the keys
     let keys_values = on
@@ -619,11 +619,14 @@ pub fn update_hash(
 
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+    if EXTEND_CHAIN {
+        hash_map.extend(batch.num_rows(), 0)
+    }
 
     // insert hashes to key of the hashmap
     for (row, hash_value) in hash_values.iter().enumerate() {
         let item = hash_map
-            .map
+            .get_mut_map()
             .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
         if let Some((_, index)) = item {
             // Already exists: add index to next array
@@ -631,9 +634,9 @@ pub fn update_hash(
             // Store new value inside hashmap
             *index = (row + offset + 1) as u64;
             // Update chained Vec at row + offset with previous value
-            hash_map.next[row + offset] = prev_index;
+            hash_map.get_mut_list()[row + offset - deleted_offset] = prev_index;
         } else {
-            hash_map.map.insert(
+            hash_map.get_mut_map().insert(
                 *hash_value,
                 // store the value + 1 as 0 value reserved for end of list
                 (*hash_value, (row + offset + 1) as u64),
@@ -716,8 +719,8 @@ impl RecordBatchStream for HashJoinStream {
 // Build indices: 4, 5, 6, 6
 // Probe indices: 3, 3, 4, 5
 #[allow(clippy::too_many_arguments)]
-pub fn build_equal_condition_join_indices(
-    build_hashmap: &JoinHashMap,
+pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
+    build_hashmap: &T,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
     build_on: &[Column],
@@ -727,6 +730,7 @@ pub fn build_equal_condition_join_indices(
     hashes_buffer: &mut Vec<u64>,
     filter: Option<&JoinFilter>,
     build_side: JoinSide,
+    deleted_offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
@@ -741,6 +745,7 @@ pub fn build_equal_condition_join_indices(
         .collect::<Result<Vec<_>>>()?;
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
+    let deleted_offset_value = deleted_offset.unwrap_or(0);
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
@@ -774,22 +779,33 @@ pub fn build_equal_condition_join_indices(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+    let hash_map = build_hashmap.get_map();
+    let next_chain = build_hashmap.get_list();
     for (row, hash_value) in hash_values.iter().enumerate().rev() {
         // Get the hash and find it in the build index
 
         // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
-        if let Some((_, index)) = build_hashmap
-            .map
-            .get(*hash_value, |(hash, _)| *hash_value == *hash)
+        if let Some((_, index)) =
+            hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
             let mut i = *index - 1;
             loop {
-                build_indices.append(i);
+                let build_row_value = if let Some(offset) = deleted_offset {
+                    // This arguments means that we prune the next index way before here.
+                    if i < offset as u64 {
+                        // End of the list due to pruning;
+                        break;
+                    }
+                    i - deleted_offset_value as u64
+                } else {
+                    i
+                };
+                build_indices.append(build_row_value);
                 probe_indices.append(row as u32);
                 // Follow the chain to get the next index value
-                let next = build_hashmap.next[i as usize];
+                let next = next_chain[build_row_value as usize];
                 if next == 0 {
                     // end of list
                     break;
@@ -827,7 +843,6 @@ pub fn build_equal_condition_join_indices(
         null_equals_null,
     )
 }
-
 
 // version of eq_dyn supporting equality on null arrays
 fn eq_dyn_null(
@@ -957,6 +972,7 @@ impl HashJoinStream {
                         &mut hashes_buffer,
                         self.filter.as_ref(),
                         JoinSide::Left,
+                        None,
                     );
 
                     let result = match left_right_indices {
@@ -2419,6 +2435,7 @@ mod tests {
             &mut vec![0; right.num_rows()],
             None,
             JoinSide::Left,
+            None,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);

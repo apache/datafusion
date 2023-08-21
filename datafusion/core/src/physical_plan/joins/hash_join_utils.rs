@@ -37,6 +37,7 @@ use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
+use std::ops::IndexMut;
 
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
 use crate::physical_plan::ExecutionPlan;
@@ -93,7 +94,6 @@ use datafusion_common::Result;
 // ---------------------
 // | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
 // ---------------------
-
 // TODO: speed up collision checks
 // https://github.com/apache/arrow-datafusion/issues/50
 pub struct JoinHashMap {
@@ -109,6 +109,61 @@ impl JoinHashMap {
             map: RawTable::with_capacity(capacity),
             next: vec![0; capacity],
         }
+    }
+}
+
+pub trait JoinHashMapType {
+    type ListType: IndexMut<usize, Output = u64>;
+    fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)>;
+    fn extend(&mut self, len: usize, value: u64);
+    fn get_map(&self) -> &RawTable<(u64, u64)>;
+    fn get_mut_list(&mut self) -> &mut Self::ListType;
+    fn get_list(&self) -> &Self::ListType;
+}
+
+impl JoinHashMapType for JoinHashMap {
+    type ListType = Vec<u64>;
+    fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)> {
+        &mut self.map
+    }
+
+    fn extend(&mut self, _: usize, _: u64) {
+        unimplemented!()
+    }
+
+    fn get_map(&self) -> &RawTable<(u64, u64)> {
+        &self.map
+    }
+
+    fn get_mut_list(&mut self) -> &mut Self::ListType {
+        &mut self.next
+    }
+
+    fn get_list(&self) -> &Self::ListType {
+        &self.next
+    }
+}
+
+impl JoinHashMapType for PruningJoinHashMap {
+    type ListType = VecDeque<u64>;
+    fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)> {
+        &mut self.map
+    }
+
+    fn extend(&mut self, len: usize, value: u64) {
+        self.list.resize(self.list.len() + len, value)
+    }
+
+    fn get_map(&self) -> &RawTable<(u64, u64)> {
+        &self.map
+    }
+
+    fn get_mut_list(&mut self) -> &mut Self::ListType {
+        &mut self.list
+    }
+
+    fn get_list(&self) -> &Self::ListType {
+        &self.list
     }
 }
 
@@ -219,7 +274,7 @@ impl PruningJoinHashMap {
         &mut self,
         prune_length: usize,
         deleting_offset: u64,
-        shrink_factor: usize
+        shrink_factor: usize,
     ) -> Result<()> {
         // Remove elements from the list based on the pruning length.
         self.list.drain(0..prune_length);

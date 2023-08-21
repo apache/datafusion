@@ -37,10 +37,6 @@ use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveB
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::builder::{UInt32BufferBuilder, UInt64BufferBuilder};
-use arrow_array::{UInt32Array, UInt64Array};
-use datafusion_physical_expr::hash_utils::create_hashes;
-use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
@@ -50,7 +46,9 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use crate::physical_plan::common::SharedMemoryReservation;
-use crate::physical_plan::joins::hash_join::equal_rows_arr;
+use crate::physical_plan::joins::hash_join::{
+    build_equal_condition_join_indices, update_hash,
+};
 use crate::physical_plan::joins::hash_join_utils::{
     build_filter_expression_graph, calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
@@ -78,8 +76,6 @@ use datafusion_common::utils::bisect;
 use datafusion_common::{internal_err, plan_err, JoinType};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
-
-use super::utils::apply_join_filter_to_indices;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
@@ -797,158 +793,6 @@ pub(crate) fn build_side_determined_results(
     }
 }
 
-// Returns build/probe indices satisfying the equality condition.
-// On LEFT.b1 = RIGHT.b2
-// LEFT Table:
-//  a1  b1  c1
-//  1   1   10
-//  3   3   30
-//  5   5   50
-//  7   7   70
-//  9   8   90
-//  11  8   110
-// 13   10  130
-// RIGHT Table:
-//  a2   b2  c2
-//  2    2   20
-//  4    4   40
-//  6    6   60
-//  8    8   80
-// 10   10  100
-// 12   10  120
-// The result is
-// "+----+----+-----+----+----+-----+",
-// "| a1 | b1 | c1  | a2 | b2 | c2  |",
-// "+----+----+-----+----+----+-----+",
-// "| 11 | 8  | 110 | 8  | 8  | 80  |",
-// "| 13 | 10 | 130 | 10 | 10 | 100 |",
-// "| 13 | 10 | 130 | 12 | 10 | 120 |",
-// "| 9  | 8  | 90  | 8  | 8  | 80  |",
-// "+----+----+-----+----+----+-----+"
-// And the result of build and probe indices are:
-// Build indices:  5, 6, 6, 4
-// Probe indices: 3, 4, 5, 3
-#[allow(clippy::too_many_arguments)]
-pub fn build_join_indices(
-    probe_batch: &RecordBatch,
-    build_hashmap: &PruningJoinHashMap,
-    build_input_buffer: &RecordBatch,
-    on_build: &[Column],
-    on_probe: &[Column],
-    filter: Option<&JoinFilter>,
-    random_state: &RandomState,
-    null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
-    deleted_offset: Option<usize>,
-    build_side: JoinSide,
-) -> Result<(UInt64Array, UInt32Array)> {
-    let keys_values = on_probe
-        .iter()
-        .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
-        .collect::<Result<Vec<_>>>()?;
-    let build_join_values = on_build
-        .iter()
-        .map(|c| {
-            Ok(c.evaluate(build_input_buffer)?
-                .into_array(build_input_buffer.num_rows()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    hashes_buffer.clear();
-    hashes_buffer.resize(probe_batch.num_rows(), 0);
-    let offset_value = deleted_offset.unwrap_or(0);
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-    // Using a buffer builder to avoid slower normal builder
-    let mut build_indices = UInt64BufferBuilder::new(0);
-    let mut probe_indices = UInt32BufferBuilder::new(0);
-    // The chained list algorithm generates build indices for each probe row in a reversed sequence as such:
-    // Build Indices: [5, 4, 3]
-    // Probe Indices: [1, 1, 1]
-    //
-    // This affects the output sequence. Hypothetically, it's possible to preserve the lexicographic order on the build side.
-    // Let's consider probe rows [0,1] as an example:
-    //
-    // When the probe iteration sequence is reversed, the following pairings can be derived:
-    //
-    // For probe row 1:
-    //     (5, 1)
-    //     (4, 1)
-    //     (3, 1)
-    //
-    // For probe row 0:
-    //     (5, 0)
-    //     (4, 0)
-    //     (3, 0)
-    //
-    // After reversing both sets of indices, we obtain reversed indices:
-    //
-    //     (3,0)
-    //     (4,0)
-    //     (5,0)
-    //     (3,1)
-    //     (4,1)
-    //     (5,1)
-    //
-    // With this approach, the lexicographic order on both the probe side and the build side is preserved.
-    for (probe_row, hash_value) in hash_values.iter().enumerate().rev() {
-        // Get the hash and find it in the build index
-
-        // For every item on the build and probe we check if it matches
-        // This possibly contains rows with hash collisions,
-        // So we have to check here whether rows are equal or not
-        if let Some((_, index)) = build_hashmap
-            .map
-            .get(*hash_value, |(hash, _)| *hash_value == *hash)
-        {
-            let mut i = *index - 1;
-            loop {
-                // This arguments means that we prune the next index way before here.
-                if i < offset_value as u64 {
-                    // End of the list due to pruning;
-                    break;
-                }
-                let build_row_value = i - offset_value as u64;
-                build_indices.append(build_row_value);
-                probe_indices.append(probe_row as u32);
-                // Follow the chain to get the next index value
-                let next = build_hashmap.list[build_row_value as usize];
-                if next == 0 {
-                    // end of list
-                    break;
-                }
-                i = next - 1;
-            }
-        }
-    }
-    // Reversing both sets of indices
-    build_indices.as_slice_mut().reverse();
-    probe_indices.as_slice_mut().reverse();
-
-    let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
-    let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
-
-    let (left, right) = if let Some(filter) = filter {
-        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
-        apply_join_filter_to_indices(
-            build_input_buffer,
-            probe_batch,
-            left,
-            right,
-            filter,
-            build_side,
-        )?
-    } else {
-        (left, right)
-    };
-
-    equal_rows_arr(
-        &left,
-        &right,
-        &build_join_values,
-        &keys_values,
-        null_equals_null,
-    )
-}
-
 /// This method performs a join between the build side input buffer and the probe side batch.
 ///
 /// # Arguments
@@ -983,18 +827,18 @@ pub(crate) fn join_with_probe_batch(
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(None);
     }
-    let (build_indices, probe_indices) = build_join_indices(
-        probe_batch,
+    let (build_indices, probe_indices) = build_equal_condition_join_indices(
         &build_hash_joiner.hashmap,
         &build_hash_joiner.input_buffer,
+        probe_batch,
         &build_hash_joiner.on,
         &probe_hash_joiner.on,
-        filter,
         random_state,
         null_equals_null,
         &mut build_hash_joiner.hashes_buffer,
-        Some(build_hash_joiner.deleted_offset),
+        filter,
         build_hash_joiner.build_side,
+        Some(build_hash_joiner.deleted_offset),
     )?;
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {
         record_visited_indices(
@@ -1078,54 +922,6 @@ impl OneSideHashJoiner {
         }
     }
 
-    /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
-    /// assuming that the [RecordBatch] corresponds to the `index`th
-    pub fn update_hash(
-        on: &[Column],
-        batch: &RecordBatch,
-        hash_map: &mut PruningJoinHashMap,
-        offset: usize,
-        deleted_offset: usize,
-        random_state: &RandomState,
-        hashes_buffer: &mut Vec<u64>,
-    ) -> Result<()> {
-        // evaluate the keys
-        let keys_values = on
-            .iter()
-            .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-
-        // calculate the hash values
-        let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-        hash_map
-            .list
-            .resize(hash_map.list.len() + batch.num_rows(), 0);
-        // insert hashes to key of the hashmap
-        for (row, hash_value) in hash_values.iter().enumerate() {
-            let item = hash_map
-                .map
-                .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-            if let Some((_, index)) = item {
-                // Already exists: add index to next array
-                let prev_index = *index;
-                // Store new value inside hashmap
-                *index = (row + offset + 1) as u64;
-                // Update chained Vec at row + offset with previous value
-                hash_map.list[row + offset - deleted_offset] = prev_index;
-            } else {
-                hash_map.map.insert(
-                    *hash_value,
-                    // store the value + 1 as 0 value reserved for end of list
-                    (*hash_value, (row + offset + 1) as u64),
-                    |(hash, _)| *hash,
-                );
-                // chained list at (row + offset) is already initialized with 0
-                // meaning end of list
-            }
-        }
-        Ok(())
-    }
-
     /// Updates the internal state of the [OneSideHashJoiner] with the incoming batch.
     ///
     /// # Arguments
@@ -1147,14 +943,14 @@ impl OneSideHashJoiner {
         self.hashes_buffer.resize(batch.num_rows(), 0);
         // Get allocation_info before adding the item
         // Update the hashmap with the join key values and hashes of the incoming batch:
-        Self::update_hash(
+        update_hash::<true, _>(
             &self.on,
             batch,
             &mut self.hashmap,
             self.offset,
-            self.deleted_offset,
             random_state,
             &mut self.hashes_buffer,
+            self.deleted_offset,
         )?;
         Ok(())
     }
@@ -1215,8 +1011,11 @@ impl OneSideHashJoiner {
 
     pub(crate) fn prune_internal_state(&mut self, prune_length: usize) -> Result<()> {
         // Prune the hash values:
-        self.hashmap
-            .prune_hash_values(prune_length, self.deleted_offset as u64, HASHMAP_SHRINK_SCALE_FACTOR)?;
+        self.hashmap.prune_hash_values(
+            prune_length,
+            self.deleted_offset as u64,
+            HASHMAP_SHRINK_SCALE_FACTOR,
+        )?;
         // Remove pruned rows from the visited rows set:
         for row in self.deleted_offset..(self.deleted_offset + prune_length) {
             self.visited_rows.remove(&row);
