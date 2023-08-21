@@ -18,30 +18,22 @@
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
 use std::any::Any;
-use std::convert::TryFrom;
-use std::ops::AddAssign;
 use std::sync::Arc;
 
 use super::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
-use arrow::array::Array;
-use arrow::array::Decimal128Array;
-use arrow::array::Decimal256Array;
-use arrow::compute;
+use arrow::compute::sum;
 use arrow::datatypes::DataType;
-use arrow::{
-    array::{ArrayRef, Float64Array, Int64Array, UInt64Array},
-    datatypes::Field,
-};
+use arrow::{array::ArrayRef, datatypes::Field};
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int32Type, Int64Type,
-    UInt32Type, UInt64Type,
+    Decimal128Type, Decimal256Type, Float64Type, Int64Type, UInt64Type,
 };
-use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
-};
+use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType};
+use arrow_buffer::ArrowNativeType;
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::aggregates::sum_return_type;
 use datafusion_expr::Accumulator;
 
@@ -71,17 +63,18 @@ impl Sum {
     }
 }
 
-/// Creates a [`PrimitiveGroupsAccumulator`] with the specified
-/// [`ArrowPrimitiveType`] which applies `$FN` to each element
-///
-/// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
-macro_rules! instantiate_primitive_accumulator {
-    ($SELF:expr, $PRIMTYPE:ident, $FN:expr) => {{
-        Ok(Box::new(PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(
-            &$SELF.data_type,
-            $FN,
-        )))
-    }};
+/// Sum only supports a subset of numeric types, instead relying on type coercion
+macro_rules! downcast_sum {
+    ($s:ident, $helper:ident) => {
+        match $s.data_type {
+            DataType::UInt64 => $helper!(UInt64Type, $s.data_type),
+            DataType::Int64 => $helper!(Int64Type, $s.data_type),
+            DataType::Float64 => $helper!(Float64Type, $s.data_type),
+            DataType::Decimal128(_, _) => $helper!(Decimal128Type, $s.data_type),
+            DataType::Decimal256(_, _) => $helper!(Decimal256Type, $s.data_type),
+            _ => not_impl_err!("Sum not supported for {}: {}", $s.name, $s.data_type),
+        }
+    };
 }
 
 impl AggregateExpr for Sum {
@@ -99,7 +92,12 @@ impl AggregateExpr for Sum {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SumAccumulator::try_new(&self.data_type)?))
+        macro_rules! helper {
+            ($t:ty, $dt:expr) => {
+                Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
+            };
+        }
+        downcast_sum!(self, helper)
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -123,46 +121,15 @@ impl AggregateExpr for Sum {
     }
 
     fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
-        // instantiate specialized accumulator
-        match self.data_type {
-            DataType::UInt64 => {
-                instantiate_primitive_accumulator!(self, UInt64Type, |x, y| x
-                    .add_assign(y))
-            }
-            DataType::Int64 => {
-                instantiate_primitive_accumulator!(self, Int64Type, |x, y| x
-                    .add_assign(y))
-            }
-            DataType::UInt32 => {
-                instantiate_primitive_accumulator!(self, UInt32Type, |x, y| x
-                    .add_assign(y))
-            }
-            DataType::Int32 => {
-                instantiate_primitive_accumulator!(self, Int32Type, |x, y| x
-                    .add_assign(y))
-            }
-            DataType::Float32 => {
-                instantiate_primitive_accumulator!(self, Float32Type, |x, y| x
-                    .add_assign(y))
-            }
-            DataType::Float64 => {
-                instantiate_primitive_accumulator!(self, Float64Type, |x, y| x
-                    .add_assign(y))
-            }
-            DataType::Decimal128(_, _) => {
-                instantiate_primitive_accumulator!(self, Decimal128Type, |x, y| x
-                    .add_assign(y))
-            }
-            DataType::Decimal256(_, _) => {
-                instantiate_primitive_accumulator!(self, Decimal256Type, |x, y| *x =
-                    *x + y)
-            }
-            _ => not_impl_err!(
-                "GroupsAccumulator not supported for {}: {}",
-                self.name,
-                self.data_type
-            ),
+        macro_rules! helper {
+            ($t:ty, $dt:expr) => {
+                Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
+                    &$dt,
+                    |x, y| *x = x.add_wrapping(y),
+                )))
+            };
         }
+        downcast_sum!(self, helper)
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -170,7 +137,12 @@ impl AggregateExpr for Sum {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingSumAccumulator::try_new(&self.data_type)?))
+        macro_rules! helper {
+            ($t:ty, $dt:expr) => {
+                Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
+            };
+        }
+        downcast_sum!(self, helper)
     }
 }
 
@@ -189,154 +161,123 @@ impl PartialEq<dyn Any> for Sum {
 }
 
 /// This accumulator computes SUM incrementally
-#[derive(Debug)]
-struct SumAccumulator {
-    sum: ScalarValue,
+struct SumAccumulator<T: ArrowNumericType> {
+    sum: Option<T::Native>,
+    data_type: DataType,
 }
 
-impl SumAccumulator {
-    /// new sum accumulator
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
-            sum: ScalarValue::try_from(data_type)?,
-        })
+impl<T: ArrowNumericType> std::fmt::Debug for SumAccumulator<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SumAccumulator({})", self.data_type)
+    }
+}
+
+impl<T: ArrowNumericType> SumAccumulator<T> {
+    fn new(data_type: DataType) -> Self {
+        Self {
+            sum: None,
+            data_type,
+        }
+    }
+}
+
+impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = values[0].as_primitive::<T>();
+        if let Some(x) = sum(values) {
+            let v = self.sum.get_or_insert(T::Native::usize_as(0));
+            *v = v.add_wrapping(x);
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(ScalarValue::new_primitive::<T>(self.sum, &self.data_type))
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
     }
 }
 
 /// This accumulator incrementally computes sums over a sliding window
-#[derive(Debug)]
-struct SlidingSumAccumulator {
-    sum: ScalarValue,
+///
+/// This is separate from [`SumAccumulator`] as requires additional state
+struct SlidingSumAccumulator<T: ArrowNumericType> {
+    sum: T::Native,
     count: u64,
+    data_type: DataType,
 }
 
-impl SlidingSumAccumulator {
-    /// new sum accumulator
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
-            // start at zero
-            sum: ScalarValue::try_from(data_type)?,
-            count: 0,
-        })
+impl<T: ArrowNumericType> std::fmt::Debug for SlidingSumAccumulator<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SlidingSumAccumulator({})", self.data_type)
     }
 }
 
-/// Sums the contents of the `$VALUES` array using the arrow compute
-/// kernel, and return a `ScalarValue::$SCALAR`.
-///
-/// Handles nullability
-macro_rules! typed_sum_delta_batch {
-    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident) => {{
-        let array = downcast_value!($VALUES, $ARRAYTYPE);
-        let delta = compute::sum(array);
-        ScalarValue::$SCALAR(delta)
-    }};
-}
-
-fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: i8) -> Result<ScalarValue> {
-    let array = downcast_value!(values, Decimal128Array);
-    let result = compute::sum(array);
-    Ok(ScalarValue::Decimal128(result, precision, scale))
-}
-
-fn sum_decimal256_batch(
-    values: &ArrayRef,
-    precision: u8,
-    scale: i8,
-) -> Result<ScalarValue> {
-    let array = downcast_value!(values, Decimal256Array);
-    let result = compute::sum(array);
-    Ok(ScalarValue::Decimal256(result, precision, scale))
-}
-
-// sums the array and returns a ScalarValue of its corresponding type.
-pub(crate) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
-    Ok(match values.data_type() {
-        DataType::Decimal128(precision, scale) => {
-            sum_decimal_batch(values, *precision, *scale)?
+impl<T: ArrowNumericType> SlidingSumAccumulator<T> {
+    fn new(data_type: DataType) -> Self {
+        Self {
+            sum: T::Native::usize_as(0),
+            count: 0,
+            data_type,
         }
-        DataType::Decimal256(precision, scale) => {
-            sum_decimal256_batch(values, *precision, *scale)?
-        }
-        DataType::Float64 => typed_sum_delta_batch!(values, Float64Array, Float64),
-        DataType::Int64 => typed_sum_delta_batch!(values, Int64Array, Int64),
-        DataType::UInt64 => typed_sum_delta_batch!(values, UInt64Array, UInt64),
-        e => {
-            return internal_err!("Sum is not expected to receive the type {e:?}");
-        }
-    })
+    }
 }
 
-impl Accumulator for SumAccumulator {
+impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.sum.clone()])
+        Ok(vec![self.evaluate()?, self.count.into()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        let delta = sum_batch(values)?;
-        self.sum = self.sum.add(&delta)?;
+        let values = values[0].as_primitive::<T>();
+        self.count += (values.len() - values.null_count()) as u64;
+        if let Some(x) = sum(values) {
+            self.sum = self.sum.add_wrapping(x)
+        }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // sum(sum1, sum2, sum3, ...) = sum1 + sum2 + sum3 + ...
-        self.update_batch(states)
+        let values = states[0].as_primitive::<T>();
+        if let Some(x) = sum(values) {
+            self.sum = self.sum.add_wrapping(x)
+        }
+        if let Some(x) = sum(states[1].as_primitive::<UInt64Type>()) {
+            self.count += x;
+        }
+        Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        // TODO: add the checker for overflow
-        // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
-        Ok(self.sum.clone())
+        let v = (self.count != 0).then_some(self.sum);
+        Ok(ScalarValue::new_primitive::<T>(v, &self.data_type))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.sum) + self.sum.size()
-    }
-}
-
-impl Accumulator for SlidingSumAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.sum.clone(), ScalarValue::from(self.count)])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        self.count += (values.len() - values.null_count()) as u64;
-        let delta = sum_batch(values)?;
-        self.sum = self.sum.add(&delta)?;
-        Ok(())
+        std::mem::size_of_val(self)
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        self.count -= (values.len() - values.null_count()) as u64;
-        let delta = sum_batch(values)?;
-        self.sum = self.sum.sub(&delta)?;
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // sum(sum1, sum2, sum3, ...) = sum1 + sum2 + sum3 + ...
-        self.update_batch(states)
-    }
-
-    fn evaluate(&self) -> Result<ScalarValue> {
-        // TODO: add the checker for overflow
-        // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
-        if self.count == 0 {
-            ScalarValue::try_from(&self.sum.get_datatype())
-        } else {
-            Ok(self.sum.clone())
+        let values = values[0].as_primitive::<T>();
+        if let Some(x) = sum(values) {
+            self.sum = self.sum.sub_wrapping(x)
         }
+        self.count -= (values.len() - values.null_count()) as u64;
+        Ok(())
     }
 
     fn supports_retract_batch(&self) -> bool {
         true
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.sum) + self.sum.size()
     }
 }
 
@@ -344,22 +285,11 @@ impl Accumulator for SlidingSumAccumulator {
 mod tests {
     use super::*;
     use crate::expressions::tests::assert_aggregate;
-    use arrow_array::{Float32Array, Int32Array, UInt32Array};
+    use arrow_array::*;
     use datafusion_expr::AggregateFunction;
 
     #[test]
     fn sum_decimal() {
-        // test sum batch
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(Some)
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)
-                .unwrap(),
-        );
-        let result = sum_batch(&array).unwrap();
-        assert_eq!(ScalarValue::Decimal128(Some(15), 10, 0), result);
-
         // test agg
         let array: ArrayRef = Arc::new(
             (1..6)
@@ -378,17 +308,6 @@ mod tests {
 
     #[test]
     fn sum_decimal_with_nulls() {
-        // test with batch
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)
-                .unwrap(),
-        );
-        let result = sum_batch(&array).unwrap();
-        assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
-
         // test agg
         let array: ArrayRef = Arc::new(
             (1..6)
@@ -415,8 +334,6 @@ mod tests {
                 .with_precision_and_scale(10, 0)
                 .unwrap(),
         );
-        let result = sum_batch(&array).unwrap();
-        assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
         // test agg
         assert_aggregate(

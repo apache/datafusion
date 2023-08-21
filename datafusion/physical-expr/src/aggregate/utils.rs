@@ -23,8 +23,7 @@ use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PREC
 use arrow_array::cast::AsArray;
 use arrow_array::types::Decimal128Type;
 use arrow_schema::{DataType, Field};
-use datafusion_common::internal_err;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -115,34 +114,6 @@ impl Decimal128Averager {
                 "Arithmetic Overflow in AvgAccumulator".to_string(),
             ))
         }
-    }
-}
-
-/// Returns `sum`/`count` for decimal values, detecting and reporting overflow.
-///
-/// * sum:  stored as Decimal128 with `sum_scale` scale
-/// * count: stored as a i128 (*NOT* a Decimal128 value)
-/// * sum_scale: the scale of `sum`
-/// * target_type: the output decimal type
-pub fn calculate_result_decimal_for_avg(
-    sum: i128,
-    count: i128,
-    sum_scale: i8,
-    target_type: &DataType,
-) -> Result<ScalarValue> {
-    match target_type {
-        DataType::Decimal128(target_precision, target_scale) => {
-            let new_value =
-                Decimal128Averager::try_new(sum_scale, *target_precision, *target_scale)?
-                    .avg(sum, count)?;
-
-            Ok(ScalarValue::Decimal128(
-                Some(new_value),
-                *target_precision,
-                *target_scale,
-            ))
-        }
-        other => internal_err!("Invalid target type in AvgAccumulator {other:?}"),
     }
 }
 
