@@ -766,3 +766,42 @@ query I
 SELECT strpos(arrow_cast('helloworld', 'Dictionary(Int32, Utf8)'), 'world')
 ----
 6
+
+statement ok
+CREATE TABLE products (
+product_id INT PRIMARY KEY,
+product_name VARCHAR(100),
+price DECIMAL(10, 2))
+
+statement ok
+INSERT INTO products (product_id, product_name, price) VALUES
+(1, 'OldBrand Product 1', 19.99),
+(2, 'OldBrand Product 2', 29.99),
+(3, 'OldBrand Product 3', 39.99),
+(4, 'OldBrand Product 4', 49.99)                    
+
+query ITR
+SELECT * REPLACE (price*2 AS price) FROM products
+----
+1 OldBrand Product 1 39.98
+2 OldBrand Product 2 59.98
+3 OldBrand Product 3 79.98
+4 OldBrand Product 4 99.98
+
+# types are conserved
+query ITR
+SELECT * REPLACE (product_id/2 AS product_id) FROM products
+----
+0 OldBrand Product 1 19.99
+1 OldBrand Product 2 29.99
+1 OldBrand Product 3 39.99
+2 OldBrand Product 4 49.99
+
+# multiple replace statements with qualified wildcard
+query ITR
+SELECT products.* REPLACE (price*2 AS price, product_id+1000 AS product_id) FROM products
+----
+1001 OldBrand Product 1 39.98
+1002 OldBrand Product 2 59.98
+1003 OldBrand Product 3 79.98
+1004 OldBrand Product 4 99.98
