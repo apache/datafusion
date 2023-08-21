@@ -988,17 +988,22 @@ macro_rules! general_repeat_list {
 
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args[0].as_any().downcast_ref::<NullArray>().is_some() {
+        return Ok(args[0].clone());
+    }
+
     let array = as_list_array(&args[0])?;
     let builder = array
         .iter()
         .map(|arr| {
             if let Some(arr) = arr {
-                Some(arr.is_empty())
+                Some(arr.len() == arr.null_count())
             } else {
                 Some(true)
             }
         })
         .collect::<BooleanArray>();
+    println!("\n");
     Ok(Arc::new(builder))
 }
 
