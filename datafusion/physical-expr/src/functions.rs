@@ -545,6 +545,21 @@ pub fn create_physical_fun(
                     );
                     make_scalar_function(func)(args)
                 }
+                DataType::Binary => {
+                    let args:Vec<ColumnarValue> = args.iter().map(|col_value| {
+                        cast_column(
+                            col_value,
+                            &DataType::Utf8,
+                            None,
+                        ).unwrap()
+                    }).collect();
+                    let func = invoke_if_unicode_expressions_feature_flag!(
+                        character_length,
+                        Int32Type,
+                        "character_length"
+                    );
+                    make_scalar_function(func)(args.as_slice())
+                }
                 other => internal_err!(
                     "Unsupported data type {other:?} for function character_length"
                 ),

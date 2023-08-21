@@ -889,7 +889,7 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::OctetLength
             | BuiltinScalarFunction::Reverse
             | BuiltinScalarFunction::Upper => {
-                Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
+                Signature::uniform(1, vec![Utf8, LargeUtf8, Binary, LargeBinary], self.volatility())
             }
             BuiltinScalarFunction::Btrim
             | BuiltinScalarFunction::Ltrim
@@ -1394,6 +1394,7 @@ macro_rules! make_utf8_to_return_type {
             Ok(match arg_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
+                DataType::Binary => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => {
                     match **value_type {
