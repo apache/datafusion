@@ -98,11 +98,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Generate a logical plan from an SQL statement
     pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context(statement, &mut PlannerContext::new())
+        self.sql_statement_to_plan_with_context_impl(
+            statement,
+            &mut PlannerContext::new(),
+        )
     }
 
     /// Generate a logical plan from an SQL statement
-    fn sql_statement_to_plan_with_context(
+    pub fn sql_statement_to_plan_with_context(
+        &self,
+        statement: Statement,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        self.sql_statement_to_plan_with_context_impl(statement, planner_context)
+    }
+
+    fn sql_statement_to_plan_with_context_impl(
         &self,
         statement: Statement,
         planner_context: &mut PlannerContext,
@@ -320,7 +331,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .with_prepare_param_data_types(data_types.clone());
 
                 // Build logical plan for inner statement of the prepare statement
-                let plan = self.sql_statement_to_plan_with_context(
+                let plan = self.sql_statement_to_plan_with_context_impl(
                     *statement,
                     &mut planner_context,
                 )?;
