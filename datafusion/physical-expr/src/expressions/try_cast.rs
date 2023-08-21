@@ -28,8 +28,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and retuns NULL on invalid cast
@@ -142,9 +141,7 @@ pub fn try_cast(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
-        Err(DataFusionError::NotImplemented(format!(
-            "Unsupported TRY_CAST from {expr_type:?} to {cast_type:?}"
-        )))
+        not_impl_err!("Unsupported TRY_CAST from {expr_type:?} to {cast_type:?}")
     }
 }
 

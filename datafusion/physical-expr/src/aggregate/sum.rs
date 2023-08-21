@@ -43,8 +43,9 @@ use arrow_array::types::{
     Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int32Type, Int64Type,
     UInt32Type, UInt64Type,
 };
-use datafusion_common::internal_err;
-use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 
 /// SUM aggregate expression
@@ -175,10 +176,11 @@ impl AggregateExpr for Sum {
                 instantiate_primitive_accumulator!(self, Decimal256Type, |x, y| *x =
                     *x + y)
             }
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {}: {}",
-                self.name, self.data_type
-            ))),
+                self.name,
+                self.data_type
+            ),
         }
     }
 

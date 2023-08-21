@@ -27,11 +27,10 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
-use datafusion_common::internal_err;
-use datafusion_common::plan_err;
-use datafusion_common::DataFusionError;
-use datafusion_common::Result;
-use datafusion_common::{downcast_value, ScalarValue};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
+    ScalarValue,
+};
 use datafusion_expr::Accumulator;
 use std::{any::Any, iter, sync::Arc};
 
@@ -108,9 +107,9 @@ impl ApproxPercentileCont {
                 }
             }
             other => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return not_impl_err!(
                     "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
-                )))
+                )
             }
         };
         Ok(accumulator)
@@ -146,10 +145,10 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     let percentile = match lit {
         ScalarValue::Float32(Some(q)) => *q as f64,
         ScalarValue::Float64(Some(q)) => *q,
-        got => return Err(DataFusionError::NotImplemented(format!(
+        got => return not_impl_err!(
             "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
             got.get_datatype()
-        )))
+        )
     };
 
     // Ensure the percentile is between 0 and 1.
@@ -181,10 +180,10 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
         ScalarValue::Int64(Some(q)) if *q > 0 => *q as usize,
         ScalarValue::Int16(Some(q)) if *q > 0 => *q as usize,
         ScalarValue::Int8(Some(q)) if *q > 0 => *q as usize,
-        got => return Err(DataFusionError::NotImplemented(format!(
+        got => return not_impl_err!(
             "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
             got.get_datatype()
-        )))
+        )
     };
     Ok(max_size)
 }

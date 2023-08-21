@@ -21,7 +21,9 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::{DFSchemaRef, DataFusionError, OwnedTableReference};
+use datafusion_common::{
+    not_impl_err, DFSchemaRef, DataFusionError, OwnedTableReference,
+};
 
 use crate::LogicalPlan;
 
@@ -62,9 +64,7 @@ impl FromStr for OutputFileFormat {
             "parquet" => Ok(OutputFileFormat::PARQUET),
             "avro" => Ok(OutputFileFormat::AVRO),
             "arrow" => Ok(OutputFileFormat::ARROW),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown or not supported file format {s}!"
-            ))),
+            _ => not_impl_err!("Unknown or not supported file format {s}!"),
         }
     }
 }
