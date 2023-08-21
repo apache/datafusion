@@ -21,9 +21,9 @@ use std::borrow::Borrow;
 use std::cmp::{max, Ordering};
 use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
-use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
+use std::ops::{Add, Sub};
 
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
@@ -46,7 +46,8 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::{timezone::Tz, ArrowNativeTypeOp};
+use arrow_array::{ArrowNativeTypeOp};
+use arrow_array::timezone::Tz;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
@@ -1781,6 +1782,25 @@ macro_rules! eq_array_primitive {
 }
 
 impl ScalarValue {
+    /// Create a [`ScalarValue`] with the provided value and datatype
+    ///
+    /// # Panics
+    ///
+    /// Panics if d is not compatible with T
+    pub fn new_primitive<T: ArrowPrimitiveType>(
+        a: Option<T::Native>,
+        d: &DataType,
+    ) -> Self {
+        match a {
+            None => d.try_into().unwrap(),
+            Some(v) => {
+                let array = PrimitiveArray::<T>::new(vec![v].into(), None)
+                    .with_data_type(d.clone());
+                Self::try_from_array(&array, 0).unwrap()
+            }
+        }
+    }
+
     /// Create a decimal Scalar from value/precision and scale.
     pub fn try_new_decimal128(value: i128, precision: u8, scale: i8) -> Result<Self> {
         // make sure the precision and scale is valid
@@ -2091,11 +2111,13 @@ impl ScalarValue {
         impl_op!(self, rhs, &)
     }
 
+    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
     pub fn bitor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, |)
     }
 
+    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
     pub fn bitxor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_op!(self, rhs, ^)
@@ -4061,6 +4083,7 @@ mod tests {
     use arrow::datatypes::ArrowPrimitiveType;
     use arrow::util::pretty::pretty_format_columns;
     use arrow_array::ArrowNumericType;
+    use chrono::NaiveDate;
     use rand::Rng;
 
     use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
