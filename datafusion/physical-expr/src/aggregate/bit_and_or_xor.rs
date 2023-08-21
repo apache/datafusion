@@ -79,7 +79,7 @@ impl AggregateExpr for BitAnd {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         macro_rules! helper {
             ($t:ty) => {
-                Ok(Box::new(BitAndAccumulator::<$t>::default()))
+                Ok(Box::<BitAndAccumulator<$t>>::default())
             };
         }
         downcast_integer! {
@@ -244,7 +244,7 @@ impl AggregateExpr for BitOr {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         macro_rules! helper {
             ($t:ty) => {
-                Ok(Box::new(BitOrAccumulator::<$t>::default()))
+                Ok(Box::<BitOrAccumulator<$t>>::default())
             };
         }
         downcast_integer! {
@@ -344,7 +344,7 @@ where
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = bit_or(values[0].as_primitive::<T>()) {
-            let v = self.value.insert(x);
+            let v = self.value.get_or_insert(T::Native::usize_as(0));
             *v = *v | x;
         }
         Ok(())
@@ -405,7 +405,7 @@ impl AggregateExpr for BitXor {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         macro_rules! helper {
             ($t:ty) => {
-                Ok(Box::new(BitXorAccumulator::<$t>::default()))
+                Ok(Box::<BitXorAccumulator<$t>>::default())
             };
         }
         downcast_integer! {
@@ -505,7 +505,7 @@ where
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if let Some(x) = bit_xor(values[0].as_primitive::<T>()) {
-            let v = self.value.insert(x);
+            let v = self.value.get_or_insert(T::Native::usize_as(0));
             *v = *v ^ x;
         }
         Ok(())
@@ -566,7 +566,7 @@ impl AggregateExpr for DistinctBitXor {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         macro_rules! helper {
             ($t:ty) => {
-                Ok(Box::new(DistinctBitXorAccumulator::<$t>::default()))
+                Ok(Box::<DistinctBitXorAccumulator<$t>>::default())
             };
         }
         downcast_integer! {

@@ -21,9 +21,9 @@ use std::borrow::Borrow;
 use std::cmp::{max, Ordering};
 use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
+use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
-use std::ops::{Add, Sub};
 
 use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
@@ -46,8 +46,8 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::{ArrowNativeTypeOp};
 use arrow_array::timezone::Tz;
+use arrow_array::ArrowNativeTypeOp;
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 // Constants we use throughout this file:
