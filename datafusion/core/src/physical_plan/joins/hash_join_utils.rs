@@ -18,7 +18,7 @@
 //! This file contains common subroutines for regular and symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{fmt, usize};
 
@@ -38,10 +38,12 @@ use hashbrown::HashSet;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 use std::fmt::{Debug, Formatter};
+use ahash::RandomState;
 
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
 use crate::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
+use datafusion_physical_expr::hash_utils::create_hashes;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 // By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
@@ -102,6 +104,229 @@ pub struct JoinHashMap {
     pub map: RawTable<(u64, u64)>,
     // Stores indices in chained list data structure
     pub next: Vec<u64>,
+}
+
+pub struct JoinHashMapv2 {
+    // Stores hash value to head and tail
+    pub map: RawTable<(u64, (u64, u64))>,
+    // Stores indices in chained list data structure
+    pub list: VecDeque<Node>,
+}
+
+impl JoinHashMapv2 {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        JoinHashMapv2 {
+            map: RawTable::with_capacity(capacity),
+            list: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    pub(crate) fn size(&self) -> usize{
+        0
+    }
+}
+
+pub struct JoinHashMapv3 {
+    // Stores hash value to head and tail
+    pub map: RawTable<(u64, u64)>,
+    // Stores indices in chained list data structure
+    pub list: VecDeque<u64>,
+}
+
+impl JoinHashMapv3 {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        JoinHashMapv3 {
+            map: RawTable::with_capacity(capacity),
+            list: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    pub(crate) fn size(&self) -> usize{
+        0
+    }
+}
+
+#[derive(Default, Debug, Copy, Clone)]
+pub struct Node {
+    pub(crate) prev_index: u64,
+    pub(crate) next_index: u64
+}
+
+// /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
+// /// assuming that the [RecordBatch] corresponds to the `index`th
+// pub fn update_hash(
+//     on: &[Column],
+//     batch: &RecordBatch,
+//     hash_map: &mut JoinHashMapv2,
+//     random_state: &RandomState,
+//     hashes_buffer: &mut Vec<u64>,
+//     offset: usize
+// ) -> Result<()> {
+//     // evaluate the keys
+//     let keys_values = on
+//         .iter()
+//         .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
+//         .collect::<Result<Vec<_>>>()?;
+//     let hash_values = datafusion_physical_expr::hash_utils::create_hashes(&keys_values, random_state, hashes_buffer)?;
+//     hash_map.list.resize(hash_map.list.len() + batch.num_rows(), Node::default());
+//     // insert hashes to key of the hashmap
+//     for (row, hash_value) in hash_values.iter().enumerate() {
+//         let item = hash_map
+//             .map
+//             .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+//         if let Some((_, indices)) = item {
+//             // Already exists: add index to next array
+//             let (_, tail) = indices;
+//
+//             // Update previous node if exist
+//             hash_map.list[(*tail - 1) as usize].next_index = (row + offset +  1) as u64;
+//
+//             // Update chained Vec at row + offset with previous value
+//             hash_map.list[row + offset].prev_index = *tail;
+//             // Store new value inside hashmap
+//             indices.1 = (row + offset + 1) as u64;
+//             // println!("hash_map.next new key {:?} indices {:?}",hash_map.list, indices);
+//         } else {
+//             // println!("hash_map.next new key {:?}",hash_map.list);
+//             hash_map.map.insert(
+//                 *hash_value,
+//                 // store the value + 1 as 0 value reserved for end of list
+//                 (*hash_value, ((row + offset +  1) as u64, (row + offset +  1) as u64)),
+//                 |(hash, _)| *hash,
+//             );
+//             // chained list at (row + offset) is already initialized with 0
+//             // meaning end of list
+//         }
+//     }
+//     Ok(())
+// }
+//
+// #[allow(clippy::too_many_arguments)]
+// pub fn build_equal_condition_join_indices_v2(
+//     build_hashmap: &JoinHashMapv2,
+//     build_input_buffer: &RecordBatch,
+//     probe_batch: &RecordBatch,
+//     build_on: &[Column],
+//     probe_on: &[Column],
+//     random_state: &RandomState,
+//     null_equals_null: bool,
+//     hashes_buffer: &mut Vec<u64>,
+//     filter: Option<&JoinFilter>,
+//     build_side: JoinSide,
+//     deleted_offset: Option<usize>,
+// ) -> Result<(arrow_array::UInt64Array, arrow_array::UInt32Array)> {
+//     let keys_values = probe_on
+//         .iter()
+//         .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
+//         .collect::<Result<Vec<_>>>()?;
+//     let build_join_values = build_on
+//         .iter()
+//         .map(|c| {
+//             Ok(c.evaluate(build_input_buffer)?
+//                 .into_array(build_input_buffer.num_rows()))
+//         })
+//         .collect::<Result<Vec<_>>>()?;
+//     hashes_buffer.clear();
+//     hashes_buffer.resize(probe_batch.num_rows(), 0);
+//     let offset_value = deleted_offset.unwrap_or(0);
+//     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+//     // Using a buffer builder to avoid slower normal builder
+//     let mut build_indices = arrow_array::builder::UInt64BufferBuilder::new(0);
+//     let mut probe_indices = arrow_array::builder::UInt32BufferBuilder::new(0);
+//     // The chained list algorithm generates build indices for each probe row in a reversed sequence as such:
+//     // Build Indices: [5, 4, 3]
+//     // Probe Indices: [1, 1, 1]
+//     //
+//     // This affects the output sequence. Hypothetically, it's possible to preserve the lexicographic order on the build side.
+//     // Let's consider probe rows [0,1] as an example:
+//     //
+//     // When the probe iteration sequence is reversed, the following pairings can be derived:
+//     //
+//     // For probe row 1:
+//     //     (5, 1)
+//     //     (4, 1)
+//     //     (3, 1)
+//     //
+//     // For probe row 0:
+//     //     (5, 0)
+//     //     (4, 0)
+//     //     (3, 0)
+//     //
+//     // After reversing both sets of indices, we obtain reversed indices:
+//     //
+//     //     (3,0)
+//     //     (4,0)
+//     //     (5,0)
+//     //     (3,1)
+//     //     (4,1)
+//     //     (5,1)
+//     //
+//     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+//     for (row, hash_value) in hash_values.iter().enumerate().rev() {
+//         // Get the hash and find it in the build index
+//
+//         // For every item on the build and probe we check if it matches
+//         // This possibly contains rows with hash collisions,
+//         // So we have to check here whether rows are equal or not
+//         if let Some((_, index)) = build_hashmap
+//             .map
+//             .get(*hash_value, |(hash, _)| *hash_value == *hash)
+//         {
+//             let mut i = *index - 1;
+//             loop {
+//                 build_indices.append(i  - offset_value as u64);
+//                 probe_indices.append(row as u32);
+//                 // Follow the chain to get the next index value
+//                 let next = build_hashmap.list[i as usize].prev_index;
+//                 if next == 0 {
+//                     // end of list
+//                     break;
+//                 }
+//                 i = next - 1;
+//             }
+//         }
+//     }
+//     // Reversing both sets of indices
+//     build_indices.as_slice_mut().reverse();
+//     probe_indices.as_slice_mut().reverse();
+//
+//     let left: arrow_array::UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
+//     let right: arrow_array::UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
+//
+//     let (left, right) = if let Some(filter) = filter {
+//         // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
+//         crate::physical_plan::joins::utils::apply_join_filter_to_indices(
+//             build_input_buffer,
+//             probe_batch,
+//             left,
+//             right,
+//             filter,
+//             build_side,
+//         )?
+//     } else {
+//         (left, right)
+//     };
+//
+//     crate::physical_plan::joins::hash_join::equal_rows_arr(
+//         &left,
+//         &right,
+//         &build_join_values,
+//         &keys_values,
+//         null_equals_null,
+//     )
+// }
+//
+fn prune_hash_values(
+    prune_length: usize,
+    hashmap: &mut JoinHashMapv3,
+    row_hash_values: &mut VecDeque<u64>,
+    deleting_offset: u64,
+) -> Result<()> {
+    // Create a (hash)-(row number set) map
+    for _ in 0..prune_length {
+        hashmap.list.pop_front()
+    }
+    Ok(())
 }
 
 /// SymmetricJoinHashMap is similar to JoinHashMap, except that it stores the indices inline, allowing it to mutate
@@ -684,6 +909,8 @@ pub mod tests {
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
     use smallvec::smallvec;
     use std::sync::Arc;
+    use arrow_array::{Float64Array, UInt32Array};
+    use crate::test::build_table_i32;
 
     /// Filter expr for a + b > c + 10 AND a + b < c + 100
     pub(crate) fn complicated_filter(
@@ -1056,4 +1283,53 @@ pub mod tests {
         assert!(join_hash_map.0.capacity() >= new_expected_capacity);
         assert!(join_hash_map.0.capacity() <= old_capacity);
     }
+
+    fn create_test_schema() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, false);
+        let c = Field::new("c", DataType::Int32, true);
+
+        let schema = Arc::new(Schema::new(vec![a, b, c]));
+        Ok(schema)
+    }
+
+    // #[test]
+    // fn update_sym_hash() -> Result<()>{
+    //
+    //     let left = build_table_i32(
+    //         ("a", &vec![1, 1]),
+    //         ("x", &vec![100, 200]),
+    //         ("y", &vec![200, 300]),
+    //     );
+    //
+    //     let right = build_table_i32(
+    //         ("a", &vec![10, 20]),
+    //         ("b", &vec![0, 0]),
+    //         ("c", &vec![30, 40]),
+    //     );
+    //
+    //     let on = vec![
+    //         Column::new_with_schema("a", &left.schema())?,
+    //     ];
+    //
+    //     let random_state = RandomState::with_seeds(0, 0, 0, 0);
+    //     let hashes_buff = &mut vec![0; left.num_rows()];
+    //     let mut hash_map = JoinHashMapv2{
+    //         map: RawTable::with_capacity(2),
+    //         list: VecDeque::new(),
+    //     };
+    //     let mut offset = 0;
+    //     update_hash(&on, &left, &mut hash_map, &random_state, hashes_buff, offset).unwrap();
+    //     offset += left.num_rows();
+    //     update_hash(&on, &left, &mut hash_map, &random_state, hashes_buff, offset).unwrap();
+    //     offset += left.num_rows();
+    //     update_hash(&on, &left, &mut hash_map, &random_state, hashes_buff, offset).unwrap();
+    //     offset += left.num_rows();
+    //     update_hash(&on, &left, &mut hash_map, &random_state, hashes_buff, offset).unwrap();
+    //
+    //
+    //     Ok(())
+    //
+    //
+    // }
 }
