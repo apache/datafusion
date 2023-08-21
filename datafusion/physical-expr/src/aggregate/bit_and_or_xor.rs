@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::collections::HashSet;
 
