@@ -680,6 +680,7 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
         .or_else(|| null_coercion(lhs_type, rhs_type))
+        .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
 
 /// coercion rules for regular expression comparison operations.
