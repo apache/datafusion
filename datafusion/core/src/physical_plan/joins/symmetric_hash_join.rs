@@ -25,7 +25,6 @@
 //! This plan uses the [OneSideHashJoiner] object to facilitate join calculations
 //! for both its children.
 
-use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -46,13 +45,18 @@ use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;
-use smallvec::smallvec;
 
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
 use crate::physical_plan::common::SharedMemoryReservation;
-use crate::physical_plan::joins::hash_join_utils::{build_filter_expression_graph, calculate_filter_expr_intervals, combine_two_batches, convert_sort_expr_with_filter_schema, get_pruning_anti_indices, get_pruning_semi_indices, record_visited_indices, IntervalCalculatorInnerState, JoinHashMapv2, Node};
+use crate::physical_plan::joins::hash_join::equal_rows_arr;
+use crate::physical_plan::joins::hash_join_utils::{
+    build_filter_expression_graph, calculate_filter_expr_intervals, combine_two_batches,
+    convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
+    get_pruning_semi_indices, record_visited_indices, IntervalCalculatorInnerState,
+    PruningJoinHashMap,
+};
 use crate::physical_plan::joins::StreamJoinPartitionMode;
 use crate::physical_plan::DisplayAs;
 use crate::physical_plan::{
@@ -75,8 +79,6 @@ use datafusion_common::{internal_err, plan_err, JoinType};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
-use super::hash_join::equal_rows;
-use super::hash_join_utils::SymmetricJoinHashMap;
 use super::utils::apply_join_filter_to_indices;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
@@ -616,58 +618,6 @@ impl Stream for SymmetricHashJoinStream {
     }
 }
 
-fn prune_hash_values(
-    prune_length: usize,
-    hashmap: &mut JoinHashMapv2,
-    row_hash_values: &mut VecDeque<u64>,
-    offset: u64,
-) -> Result<()> {
-    // Create a (hash)-(row number set) map
-    let mut hash_value_map: HashMap<u64, HashSet<u64>> = HashMap::new();
-    for index in 0..prune_length {
-        let hash_value = row_hash_values.pop_front().unwrap();
-        if let Some(set) = hash_value_map.get_mut(&hash_value) {
-            set.insert(offset + index as u64);
-        } else {
-            let mut set = HashSet::new();
-            set.insert(offset + index as u64);
-            hash_value_map.insert(hash_value, set);
-        }
-    }
-    let mut removed_hashes = vec![];
-    for (hash_value, index_set) in hash_value_map.iter() {
-        if let Some((_, indices)) = hashmap
-            .map
-            .get_mut(*hash_value, |(hash, _)| hash_value == hash)
-        {
-            let (start_index, _) = indices;
-            let mut start_index_temp = *start_index as usize - 1;
-            let prune_lengtg_per_key = index_set.len();
-            for _ in 0..prune_lengtg_per_key {
-                let next_index = hashmap.list[start_index_temp].next_index;
-                if next_index == 0 {
-                    removed_hashes.push(*hash_value);
-                    break;
-                }else {
-                    hashmap.list[start_index_temp].next_index = 0;
-                    start_index_temp = next_index as usize - 1;
-                }
-            }
-            indices.0 = start_index_temp as u64 + 1;
-            // Update the starting index.
-        }
-    }
-
-    for hash_value in  removed_hashes{
-        hashmap.map.remove_entry(hash_value, |(hash, _)| hash_value == *hash);
-    }
-
-    for _ in 0..prune_length {
-        hashmap.list.pop_front();
-
-    }
-    Ok(())
-}
 /// Determine the pruning length for `buffer`.
 ///
 /// This function evaluates the build side filter expression, converts the
@@ -847,39 +797,6 @@ pub(crate) fn build_side_determined_results(
     }
 }
 
-/// Gets build and probe indices which satisfy the on condition (including
-/// the equality condition and the join filter) in the join.
-#[allow(clippy::too_many_arguments)]
-pub fn build_join_indices(
-    probe_batch: &RecordBatch,
-    build_hashmap: &JoinHashMapv2,
-    build_input_buffer: &RecordBatch,
-    on_build: &[Column],
-    on_probe: &[Column],
-    filter: Option<&JoinFilter>,
-    random_state: &RandomState,
-    null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
-    offset: Option<usize>,
-    build_side: JoinSide,
-) -> Result<(UInt64Array, UInt32Array)> {
-    // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
-    build_equal_condition_join_indices(
-        build_hashmap,
-        build_input_buffer,
-        probe_batch,
-        on_build,
-        on_probe,
-        random_state,
-        null_equals_null,
-        hashes_buffer,
-        filter,
-        build_side,
-        offset,
-
-    )
-}
-
 // Returns build/probe indices satisfying the equality condition.
 // On LEFT.b1 = RIGHT.b2
 // LEFT Table:
@@ -912,24 +829,24 @@ pub fn build_join_indices(
 // Build indices:  5, 6, 6, 4
 // Probe indices: 3, 4, 5, 3
 #[allow(clippy::too_many_arguments)]
-pub fn build_equal_condition_join_indices(
-    build_hashmap: &JoinHashMapv2,
-    build_input_buffer: &RecordBatch,
+pub fn build_join_indices(
     probe_batch: &RecordBatch,
-    build_on: &[Column],
-    probe_on: &[Column],
+    build_hashmap: &PruningJoinHashMap,
+    build_input_buffer: &RecordBatch,
+    on_build: &[Column],
+    on_probe: &[Column],
+    filter: Option<&JoinFilter>,
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
-    filter: Option<&JoinFilter>,
-    build_side: JoinSide,
     deleted_offset: Option<usize>,
+    build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    let keys_values = probe_on
+    let keys_values = on_probe
         .iter()
         .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
         .collect::<Result<Vec<_>>>()?;
-    let build_join_values = build_on
+    let build_join_values = on_build
         .iter()
         .map(|c| {
             Ok(c.evaluate(build_input_buffer)?
@@ -941,8 +858,8 @@ pub fn build_equal_condition_join_indices(
     let offset_value = deleted_offset.unwrap_or(0);
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
     // Using a buffer builder to avoid slower normal builder
-    let mut build_indices = arrow_array::builder::UInt64BufferBuilder::new(0);
-    let mut probe_indices = arrow_array::builder::UInt32BufferBuilder::new(0);
+    let mut build_indices = UInt64BufferBuilder::new(0);
+    let mut probe_indices = UInt32BufferBuilder::new(0);
     // The chained list algorithm generates build indices for each probe row in a reversed sequence as such:
     // Build Indices: [5, 4, 3]
     // Probe Indices: [1, 1, 1]
@@ -972,7 +889,7 @@ pub fn build_equal_condition_join_indices(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
-    for (row, hash_value) in hash_values.iter().enumerate().rev() {
+    for (probe_row, hash_value) in hash_values.iter().enumerate().rev() {
         // Get the hash and find it in the build index
 
         // For every item on the build and probe we check if it matches
@@ -982,13 +899,18 @@ pub fn build_equal_condition_join_indices(
             .map
             .get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
-            let (prev_index, _) = index;
-            let mut i = *prev_index - 1;
+            let mut i = *index - 1;
             loop {
-                build_indices.append(i  - offset_value as u64);
-                probe_indices.append(row as u32);
+                // This arguments means that we prune the next index way before here.
+                if i < offset_value as u64 {
+                    // End of the list due to pruning;
+                    break;
+                }
+                let build_row_value = i - offset_value as u64;
+                build_indices.append(build_row_value);
+                probe_indices.append(probe_row as u32);
                 // Follow the chain to get the next index value
-                let next = build_hashmap.list[i as usize].prev_index;
+                let next = build_hashmap.list[build_row_value as usize];
                 if next == 0 {
                     // end of list
                     break;
@@ -1018,7 +940,7 @@ pub fn build_equal_condition_join_indices(
         (left, right)
     };
 
-    crate::physical_plan::joins::hash_join::equal_rows_arr(
+    equal_rows_arr(
         &left,
         &right,
         &build_join_values,
@@ -1118,9 +1040,7 @@ pub struct OneSideHashJoiner {
     /// Columns from the side
     pub(crate) on: Vec<Column>,
     /// Hashmap
-    pub(crate) hashmap: JoinHashMapv2,
-    /// To optimize hash deleting in case of pruning, we hold them in memory
-    row_hash_values: VecDeque<u64>,
+    pub(crate) hashmap: PruningJoinHashMap,
     /// Reuse the hashes buffer
     pub(crate) hashes_buffer: Vec<u64>,
     /// Matched rows
@@ -1139,7 +1059,6 @@ impl OneSideHashJoiner {
         size += self.input_buffer.get_array_memory_size();
         size += std::mem::size_of_val(&self.on);
         size += self.hashmap.size();
-        size += self.row_hash_values.capacity() * std::mem::size_of::<u64>();
         size += self.hashes_buffer.capacity() * std::mem::size_of::<u64>();
         size += self.visited_rows.capacity() * std::mem::size_of::<usize>();
         size += std::mem::size_of_val(&self.offset);
@@ -1151,8 +1070,7 @@ impl OneSideHashJoiner {
             build_side,
             input_buffer: RecordBatch::new_empty(schema),
             on,
-            hashmap: JoinHashMapv2::with_capacity(0),
-            row_hash_values: VecDeque::new(),
+            hashmap: PruningJoinHashMap::with_capacity(0),
             hashes_buffer: vec![],
             visited_rows: HashSet::new(),
             offset: 0,
@@ -1165,41 +1083,40 @@ impl OneSideHashJoiner {
     pub fn update_hash(
         on: &[Column],
         batch: &RecordBatch,
-        hash_map: &mut JoinHashMapv2,
+        hash_map: &mut PruningJoinHashMap,
+        offset: usize,
+        deleted_offset: usize,
         random_state: &RandomState,
         hashes_buffer: &mut Vec<u64>,
-        offset: usize
     ) -> Result<()> {
         // evaluate the keys
         let keys_values = on
             .iter()
             .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
             .collect::<Result<Vec<_>>>()?;
-        let hash_values = datafusion_physical_expr::hash_utils::create_hashes(&keys_values, random_state, hashes_buffer)?;
-        hash_map.list.resize(hash_map.list.len() + batch.num_rows(), Node::default());
+
+        // calculate the hash values
+        let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+        hash_map
+            .list
+            .resize(hash_map.list.len() + batch.num_rows(), 0);
         // insert hashes to key of the hashmap
         for (row, hash_value) in hash_values.iter().enumerate() {
             let item = hash_map
                 .map
                 .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-            if let Some((_, indices)) = item {
+            if let Some((_, index)) = item {
                 // Already exists: add index to next array
-                let (_, tail) = indices;
-
-                // Update previous node if exist
-                hash_map.list[(*tail - 1) as usize].next_index = (row + offset +  1) as u64;
-
-                // Update chained Vec at row + offset with previous value
-                hash_map.list[row + offset].prev_index = *tail;
+                let prev_index = *index;
                 // Store new value inside hashmap
-                indices.1 = (row + offset + 1) as u64;
-                // println!("hash_map.next new key {:?} indices {:?}",hash_map.list, indices);
+                *index = (row + offset + 1) as u64;
+                // Update chained Vec at row + offset with previous value
+                hash_map.list[row + offset - deleted_offset] = prev_index;
             } else {
-                // println!("hash_map.next new key {:?}",hash_map.list);
                 hash_map.map.insert(
                     *hash_value,
                     // store the value + 1 as 0 value reserved for end of list
-                    (*hash_value, ((row + offset +  1) as u64, (row + offset +  1) as u64)),
+                    (*hash_value, (row + offset + 1) as u64),
                     |(hash, _)| *hash,
                 );
                 // chained list at (row + offset) is already initialized with 0
@@ -1234,12 +1151,11 @@ impl OneSideHashJoiner {
             &self.on,
             batch,
             &mut self.hashmap,
+            self.offset,
+            self.deleted_offset,
             random_state,
             &mut self.hashes_buffer,
-            self.offset,
         )?;
-        // Add the hashes buffer to the hash value deque:
-        self.row_hash_values.extend(self.hashes_buffer.iter());
         Ok(())
     }
 
@@ -1299,12 +1215,8 @@ impl OneSideHashJoiner {
 
     pub(crate) fn prune_internal_state(&mut self, prune_length: usize) -> Result<()> {
         // Prune the hash values:
-        prune_hash_values(
-            prune_length,
-            &mut self.hashmap,
-            &mut self.row_hash_values,
-            self.deleted_offset as u64,
-        )?;
+        self.hashmap
+            .prune_hash_values(prune_length, self.deleted_offset as u64, HASHMAP_SHRINK_SCALE_FACTOR)?;
         // Remove pruned rows from the visited rows set:
         for row in self.deleted_offset..(self.deleted_offset + prune_length) {
             self.visited_rows.remove(&row);
@@ -1519,7 +1431,7 @@ mod tests {
     };
     use datafusion_common::ScalarValue;
 
-    const TABLE_SIZE: i32 = 100;
+    const TABLE_SIZE: i32 = 1000;
 
     pub async fn experiment(
         left: Arc<dyn ExecutionPlan>,
@@ -1653,6 +1565,61 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: col("la1", left_schema)?,
+            options: SortOptions::default(),
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: col("ra1", right_schema)?,
+            options: SortOptions::default(),
+        }];
+        let (left, right) = create_memory_table(
+            left_batch,
+            right_batch,
+            vec![left_sorted],
+            vec![right_sorted],
+            13,
+        )?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
+        )];
+
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Int32, true),
+            Field::new("right", DataType::Int32, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture_i32(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
+        let column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn join_all_one_ascending_numeric_v2() -> Result<()> {
+        let join_type = JoinType::Inner;
+        let cardinality = (4, 5);
+        let case_expr = 2;
+        let task_ctx = Arc::new(TaskContext::default());
+        let (left_batch, right_batch) = build_sides_record_batches(1000, cardinality)?;
         let left_schema = &left_batch.schema();
         let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {

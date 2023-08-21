@@ -73,7 +73,7 @@ pub async fn partitioned_sym_join_with_filter(
     null_equals_null: bool,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
-    let partition_count = 4;
+    let partition_count = 1;
 
     let left_expr = on
         .iter()
