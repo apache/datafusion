@@ -301,7 +301,7 @@ impl FileType {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
             FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
-                _ => crate::error::_internal_err!(
+                _ => crate::error::_not_impl_err!(
                     "FileCompressionType can be specified for CSV/JSON FileType."
                 ),
             },
