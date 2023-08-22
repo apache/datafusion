@@ -1891,6 +1891,15 @@
     </ul>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#array-empty">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       array_empty
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#array-extract">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -2343,6 +2352,27 @@
     </ul>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#empty">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       empty
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id138">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id139">
+       Example
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#list-append">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -2568,17 +2598,17 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id138">
+      <a class="reference internal nav-link" href="#id140">
        Arguments
       </a>
      </li>
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id139">
+      <a class="reference internal nav-link" href="#id141">
        Example
       </a>
      </li>
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id140">
+      <a class="reference internal nav-link" href="#id142">
        Aliases
       </a>
      </li>
@@ -2603,7 +2633,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id141">
+      <a class="reference internal nav-link" href="#id143">
        Arguments
       </a>
      </li>
@@ -2626,7 +2656,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id142">
+      <a class="reference internal nav-link" href="#id144">
        Arguments
       </a>
      </li>
@@ -2649,7 +2679,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id143">
+      <a class="reference internal nav-link" href="#id145">
        Arguments
       </a>
      </li>
@@ -2665,7 +2695,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id144">
+      <a class="reference internal nav-link" href="#id146">
        Arguments
       </a>
      </li>
@@ -2681,7 +2711,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id145">
+      <a class="reference internal nav-link" href="#id147">
        Arguments
       </a>
      </li>
@@ -2697,7 +2727,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id146">
+      <a class="reference internal nav-link" href="#id148">
        Arguments
       </a>
      </li>
@@ -2713,7 +2743,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id147">
+      <a class="reference internal nav-link" href="#id149">
        Arguments
       </a>
      </li>
@@ -2729,7 +2759,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id148">
+      <a class="reference internal nav-link" href="#id150">
        Arguments
       </a>
      </li>
@@ -2752,7 +2782,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id149">
+      <a class="reference internal nav-link" href="#id151">
        Arguments
       </a>
      </li>
@@ -2768,7 +2798,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id150">
+      <a class="reference internal nav-link" href="#id152">
        Arguments
       </a>
      </li>
@@ -4371,6 +4401,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 <li><p><a class="reference internal" href="#array-slice">array_slice</a></p></li>
 <li><p><a class="reference internal" href="#array-to-string">array_to_string</a></p></li>
 <li><p><a class="reference internal" href="#cardinality">cardinality</a></p></li>
+<li><p><a class="reference internal" href="#empty">empty</a></p></li>
 <li><p><a class="reference internal" href="#list-append">list_append</a></p></li>
 <li><p><a class="reference internal" href="#list-cat">list_cat</a></p></li>
 <li><p><a class="reference internal" href="#list-concat">list_concat</a></p></li>
@@ -4583,6 +4614,9 @@ Can be a constant, column, or function, and any combination of array operators.<
 <li><p>list_extract</p></li>
 </ul>
 </section>
+</section>
+<section id="array-empty">
+<h3><code class="docutils literal notranslate"><span class="pre">array_empty</span></code><a class="headerlink" href="#array-empty" title="Link to this heading">¶</a></h3>
 </section>
 <section id="array-extract">
 <h3><code class="docutils literal notranslate"><span class="pre">array_extract</span></code><a class="headerlink" href="#array-extract" title="Link to this heading">¶</a></h3>
@@ -5118,6 +5152,31 @@ Can be a constant, column, or function, and any combination of array operators.<
 </div>
 </section>
 </section>
+<section id="empty">
+<h3><code class="docutils literal notranslate"><span class="pre">empty</span></code><a class="headerlink" href="#empty" title="Link to this heading">¶</a></h3>
+<p>Returns 1 for an empty array or 0 for a non-empty array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">empty</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id138">
+<h4>Arguments<a class="headerlink" href="#id138" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>array</strong>: Array expression.
+Can be a constant, column, or function, and any combination of array operators.</p></li>
+</ul>
+</section>
+<section id="id139">
+<h4>Example<a class="headerlink" href="#id139" title="Link to this heading">¶</a></h4>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select empty([1]);
++------------------+
+| empty(List([1])) |
++------------------+
+| 0                |
++------------------+
+</pre></div>
+</div>
+</section>
+</section>
 <section id="list-append">
 <h3><code class="docutils literal notranslate"><span class="pre">list_append</span></code><a class="headerlink" href="#list-append" title="Link to this heading">¶</a></h3>
 <p><em>Alias of <a class="reference internal" href="#array-append">array_append</a>.</em></p>
@@ -5220,16 +5279,16 @@ Can be a constant, column, or function, and any combination of array operators.<
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">make_array</span><span class="p">(</span><span class="n">expression1</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">expression_n</span><span class="p">])</span>
 </pre></div>
 </div>
-<section id="id138">
-<h4>Arguments<a class="headerlink" href="#id138" title="Link to this heading">¶</a></h4>
+<section id="id140">
+<h4>Arguments<a class="headerlink" href="#id140" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_n</strong>: Expression to include in the output array.
 Can be a constant, column, or function, and any combination of arithmetic or
 string operators.</p></li>
 </ul>
 </section>
-<section id="id139">
-<h4>Example<a class="headerlink" href="#id139" title="Link to this heading">¶</a></h4>
+<section id="id141">
+<h4>Example<a class="headerlink" href="#id141" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>❯ select make_array(1, 2, 3, 4, 5);
 +----------------------------------------------------------+
 | make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
@@ -5239,8 +5298,8 @@ string operators.</p></li>
 </pre></div>
 </div>
 </section>
-<section id="id140">
-<h4>Aliases<a class="headerlink" href="#id140" title="Link to this heading">¶</a></h4>
+<section id="id142">
+<h4>Aliases<a class="headerlink" href="#id142" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p>make_list</p></li>
 </ul>
@@ -5257,8 +5316,8 @@ string operators.</p></li>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">trim_array</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id141">
-<h4>Arguments<a class="headerlink" href="#id141" title="Link to this heading">¶</a></h4>
+<section id="id143">
+<h4>Arguments<a class="headerlink" href="#id143" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression.
 Can be a constant, column, or function, and any combination of array operators.</p></li>
@@ -5299,8 +5358,8 @@ a struct type of fields <code class="docutils literal notranslate"><span class="
 <span class="o">+</span><span class="c1">-----------------+</span>
 </pre></div>
 </div>
-<section id="id142">
-<h4>Arguments<a class="headerlink" href="#id142" title="Link to this heading">¶</a></h4>
+<section id="id144">
+<h4>Arguments<a class="headerlink" href="#id144" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression_n</strong>: Expression to include in the output struct.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -5325,8 +5384,8 @@ string operators.</p></li>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">digest</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">algorithm</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id143">
-<h4>Arguments<a class="headerlink" href="#id143" title="Link to this heading">¶</a></h4>
+<section id="id145">
+<h4>Arguments<a class="headerlink" href="#id145" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5352,8 +5411,8 @@ Must be one of:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">md5</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id144">
-<h4>Arguments<a class="headerlink" href="#id144" title="Link to this heading">¶</a></h4>
+<section id="id146">
+<h4>Arguments<a class="headerlink" href="#id146" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5366,8 +5425,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha224</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id145">
-<h4>Arguments<a class="headerlink" href="#id145" title="Link to this heading">¶</a></h4>
+<section id="id147">
+<h4>Arguments<a class="headerlink" href="#id147" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5380,8 +5439,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha256</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id146">
-<h4>Arguments<a class="headerlink" href="#id146" title="Link to this heading">¶</a></h4>
+<section id="id148">
+<h4>Arguments<a class="headerlink" href="#id148" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5394,8 +5453,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha384</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id147">
-<h4>Arguments<a class="headerlink" href="#id147" title="Link to this heading">¶</a></h4>
+<section id="id149">
+<h4>Arguments<a class="headerlink" href="#id149" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5408,8 +5467,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha512</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id148">
-<h4>Arguments<a class="headerlink" href="#id148" title="Link to this heading">¶</a></h4>
+<section id="id150">
+<h4>Arguments<a class="headerlink" href="#id150" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -5429,8 +5488,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">datatype</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id149">
-<h4>Arguments<a class="headerlink" href="#id149" title="Link to this heading">¶</a></h4>
+<section id="id151">
+<h4>Arguments<a class="headerlink" href="#id151" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to cast.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -5446,8 +5505,8 @@ to cast to.</p></li>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id150">
-<h4>Arguments<a class="headerlink" href="#id150" title="Link to this heading">¶</a></h4>
+<section id="id152">
+<h4>Arguments<a class="headerlink" href="#id152" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to evaluate.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -5498,7 +5557,7 @@ string operators.</p></li>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.0.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.2.<br>
 </p>
     </div>
     
