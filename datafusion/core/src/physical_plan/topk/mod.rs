@@ -129,14 +129,14 @@ impl TopK {
         );
 
         Ok(Self {
-            schema,
+            schema: schema.clone(),
             metrics: TopKMetrics::new(metrics, partition),
             reservation,
             batch_size,
             expr,
             row_converter,
             scratch_rows,
-            heap: TopKHeap::new(k),
+            heap: TopKHeap::new(k, schema),
         })
     }
 
@@ -199,7 +199,7 @@ impl TopK {
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
-        let mut batch = heap.emit(schema.clone())?;
+        let mut batch = heap.emit()?;
         metrics.baseline.output_rows().add(batch.num_rows());
 
         // break into record batches as needed
@@ -259,7 +259,7 @@ impl TopKMetrics {
 /// it is important to check the current minimum value in the heap
 /// prior to creating a new value to insert.
 struct TopKHeap {
-    /// The maximum size of this heap.
+    /// The maximum number of elemenents to store in this heap.
     k: usize,
     /// Storage for up at most `k` items, in ascending
     /// order. `inner[0]` holds the smallest value of the smallest k
@@ -272,12 +272,12 @@ struct TopKHeap {
 }
 
 impl TopKHeap {
-    fn new(k: usize) -> Self {
+    fn new(k: usize, schema: SchemaRef) -> Self {
         assert!(k > 0);
         Self {
             k,
             inner: Vec::with_capacity(k),
-            store: RecordBatchStore::new(),
+            store: RecordBatchStore::new(schema),
             owned_bytes: 0,
         }
     }
@@ -349,7 +349,9 @@ impl TopKHeap {
 
     /// Returns the values stored in this heap, from values low to high, as a single
     /// [`RecordBatch`]
-    pub fn emit(&self, schema: SchemaRef) -> Result<RecordBatch> {
+    pub fn emit(&self) -> Result<RecordBatch> {
+        let schema = self.store.schema().clone();
+
         // Indicies for each row within its respective RecordBatch
         let indicies: Vec<_> = self
             .inner
@@ -358,16 +360,7 @@ impl TopKHeap {
             .map(|(i, k)| (i, k.index))
             .collect();
 
-        let num_columns = {
-            let Some(first_value) = self.inner.get(0) else {
-                return Ok(RecordBatch::new_empty(schema));
-            };
-            self.store
-                .get(first_value.batch_id)
-                .expect("invalid batch id")
-                .batch
-                .num_columns()
-        };
+        let num_columns = schema.fields().len();
 
         // build the output columns one at time, using the
         // `interleave` kernel to pick rows from different arrays
@@ -392,6 +385,11 @@ impl TopKHeap {
             .collect::<Result<_>>()?;
 
         Ok(RecordBatch::try_new(schema, output_columns)?)
+    }
+
+    /// Compact this heap, rewriting all stored batches
+    fn compact(&mut self) {
+        //let new_batch = self.emit(
     }
 
     /// return the size of memory used by this heap, in bytes
@@ -498,14 +496,17 @@ struct RecordBatchStore {
     batches: HashMap<u32, RecordBatchEntry>,
     /// total size of all record batches tracked by this store
     batches_size: usize,
+    /// schema of the batches
+    schema: SchemaRef,
 }
 
 impl RecordBatchStore {
-    fn new() -> Self {
+    fn new(schema: SchemaRef) -> Self {
         Self {
             next_id: 0,
             batches: HashMap::new(),
             batches_size: 0,
+            schema,
         }
     }
 
@@ -529,6 +530,16 @@ impl RecordBatchStore {
 
     fn get(&self, id: u32) -> Option<&RecordBatchEntry> {
         self.batches.get(&id)
+    }
+
+    /// returns the total number of batches stored in this store
+    fn len(&self) -> usize {
+        self.batches.len()
+    }
+
+    /// return the schema of batches stored
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     /// remove a use from the specified batch id. If the use count

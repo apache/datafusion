@@ -27,8 +27,8 @@ use self::{
 use crate::datasource::physical_plan::FileScanConfig;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use datafusion_common::Result;
-pub use topk::TopK;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use topk::TopK;
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 use arrow::datatypes::SchemaRef;
