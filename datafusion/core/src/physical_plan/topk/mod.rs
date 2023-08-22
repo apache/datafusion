@@ -399,12 +399,13 @@ impl TopKHeap {
     /// Compact this heap, rewriting all stored batches into a single
     /// input batch
     pub fn maybe_compact(&mut self) -> Result<()>{
+        use log::info;
+        info!("Have {} batches in store", self.store.len());
         // don't compact if the store has less than ten batches
-        if self.store.len() <= 10 {
+        //if self.store.len() <= 10 {
+        if self.store.len() <= 2 {
             return Ok(());
         }
-
-        panic!("Disco");
 
         // at first, compact the entire thing always into a new batch
         // (maybe we can get fancier in the future about ignoring
@@ -428,6 +429,7 @@ impl TopKHeap {
             topk_row.index = i;
         }
         self.insert_batch_entry(batch_entry);
+        info!("COMPACTION DONE: Have {} batches in store", self.store.len());
         Ok(())
     }
 
