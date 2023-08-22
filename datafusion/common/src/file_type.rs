@@ -287,9 +287,7 @@ impl FromStr for FileType {
             "PARQUET" => Ok(FileType::PARQUET),
             "CSV" => Ok(FileType::CSV),
             "JSON" | "NDJSON" => Ok(FileType::JSON),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileType: {s}"
-            ))),
+            _ => crate::error::_not_impl_err!("Unknown FileType: {s}"),
         }
     }
 }
