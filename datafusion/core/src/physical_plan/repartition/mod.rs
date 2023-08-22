@@ -45,7 +45,7 @@ use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalExpr};
@@ -119,11 +119,7 @@ impl BatchPartitioner {
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
-            other => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported repartitioning scheme {other:?}"
-                )))
-            }
+            other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
         };
 
         Ok(Self { state, timer })

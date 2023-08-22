@@ -39,7 +39,7 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use datafusion_common::DataFusionError;
+use datafusion_common::{not_impl_err, DataFusionError};
 use datafusion_physical_expr::PhysicalExpr;
 
 use async_trait::async_trait;
@@ -99,8 +99,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         _state: &SessionState,
         _conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let msg = "Writer not implemented for this format".to_owned();
-        Err(DataFusionError::NotImplemented(msg))
+        not_impl_err!("Writer not implemented for this format")
     }
 }
 

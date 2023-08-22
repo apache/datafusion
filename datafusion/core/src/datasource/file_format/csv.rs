@@ -27,7 +27,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use arrow_array::RecordBatch;
-use datafusion_common::DataFusionError;
+use datafusion_common::{not_impl_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -265,15 +265,11 @@ impl FileFormat for CsvFormat {
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented yet for CSV".into(),
-            ));
+            return not_impl_err!("Overwrites are not implemented yet for CSV");
         }
 
         if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
-            return Err(DataFusionError::NotImplemented(
-                "Inserting compressed CSV is not implemented yet.".into(),
-            ));
+            return not_impl_err!("Inserting compressed CSV is not implemented yet.");
         }
 
         let sink_schema = conf.output_schema().clone();
@@ -510,7 +506,7 @@ impl DataSink for CsvSink {
         match self.config.writer_mode {
             FileWriterMode::Append => {
                 if !self.config.per_thread_output {
-                    return Err(DataFusionError::NotImplemented("per_thread_output=false is not implemented for CsvSink in Append mode".into()));
+                    return not_impl_err!("per_thread_output=false is not implemented for CsvSink in Append mode");
                 }
                 for file_group in &self.config.file_groups {
                     // In append mode, consider has_header flag only when file is empty (at the start).
@@ -536,9 +532,7 @@ impl DataSink for CsvSink {
                 }
             }
             FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented(
-                    "Put Mode is not implemented for CSV Sink yet".into(),
-                ))
+                return not_impl_err!("Put Mode is not implemented for CSV Sink yet")
             }
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)

@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::Operator;
 use sqlparser::ast::BinaryOperator;
 
@@ -47,9 +47,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
             BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported SQL binary operator {op:?}"
-            ))),
+            _ => not_impl_err!("Unsupported SQL binary operator {op:?}"),
         }
     }
 }

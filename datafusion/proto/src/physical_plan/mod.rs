@@ -46,8 +46,7 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::FileCompressionType;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result, FileCompressionType};
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -1349,9 +1348,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::NotImplemented(
-            "PhysicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 
     fn try_encode(
@@ -1359,9 +1356,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "PhysicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 }
 

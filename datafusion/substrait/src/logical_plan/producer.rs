@@ -28,8 +28,8 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
-use datafusion::common::internal_err;
 use datafusion::common::DFSchemaRef;
+use datafusion::common::{internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
@@ -273,9 +273,7 @@ pub fn to_substrait_rel(
             match join.join_constraint {
                 JoinConstraint::On => {}
                 JoinConstraint::Using => {
-                    return Err(DataFusionError::NotImplemented(
-                        "join constraint: `using`".to_string(),
-                    ))
+                    return not_impl_err!("join constraint: `using`")
                 }
             }
             // parse filter if exists
@@ -413,9 +411,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(rel_type),
             }))
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported operator: {plan:?}"
-        ))),
+        _ => not_impl_err!("Unsupported operator: {plan:?}"),
     }
 }
 
@@ -952,9 +948,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extension_info,
         ),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported expression: {expr:?}"
-        ))),
+        _ => not_impl_err!("Unsupported expression: {expr:?}"),
     }
 }
 
@@ -1136,9 +1130,7 @@ fn to_substrait_type(dt: &DataType) -> Result<substrait::proto::Type> {
                 precision: *p as i32,
             })),
         }),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported cast type: {dt:?}"
-        ))),
+        _ => not_impl_err!("Unsupported cast type: {dt:?}"),
     }
 }
 
@@ -1563,9 +1555,7 @@ fn try_to_substrait_null(v: &ScalarValue) -> Result<LiteralType> {
             }))
         }
         // TODO: Extend support for remaining data types
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported literal: {v:?}"
-        ))),
+        _ => not_impl_err!("Unsupported literal: {v:?}"),
     }
 }
 
@@ -1595,9 +1585,7 @@ fn substrait_sort_field(
                 sort_kind: Some(SortKind::Direction(d as i32)),
             })
         }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Expecting sort expression but got {expr:?}"
-        ))),
+        _ => not_impl_err!("Expecting sort expression but got {expr:?}"),
     }
 }
 

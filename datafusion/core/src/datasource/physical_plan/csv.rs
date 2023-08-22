@@ -653,10 +653,10 @@ mod tests {
     use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
-    use crate::test_util::{aggr_test_schema_with_missing_col, arrow_test_data};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
     use datafusion_common::FileType;
+    use datafusion_common::test_util::arrow_test_data;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -1248,5 +1248,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Get the schema for the aggregate_test_* csv files with an additional filed not present in the files.
+    fn aggr_test_schema_with_missing_col() -> SchemaRef {
+        let fields =
+            Fields::from_iter(aggr_test_schema().fields().iter().cloned().chain(
+                std::iter::once(Arc::new(Field::new(
+                    "missing_col",
+                    DataType::Int64,
+                    true,
+                ))),
+            ));
+
+        let schema = Schema::new(fields);
+
+        Arc::new(schema)
     }
 }
