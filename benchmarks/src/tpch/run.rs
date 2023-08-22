@@ -35,6 +35,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use datafusion::common::exec_err;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use structopt::StructOpt;
