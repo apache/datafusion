@@ -21,7 +21,7 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
+use crate::physical_expr::{down_cast_any_ref, SortProperties};
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -104,7 +104,7 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
-    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         -children[0]
     }
 }

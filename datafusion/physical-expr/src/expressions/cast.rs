@@ -21,7 +21,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::intervals::Interval;
-use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
+use crate::physical_expr::{down_cast_any_ref, SortProperties};
 use crate::PhysicalExpr;
 
 use arrow::compute;
@@ -142,7 +142,7 @@ impl PhysicalExpr for CastExpr {
     }
 
     /// A [`CastExpr`] preserves the ordering of its child.
-    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         children[0]
     }
 }

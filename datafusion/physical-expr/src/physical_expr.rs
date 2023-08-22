@@ -136,10 +136,10 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     ///
     /// By recursively calling this function, we can obtain the overall order
     /// information of the PhysicalExpr. Since `SortOptions` cannot fully handle
-    /// the propagation of unordered columns and literals, the `ExtendedSortOptions`
+    /// the propagation of unordered columns and literals, the `SortProperties`
     /// struct is used.
-    fn get_ordering(&self, _children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
-        ExtendedSortOptions::Unordered
+    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
+        SortProperties::Unordered
     }
 }
 
@@ -161,7 +161,7 @@ impl Hash for dyn PhysicalExpr {
 /// we need two different variants for literals and unordered columns as literals are
 /// often more ordering-friendly under most mathematical operations.
 #[derive(PartialEq, Debug, Clone, Copy)]
-pub enum ExtendedSortOptions {
+pub enum SortProperties {
     /// Use the ordinary [`SortOptions`] struct to represent ordered data:
     Ordered(SortOptions),
     // This alternative represents unordered data:
@@ -170,20 +170,20 @@ pub enum ExtendedSortOptions {
     Singleton,
 }
 
-impl Neg for ExtendedSortOptions {
+impl Neg for SortProperties {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
         match self {
-            ExtendedSortOptions::Ordered(SortOptions {
+            SortProperties::Ordered(SortOptions {
                 descending,
                 nulls_first,
-            }) => ExtendedSortOptions::Ordered(SortOptions {
+            }) => SortProperties::Ordered(SortOptions {
                 descending: !descending,
                 nulls_first,
             }),
-            ExtendedSortOptions::Singleton => ExtendedSortOptions::Singleton,
-            ExtendedSortOptions::Unordered => ExtendedSortOptions::Unordered,
+            SortProperties::Singleton => SortProperties::Singleton,
+            SortProperties::Unordered => SortProperties::Unordered,
         }
     }
 }

@@ -44,8 +44,8 @@ use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
 use datafusion_physical_expr::utils::get_indices_of_matching_sort_exprs_with_order_eq;
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
-    project_ordering_equivalence_properties, ExtendedSortOptions,
-    OrderingEquivalenceProperties,
+    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
+    SortProperties,
 };
 
 use futures::stream::{Stream, StreamExt};
@@ -377,7 +377,7 @@ fn find_orderings_of_exprs(
                     || input.ordering_equivalence_properties(),
                 )
             })?;
-            if let Some(ExtendedSortOptions::Ordered(sort_options)) = transformed.state {
+            if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
                 orderings.push(Some(PhysicalSortExpr {
                     expr: Arc::new(Column::new(name, index)),
                     options: sort_options,
@@ -425,7 +425,7 @@ fn validate_output_ordering(
 }
 
 /// The `ExprOrdering` struct is designed to aid in the determination of ordering (represented
-/// by [`ExtendedSortOptions`]) for a given [`PhysicalExpr`]. When analyzing the orderings
+/// by [`SortProperties`]) for a given [`PhysicalExpr`]. When analyzing the orderings
 /// of a [`PhysicalExpr`], the process begins by assigning the ordering of its leaf nodes.
 /// By propagating these leaf node orderings upwards in the expression tree, the overall
 /// ordering of the entire [`PhysicalExpr`] can be derived.
@@ -437,8 +437,8 @@ fn validate_output_ordering(
 #[derive(Debug)]
 struct ExprOrdering {
     expr: Arc<dyn PhysicalExpr>,
-    state: Option<ExtendedSortOptions>,
-    children_states: Option<Vec<ExtendedSortOptions>>,
+    state: Option<SortProperties>,
+    children_states: Option<Vec<SortProperties>>,
 }
 
 impl ExprOrdering {
@@ -459,7 +459,7 @@ impl ExprOrdering {
     }
 
     pub fn new_with_children(
-        children_states: Vec<ExtendedSortOptions>,
+        children_states: Vec<SortProperties>,
         parent_expr: Arc<dyn PhysicalExpr>,
     ) -> Self {
         Self {
@@ -470,7 +470,7 @@ impl ExprOrdering {
     }
 }
 
-/// Calculates the [`ExtendedSortOptions`] of a given [`ExprOrdering`] node.
+/// Calculates the [`SortProperties`] of a given [`ExprOrdering`] node.
 /// The node is either a leaf node, or an intermediate node:
 /// - If it is a leaf node, the children states are `None`. We directly find
 /// the order of the node by looking at the given sort expression and equivalence
@@ -498,7 +498,7 @@ fn update_ordering<
     //       a BinaryExpr like a + b), and there is an ordering equivalence of
     //       it (let's say like c + d), we actually can find it at this step.
     if sort_expr.expr.eq(&node.expr) {
-        node.state = Some(ExtendedSortOptions::Ordered(sort_expr.options));
+        node.state = Some(SortProperties::Ordered(sort_expr.options));
         return Ok(Transformed::Yes(node));
     }
 
@@ -514,7 +514,7 @@ fn update_ordering<
             ordering_equal_properties,
         )
         .map(|(sort_options, _)| {
-            ExtendedSortOptions::Ordered(SortOptions {
+            SortProperties::Ordered(SortOptions {
                 descending: sort_options[0].descending,
                 nulls_first: sort_options[0].nulls_first,
             })
@@ -553,7 +553,7 @@ impl TreeNode for ExprOrdering {
                 children
                     .into_iter()
                     .map(transform)
-                    .map_ok(|c| c.state.unwrap_or(ExtendedSortOptions::Unordered))
+                    .map_ok(|c| c.state.unwrap_or(SortProperties::Unordered))
                     .collect::<Result<Vec<_>>>()?,
                 self.expr,
             ))

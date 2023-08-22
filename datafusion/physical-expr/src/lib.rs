@@ -61,7 +61,7 @@ pub use equivalence::{
 };
 
 pub use partitioning::{Distribution, Partitioning};
-pub use physical_expr::{ExtendedSortOptions, PhysicalExpr, PhysicalExprRef};
+pub use physical_expr::{PhysicalExpr, PhysicalExprRef, SortProperties};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{

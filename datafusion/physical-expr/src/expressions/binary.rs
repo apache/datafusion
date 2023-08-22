@@ -27,7 +27,7 @@ use crate::array_expressions::{
 };
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
-use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
+use crate::physical_expr::{down_cast_any_ref, SortProperties};
 use crate::PhysicalExpr;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -693,7 +693,7 @@ impl PhysicalExpr for BinaryExpr {
 
     /// For each operator, [`BinaryExpr`] has distinct ordering rules.
     /// TODO: There may be rules specific to some data types (such as division and multiplication on unsigned integers)
-    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         let (left_child, right_child) = (&children[0], &children[1]);
         match self.op() {
             Operator::Plus => left_child.add(right_child),
@@ -701,12 +701,12 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Gt | Operator::GtEq => left_child.gt_or_gteq(right_child),
             Operator::Lt | Operator::LtEq => right_child.gt_or_gteq(left_child),
             Operator::And => left_child.and(right_child),
-            _ => ExtendedSortOptions::Unordered,
+            _ => SortProperties::Unordered,
         }
     }
 }
 
-impl ExtendedSortOptions {
+impl SortProperties {
     fn add(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Singleton, _) => *rhs,
