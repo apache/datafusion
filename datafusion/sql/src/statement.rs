@@ -27,9 +27,10 @@ use crate::utils::normalize_ident;
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    not_impl_err, unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, ExprSchema, FileType, OwnedTableReference, Result, SchemaReference,
-    TableReference, ToDFSchema};
+    not_impl_err, unqualified_field_not_found, Column, Constraints, DFField, DFSchema,
+    DFSchemaRef, DataFusionError, ExprSchema, FileType, OwnedTableReference, Result,
+    SchemaReference, TableReference, ToDFSchema,
+};
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;

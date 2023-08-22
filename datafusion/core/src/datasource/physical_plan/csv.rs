@@ -655,8 +655,8 @@ mod tests {
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
-    use datafusion_common::FileType;
     use datafusion_common::test_util::arrow_test_data;
+    use datafusion_common::FileType;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use rstest::*;

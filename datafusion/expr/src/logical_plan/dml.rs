@@ -20,9 +20,7 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::{
-    not_impl_err, DFSchemaRef, DataFusionError, OwnedTableReference, FileType
-};
+use datafusion_common::{DFSchemaRef, FileType, OwnedTableReference};
 
 use crate::LogicalPlan;
 

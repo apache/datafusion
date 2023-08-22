@@ -46,7 +46,9 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result, FileCompressionType};
+use datafusion_common::{
+    internal_err, not_impl_err, DataFusionError, FileCompressionType, Result,
+};
 use prost::bytes::BufMut;
 use prost::Message;
 
