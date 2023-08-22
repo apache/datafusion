@@ -36,7 +36,7 @@ use crate::physical_plan::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
-    joins::hash_join_utils::JoinHashMap,
+    joins::hash_join_utils::{JoinHashMap, JoinHashMapType, PruningJoinHashMap},
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         combine_join_equivalence_properties, estimate_join_statistics,
@@ -53,17 +53,15 @@ use super::{
     PartitionMode,
 };
 
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
+    UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
+};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::{and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::{
-    array::{
-        Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
-        UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
-    },
-    datatypes::{DataType, Schema, SchemaRef},
-    util::bit_util,
-};
+use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
@@ -71,7 +69,6 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
-use crate::physical_plan::joins::hash_join_utils::{JoinHashMapType, PruningJoinHashMap};
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
@@ -630,19 +627,18 @@ where
     }
 
     // insert hashes to key of the hashmap
+    let (mut_map, mut_list) = hash_map.get_mut();
     for (row, hash_value) in hash_values.iter().enumerate() {
-        let item = hash_map
-            .get_mut_map()
-            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+        let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
         if let Some((_, index)) = item {
             // Already exists: add index to next array
             let prev_index = *index;
             // Store new value inside hashmap
             *index = (row + offset + 1) as u64;
             // Update chained Vec at row + offset with previous value
-            hash_map.get_mut_list()[row + offset - deleted_offset] = prev_index;
+            mut_list[row + offset - deleted_offset] = prev_index;
         } else {
-            hash_map.get_mut_map().insert(
+            mut_map.insert(
                 *hash_value,
                 // store the value + 1 as 0 value reserved for end of list
                 (*hash_value, (row + offset + 1) as u64),
@@ -751,7 +747,6 @@ pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
         .collect::<Result<Vec<_>>>()?;
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
-    let deleted_offset_value = deleted_offset.unwrap_or(0);
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
@@ -801,10 +796,10 @@ pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
                 let build_row_value = if let Some(offset) = deleted_offset {
                     // This arguments means that we prune the next index way before here.
                     if i < offset as u64 {
-                        // End of the list due to pruning;
+                        // End of the list due to pruning
                         break;
                     }
-                    i - deleted_offset_value as u64
+                    i - offset as u64
                 } else {
                     i
                 };

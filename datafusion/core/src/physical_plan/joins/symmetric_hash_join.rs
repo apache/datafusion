@@ -32,19 +32,6 @@ use std::task::Poll;
 use std::vec;
 use std::{any::Any, usize};
 
-use ahash::RandomState;
-use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder};
-use arrow::compute::concat_batches;
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use futures::stream::{select, BoxStream};
-use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
-use parking_lot::Mutex;
-
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
-
 use crate::physical_plan::common::SharedMemoryReservation;
 use crate::physical_plan::joins::hash_join::{
     build_equal_condition_join_indices, update_hash,
@@ -72,10 +59,23 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+
+use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder};
+use arrow::compute::concat_batches;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::bisect;
 use datafusion_common::{internal_err, plan_err, JoinType};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::intervals::ExprIntervalGraph;
+
+use ahash::RandomState;
+use futures::stream::{select, BoxStream};
+use futures::{Stream, StreamExt};
+use hashbrown::HashSet;
+use parking_lot::Mutex;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 

@@ -20,29 +20,28 @@
 
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::{Debug, Formatter};
+use std::ops::IndexMut;
 use std::sync::Arc;
 use std::{fmt, usize};
 
-use arrow::datatypes::{ArrowNativeType, SchemaRef};
+use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
+use crate::physical_plan::ExecutionPlan;
 
 use arrow::compute::concat_batches;
+use arrow::datatypes::{ArrowNativeType, SchemaRef};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
-use std::fmt::{Debug, Formatter};
-use std::ops::IndexMut;
-
-use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
-use crate::physical_plan::ExecutionPlan;
-use datafusion_common::Result;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 // By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
@@ -119,12 +118,10 @@ pub trait JoinHashMapType {
     type NextType: IndexMut<usize, Output = u64>;
     /// Returns a mutable reference to `self` as a `dyn Any` for dynamic downcasting.
     fn as_any_mut(&mut self) -> &mut dyn Any;
-    /// Returns a mutable reference to the hash map.
-    fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)>;
+    /// Returns mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
     /// Returns a reference to the hash map.
     fn get_map(&self) -> &RawTable<(u64, u64)>;
-    /// Returns a mutable reference to the next.
-    fn get_mut_list(&mut self) -> &mut Self::NextType;
     /// Returns a reference to the next.
     fn get_list(&self) -> &Self::NextType;
 }
@@ -137,19 +134,14 @@ impl JoinHashMapType for JoinHashMap {
         self
     }
 
-    /// Get a mutable reference to the hash map.
-    fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)> {
-        &mut self.map
+    /// Get mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+        (&mut self.map, &mut self.next)
     }
 
     /// Get a reference to the hash map.
     fn get_map(&self) -> &RawTable<(u64, u64)> {
         &self.map
-    }
-
-    /// Get a mutable reference to the next.
-    fn get_mut_list(&mut self) -> &mut Self::NextType {
-        &mut self.next
     }
 
     /// Get a reference to the next.
@@ -166,19 +158,14 @@ impl JoinHashMapType for PruningJoinHashMap {
         self
     }
 
-    /// Get a mutable reference to the hash map.
-    fn get_mut_map(&mut self) -> &mut RawTable<(u64, u64)> {
-        &mut self.map
+    /// Get mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+        (&mut self.map, &mut self.next)
     }
 
     /// Get a reference to the hash map.
     fn get_map(&self) -> &RawTable<(u64, u64)> {
         &self.map
-    }
-
-    /// Get a mutable reference to the next.
-    fn get_mut_list(&mut self) -> &mut Self::NextType {
-        &mut self.next
     }
 
     /// Get a reference to the next.
@@ -193,15 +180,16 @@ impl fmt::Debug for JoinHashMap {
     }
 }
 
-/// The `PruningJoinHashMap` is similar to a regular `JoinHashMap`, but with the capability of pruning
-/// elements in an efficient manner. This structure is particularly useful for cases where
-/// it's necessary to remove elements from the map based on their buffer order.
-///
+/// The `PruningJoinHashMap` is similar to a regular `JoinHashMap`, but with
+/// the capability of pruning elements in an efficient manner. This structure
+/// is particularly useful for cases where it's necessary to remove elements
+/// from the map based on their buffer order.
 ///
 /// # Example
 ///
 /// ``` text
-/// Let's continue the example of `JoinHashMap` and then show how `PruningJoinHashMap` would handle the pruning scenario.
+/// Let's continue the example of `JoinHashMap` and then show how `PruningJoinHashMap` would
+/// handle the pruning scenario.
 ///
 /// Insert the pair (1,4) into the `PruningJoinHashMap`:
 /// map:
@@ -224,7 +212,8 @@ impl fmt::Debug for JoinHashMap {
 /// | 2 | 4 | <--- hash value 1 maps to 2 (5 - 3), 1 (4 - 3), NA (2 - 3) (which means indices values 1,0)
 /// ---------
 ///
-/// After pruning, the | 2 | 3 | entry is deleted from `PruningJoinHashMap` since there are no values left for this key.
+/// After pruning, the | 2 | 3 | entry is deleted from `PruningJoinHashMap` since
+/// there are no values left for this key.
 /// ```
 pub struct PruningJoinHashMap {
     /// Stores hash value to last row index
@@ -249,11 +238,13 @@ impl PruningJoinHashMap {
         }
     }
 
-    /// Shrinks the capacity of the hash map if necessary based on the provided scale factor.
+    /// Shrinks the capacity of the hash map, if necessary, based on the
+    /// provided scale factor.
     ///
     /// # Arguments
-    /// * `scale_factor`: The scale factor that determines how conservative the shrinking strategy is.
-    ///     The capacity will be reduced by 1/scale_factor when necessary.
+    /// * `scale_factor`: The scale factor that determines how conservative the
+    ///   shrinking strategy is. The capacity will be reduced by 1/`scale_factor`
+    ///   when necessary.
     ///
     /// # Note
     /// Increasing the scale factor results in less aggressive capacity shrinking,
@@ -262,9 +253,8 @@ impl PruningJoinHashMap {
     /// potentially leading to lower memory usage but more frequent resizing.
     pub(crate) fn shrink_if_necessary(&mut self, scale_factor: usize) {
         let capacity = self.map.capacity();
-        let len = self.map.len();
 
-        if capacity > scale_factor * len {
+        if capacity > scale_factor * self.map.len() {
             let new_capacity = (capacity * (scale_factor - 1)) / scale_factor;
             // Resize the map with the new capacity.
             self.map.shrink_to(new_capacity, |(hash, _)| *hash)
@@ -280,9 +270,8 @@ impl PruningJoinHashMap {
             + self.next.capacity() * std::mem::size_of::<u64>()
     }
 
-    /// Removes hash values from the map and list based on the given pruning length and deleting offset.
-    ///
-    ///
+    /// Removes hash values from the map and the list based on the given pruning
+    /// length and deleting offset.
     ///
     /// # Arguments
     /// * `prune_length`: The number of elements to remove from the list.
@@ -305,11 +294,7 @@ impl PruningJoinHashMap {
                 .iter()
                 .map(|bucket| bucket.as_ref())
                 .filter_map(|(hash, tail_index)| {
-                    if *tail_index < prune_length as u64 + deleting_offset {
-                        Some(*hash)
-                    } else {
-                        None
-                    }
+                    (*tail_index < prune_length as u64 + deleting_offset).then_some(*hash)
                 })
                 .collect::<Vec<_>>()
         };
