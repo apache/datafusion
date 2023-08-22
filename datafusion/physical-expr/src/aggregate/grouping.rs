@@ -62,17 +62,13 @@ impl AggregateExpr for Grouping {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.nullable,
-        ))
+        Ok(Field::new(&self.name, DataType::Int32, self.nullable))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             format_state_name(&self.name, "grouping"),
-            self.data_type.clone(),
+            DataType::Int32,
             true,
         )])
     }

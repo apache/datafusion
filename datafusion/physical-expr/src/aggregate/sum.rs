@@ -30,13 +30,9 @@ use arrow::array::Array;
 use arrow::array::Decimal128Array;
 use arrow::array::Decimal256Array;
 use arrow::compute;
-use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
 use arrow::{
-    array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-    },
+    array::{ArrayRef, Float64Array, Int64Array, UInt64Array},
     datatypes::Field,
 };
 use arrow_array::types::{
@@ -46,16 +42,16 @@ use arrow_array::types::{
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::type_coercion::aggregates::sum_return_type;
 use datafusion_expr::Accumulator;
 
 /// SUM aggregate expression
 #[derive(Debug, Clone)]
 pub struct Sum {
     name: String,
-    pub data_type: DataType,
+    data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     nullable: bool,
-    pub pre_cast_to_sum_type: bool,
 }
 
 impl Sum {
@@ -65,27 +61,12 @@ impl Sum {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
+        let data_type = sum_return_type(&data_type).unwrap();
         Self {
             name: name.into(),
             expr,
             data_type,
             nullable: true,
-            pre_cast_to_sum_type: false,
-        }
-    }
-
-    pub fn new_with_pre_cast(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-        pre_cast_to_sum_type: bool,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            expr,
-            data_type,
-            nullable: true,
-            pre_cast_to_sum_type,
         }
     }
 }
@@ -269,14 +250,7 @@ fn sum_decimal256_batch(
 }
 
 // sums the array and returns a ScalarValue of its corresponding type.
-pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<ScalarValue> {
-    // TODO refine the cast kernel in arrow-rs
-    let cast_values = if values.data_type() != sum_type {
-        Some(cast(values, sum_type)?)
-    } else {
-        None
-    };
-    let values = cast_values.as_ref().unwrap_or(values);
+pub(crate) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
     Ok(match values.data_type() {
         DataType::Decimal128(precision, scale) => {
             sum_decimal_batch(values, *precision, *scale)?
@@ -285,15 +259,8 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
             sum_decimal256_batch(values, *precision, *scale)?
         }
         DataType::Float64 => typed_sum_delta_batch!(values, Float64Array, Float64),
-        DataType::Float32 => typed_sum_delta_batch!(values, Float32Array, Float32),
         DataType::Int64 => typed_sum_delta_batch!(values, Int64Array, Int64),
-        DataType::Int32 => typed_sum_delta_batch!(values, Int32Array, Int32),
-        DataType::Int16 => typed_sum_delta_batch!(values, Int16Array, Int16),
-        DataType::Int8 => typed_sum_delta_batch!(values, Int8Array, Int8),
         DataType::UInt64 => typed_sum_delta_batch!(values, UInt64Array, UInt64),
-        DataType::UInt32 => typed_sum_delta_batch!(values, UInt32Array, UInt32),
-        DataType::UInt16 => typed_sum_delta_batch!(values, UInt16Array, UInt16),
-        DataType::UInt8 => typed_sum_delta_batch!(values, UInt8Array, UInt8),
         e => {
             return internal_err!("Sum is not expected to receive the type {e:?}");
         }
@@ -307,7 +274,7 @@ impl Accumulator for SumAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        let delta = sum_batch(values, &self.sum.get_datatype())?;
+        let delta = sum_batch(values)?;
         self.sum = self.sum.add(&delta)?;
         Ok(())
     }
@@ -336,7 +303,7 @@ impl Accumulator for SlidingSumAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         self.count += (values.len() - values.null_count()) as u64;
-        let delta = sum_batch(values, &self.sum.get_datatype())?;
+        let delta = sum_batch(values)?;
         self.sum = self.sum.add(&delta)?;
         Ok(())
     }
@@ -344,7 +311,7 @@ impl Accumulator for SlidingSumAccumulator {
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         self.count -= (values.len() - values.null_count()) as u64;
-        let delta = sum_batch(values, &self.sum.get_datatype())?;
+        let delta = sum_batch(values)?;
         self.sum = self.sum.sub(&delta)?;
         Ok(())
     }
@@ -376,23 +343,21 @@ impl Accumulator for SlidingSumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
-    use crate::expressions::tests::aggregate;
-    use crate::generic_test_op;
-    use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
+    use crate::expressions::tests::assert_aggregate;
+    use arrow_array::{Float32Array, Int32Array, UInt32Array};
+    use datafusion_expr::AggregateFunction;
 
     #[test]
-    fn sum_decimal() -> Result<()> {
+    fn sum_decimal() {
         // test sum batch
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(Some)
                 .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
+                .with_precision_and_scale(10, 0)
+                .unwrap(),
         );
-        let result = sum_batch(&array, &DataType::Decimal128(10, 0))?;
+        let result = sum_batch(&array).unwrap();
         assert_eq!(ScalarValue::Decimal128(Some(15), 10, 0), result);
 
         // test agg
@@ -400,27 +365,28 @@ mod tests {
             (1..6)
                 .map(Some)
                 .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
+                .with_precision_and_scale(10, 0)
+                .unwrap(),
         );
 
-        generic_test_op!(
+        assert_aggregate(
             array,
-            DataType::Decimal128(10, 0),
-            Sum,
-            ScalarValue::Decimal128(Some(15), 20, 0)
-        )
+            AggregateFunction::Sum,
+            ScalarValue::Decimal128(Some(15), 20, 0),
+        );
     }
 
     #[test]
-    fn sum_decimal_with_nulls() -> Result<()> {
+    fn sum_decimal_with_nulls() {
         // test with batch
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i) })
                 .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
+                .with_precision_and_scale(10, 0)
+                .unwrap(),
         );
-        let result = sum_batch(&array, &DataType::Decimal128(10, 0))?;
+        let result = sum_batch(&array).unwrap();
         assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
 
         // test agg
@@ -428,45 +394,46 @@ mod tests {
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i) })
                 .collect::<Decimal128Array>()
-                .with_precision_and_scale(35, 0)?,
+                .with_precision_and_scale(35, 0)
+                .unwrap(),
         );
-        generic_test_op!(
+
+        assert_aggregate(
             array,
-            DataType::Decimal128(35, 0),
-            Sum,
-            ScalarValue::Decimal128(Some(13), 38, 0)
-        )
+            AggregateFunction::Sum,
+            ScalarValue::Decimal128(Some(13), 38, 0),
+        );
     }
 
     #[test]
-    fn sum_decimal_all_nulls() -> Result<()> {
+    fn sum_decimal_all_nulls() {
         // test with batch
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)
                 .take(6)
                 .collect::<Decimal128Array>()
-                .with_precision_and_scale(10, 0)?,
+                .with_precision_and_scale(10, 0)
+                .unwrap(),
         );
-        let result = sum_batch(&array, &DataType::Decimal128(10, 0))?;
+        let result = sum_batch(&array).unwrap();
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
         // test agg
-        generic_test_op!(
+        assert_aggregate(
             array,
-            DataType::Decimal128(10, 0),
-            Sum,
-            ScalarValue::Decimal128(None, 20, 0)
-        )
+            AggregateFunction::Sum,
+            ScalarValue::Decimal128(None, 20, 0),
+        );
     }
 
     #[test]
-    fn sum_i32() -> Result<()> {
+    fn sum_i32() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(a, DataType::Int32, Sum, ScalarValue::from(15i32))
+        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(15i64));
     }
 
     #[test]
-    fn sum_i32_with_nulls() -> Result<()> {
+    fn sum_i32_with_nulls() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
             None,
@@ -474,33 +441,33 @@ mod tests {
             Some(4),
             Some(5),
         ]));
-        generic_test_op!(a, DataType::Int32, Sum, ScalarValue::from(13i32))
+        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(13i64));
     }
 
     #[test]
-    fn sum_i32_all_nulls() -> Result<()> {
+    fn sum_i32_all_nulls() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        generic_test_op!(a, DataType::Int32, Sum, ScalarValue::Int32(None))
+        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::Int64(None));
     }
 
     #[test]
-    fn sum_u32() -> Result<()> {
+    fn sum_u32() {
         let a: ArrayRef =
             Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(a, DataType::UInt32, Sum, ScalarValue::from(15u32))
+        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(15u64));
     }
 
     #[test]
-    fn sum_f32() -> Result<()> {
+    fn sum_f32() {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(a, DataType::Float32, Sum, ScalarValue::from(15_f32))
+        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(15_f64));
     }
 
     #[test]
-    fn sum_f64() -> Result<()> {
+    fn sum_f64() {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(a, DataType::Float64, Sum, ScalarValue::from(15_f64))
+        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(15_f64));
     }
 }
