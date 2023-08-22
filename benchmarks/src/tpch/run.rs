@@ -19,10 +19,8 @@ use super::get_query_sql;
 use crate::{BenchmarkRun, CommonOpt};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
-use datafusion::datasource::file_format::csv::{CsvFormat, DEFAULT_CSV_EXTENSION};
-use datafusion::datasource::file_format::parquet::{
-    ParquetFormat, DEFAULT_PARQUET_EXTENSION,
-};
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -30,6 +28,7 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
+use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 use log::info;
 
 use std::path::PathBuf;

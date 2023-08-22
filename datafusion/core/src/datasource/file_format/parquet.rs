@@ -64,9 +64,6 @@ use crate::physical_plan::{
     Statistics,
 };
 
-/// The default file extension of parquet files
-pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
-
 /// The number of files to read in parallel when inferring schema
 const SCHEMA_INFERENCE_CONCURRENCY: usize = 32;
 

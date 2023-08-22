@@ -17,7 +17,6 @@
 
 //! Execution plan for reading CSV files
 
-use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -32,6 +31,7 @@ use crate::physical_plan::{
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::FileCompressionType;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
@@ -650,13 +650,13 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::file_type::FileType;
     use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
     use datafusion_common::test_util::arrow_test_data;
+    use datafusion_common::FileType;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use rstest::*;
