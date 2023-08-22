@@ -29,6 +29,11 @@ As another example, the SQL expression `a + b * c` would be represented as an `E
 
 As the writer of a library, you may want to use or create `Expr`s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an `Expr` and how to rewrite `Expr`s to inline the simple UDF.
 
+There are also executable examples for working with `Expr`s:
+
+- [rewrite_expr.rs](../../../datafusion-examples/examples/catalog.rs)
+- [expr_api.rs](../../../datafusion-examples/examples/expr_api.rs)
+
 ## A Scalar UDF Example
 
 Let's start by creating our own `Expr` in the form of a Scalar UDF. This UDF will simply add 1 to the input value.
