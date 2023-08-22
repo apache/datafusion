@@ -1280,6 +1280,10 @@ NULL NULL 781 7.81 125 -117 100
 # ----
 # [4, 2, 3, 5, 1]
 
+# additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
+statement ok
+SELECT array_agg(distinct c2), count(1) FROM aggregate_test_100
+
 # aggregate_time_min_and_max
 query TT
 select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' union select '00:00:02')
