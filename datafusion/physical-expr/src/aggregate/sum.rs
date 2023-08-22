@@ -64,6 +64,10 @@ impl Sum {
 }
 
 /// Sum only supports a subset of numeric types, instead relying on type coercion
+///
+/// This macro is similar to [downcast_primitive](arrow_array::downcast_primitive)
+///
+/// `s` is a `Sum`, `helper` is a macro accepting (ArrowPrimitiveType, DataType)
 macro_rules! downcast_sum {
     ($s:ident, $helper:ident) => {
         match $s.data_type {

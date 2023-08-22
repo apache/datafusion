@@ -103,7 +103,7 @@ impl AggregateExpr for Avg {
                 target_scale: *target_scale,
             })),
             _ => not_impl_err!(
-                "AvgGroupsAccumulator for ({} --> {})",
+                "AvgAccumulator for ({} --> {})",
                 self.input_data_type,
                 self.result_data_type
             ),
