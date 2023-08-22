@@ -29,6 +29,7 @@ use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
+use datafusion_common::internal_err;
 use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
@@ -328,16 +329,27 @@ pub(crate) async fn stateless_serialize_and_write_files(
     mut data: Vec<SendableRecordBatchStream>,
     mut serializers: Vec<Box<dyn BatchSerializer>>,
     mut writers: Vec<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>>,
+    per_thread_output: bool,
 ) -> Result<u64> {
+    if !per_thread_output && (serializers.len() != 1 || writers.len() != 1) {
+        return internal_err!("per_thread_output is false, but got more than 1 writer!");
+    }
     let num_partitions = data.len();
+    if per_thread_output && (num_partitions != writers.len()) {
+        return internal_err!("per_thread_output is true, but did not get 1 writer for each output partition!");
+    }
     let mut row_count = 0;
     // Map errors to DatafusionError.
     let err_converter =
         |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
     // TODO parallelize serialization accross partitions and batches within partitions
     // see: https://github.com/apache/arrow-datafusion/issues/7079
-    for idx in 0..num_partitions {
-        while let Some(maybe_batch) = data[idx].next().await {
+    for (part_idx, data_stream) in data.iter_mut().enumerate().take(num_partitions) {
+        let idx = match per_thread_output {
+            true => part_idx,
+            false => 0,
+        };
+        while let Some(maybe_batch) = data_stream.next().await {
             // Write data to files in a round robin fashion:
             let serializer = &mut serializers[idx];
             let batch = check_for_errors(maybe_batch, &mut writers).await?;

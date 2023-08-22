@@ -43,7 +43,9 @@ use arrow_array::types::{
     Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int32Type, Int64Type,
     UInt32Type, UInt64Type,
 };
-use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 
 /// SUM aggregate expression
@@ -174,10 +176,11 @@ impl AggregateExpr for Sum {
                 instantiate_primitive_accumulator!(self, Decimal256Type, |x, y| *x =
                     *x + y)
             }
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {}: {}",
-                self.name, self.data_type
-            ))),
+                self.name,
+                self.data_type
+            ),
         }
     }
 
@@ -292,9 +295,7 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
         DataType::UInt16 => typed_sum_delta_batch!(values, UInt16Array, UInt16),
         DataType::UInt8 => typed_sum_delta_batch!(values, UInt8Array, UInt8),
         e => {
-            return Err(DataFusionError::Internal(format!(
-                "Sum is not expected to receive the type {e:?}"
-            )));
+            return internal_err!("Sum is not expected to receive the type {e:?}");
         }
     })
 }

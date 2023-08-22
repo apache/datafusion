@@ -26,7 +26,9 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{plan_err, Constraints, DataFusionError, SchemaExt};
+use datafusion_common::{
+    not_impl_err, plan_err, Constraints, DataFusionError, SchemaExt,
+};
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -35,7 +37,7 @@ use crate::datasource::{TableProvider, TableType};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::insert::{DataSink, InsertExec};
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
@@ -214,12 +216,14 @@ impl TableProvider for MemTable {
             );
         }
         if overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrite not implemented for MemoryTable yet".into(),
-            ));
+            return not_impl_err!("Overwrite not implemented for MemoryTable yet");
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(InsertExec::new(input, sink, self.schema.clone())))
+        Ok(Arc::new(FileSinkExec::new(
+            input,
+            sink,
+            self.schema.clone(),
+        )))
     }
 }
 

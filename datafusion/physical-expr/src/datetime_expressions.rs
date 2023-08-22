@@ -42,8 +42,9 @@ use datafusion_common::cast::{
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
-use datafusion_common::{DataFusionError, Result};
-use datafusion_common::{ScalarType, ScalarValue};
+use datafusion_common::{
+    internal_err, not_impl_err, DataFusionError, Result, ScalarType, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
@@ -66,11 +67,11 @@ where
     F: Fn(&'a str) -> Result<O::Native>,
 {
     if args.len() != 1 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but {} takes exactly one argument",
             args.len(),
-            name,
-        )));
+            name
+        );
     }
 
     let array = as_generic_string_array::<T>(args[0])?;
@@ -100,9 +101,7 @@ where
             DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?,
             ))),
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function {name}",
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function {name}"),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
             ScalarValue::Utf8(a) => {
@@ -113,9 +112,7 @@ where
                 let result = a.as_ref().map(|x| (op)(x)).transpose()?;
                 Ok(ColumnarValue::Scalar(S::scalar(result)))
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function {name}"
-            ))),
+            other => internal_err!("Unsupported data type {other:?} for function {name}"),
         },
     }
 }
@@ -548,9 +545,9 @@ fn date_bin_impl(
             if months != 0 {
                 // Return error if days or nanos is not zero
                 if days != 0 || nanos != 0 {
-                    return Err(DataFusionError::NotImplemented(
-                        "DATE_BIN stride does not support combination of month, day and nanosecond intervals".to_string(),
-                    ));
+                    return not_impl_err!(
+                        "DATE_BIN stride does not support combination of month, day and nanosecond intervals"
+                    );
                 } else {
                     Interval::Months(months as i64)
                 }
@@ -573,10 +570,11 @@ fn date_bin_impl(
                 v.get_datatype()
             )))
         }
-        ColumnarValue::Array(_) => return Err(DataFusionError::NotImplemented(
+        ColumnarValue::Array(_) => {
+            return not_impl_err!(
             "DATE_BIN only supports literal values for the stride argument, not arrays"
-                .to_string(),
-        )),
+        )
+        }
     };
 
     let origin = match origin {
@@ -587,10 +585,9 @@ fn date_bin_impl(
                 v.get_datatype()
             )))
         }
-        ColumnarValue::Array(_) => return Err(DataFusionError::NotImplemented(
+        ColumnarValue::Array(_) => return not_impl_err!(
             "DATE_BIN only supports literal values for the origin argument, not arrays"
-                .to_string(),
-        )),
+        ),
     };
 
     let (stride, stride_fn) = stride.bin_fn();
@@ -725,10 +722,7 @@ macro_rules! extract_date_part {
                         .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
             },
-            datatype => Err(DataFusionError::Internal(format!(
-                "Extract does not support datatype {:?}",
-                datatype
-            ))),
+            datatype => internal_err!("Extract does not support datatype {:?}", datatype),
         }
     };
 }
@@ -855,12 +849,7 @@ where
                 }
             }
         }
-        _ => {
-            return Err(DataFusionError::Internal(format!(
-                "Can not convert {:?} to epoch",
-                array.data_type()
-            )))
-        }
+        _ => return internal_err!("Can not convert {:?} to epoch", array.data_type()),
     }
     Ok(b.finish())
 }

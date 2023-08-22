@@ -28,7 +28,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
@@ -53,11 +53,12 @@ use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{
     FileGroupDisplay, FileMeta, FileSinkConfig, ParquetExec, SchemaAdapter,
 };
+
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::insert::{DataSink, InsertExec};
+use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
@@ -230,15 +231,13 @@ impl FileFormat for ParquetFormat {
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented yet for Parquet".into(),
-            ));
+            return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(ParquetSink::new(conf));
 
-        Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
+        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
     }
 }
 
@@ -604,7 +603,6 @@ impl DisplayAs for ParquetSink {
 }
 
 /// Parses datafusion.execution.parquet.encoding String to a parquet::basic::Encoding
-/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_encoding_string(str_setting: &str) -> Result<parquet::basic::Encoding> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -668,7 +666,6 @@ fn require_level(codec: &str, level: Option<u32>) -> Result<u32> {
 }
 
 /// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
-/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_compression_string(str_setting: &str) -> Result<parquet::basic::Compression> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     let (codec, level) = split_compression_string(str_setting_lower)?;
@@ -719,7 +716,6 @@ fn parse_compression_string(str_setting: &str) -> Result<parquet::basic::Compres
     }
 }
 
-/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -732,7 +728,6 @@ fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
     }
 }
 
-/// TODO use upstream version: <https://github.com/apache/arrow-rs/issues/4693>
 fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -758,28 +753,59 @@ impl ParquetSink {
         context: &Arc<TaskContext>,
     ) -> Result<WriterProperties> {
         let parquet_context = &context.session_config().options().execution.parquet;
-        Ok(WriterProperties::builder()
+        let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(parquet_context.data_pagesize_limit)
             .set_write_batch_size(parquet_context.write_batch_size)
             .set_writer_version(parse_version_string(&parquet_context.writer_version)?)
-            .set_compression(parse_compression_string(&parquet_context.compression)?)
-            .set_dictionary_enabled(parquet_context.dictionary_enabled)
             .set_dictionary_page_size_limit(parquet_context.dictionary_page_size_limit)
-            .set_statistics_enabled(parse_statistics_string(
-                &parquet_context.statistics_enabled,
-            )?)
-            .set_max_statistics_size(parquet_context.max_statistics_size)
             .set_max_row_group_size(parquet_context.max_row_group_size)
             .set_created_by(parquet_context.created_by.clone())
             .set_column_index_truncate_length(
                 parquet_context.column_index_truncate_length,
             )
             .set_data_page_row_count_limit(parquet_context.data_page_row_count_limit)
-            .set_encoding(parse_encoding_string(&parquet_context.encoding)?)
-            .set_bloom_filter_enabled(parquet_context.bloom_filter_enabled)
-            .set_bloom_filter_fpp(parquet_context.bloom_filter_fpp)
-            .set_bloom_filter_ndv(parquet_context.bloom_filter_ndv)
-            .build())
+            .set_bloom_filter_enabled(parquet_context.bloom_filter_enabled);
+
+        builder = match &parquet_context.encoding {
+            Some(encoding) => builder.set_encoding(parse_encoding_string(encoding)?),
+            None => builder,
+        };
+
+        builder = match &parquet_context.dictionary_enabled {
+            Some(enabled) => builder.set_dictionary_enabled(*enabled),
+            None => builder,
+        };
+
+        builder = match &parquet_context.compression {
+            Some(compression) => {
+                builder.set_compression(parse_compression_string(compression)?)
+            }
+            None => builder,
+        };
+
+        builder = match &parquet_context.statistics_enabled {
+            Some(statistics) => {
+                builder.set_statistics_enabled(parse_statistics_string(statistics)?)
+            }
+            None => builder,
+        };
+
+        builder = match &parquet_context.max_statistics_size {
+            Some(size) => builder.set_max_statistics_size(*size),
+            None => builder,
+        };
+
+        builder = match &parquet_context.bloom_filter_fpp {
+            Some(fpp) => builder.set_bloom_filter_fpp(*fpp),
+            None => builder,
+        };
+
+        builder = match &parquet_context.bloom_filter_ndv {
+            Some(ndv) => builder.set_bloom_filter_ndv(*ndv),
+            None => builder,
+        };
+
+        Ok(builder.build())
     }
 
     // Create a write for parquet files
@@ -798,9 +824,9 @@ impl ParquetSink {
                     "Appending to Parquet files is not supported by the file format!"
                 )
             }
-            FileWriterMode::Put => Err(DataFusionError::NotImplemented(
-                "FileWriterMode::Put is not implemented for ParquetSink".into(),
-            )),
+            FileWriterMode::Put => {
+                not_impl_err!("FileWriterMode::Put is not implemented for ParquetSink")
+            }
             FileWriterMode::PutMultipart => {
                 let (_, multipart_writer) = object_store
                     .put_multipart(&object.location)
@@ -841,33 +867,53 @@ impl DataSink for ParquetSink {
                 )
             }
             FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented(
-                    "Put Mode is not implemented for ParquetSink yet".into(),
-                ))
+                return not_impl_err!("Put Mode is not implemented for ParquetSink yet")
             }
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
                 let base_path = &self.config.table_paths[0];
-                // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
-                let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-                for part_idx in 0..num_partitions {
-                    let file_path = base_path
-                        .prefix()
-                        .child(format!("/{}_{}.parquet", write_id, part_idx));
-                    let object_meta = ObjectMeta {
-                        location: file_path,
-                        last_modified: chrono::offset::Utc::now(),
-                        size: 0,
-                        e_tag: None,
-                    };
-                    let writer = self
-                        .create_writer(
-                            object_meta.into(),
-                            object_store.clone(),
-                            parquet_props.clone(),
-                        )
-                        .await?;
-                    writers.push(writer);
+                match self.config.per_thread_output {
+                    true => {
+                        // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
+                        let write_id =
+                            Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                        for part_idx in 0..num_partitions {
+                            let file_path = base_path
+                                .prefix()
+                                .child(format!("{}_{}.parquet", write_id, part_idx));
+                            let object_meta = ObjectMeta {
+                                location: file_path,
+                                last_modified: chrono::offset::Utc::now(),
+                                size: 0,
+                                e_tag: None,
+                            };
+                            let writer = self
+                                .create_writer(
+                                    object_meta.into(),
+                                    object_store.clone(),
+                                    parquet_props.clone(),
+                                )
+                                .await?;
+                            writers.push(writer);
+                        }
+                    }
+                    false => {
+                        let file_path = base_path.prefix();
+                        let object_meta = ObjectMeta {
+                            location: file_path.clone(),
+                            last_modified: chrono::offset::Utc::now(),
+                            size: 0,
+                            e_tag: None,
+                        };
+                        let writer = self
+                            .create_writer(
+                                object_meta.into(),
+                                object_store.clone(),
+                                parquet_props.clone(),
+                            )
+                            .await?;
+                        writers.push(writer);
+                    }
                 }
             }
         }
@@ -875,8 +921,12 @@ impl DataSink for ParquetSink {
         let mut row_count = 0;
         // TODO parallelize serialization accross partitions and batches within partitions
         // see: https://github.com/apache/arrow-datafusion/issues/7079
-        for idx in 0..num_partitions {
-            while let Some(batch) = data[idx].next().await.transpose()? {
+        for (part_idx, data_stream) in data.iter_mut().enumerate().take(num_partitions) {
+            let idx = match self.config.per_thread_output {
+                true => part_idx,
+                false => 0,
+            };
+            while let Some(batch) = data_stream.next().await.transpose()? {
                 row_count += batch.num_rows();
                 // TODO cleanup all multipart writes when any encounters an error
                 writers[idx].write(&batch).await?;

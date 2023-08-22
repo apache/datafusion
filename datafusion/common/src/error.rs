@@ -415,7 +415,6 @@ macro_rules! unwrap_or_internal_err {
     };
 }
 
-#[macro_export]
 macro_rules! with_dollar_sign {
     ($($body:tt)*) => {
         macro_rules! __with_dollar_sign { $($body)* }
@@ -448,6 +447,17 @@ macro_rules! make_error {
 
 // Exposes a macro to create `DataFusionError::Plan`
 make_error!(plan_err, Plan);
+
+// Exposes a macro to create `DataFusionError::Internal`
+make_error!(internal_err, Internal);
+
+// Exposes a macro to create `DataFusionError::NotImplemented`
+make_error!(not_impl_err, NotImplemented);
+
+// To avoid compiler error when using macro in the same crate:
+// macros from the current crate cannot be referred to by absolute paths
+pub use internal_err as _internal_err;
+pub use not_impl_err as _not_impl_err;
 
 #[cfg(test)]
 mod test {

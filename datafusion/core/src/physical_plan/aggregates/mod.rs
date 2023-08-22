@@ -30,7 +30,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
@@ -448,9 +448,9 @@ fn get_finest_requirement<
             // If neither of the requirements satisfy the other, this means
             // requirements are conflicting. Currently, we do not support
             // conflicting requirements.
-            return Err(DataFusionError::NotImplemented(
-                "Conflicting ordering requirements in aggregate functions is not supported".to_string(),
-            ));
+            return not_impl_err!(
+                "Conflicting ordering requirements in aggregate functions is not supported"
+            );
         } else {
             finest_req = Some(fn_req.clone());
         }
@@ -1238,7 +1238,7 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{DataFusionError, Result, ScalarValue};
+    use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Column, Count, FirstValue, LastValue, Median,
@@ -1670,9 +1670,7 @@ mod tests {
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Err(DataFusionError::Internal(format!(
-                "Children cannot be replaced in {self:?}"
-            )))
+            internal_err!("Children cannot be replaced in {self:?}")
         }
 
         fn execute(

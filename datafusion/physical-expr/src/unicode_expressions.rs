@@ -27,7 +27,7 @@ use arrow::{
 };
 use datafusion_common::{
     cast::{as_generic_string_array, as_int64_array},
-    DataFusionError, Result,
+    internal_err, DataFusionError, Result,
 };
 use hashbrown::HashMap;
 use std::cmp::{max, Ordering};
@@ -312,9 +312,9 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => internal_err!(
             "rpad was called with {other} arguments. It requires at least 2 and at most 3."
-        ))),
+        ),
     }
 }
 
@@ -406,9 +406,9 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Internal(format!(
-            "substr was called with {other} arguments. It requires 2 or 3."
-        ))),
+        other => {
+            internal_err!("substr was called with {other} arguments. It requires 2 or 3.")
+        }
     }
 }
 

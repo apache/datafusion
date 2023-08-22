@@ -24,7 +24,9 @@ use crate::utils::collect_columns;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
+};
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -197,10 +199,7 @@ fn shrink_boundaries(
     )?;
 
     if !(0.0..=1.0).contains(&selectivity) {
-        return Err(DataFusionError::Internal(format!(
-            "Selectivity is out of limit: {}",
-            selectivity
-        )));
+        return internal_err!("Selectivity is out of limit: {}", selectivity);
     }
 
     Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))

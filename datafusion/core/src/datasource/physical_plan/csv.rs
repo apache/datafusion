@@ -654,13 +654,13 @@ mod tests {
     use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
-    use crate::test_util::{aggr_test_schema_with_missing_col, arrow_test_data};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
+    use datafusion_common::test_util::arrow_test_data;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use rstest::*;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::Write;
     use tempfile::TempDir;
     use url::Url;
@@ -1191,11 +1191,32 @@ mod tests {
             Field::new("c2", DataType::UInt64, false),
         ]));
 
+        // get name of first part
+        let paths = fs::read_dir(&out_dir).unwrap();
+        let mut part_0_name: String = "".to_owned();
+        for path in paths {
+            let path = path.unwrap();
+            let name = path
+                .path()
+                .file_name()
+                .expect("Should be a file name")
+                .to_str()
+                .expect("Should be a str")
+                .to_owned();
+            if name.ends_with("_0.csv") {
+                part_0_name = name;
+                break;
+            }
+        }
+
+        if part_0_name.is_empty() {
+            panic!("Did not find part_0 in csv output files!")
+        }
         // register each partition as well as the top level dir
         let csv_read_option = CsvReadOptions::new().schema(&schema);
         ctx.register_csv(
             "part0",
-            &format!("{out_dir}/part-0.csv"),
+            &format!("{out_dir}/{part_0_name}"),
             csv_read_option.clone(),
         )
         .await?;
@@ -1227,5 +1248,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Get the schema for the aggregate_test_* csv files with an additional filed not present in the files.
+    fn aggr_test_schema_with_missing_col() -> SchemaRef {
+        let fields =
+            Fields::from_iter(aggr_test_schema().fields().iter().cloned().chain(
+                std::iter::once(Arc::new(Field::new(
+                    "missing_col",
+                    DataType::Int64,
+                    true,
+                ))),
+            ));
+
+        let schema = Schema::new(fields);
+
+        Arc::new(schema)
     }
 }

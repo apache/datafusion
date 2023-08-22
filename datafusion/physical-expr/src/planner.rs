@@ -25,8 +25,9 @@ use crate::{
     PhysicalExpr,
 };
 use arrow::datatypes::Schema;
-use datafusion_common::plan_err;
-use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetFieldAccess, GetIndexedField, Like,
@@ -50,12 +51,12 @@ pub fn create_physical_expr(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     if input_schema.fields.len() != input_dfschema.fields().len() {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "create_physical_expr expected same number of fields, got \
                      Arrow schema with {}  and DataFusion schema with {}",
             input_schema.fields.len(),
             input_dfschema.fields().len()
-        )));
+        );
     }
     match e {
         Expr::Alias(Alias { expr, .. }) => Ok(create_physical_expr(
@@ -443,8 +444,8 @@ pub fn create_physical_expr(
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
-        other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {other:?}"
-        ))),
+        other => {
+            not_impl_err!("Physical plan does not support logical expression {other:?}")
+        }
     }
 }
