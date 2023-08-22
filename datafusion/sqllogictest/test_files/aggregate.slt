@@ -1983,7 +1983,7 @@ select
 from t_source;
 
 # No groupy
-query error DataFusion error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query ??I??I
 SELECT
   min(binary),
   max(binary),
@@ -1992,10 +1992,11 @@ SELECT
   max(largebinary),
   count(largebinary)
 FROM t
-
+----
+426172 466f6f 3 426172 466f6f 3
 
 # with groupby
-query error DataFusion error: External error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query ??I??I
 SELECT
   min(binary),
   max(binary),
@@ -2006,6 +2007,9 @@ SELECT
 FROM t
 GROUP BY tag
 ORDER BY tag
+----
+42617a 466f6f 2 42617a 466f6f 2
+426172 426172 1 426172 426172 1
 
 
 

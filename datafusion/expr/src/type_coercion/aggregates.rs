@@ -76,6 +76,8 @@ pub static TIMESTAMPS: &[DataType] = &[
 
 pub static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 
+pub static BINARYS: &[DataType] = &[DataType::Binary, DataType::LargeBinary];
+
 pub static TIMES: &[DataType] = &[
     DataType::Time32(TimeUnit::Second),
     DataType::Time32(TimeUnit::Millisecond),
