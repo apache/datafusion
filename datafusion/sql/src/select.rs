@@ -24,11 +24,11 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs,
 };
 
+use datafusion_common::Column;
 use datafusion_common::{
     get_target_functional_dependencies, not_impl_err, plan_err, DFSchemaRef,
     DataFusionError, Result,
 };
-use datafusion_common::{plan_err, Column};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check,
