@@ -122,8 +122,6 @@ impl ProjectionExec {
             };
         }
 
-        let orderings = find_orderings_of_exprs(&expr, &input)?;
-
         // Output Ordering need to respect the alias
         let child_output_ordering = input.output_ordering();
         let output_ordering = match child_output_ordering {
@@ -145,6 +143,8 @@ impl ProjectionExec {
             }
             None => None,
         };
+
+        let orderings = find_orderings_of_exprs(&expr, &input)?;
 
         let output_ordering =
             validate_output_ordering(output_ordering, &orderings, &expr);
