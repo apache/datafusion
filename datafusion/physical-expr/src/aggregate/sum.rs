@@ -76,6 +76,7 @@ macro_rules! downcast_sum {
         }
     };
 }
+pub(crate) use downcast_sum;
 
 impl AggregateExpr for Sum {
     /// Return a reference to Any that can be used for downcasting
@@ -302,6 +303,7 @@ mod tests {
         assert_aggregate(
             array,
             AggregateFunction::Sum,
+            false,
             ScalarValue::Decimal128(Some(15), 20, 0),
         );
     }
@@ -320,6 +322,7 @@ mod tests {
         assert_aggregate(
             array,
             AggregateFunction::Sum,
+            false,
             ScalarValue::Decimal128(Some(13), 38, 0),
         );
     }
@@ -339,6 +342,7 @@ mod tests {
         assert_aggregate(
             array,
             AggregateFunction::Sum,
+            false,
             ScalarValue::Decimal128(None, 20, 0),
         );
     }
@@ -346,7 +350,7 @@ mod tests {
     #[test]
     fn sum_i32() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(15i64));
+        assert_aggregate(a, AggregateFunction::Sum, false, ScalarValue::from(15i64));
     }
 
     #[test]
@@ -358,33 +362,33 @@ mod tests {
             Some(4),
             Some(5),
         ]));
-        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(13i64));
+        assert_aggregate(a, AggregateFunction::Sum, false, ScalarValue::from(13i64));
     }
 
     #[test]
     fn sum_i32_all_nulls() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::Int64(None));
+        assert_aggregate(a, AggregateFunction::Sum, false, ScalarValue::Int64(None));
     }
 
     #[test]
     fn sum_u32() {
         let a: ArrayRef =
             Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(15u64));
+        assert_aggregate(a, AggregateFunction::Sum, false, ScalarValue::from(15u64));
     }
 
     #[test]
     fn sum_f32() {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(15_f64));
+        assert_aggregate(a, AggregateFunction::Sum, false, ScalarValue::from(15_f64));
     }
 
     #[test]
     fn sum_f64() {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        assert_aggregate(a, AggregateFunction::Sum, ScalarValue::from(15_f64));
+        assert_aggregate(a, AggregateFunction::Sum, false, ScalarValue::from(15_f64));
     }
 }

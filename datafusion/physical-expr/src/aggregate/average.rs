@@ -547,6 +547,7 @@ mod tests {
         assert_aggregate(
             array,
             AggregateFunction::Avg,
+            false,
             ScalarValue::Decimal128(Some(35000), 14, 4),
         );
     }
@@ -563,6 +564,7 @@ mod tests {
         assert_aggregate(
             array,
             AggregateFunction::Avg,
+            false,
             ScalarValue::Decimal128(Some(32500), 14, 4),
         );
     }
@@ -580,6 +582,7 @@ mod tests {
         assert_aggregate(
             array,
             AggregateFunction::Avg,
+            false,
             ScalarValue::Decimal128(None, 14, 4),
         );
     }
@@ -587,7 +590,7 @@ mod tests {
     #[test]
     fn avg_i32() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        assert_aggregate(a, AggregateFunction::Avg, ScalarValue::from(3_f64));
+        assert_aggregate(a, AggregateFunction::Avg, false, ScalarValue::from(3_f64));
     }
 
     #[test]
@@ -599,33 +602,33 @@ mod tests {
             Some(4),
             Some(5),
         ]));
-        assert_aggregate(a, AggregateFunction::Avg, ScalarValue::from(3.25f64));
+        assert_aggregate(a, AggregateFunction::Avg, false, ScalarValue::from(3.25f64));
     }
 
     #[test]
     fn avg_i32_all_nulls() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        assert_aggregate(a, AggregateFunction::Avg, ScalarValue::Float64(None));
+        assert_aggregate(a, AggregateFunction::Avg, false, ScalarValue::Float64(None));
     }
 
     #[test]
     fn avg_u32() {
         let a: ArrayRef =
             Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        assert_aggregate(a, AggregateFunction::Avg, ScalarValue::from(3.0f64));
+        assert_aggregate(a, AggregateFunction::Avg, false, ScalarValue::from(3.0f64));
     }
 
     #[test]
     fn avg_f32() {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        assert_aggregate(a, AggregateFunction::Avg, ScalarValue::from(3_f64));
+        assert_aggregate(a, AggregateFunction::Avg, false, ScalarValue::from(3_f64));
     }
 
     #[test]
     fn avg_f64() {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        assert_aggregate(a, AggregateFunction::Avg, ScalarValue::from(3_f64));
+        assert_aggregate(a, AggregateFunction::Avg, false, ScalarValue::from(3_f64));
     }
 }
