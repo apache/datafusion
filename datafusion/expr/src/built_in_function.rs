@@ -872,7 +872,8 @@ impl BuiltinScalarFunction {
                 conditional_expressions::SUPPORTED_COALESCE_TYPES.to_vec(),
                 self.volatility(),
             ),
-            BuiltinScalarFunction::SHA224
+            BuiltinScalarFunction::CharacterLength
+            | BuiltinScalarFunction::SHA224
             | BuiltinScalarFunction::SHA256
             | BuiltinScalarFunction::SHA384
             | BuiltinScalarFunction::SHA512
@@ -883,13 +884,12 @@ impl BuiltinScalarFunction {
             ),
             BuiltinScalarFunction::Ascii
             | BuiltinScalarFunction::BitLength
-            | BuiltinScalarFunction::CharacterLength
             | BuiltinScalarFunction::InitCap
             | BuiltinScalarFunction::Lower
             | BuiltinScalarFunction::OctetLength
             | BuiltinScalarFunction::Reverse
             | BuiltinScalarFunction::Upper => {
-                Signature::uniform(1, vec![Utf8, LargeUtf8, Binary, LargeBinary], self.volatility())
+                Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
             }
             BuiltinScalarFunction::Btrim
             | BuiltinScalarFunction::Ltrim
@@ -1395,6 +1395,7 @@ macro_rules! make_utf8_to_return_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
                 DataType::Binary => $utf8Type,
+                DataType::LargeBinary => $largeUtf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => {
                     match **value_type {
