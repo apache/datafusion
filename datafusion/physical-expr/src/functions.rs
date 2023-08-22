@@ -891,7 +891,7 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_common::cast::as_uint64_array;
-    use datafusion_common::plan_err;
+    use datafusion_common::{exec_err, plan_err};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
     use datafusion_expr::Signature;
@@ -1145,9 +1145,7 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(0)))],
-            Err(DataFusionError::Execution(
-                "null character not permitted.".to_string(),
-            )),
+            exec_err!("null character not permitted."),
             &str,
             Utf8,
             StringArray
@@ -1155,9 +1153,7 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(i64::MAX)))],
-            Err(DataFusionError::Execution(
-                "requested character too large for encoding.".to_string(),
-            )),
+            exec_err!("requested character too large for encoding."),
             &str,
             Utf8,
             StringArray
@@ -2362,9 +2358,7 @@ mod tests {
                 lit("~@~"),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            Err(DataFusionError::Execution(
-                "field position must be greater than zero".to_string(),
-            )),
+            exec_err!("field position must be greater than zero"),
             &str,
             Utf8,
             StringArray
@@ -2665,9 +2659,7 @@ mod tests {
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            Err(DataFusionError::Execution(
-                "negative substring length not allowed: substr(<str>, 1, -1)".to_string(),
-            )),
+            exec_err!("negative substring length not allowed: substr(<str>, 1, -1)"),
             &str,
             Utf8,
             StringArray

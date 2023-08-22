@@ -29,7 +29,7 @@ use datafusion::{
 };
 
 use datafusion::common::DFSchemaRef;
-use datafusion::common::{internal_err, not_impl_err};
+use datafusion::common::{exec_err, internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
@@ -571,9 +571,7 @@ fn to_substrait_sort_field(
                 sort_kind: Some(SortKind::Direction(sort_kind.into())),
             })
         }
-        _ => Err(DataFusionError::Execution(
-            "expects to receive sort expression".to_string(),
-        )),
+        _ => exec_err!("expects to receive sort expression"),
     }
 }
 

@@ -81,7 +81,7 @@ impl Command {
                     exec_from_lines(ctx, &mut BufReader::new(file), print_options).await;
                     Ok(())
                 } else {
-                    Err(DataFusionError::Execution(
+                    exec_err!(
                         "Required filename argument is missing".into(),
                     ))
                 }
@@ -101,7 +101,7 @@ impl Command {
                 }
                 Ok(())
             }
-            Self::Quit => Err(DataFusionError::Execution(
+            Self::Quit => exec_err!(
                 "Unexpected quit, this should be handled outside".into(),
             )),
             Self::ListFunctions => display_all_functions(),
@@ -112,10 +112,10 @@ impl Command {
                     Ok(())
                 } else {
                     let msg = format!("{} is not a supported function", function);
-                    Err(DataFusionError::Execution(msg))
+                    exec_err!(msg))
                 }
             }
-            Self::OutputFormat(_) => Err(DataFusionError::Execution(
+            Self::OutputFormat(_) => exec_err!(
                 "Unexpected change output format, this should be handled outside".into(),
             )),
         }
@@ -230,11 +230,11 @@ impl OutputFormat {
                     println!("Output format is {:?}.", print_options.format);
                     Ok(())
                 } else {
-                    Err(DataFusionError::Execution(format!(
+                    exec_err!(
                         "{:?} is not a valid format type [possible values: {:?}]",
                         format,
                         PrintFormat::value_variants()
-                    )))
+                    )
                 }
             }
         }

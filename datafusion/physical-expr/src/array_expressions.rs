@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
-use datafusion_common::{internal_err, not_impl_err, plan_err, ScalarValue};
+use datafusion_common::{exec_err, internal_err, not_impl_err, plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools;
@@ -1040,11 +1040,7 @@ macro_rules! position {
                             i - 1
                         }
                     }
-                    None => {
-                        return Err(DataFusionError::Execution(
-                            "initial position must not be null".to_string(),
-                        ))
-                    }
+                    None => return exec_err!("initial position must not be null"),
                 };
 
                 match arr {
