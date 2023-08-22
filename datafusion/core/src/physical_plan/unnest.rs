@@ -255,7 +255,7 @@ fn build_batch(
     match list_array.data_type() {
         DataType::List(_) => {
             let list_array = list_array.as_any().downcast_ref::<ListArray>().unwrap();
-            unnest_and_create_take_indicies_generic::<i32, Int32Type>(
+            build_batch_generic_list::<i32, Int32Type>(
                 batch,
                 schema,
                 column.index(),
@@ -268,7 +268,7 @@ fn build_batch(
                 .as_any()
                 .downcast_ref::<LargeListArray>()
                 .unwrap();
-            unnest_and_create_take_indicies_generic::<i64, Int64Type>(
+            build_batch_generic_list::<i64, Int64Type>(
                 batch,
                 schema,
                 column.index(),
@@ -281,13 +281,7 @@ fn build_batch(
                 .as_any()
                 .downcast_ref::<FixedSizeListArray>()
                 .unwrap();
-            unnest_and_create_take_indicies_fixed(
-                batch,
-                schema,
-                column.index(),
-                list_array,
-                options,
-            )
+            build_batch_fixedsize_list(batch, schema, column.index(), list_array, options)
         }
         _ => Err(DataFusionError::Execution(format!(
             "Invalid unnest column {column}"
@@ -295,10 +289,7 @@ fn build_batch(
     }
 }
 
-fn unnest_and_create_take_indicies_generic<
-    T: OffsetSizeTrait,
-    P: ArrowPrimitiveType<Native = T>,
->(
+fn build_batch_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
     batch: &RecordBatch,
     schema: &SchemaRef,
     unnest_column_idx: usize,
@@ -318,6 +309,27 @@ fn unnest_and_create_take_indicies_generic<
         &take_indicies,
     )
 }
+
+/// Given this `GenericList` list_array:
+///   
+/// ```ignore
+/// [1], null, [2, 3, 4], null, [5, 6]
+/// ```
+/// Its values array is represented like this:
+///
+/// ```ignore
+/// [1, 2, 3, 4, 5, 6]
+/// ```
+///
+/// So if there are no null values or `UnnestOptions.preserve_nulls` is false
+/// we can return the values array without any copying.
+///
+/// Otherwise we'll transfrom the values array using the take kernel and the following take indicies:
+///
+/// ```ignore
+/// 0, null, 1, 2, 3, null, 4, 5
+/// ```
+///
 fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
     list_array: &GenericListArray<T>,
     options: &UnnestOptions,
@@ -326,7 +338,7 @@ fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
     if list_array.null_count() == 0 || !options.preserve_nulls {
         Ok(values.clone())
     } else {
-        let mut builder =
+        let mut take_indicies_builder =
             PrimitiveArray::<P>::builder(values.len() + list_array.null_count());
         let mut take_offset = 0;
 
@@ -335,19 +347,23 @@ fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
                 for i in 0..array.len() {
                     // take_offset + i is always positive
                     let take_index = P::Native::from_usize(take_offset + i).unwrap();
-                    builder.append_value(take_index);
+                    take_indicies_builder.append_value(take_index);
                 }
                 take_offset += array.len();
             }
             None => {
-                builder.append_null();
+                take_indicies_builder.append_null();
             }
         });
-        Ok(kernels::take::take(&values, &builder.finish(), None)?)
+        Ok(kernels::take::take(
+            &values,
+            &take_indicies_builder.finish(),
+            None,
+        )?)
     }
 }
 
-fn unnest_and_create_take_indicies_fixed(
+fn build_batch_fixedsize_list(
     batch: &RecordBatch,
     schema: &SchemaRef,
     unnest_column_idx: usize,
@@ -368,6 +384,33 @@ fn unnest_and_create_take_indicies_fixed(
     )
 }
 
+/// Given this `FixedSizeListArray` list_array:
+///   
+/// ```ignore
+/// [1, 2], null, [3, 4], null, [5, 6]
+/// ```
+/// Its values array is represented like this:
+///
+/// ```ignore
+/// [1, 2, null, null 3, 4, null, null, 5, 6]
+/// ```
+///
+/// So if there are no null values
+/// we can return the values array without any copying.
+///
+/// Otherwise we'll transfrom the values array using the take kernel.
+///
+/// If `UnnestOptions.preserve_nulls` is true the take indicies will look like this:
+///
+/// ```ignore
+/// 0, 1, null, 4, 5, null, 8, 9
+/// ```
+/// Otherwise we drop the nulls and take indicies will look like this:
+///
+/// ```ignore
+/// 0, 1, 4, 5, 8, 9
+/// ```
+///
 fn unnest_fixed_list(
     list_array: &FixedSizeListArray,
     options: &UnnestOptions,
@@ -412,6 +455,20 @@ fn unnest_fixed_list(
     }
 }
 
+/// Creates take indicies to be used to expand all other column's data.
+/// Every column value needs to be repeated as many times as many elements there is in each corresponding array value.
+///
+/// If the column being unnested looks like this:
+///    
+/// ```ignore
+/// [1], null, [2, 3, 4], null, [5, 6]
+/// ```
+/// Then `create_take_indicies_generic` will return an array like this
+///
+/// ```ignore
+/// [1, null, 2, 2, 2, null, 4, 4]
+/// ```
+///
 fn create_take_indicies_generic<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
     list_array: &GenericListArray<T>,
     capacity: usize,
