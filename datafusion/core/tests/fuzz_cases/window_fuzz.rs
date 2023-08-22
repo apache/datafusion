@@ -266,8 +266,8 @@ fn get_random_function(
         let a = args[0].clone();
         let dt = a.data_type(schema.as_ref()).unwrap();
         let sig = f.signature();
-        let coerced = coerce_types(&f, &[dt], &sig).unwrap();
-        args[0] = cast(a, &schema, coerced[0].clone()).unwrap();
+        let coerced = coerce_types(f, &[dt], &sig).unwrap();
+        args[0] = cast(a, schema, coerced[0].clone()).unwrap();
     }
 
     for new_arg in new_args {
