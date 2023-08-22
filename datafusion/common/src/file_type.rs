@@ -151,9 +151,7 @@ impl FileCompressionType {
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return Err(DataFusionError::NotImplemented(
-                    "Compression feature is not enabled".to_owned(),
-                ))
+                return crate::error::_internal_err!("Compression feature is not enabled",)
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -176,9 +174,9 @@ impl FileCompressionType {
             ZSTD => Box::new(ZstdEncoder::new(w)),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return Err(DataFusionError::NotImplemented(
+                return crate::error::_not_impl_err!(
                     "Compression feature is not enabled".to_owned(),
-                ))
+                )
             }
             UNCOMPRESSED => w,
         })
@@ -208,9 +206,9 @@ impl FileCompressionType {
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return Err(DataFusionError::NotImplemented(
+                return crate::error::_not_impl_err!(
                     "Compression feature is not enabled".to_owned(),
-                ))
+                )
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -235,9 +233,9 @@ impl FileCompressionType {
             },
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return Err(DataFusionError::NotImplemented(
+                return crate::error::_not_impl_err!(
                     "Compression feature is not enabled".to_owned(),
-                ))
+                )
             }
             UNCOMPRESSED => Box::new(r),
         })
@@ -311,9 +309,9 @@ impl FileType {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
             FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
-                _ => Err(DataFusionError::Internal(
-                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
-                )),
+                _ => crate::error::_internal_err!(
+                    "FileCompressionType can be specified for CSV/JSON FileType."
+                ),
             },
         }
     }
