@@ -39,7 +39,7 @@ pub fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let array = i32s
         .iter()
-        .map(|sequence| match sequence {
+        .map(|item| match item {
             Some(value) => Some(value + 1),
             None => None,
         })
@@ -52,7 +52,7 @@ pub fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
 And our `ScalarUDF` would look like this. Please see the section on [adding UDFs](./adding-udfs.md) for more information on how to create a `ScalarUDF`.
 
 ```rust
-let add_one = create_udf(
+let add_one_udf = create_udf(
     "add_one",
     vec![DataType::Int64],
     Arc::new(DataType::Int64),
@@ -79,7 +79,7 @@ use datafusion::prelude::*;
 let expr = col("a") + col("b");
 ```
 
-In fact, the `add_one` we created earlier is also an `Expr`. And because it's so simple, we'll use it as fodder for how to rewrite `Expr`s.
+In fact, the `add_one_udf` we created earlier is also an `Expr`. And because it's so simple, we'll use it as fodder for how to rewrite `Expr`s.
 
 ## Rewriting Exprs
 

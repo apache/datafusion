@@ -76,7 +76,7 @@ The challenge however is that DataFusion doesn't know about this function. We ne
 
 ### Registering a Scalar UDF
 
-To register a Scalar UDF, you need to wrap the function implementation in a `ScalarUDF` struct and then register it with the `ExecutionContext`. DataFusion provides the `create_udf` and `make_scalar_function` helper functions to make this easier.
+To register a Scalar UDF, you need to wrap the function implementation in a `ScalarUDF` struct and then register it with the `SessionContext`. DataFusion provides the `create_udf` and `make_scalar_function` helper functions to make this easier.
 
 ```rust
 let udf = create_udf(
@@ -96,10 +96,10 @@ A few things to note:
 - The fourth argument is the volatility of the function. This is an enum with three options: `Immutable`, `Stable`, and `Volatile`. This is used to determine if the function can be cached in some situations. In this case, the function is `Immutable` because it always returns the same value for the same input. A random number generator would be `Volatile` because it returns a different value for the same input.
 - The fifth argument is the function implementation. This is the function that we defined above.
 
-That gives us a `ScalarUDF` that we can register with the `ExecutionContext`:
+That gives us a `ScalarUDF` that we can register with the `SessionContext`:
 
 ```rust
-let mut ctx = ExecutionContext::new();
+let mut ctx = SessionContext::new();
 
 ctx.register_udf(udf);
 ```
