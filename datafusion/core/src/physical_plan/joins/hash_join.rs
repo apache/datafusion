@@ -36,7 +36,7 @@ use crate::physical_plan::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
-    joins::hash_join_utils::{JoinHashMap, JoinHashMapType, PruningJoinHashMap},
+    joins::hash_join_utils::{JoinHashMap, JoinHashMapType},
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         combine_join_equivalence_properties, estimate_join_statistics,
@@ -620,11 +620,8 @@ where
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
-    if let Some(hash_map) = hash_map.as_any_mut().downcast_mut::<PruningJoinHashMap>() {
-        hash_map
-            .next
-            .resize(hash_map.next.len() + batch.num_rows(), 0);
-    }
+    // For usual JoinHashmap, the implementation is void.
+    hash_map.extend_with_value(batch.num_rows(), 0);
 
     // insert hashes to key of the hashmap
     let (mut_map, mut_list) = hash_map.get_mut();

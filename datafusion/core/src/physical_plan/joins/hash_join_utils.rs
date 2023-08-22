@@ -18,7 +18,6 @@
 //! This file contains common subroutines for regular and symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
-use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::ops::IndexMut;
@@ -41,6 +40,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
+use itertools::repeat_n;
 use parking_lot::Mutex;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -117,7 +117,7 @@ pub trait JoinHashMapType {
     /// The type of list used to store the hash values.
     type NextType: IndexMut<usize, Output = u64>;
     /// Returns a mutable reference to `self` as a `dyn Any` for dynamic downcasting.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn extend_with_value(&mut self, len: usize, value: u64);
     /// Returns mutable references to the hash map and the next.
     fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
     /// Returns a reference to the hash map.
@@ -130,9 +130,8 @@ pub trait JoinHashMapType {
 impl JoinHashMapType for JoinHashMap {
     type NextType = Vec<u64>;
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
+    // Void implementation
+    fn extend_with_value(&mut self, _: usize, _: u64) {}
 
     /// Get mutable references to the hash map and the next.
     fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
@@ -154,8 +153,9 @@ impl JoinHashMapType for JoinHashMap {
 impl JoinHashMapType for PruningJoinHashMap {
     type NextType = VecDeque<u64>;
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
+    // Extend with value
+    fn extend_with_value(&mut self, len: usize, value: u64) {
+        self.next.extend(repeat_n(value, len))
     }
 
     /// Get mutable references to the hash map and the next.
