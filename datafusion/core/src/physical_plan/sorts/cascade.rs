@@ -1,7 +1,10 @@
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::SortOrder;
 use crate::physical_plan::sorts::cursor::Cursor;
-use crate::physical_plan::sorts::merge::{CursorStream, SortPreservingMergeStream};
+use crate::physical_plan::sorts::merge::SortPreservingMergeStream;
+use crate::physical_plan::sorts::stream::{
+    CursorStream, MergeStream, OffsetCursorStream, YieldedCursorStream,
+};
 use crate::physical_plan::RecordBatchStream;
 
 use arrow::compute::interleave;
@@ -11,14 +14,11 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
-type MergeStream<C> = Pin<
-    Box<dyn Send + Stream<Item = Result<(Vec<RecordBatch>, Vec<C>, Vec<SortOrder>)>>>,
->;
-
 pub(crate) struct SortPreservingCascadeStream<C: Cursor> {
-    /// If the stream has encountered an error
+    /// If the stream has encountered an error, or fetch is reached
     aborted: bool,
 
     /// used to record execution metrics
@@ -40,15 +40,49 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
         fetch: Option<usize>,
         reservation: MemoryReservation,
     ) -> Self {
+        let stream_count = streams.partitions();
+
+        // TODO: since we already use a mutex here,
+        // we can have (for the same relative cost) a mutex for a single holder of record_batches
+        // which yields a batch_idx tracker.
+        // In this way, we can do slicing followed by concating of Cursors yielded from each merge,
+        // without needing to also yield sliced-then-concated batches (which are expensive to concat).
+        //
+        // Refer to YieldedCursorStream for where the concat would happen (TODO).
+        let streams = Arc::new(parking_lot::Mutex::new(streams));
+
+        let max_streams_per_merge = 2; // TODO: change this to 10, once we have tested with 2 (to force more leaf nodes)
+        let mut divided_streams: Vec<MergeStream<C>> =
+            Vec::with_capacity(stream_count / max_streams_per_merge + 1);
+
+        for stream_offset in (0..stream_count).step_by(max_streams_per_merge) {
+            let limit =
+                std::cmp::min(stream_offset + max_streams_per_merge, stream_count);
+
+            // OffsetCursorStream enables the ability to share the same RowCursorStream across multiple leafnode merges.
+            let streams =
+                OffsetCursorStream::new(Arc::clone(&streams), stream_offset, limit);
+
+            divided_streams.push(Box::pin(SortPreservingMergeStream::new(
+                Box::new(streams),
+                metrics.clone(),
+                batch_size,
+                None, // fetch, the LIMIT, is applied to the final merge
+                reservation.new_empty(),
+            )));
+        }
+
+        let next_level: CursorStream<C> =
+            Box::new(YieldedCursorStream::new(divided_streams));
+
         let root: MergeStream<C> = Box::pin(SortPreservingMergeStream::new(
-            streams,
+            next_level,
             metrics.clone(),
             batch_size,
             fetch,
             reservation,
         ));
 
-        // TODO (followup commit): build the cascade tree here
         let cascade = root;
         Self {
             aborted: false,

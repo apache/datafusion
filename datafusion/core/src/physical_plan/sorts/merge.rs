@@ -18,17 +18,13 @@
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::{SortOrder, SortOrderBuilder};
 use crate::physical_plan::sorts::cursor::Cursor;
-use crate::physical_plan::sorts::stream::PartitionedStream;
+use crate::physical_plan::sorts::stream::CursorStream;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
-
-/// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
-pub(crate) type CursorStream<C> =
-    Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
 #[derive(Debug)]
 pub(crate) struct SortPreservingMergeStream<C: Cursor> {
