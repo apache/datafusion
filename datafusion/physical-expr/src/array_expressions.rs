@@ -1003,7 +1003,6 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         })
         .collect::<BooleanArray>();
-    println!("\n");
     Ok(Arc::new(builder))
 }
 
