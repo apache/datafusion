@@ -597,6 +597,7 @@ enum ScalarFunction {
   Flatten = 112;
   Isnan = 113;
   Iszero = 114;
+  ArrayEmpty = 115;
 }
 
 message ScalarFunctionNode {
