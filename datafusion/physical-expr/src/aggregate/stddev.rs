@@ -27,7 +27,7 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
@@ -230,9 +230,7 @@ impl Accumulator for StddevAccumulator {
                     Ok(ScalarValue::Float64(e.map(|f| f.sqrt())))
                 }
             }
-            _ => Err(DataFusionError::Internal(
-                "Variance should be f64".to_string(),
-            )),
+            _ => internal_err!("Variance should be f64"),
         }
     }
 

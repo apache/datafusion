@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fs;
+
 use crate::datasource::object_store::ObjectStoreUrl;
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::BoxStream;
@@ -84,6 +86,32 @@ impl ListingTableUrl {
             Ok(url) => Ok(Self::new(url, None)),
             Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
             Err(e) => Err(DataFusionError::External(Box::new(e))),
+        }
+    }
+
+    /// Get object store for specified input_url
+    /// if input_url is actually not a url, we assume it is a local file path
+    /// if we have a local path, create it if not exists so ListingTableUrl::parse works
+    pub fn parse_create_local_if_not_exists(
+        s: impl AsRef<str>,
+        is_directory: bool,
+    ) -> Result<Self> {
+        let s = s.as_ref();
+        let is_valid_url = Url::parse(s).is_ok();
+
+        match is_valid_url {
+            true => ListingTableUrl::parse(s),
+            false => {
+                let path = std::path::PathBuf::from(s);
+                if !path.exists() {
+                    if is_directory {
+                        fs::create_dir_all(path)?;
+                    } else {
+                        fs::File::create(path)?;
+                    }
+                }
+                ListingTableUrl::parse(s)
+            }
         }
     }
 

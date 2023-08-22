@@ -28,7 +28,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
@@ -231,9 +231,7 @@ impl FileFormat for ParquetFormat {
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented yet for Parquet".into(),
-            ));
+            return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
         let sink_schema = conf.output_schema().clone();
@@ -755,28 +753,59 @@ impl ParquetSink {
         context: &Arc<TaskContext>,
     ) -> Result<WriterProperties> {
         let parquet_context = &context.session_config().options().execution.parquet;
-        Ok(WriterProperties::builder()
+        let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(parquet_context.data_pagesize_limit)
             .set_write_batch_size(parquet_context.write_batch_size)
             .set_writer_version(parse_version_string(&parquet_context.writer_version)?)
-            .set_compression(parse_compression_string(&parquet_context.compression)?)
-            .set_dictionary_enabled(parquet_context.dictionary_enabled)
             .set_dictionary_page_size_limit(parquet_context.dictionary_page_size_limit)
-            .set_statistics_enabled(parse_statistics_string(
-                &parquet_context.statistics_enabled,
-            )?)
-            .set_max_statistics_size(parquet_context.max_statistics_size)
             .set_max_row_group_size(parquet_context.max_row_group_size)
             .set_created_by(parquet_context.created_by.clone())
             .set_column_index_truncate_length(
                 parquet_context.column_index_truncate_length,
             )
             .set_data_page_row_count_limit(parquet_context.data_page_row_count_limit)
-            .set_encoding(parse_encoding_string(&parquet_context.encoding)?)
-            .set_bloom_filter_enabled(parquet_context.bloom_filter_enabled)
-            .set_bloom_filter_fpp(parquet_context.bloom_filter_fpp)
-            .set_bloom_filter_ndv(parquet_context.bloom_filter_ndv)
-            .build())
+            .set_bloom_filter_enabled(parquet_context.bloom_filter_enabled);
+
+        builder = match &parquet_context.encoding {
+            Some(encoding) => builder.set_encoding(parse_encoding_string(encoding)?),
+            None => builder,
+        };
+
+        builder = match &parquet_context.dictionary_enabled {
+            Some(enabled) => builder.set_dictionary_enabled(*enabled),
+            None => builder,
+        };
+
+        builder = match &parquet_context.compression {
+            Some(compression) => {
+                builder.set_compression(parse_compression_string(compression)?)
+            }
+            None => builder,
+        };
+
+        builder = match &parquet_context.statistics_enabled {
+            Some(statistics) => {
+                builder.set_statistics_enabled(parse_statistics_string(statistics)?)
+            }
+            None => builder,
+        };
+
+        builder = match &parquet_context.max_statistics_size {
+            Some(size) => builder.set_max_statistics_size(*size),
+            None => builder,
+        };
+
+        builder = match &parquet_context.bloom_filter_fpp {
+            Some(fpp) => builder.set_bloom_filter_fpp(*fpp),
+            None => builder,
+        };
+
+        builder = match &parquet_context.bloom_filter_ndv {
+            Some(ndv) => builder.set_bloom_filter_ndv(*ndv),
+            None => builder,
+        };
+
+        Ok(builder.build())
     }
 
     // Create a write for parquet files
@@ -795,9 +824,9 @@ impl ParquetSink {
                     "Appending to Parquet files is not supported by the file format!"
                 )
             }
-            FileWriterMode::Put => Err(DataFusionError::NotImplemented(
-                "FileWriterMode::Put is not implemented for ParquetSink".into(),
-            )),
+            FileWriterMode::Put => {
+                not_impl_err!("FileWriterMode::Put is not implemented for ParquetSink")
+            }
             FileWriterMode::PutMultipart => {
                 let (_, multipart_writer) = object_store
                     .put_multipart(&object.location)
@@ -838,9 +867,7 @@ impl DataSink for ParquetSink {
                 )
             }
             FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented(
-                    "Put Mode is not implemented for ParquetSink yet".into(),
-                ))
+                return not_impl_err!("Put Mode is not implemented for ParquetSink yet")
             }
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)

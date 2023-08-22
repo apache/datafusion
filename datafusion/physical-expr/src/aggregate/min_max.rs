@@ -467,9 +467,7 @@ macro_rules! interval_min_max {
             Some(interval_choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
-                return Err(DataFusionError::Internal(
-                    "Comparison error while computing interval min/max".to_string(),
-                ))
+                return internal_err!("Comparison error while computing interval min/max")
             }
         }
     }};

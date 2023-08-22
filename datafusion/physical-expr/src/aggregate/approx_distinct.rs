@@ -29,8 +29,9 @@ use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Field, Int16Type, Int32Type, Int64Type, Int8Type,
     UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::convert::TryFrom;
@@ -102,9 +103,9 @@ impl AggregateExpr for ApproxDistinct {
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
             other => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return not_impl_err!(
                 "Support for 'approx_distinct' for data type {other} is not implemented"
-            )))
+            )
             }
         };
         Ok(accumulator)
@@ -219,10 +220,9 @@ impl<T: Hash> TryFrom<&ScalarValue> for HyperLogLog<T> {
         if let ScalarValue::Binary(Some(slice)) = v {
             slice.as_slice().try_into()
         } else {
-            Err(DataFusionError::Internal(
+            internal_err!(
                 "Impossibly got invalid scalar value while converting to HyperLogLog"
-                    .into(),
-            ))
+            )
         }
     }
 }

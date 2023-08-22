@@ -18,8 +18,7 @@
 //! Partition evaluation module
 
 use arrow::array::ArrayRef;
-use datafusion_common::Result;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use std::fmt::Debug;
 use std::ops::Range;
 
@@ -168,9 +167,7 @@ pub trait PartitionEvaluator: Debug + Send {
                 .collect::<Result<Vec<_>>>()?;
             ScalarValue::iter_to_array(res.into_iter())
         } else {
-            Err(DataFusionError::NotImplemented(
-                "evaluate_all is not implemented by default".into(),
-            ))
+            not_impl_err!("evaluate_all is not implemented by default")
         }
     }
 
@@ -193,9 +190,7 @@ pub trait PartitionEvaluator: Debug + Send {
         _values: &[ArrayRef],
         _range: &Range<usize>,
     ) -> Result<ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate is not implemented by default".into(),
-        ))
+        not_impl_err!("evaluate is not implemented by default")
     }
 
     /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
@@ -230,9 +225,7 @@ pub trait PartitionEvaluator: Debug + Send {
         _num_rows: usize,
         _ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_partition_with_rank is not implemented by default".into(),
-        ))
+        not_impl_err!("evaluate_partition_with_rank is not implemented by default")
     }
 
     /// Can the window function be incrementally computed using

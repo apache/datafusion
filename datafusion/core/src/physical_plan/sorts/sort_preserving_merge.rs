@@ -219,10 +219,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 .register(&context.runtime_env().memory_pool);
 
         match input_partitions {
-            0 => Err(DataFusionError::Internal(
+            0 => internal_err!(
                 "SortPreservingMergeExec requires at least one input partition"
-                    .to_owned(),
-            )),
+            ),
             1 => {
                 // bypass if there is only one partition to merge (no metrics in this case either)
                 let result = self.input.execute(0, context);

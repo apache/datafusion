@@ -23,7 +23,7 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use std::any::Any;
@@ -76,9 +76,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
 
     /// Computes bounds for the expression using interval arithmetic.
     fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
-        Err(DataFusionError::NotImplemented(format!(
-            "Not implemented for {self}"
-        )))
+        not_impl_err!("Not implemented for {self}")
     }
 
     /// Updates/shrinks bounds for the expression using interval arithmetic.
@@ -90,9 +88,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         _interval: &Interval,
         _children: &[&Interval],
     ) -> Result<Vec<Option<Interval>>> {
-        Err(DataFusionError::NotImplemented(format!(
-            "Not implemented for {self}"
-        )))
+        not_impl_err!("Not implemented for {self}")
     }
 
     /// Update the hash `state` with this expression requirements from
@@ -145,9 +141,7 @@ pub fn with_new_children_if_necessary(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let old_children = expr.children();
     if children.len() != old_children.len() {
-        Err(DataFusionError::Internal(
-            "PhysicalExpr: Wrong number of children".to_string(),
-        ))
+        internal_err!("PhysicalExpr: Wrong number of children")
     } else if children.is_empty()
         || children
             .iter()

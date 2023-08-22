@@ -29,8 +29,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
@@ -195,9 +194,7 @@ pub fn cast_with_options(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
-        Err(DataFusionError::NotImplemented(format!(
-            "Unsupported CAST from {expr_type:?} to {cast_type:?}"
-        )))
+        not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")
     }
 }
 
