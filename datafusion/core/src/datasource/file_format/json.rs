@@ -50,7 +50,6 @@ use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
 use super::FileFormat;
 use super::FileScanConfig;
-use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::write::{
     create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
@@ -60,9 +59,8 @@ use crate::datasource::physical_plan::NdJsonExec;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
+use datafusion_common::FileCompressionType;
 
-/// The default file extension of json files
-pub const DEFAULT_JSON_EXTENSION: &str = ".json";
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
 pub struct JsonFormat {

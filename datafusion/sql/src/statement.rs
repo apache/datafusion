@@ -28,10 +28,10 @@ use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, unqualified_field_not_found, Column, Constraints, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference, Result,
+    DFSchemaRef, DataFusionError, ExprSchema, FileType, OwnedTableReference, Result,
     SchemaReference, TableReference, ToDFSchema,
 };
-use datafusion_expr::dml::{CopyTo, OutputFileFormat};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -592,7 +592,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let (k, v) = (key.to_lowercase(), value.to_string().to_lowercase());
             // check for options important to planning
             if k == "format" {
-                explicit_format = Some(OutputFileFormat::from_str(&v)?);
+                explicit_format = Some(FileType::from_str(&v)?);
             }
             if k == "per_thread_output" {
                 per_thread_output = match v.as_str(){
@@ -617,7 +617,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .ok_or(DataFusionError::Plan("Copy to format not explicitly set and failed to parse file extension!".to_string()))?
                     .to_lowercase();
 
-                OutputFileFormat::from_str(extension)?
+                FileType::from_str(extension)?
             }
         };
         Ok(LogicalPlan::Copy(CopyTo {
