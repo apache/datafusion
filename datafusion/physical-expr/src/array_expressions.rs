@@ -996,13 +996,7 @@ pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array = as_list_array(&args[0])?;
     let builder = array
         .iter()
-        .map(|arr| {
-            if let Some(arr) = arr {
-                Some(arr.len() == arr.null_count())
-            } else {
-                None
-            }
-        })
+        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
         .collect::<BooleanArray>();
     Ok(Arc::new(builder))
 }
