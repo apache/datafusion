@@ -39,7 +39,8 @@ use datafusion_expr::{
 
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{Result, ScalarValue};
-use datafusion_physical_expr::expressions::{col, lit};
+use datafusion_expr::type_coercion::aggregates::coerce_types;
+use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
@@ -261,6 +262,14 @@ fn get_random_function(
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
     let (window_fn, new_args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
+    if let WindowFunction::AggregateFunction(f) = window_fn {
+        let a = args[0].clone();
+        let dt = a.data_type(schema.as_ref()).unwrap();
+        let sig = f.signature();
+        let coerced = coerce_types(&f, &[dt], &sig).unwrap();
+        args[0] = cast(a, &schema, coerced[0].clone()).unwrap();
+    }
+
     for new_arg in new_args {
         args.push(new_arg.clone());
     }

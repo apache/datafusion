@@ -1387,8 +1387,8 @@ mod roundtrip_tests {
     use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_expr::create_udf;
     use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
-    use datafusion::physical_expr::expressions::in_list;
     use datafusion::physical_expr::expressions::GetFieldAccessExpr;
+    use datafusion::physical_expr::expressions::{cast, in_list};
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
     use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
@@ -1584,14 +1584,11 @@ mod roundtrip_tests {
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("a", &schema)?, "unused".to_string())];
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> =
-            vec![Arc::new(Avg::new_with_pre_cast(
-                col("b", &schema)?,
-                "AVG(b)".to_string(),
-                DataType::Float64,
-                DataType::Float64,
-                true,
-            ))];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+            cast(col("b", &schema)?, &schema, DataType::Float64)?,
+            "AVG(b)".to_string(),
+            DataType::Float64,
+        ))];
 
         roundtrip_test(Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
