@@ -44,8 +44,8 @@ use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_u
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
-    type_coercion, AggregateFunction, BuiltinScalarFunction, Expr, LogicalPlan, Operator,
-    Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
+    LogicalPlan, Operator, Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
@@ -381,6 +381,19 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             }) => {
                 let window_frame =
                     coerce_window_frame(window_frame, &self.schema, &order_by)?;
+
+                let args = match &fun {
+                    window_function::WindowFunction::AggregateFunction(fun) => {
+                        coerce_agg_exprs_for_signature(
+                            fun,
+                            &args,
+                            &self.schema,
+                            &fun.signature(),
+                        )?
+                    }
+                    _ => args,
+                };
+
                 let expr = Expr::WindowFunction(WindowFunction::new(
                     fun,
                     args,
@@ -961,7 +974,7 @@ mod test {
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
-        let expected = "Projection: AVG(Int64(12))\n  EmptyRelation";
+        let expected = "Projection: AVG(CAST(Int64(12) AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
 
         let empty = empty_with_type(DataType::Int32);
@@ -974,7 +987,7 @@ mod test {
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
-        let expected = "Projection: AVG(a)\n  EmptyRelation";
+        let expected = "Projection: AVG(CAST(a AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         Ok(())
     }

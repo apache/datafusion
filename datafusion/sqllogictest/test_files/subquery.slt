@@ -173,7 +173,7 @@ Projection: t1.t1_id, __scalar_sq_1.SUM(t2.t2_int) AS t2_sum
 ----TableScan: t1 projection=[t1_id]
 ----SubqueryAlias: __scalar_sq_1
 ------Projection: SUM(t2.t2_int), t2.t2_id
---------Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(t2.t2_int)]]
+--------Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(CAST(t2.t2_int AS Int64))]]
 ----------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
 ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]
@@ -241,7 +241,7 @@ Projection: t1.t1_id, __scalar_sq_1.SUM(t2.t2_int) AS t2_sum
 ----TableScan: t1 projection=[t1_id]
 ----SubqueryAlias: __scalar_sq_1
 ------Projection: SUM(t2.t2_int), t2.t2_id
---------Aggregate: groupBy=[[t2.t2_id, Utf8("a")]], aggr=[[SUM(t2.t2_int)]]
+--------Aggregate: groupBy=[[t2.t2_id, Utf8("a")]], aggr=[[SUM(CAST(t2.t2_int AS Int64))]]
 ----------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
 ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]
@@ -278,7 +278,7 @@ Projection: t1.t1_id, __scalar_sq_1.SUM(t2.t2_int) AS t2_sum
 ----SubqueryAlias: __scalar_sq_1
 ------Projection: SUM(t2.t2_int), t2.t2_id
 --------Filter: SUM(t2.t2_int) < Int64(3)
-----------Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(t2.t2_int)]]
+----------Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(CAST(t2.t2_int AS Int64))]]
 ------------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
 ProjectionExec: expr=[t1_id@0 as t1_id, SUM(t2.t2_int)@1 as t2_sum]
@@ -483,7 +483,7 @@ logical_plan
 Filter: EXISTS (<subquery>)
 --Subquery:
 ----Projection: SUM(outer_ref(t1.t1_int) + t2.t2_id)
-------Aggregate: groupBy=[[]], aggr=[[SUM(outer_ref(t1.t1_int) + t2.t2_id)]]
+------Aggregate: groupBy=[[]], aggr=[[SUM(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
 --------Filter: outer_ref(t1.t1_name) = t2.t2_name
 ----------TableScan: t2
 --TableScan: t1 projection=[t1_id, t1_name]
@@ -497,7 +497,7 @@ Filter: EXISTS (<subquery>)
 --Subquery:
 ----Projection: COUNT(*)
 ------Filter: SUM(outer_ref(t1.t1_int) + t2.t2_id) > Int64(0)
---------Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*), SUM(outer_ref(t1.t1_int) + t2.t2_id)]]
+--------Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*), SUM(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
 ----------Filter: outer_ref(t1.t1_name) = t2.t2_name
 ------------TableScan: t2
 --TableScan: t1 projection=[t1_id, t1_name]
