@@ -35,7 +35,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use datafusion::common::exec_err;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use structopt::StructOpt;
@@ -300,6 +299,7 @@ struct QueryResult {
 #[cfg(feature = "ci")]
 mod tests {
     use super::*;
+    use datafusion::common::exec_err;
     use datafusion::error::{DataFusionError, Result};
     use std::path::Path;
 
