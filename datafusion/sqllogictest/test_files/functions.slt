@@ -679,6 +679,11 @@ SELECT regexp_replace('foobar', 'bar', 'xx', 'gi')
 fooxx
 
 query T
+SELECT regexp_replace(arrow_cast('foobar', 'Binary'), arrow_cast('bar', 'Binary'), arrow_cast('xx', 'Binary'), arrow_cast('gi', 'Binary'))
+----
+fooxx
+
+query T
 SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'xx', 'gi')
 ----
 fooxx
