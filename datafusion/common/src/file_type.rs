@@ -151,7 +151,7 @@ impl FileCompressionType {
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_internal_err!("Compression feature is not enabled")
+                return crate::error::_not_impl_err!("Compression feature is not enabled")
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -301,7 +301,7 @@ impl FileType {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
             FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
-                _ => crate::error::_not_impl_err!(
+                _ => crate::error::_internal_err!(
                     "FileCompressionType can be specified for CSV/JSON FileType."
                 ),
             },
