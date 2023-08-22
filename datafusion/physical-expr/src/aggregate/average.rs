@@ -65,12 +65,6 @@ impl Avg {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
-        // the internal sum data type of avg just support FLOAT64 and Decimal data type.
-        assert!(matches!(
-            data_type,
-            DataType::Float64 | DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
-        ));
-
         let result_data_type = avg_return_type(&data_type).unwrap();
 
         Self {
