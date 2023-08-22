@@ -318,8 +318,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
 /// Find excluded columns in the schema, if any
 /// SELECT * EXCLUDE(col1, col2), would return `vec![col1, col2]`
 fn get_excluded_columns(
-    opt_exclude: &Option<ExcludeSelectItem>,
-    opt_except: &Option<ExceptSelectItem>,
+    opt_exclude: Option<&ExcludeSelectItem>,
+    opt_except: Option<&ExceptSelectItem>,
     schema: &DFSchema,
     qualifier: &Option<TableReference>,
 ) -> Result<Vec<Column>> {
@@ -417,7 +417,7 @@ pub fn expand_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude, opt_except, schema, &None)?
+        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, &None)?
     } else {
         vec![]
     };
@@ -451,7 +451,12 @@ pub fn expand_qualified_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude, opt_except, schema, &Some(qualifier))?
+        get_excluded_columns(
+            opt_exclude.as_ref(),
+            opt_except.as_ref(),
+            schema,
+            &Some(qualifier),
+        )?
     } else {
         vec![]
     };

@@ -426,7 +426,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// If there is a REPLACE statement in the projected expression in the form of
     /// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
     /// that column with the given replace expression. Column name remains the same.
-    /// Multiple REPLACE's are also possible with comma separations.
+    /// Multiple REPLACEs are also possible with comma separations.
     fn replace_columns(
         &self,
         plan: &LogicalPlan,
@@ -436,11 +436,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         replace: ReplaceSelectItem,
     ) -> Result<Vec<Expr>> {
         for expr in exprs.iter_mut() {
-            if let Expr::Column(Column {
-                relation: _relation,
-                name,
-            }) = expr
-            {
+            if let Expr::Column(Column { name, .. }) = expr {
                 if let Some(item) = replace
                     .items
                     .iter()
