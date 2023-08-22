@@ -287,34 +287,6 @@ pub fn normalize_ordering_equivalence_classes(
         .collect()
 }
 
-/// This function "normalizes" its argument `oeq_classes` by making sure that
-/// it only refers to representative (i.e. head) entries in the given equivlance
-/// properties (`eq_properties`).
-pub fn normalize_ordering_equivalence_classes(
-    oeq_classes: &[OrderingEquivalentClass],
-    eq_properties: &EquivalenceProperties,
-) -> Vec<OrderingEquivalentClass> {
-    oeq_classes
-        .iter()
-        .map(|class| {
-            let head = normalize_sort_exprs_with_equivalence_properties(
-                class.head(),
-                eq_properties,
-            );
-
-            let others = class
-                .others()
-                .iter()
-                .map(|other| {
-                    normalize_sort_exprs_with_equivalence_properties(other, eq_properties)
-                })
-                .collect();
-
-            EquivalentClass::new(head, others)
-        })
-        .collect()
-}
-
 /// Transform `sort_reqs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
 /// Assume `eq_properties` states that `Column a` and `Column b` are aliases.
 /// Also assume `ordering_eq_properties` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
