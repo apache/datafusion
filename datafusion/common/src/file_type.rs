@@ -151,7 +151,7 @@ impl FileCompressionType {
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_internal_err!("Compression feature is not enabled",)
+                return crate::error::_internal_err!("Compression feature is not enabled")
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -174,9 +174,7 @@ impl FileCompressionType {
             ZSTD => Box::new(ZstdEncoder::new(w)),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_not_impl_err!(
-                    "Compression feature is not enabled".to_owned(),
-                )
+                return crate::error::_not_impl_err!("Compression feature is not enabled")
             }
             UNCOMPRESSED => w,
         })
@@ -206,9 +204,7 @@ impl FileCompressionType {
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_not_impl_err!(
-                    "Compression feature is not enabled".to_owned(),
-                )
+                return crate::error::_not_impl_err!("Compression feature is not enabled")
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -233,9 +229,7 @@ impl FileCompressionType {
             },
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_not_impl_err!(
-                    "Compression feature is not enabled".to_owned(),
-                )
+                return crate::error::_not_impl_err!("Compression feature is not enabled")
             }
             UNCOMPRESSED => Box::new(r),
         })
