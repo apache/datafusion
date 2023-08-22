@@ -329,9 +329,7 @@ pub fn isnan(args: &[ArrayRef]) -> Result<ArrayRef> {
             { f32::is_nan }
         )) as ArrayRef),
 
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function isnan"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function isnan"),
     }
 }
 
@@ -354,18 +352,14 @@ pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
             { |x: f32| { x == 0_f32 } }
         )) as ArrayRef),
 
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function iszero"
-        ))),
+        other => internal_err!("Unsupported data type {other:?} for function iszero"),
     }
 }
 
 /// Pi SQL function
 pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if !matches!(&args[0], ColumnarValue::Array(_)) {
-        return Err(DataFusionError::Internal(
-            "Expect pi function to take no param".to_string(),
-        ));
+        return internal_err!("Expect pi function to take no param");
     }
     let array = Float64Array::from_value(std::f64::consts::PI, 1);
     Ok(ColumnarValue::Array(Arc::new(array)))
@@ -375,11 +369,7 @@ pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let len: usize = match &args[0] {
         ColumnarValue::Array(array) => array.len(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Expect random function to take no param".to_string(),
-            ))
-        }
+        _ => return internal_err!("Expect random function to take no param"),
     };
     let mut rng = thread_rng();
     let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
@@ -434,10 +424,9 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                 }
             )) as ArrayRef),
-            _ => Err(DataFusionError::Internal(
+            _ => internal_err!(
                 "round function requires a scalar or array for decimal_places"
-                    .to_string(),
-            )),
+            ),
         },
 
         DataType::Float32 => match decimal_places {
@@ -471,10 +460,9 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                 }
             )) as ArrayRef),
-            _ => Err(DataFusionError::Internal(
+            _ => internal_err!(
                 "round function requires a scalar or array for decimal_places"
-                    .to_string(),
-            )),
+            ),
         },
 
         other => internal_err!("Unsupported data type {other:?} for function round"),
@@ -560,9 +548,7 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Float64Array,
                 { f64::log }
             )) as ArrayRef),
-            _ => Err(DataFusionError::Internal(
-                "log function requires a scalar or array for base".to_string(),
-            )),
+            _ => internal_err!("log function requires a scalar or array for base"),
         },
 
         DataType::Float32 => match base {
@@ -580,9 +566,7 @@ pub fn log(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Float32Array,
                 { f32::log }
             )) as ArrayRef),
-            _ => Err(DataFusionError::Internal(
-                "log function requires a scalar or array for base".to_string(),
-            )),
+            _ => internal_err!("log function requires a scalar or array for base"),
         },
 
         other => internal_err!("Unsupported data type {other:?} for function log"),
@@ -652,9 +636,7 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Int64Array,
                 { compute_truncate64 }
             )) as ArrayRef),
-            _ => Err(DataFusionError::Internal(
-                "trunc function requires a scalar or array for precision".to_string(),
-            )),
+            _ => internal_err!("trunc function requires a scalar or array for precision"),
         },
         DataType::Float32 => match precision {
             ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
@@ -669,9 +651,7 @@ pub fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Int64Array,
                 { compute_truncate32 }
             )) as ArrayRef),
-            _ => Err(DataFusionError::Internal(
-                "trunc function requires a scalar or array for precision".to_string(),
-            )),
+            _ => internal_err!("trunc function requires a scalar or array for precision"),
         },
         other => internal_err!("Unsupported data type {other:?} for function trunc"),
     }

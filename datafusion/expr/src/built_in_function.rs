@@ -502,9 +502,7 @@ impl BuiltinScalarFunction {
                             DataType::List(_) => get_base_type(field.data_type()),
                             _ => Ok(data_type.to_owned()),
                         },
-                        _ => Err(DataFusionError::Internal(
-                            "Not reachable, data_type should be List".to_string(),
-                        )),
+                        _ => internal_err!("Not reachable, data_type should be List"),
                     }
                 }
 
@@ -680,9 +678,9 @@ impl BuiltinScalarFunction {
                 Null => Null,
                 _ => {
                     // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(
-                        "The encode function can only accept utf8 or binary.".to_string(),
-                    ));
+                    return internal_err!(
+                        "The encode function can only accept utf8 or binary."
+                    );
                 }
             }),
             BuiltinScalarFunction::Decode => Ok(match input_expr_types[0] {
@@ -693,9 +691,9 @@ impl BuiltinScalarFunction {
                 Null => Null,
                 _ => {
                     // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(
-                        "The decode function can only accept utf8 or binary.".to_string(),
-                    ));
+                    return internal_err!(
+                        "The decode function can only accept utf8 or binary."
+                    );
                 }
             }),
             BuiltinScalarFunction::SplitPart => {
@@ -712,9 +710,9 @@ impl BuiltinScalarFunction {
                 Int8 | Int16 | Int32 | Int64 => Utf8,
                 _ => {
                     // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(
-                        "The to_hex function can only accept integers.".to_string(),
-                    ));
+                    return internal_err!(
+                        "The to_hex function can only accept integers."
+                    );
                 }
             }),
             BuiltinScalarFunction::ToTimestamp => Ok(Timestamp(Nanosecond, None)),
@@ -740,10 +738,9 @@ impl BuiltinScalarFunction {
                 Null => Null,
                 _ => {
                     // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(
+                    return internal_err!(
                         "The regexp_extract function can only accept strings."
-                            .to_string(),
-                    ));
+                    );
                 }
             }),
 
@@ -1398,25 +1395,25 @@ macro_rules! make_utf8_to_return_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
                 DataType::Null => DataType::Null,
-                DataType::Dictionary(_, value_type) => {
-                    match **value_type {
-                        DataType::LargeUtf8 => $largeUtf8Type,
-                        DataType::Utf8 => $utf8Type,
-                        DataType::Null => DataType::Null,
-                        _ => {
-                            // this error is internal as `data_types` should have captured this.
-                            return internal_err!(
-                                "The {:?} function can only accept strings.",
-                                name
-                            );
-                        }
+                DataType::Dictionary(_, value_type) => match **value_type {
+                    DataType::LargeUtf8 => $largeUtf8Type,
+                    DataType::Utf8 => $utf8Type,
+                    DataType::Null => DataType::Null,
+                    _ => {
+                        // this error is internal as `data_types` should have captured this.
+                        return plan_err!(
+                            "The {:?} function can only accept strings, but got {:?}.",
+                            name,
+                            **value_type
+                        );
                     }
-                }
-                _ => {
+                },
+                data_type => {
                     // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
-                        "The {:?} function can only accept strings.",
-                        name
+                    return plan_err!(
+                        "The {:?} function can only accept strings, but got {:?}.",
+                        name,
+                        data_type
                     );
                 }
             })

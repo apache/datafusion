@@ -284,11 +284,7 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
             ColumnarValue::Scalar(ScalarValue::Utf8(opt.map(hex_encode::<_>)))
         }
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Impossibly got invalid results from digest".into(),
-            ))
-        }
+        _ => return internal_err!("Impossibly got invalid results from digest"),
     })
 }
 
@@ -345,9 +341,9 @@ pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             }
             other => internal_err!("Unsupported data type {other:?} for function digest"),
         },
-        ColumnarValue::Array(_) => Err(DataFusionError::Internal(
-            "Digest using dynamically decided method is not yet supported".into(),
-        )),
+        ColumnarValue::Array(_) => {
+            internal_err!("Digest using dynamically decided method is not yet supported")
+        }
     }?;
     digest_process(&args[0], digest_algorithm)
 }

@@ -28,7 +28,7 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
-use datafusion_common::{alias::AliasGenerator, plan_err};
+use datafusion_common::{alias::AliasGenerator, not_impl_err, plan_err};
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
@@ -1643,9 +1643,9 @@ impl SessionState {
         })?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
         if statements.len() > 1 {
-            return Err(DataFusionError::NotImplemented(
-                "The context currently only supports a single SQL statement".to_string(),
-            ));
+            return not_impl_err!(
+                "The context currently only supports a single SQL statement"
+            );
         }
         let statement = statements.pop_front().ok_or_else(|| {
             DataFusionError::NotImplemented(
@@ -1698,29 +1698,38 @@ impl SessionState {
         }
 
         let mut visitor = RelationVisitor(&mut relations);
-        match statement {
-            DFStatement::Statement(s) => {
-                let _ = s.as_ref().visit(&mut visitor);
-            }
-            DFStatement::CreateExternalTable(table) => {
-                visitor
-                    .0
-                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
-            }
-            DFStatement::DescribeTableStmt(table) => visitor.insert(&table.table_name),
-            DFStatement::CopyTo(CopyToStatement {
-                source,
-                target: _,
-                options: _,
-            }) => match source {
-                CopyToSource::Relation(table_name) => {
-                    visitor.insert(table_name);
+        fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor<'_>) {
+            match statement {
+                DFStatement::Statement(s) => {
+                    let _ = s.as_ref().visit(visitor);
                 }
-                CopyToSource::Query(query) => {
-                    query.visit(&mut visitor);
+                DFStatement::CreateExternalTable(table) => {
+                    visitor
+                        .0
+                        .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
                 }
-            },
+                DFStatement::DescribeTableStmt(table) => {
+                    visitor.insert(&table.table_name)
+                }
+                DFStatement::CopyTo(CopyToStatement {
+                    source,
+                    target: _,
+                    options: _,
+                }) => match source {
+                    CopyToSource::Relation(table_name) => {
+                        visitor.insert(table_name);
+                    }
+                    CopyToSource::Query(query) => {
+                        query.visit(visitor);
+                    }
+                },
+                DFStatement::Explain(explain) => {
+                    visit_statement(&explain.statement, visitor)
+                }
+            }
         }
+
+        visit_statement(statement, &mut visitor);
 
         // Always include information_schema if available
         if self.config.information_schema() {
@@ -2069,10 +2078,10 @@ impl SerializerRegistry for EmptySerializerRegistry {
         &self,
         node: &dyn UserDefinedLogicalNode,
     ) -> Result<Vec<u8>> {
-        Err(DataFusionError::NotImplemented(format!(
+        not_impl_err!(
             "Serializing user defined logical plan node `{}` is not supported",
             node.name()
-        )))
+        )
     }
 
     fn deserialize_logical_plan(
@@ -2080,9 +2089,9 @@ impl SerializerRegistry for EmptySerializerRegistry {
         name: &str,
         _bytes: &[u8],
     ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
-        Err(DataFusionError::NotImplemented(format!(
+        not_impl_err!(
             "Deserializing user defined logical plan node `{name}` is not supported"
-        )))
+        )
     }
 }
 
@@ -2683,9 +2692,7 @@ mod tests {
             _logical_plan: &LogicalPlan,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Err(DataFusionError::NotImplemented(
-                "query not supported".to_string(),
-            ))
+            not_impl_err!("query not supported")
         }
 
         fn create_physical_expr(

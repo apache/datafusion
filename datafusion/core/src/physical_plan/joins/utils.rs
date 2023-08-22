@@ -1385,6 +1385,7 @@ mod tests {
     use arrow::datatypes::Fields;
     use arrow::error::Result as ArrowResult;
     use arrow::{datatypes::DataType, error::ArrowError};
+    use arrow_schema::SortOptions;
     use datafusion_common::ScalarValue;
     use std::pin::Pin;
 
@@ -1910,6 +1911,184 @@ mod tests {
             assert_eq!(
                 partial_join_stats.column_statistics,
                 [left_col_stats.clone(), right_col_stats.clone()].concat()
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_updated_right_ordering_equivalence_properties() -> Result<()> {
+        let join_type = JoinType::Inner;
+
+        let options = SortOptions::default();
+        let right_oeq_classes = OrderingEquivalentClass::new(
+            vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("x", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 1)),
+                    options,
+                },
+            ],
+            vec![vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 2)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("w", 3)),
+                    options,
+                },
+            ]],
+        );
+
+        let left_columns_len = 4;
+
+        let fields: Fields = ["a", "b", "c", "d", "x", "y", "z", "w"]
+            .into_iter()
+            .map(|name| Field::new(name, DataType::Int32, true))
+            .collect();
+
+        let mut join_eq_properties =
+            EquivalenceProperties::new(Arc::new(Schema::new(fields)));
+        join_eq_properties
+            .add_equal_conditions((&Column::new("a", 0), &Column::new("x", 4)));
+        join_eq_properties
+            .add_equal_conditions((&Column::new("d", 3), &Column::new("w", 7)));
+
+        let result = get_updated_right_ordering_equivalence_properties(
+            &join_type,
+            &[right_oeq_classes.clone()],
+            left_columns_len,
+            &join_eq_properties,
+        )?;
+
+        let expected = OrderingEquivalentClass::new(
+            vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 5)),
+                    options,
+                },
+            ],
+            vec![vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 6)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d", 3)),
+                    options,
+                },
+            ]],
+        );
+
+        assert_eq!(result[0].head(), expected.head());
+        assert_eq!(result[0].others(), expected.others());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_calculate_join_output_ordering() -> Result<()> {
+        let options = SortOptions::default();
+        let left_ordering = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("d", 3)),
+                options,
+            },
+        ];
+        let right_ordering = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("z", 2)),
+                options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("y", 1)),
+                options,
+            },
+        ];
+        let join_type = JoinType::Inner;
+        let on_columns = [(Column::new("b", 1), Column::new("x", 0))];
+        let left_columns_len = 5;
+        let maintains_input_orders = [[true, false], [false, true]];
+        let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
+
+        let expected = [
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("c", 2)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d", 3)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 7)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 6)),
+                    options,
+                },
+            ]),
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 7)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 6)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("c", 2)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d", 3)),
+                    options,
+                },
+            ]),
+        ];
+
+        for (i, (maintains_input_order, probe_side)) in
+            maintains_input_orders.iter().zip(probe_sides).enumerate()
+        {
+            assert_eq!(
+                calculate_join_output_ordering(
+                    &left_ordering,
+                    &right_ordering,
+                    join_type,
+                    &on_columns,
+                    left_columns_len,
+                    maintains_input_order,
+                    probe_side
+                )?,
+                expected[i]
             );
         }
 

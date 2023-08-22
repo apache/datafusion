@@ -29,7 +29,10 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{DataFusionError, Result};
+
+use crate::physical_expr::down_cast_any_ref;
+use crate::PhysicalExpr;
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
     ColumnarValue,
@@ -131,9 +134,9 @@ pub fn negative(
     if is_null(&data_type) {
         Ok(arg)
     } else if !is_signed_numeric(&data_type) && !is_interval(&data_type) {
-        Err(DataFusionError::Internal(
-            format!("Can't create negative physical expr for (- '{arg:?}'), the type of child expr is {data_type}, not signed numeric"),
-        ))
+        internal_err!(
+            "Can't create negative physical expr for (- '{arg:?}'), the type of child expr is {data_type}, not signed numeric"
+        )
     } else {
         Ok(Arc::new(NegativeExpr::new(arg)))
     }

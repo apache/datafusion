@@ -545,9 +545,9 @@ fn swap_join_according_to_unboundedness(
         (PartitionMode::CollectLeft, _) => {
             swap_hash_join(hash_join, PartitionMode::CollectLeft)
         }
-        (PartitionMode::Auto, _) => Err(DataFusionError::Internal(
-            "Auto is not acceptable for unbounded input here.".to_string(),
-        )),
+        (PartitionMode::Auto, _) => {
+            internal_err!("Auto is not acceptable for unbounded input here.")
+        }
     }
 }
 

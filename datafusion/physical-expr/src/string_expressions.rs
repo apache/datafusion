@@ -549,11 +549,7 @@ pub fn upper(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let len: usize = match &args[0] {
         ColumnarValue::Array(array) => array.len(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Expect uuid function to take no param".to_string(),
-            ))
-        }
+        _ => return internal_err!("Expect uuid function to take no param"),
     };
 
     let values = iter::repeat_with(|| Uuid::new_v4().to_string()).take(len);
