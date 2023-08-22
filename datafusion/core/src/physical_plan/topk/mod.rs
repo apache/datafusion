@@ -143,6 +143,8 @@ impl TopK {
     /// Insert `batch`, remembering it if any of its values are among
     /// the top k seen so far.
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        use log::info;
+        info!("INSERTING {} rows", batch.num_rows());
         // Updates on drop
         let _timer = self.metrics.baseline.elapsed_compute().timer();
 
@@ -179,6 +181,9 @@ impl TopK {
             }
         }
         self.heap.insert_batch_entry(batch_entry);
+
+        // conserve memory
+        self.heap.maybe_compact()?;
 
         // update memory reservation
         self.reservation.try_resize(self.size())?;
@@ -352,6 +357,10 @@ impl TopKHeap {
     pub fn emit(&self) -> Result<RecordBatch> {
         let schema = self.store.schema().clone();
 
+        if self.store.is_empty() {
+            return Ok(RecordBatch::new_empty(schema));
+        }
+
         // Indicies for each row within its respective RecordBatch
         let indicies: Vec<_> = self
             .inner
@@ -387,9 +396,39 @@ impl TopKHeap {
         Ok(RecordBatch::try_new(schema, output_columns)?)
     }
 
-    /// Compact this heap, rewriting all stored batches
-    fn compact(&mut self) {
-        //let new_batch = self.emit(
+    /// Compact this heap, rewriting all stored batches into a single
+    /// input batch
+    pub fn maybe_compact(&mut self) -> Result<()>{
+        // don't compact if the store has less than ten batches
+        if self.store.len() <= 10 {
+            return Ok(());
+        }
+
+        panic!("Disco");
+
+        // at first, compact the entire thing always into a new batch
+        // (maybe we can get fancier in the future about ignoring
+        // batches that have a high usage ratio already
+
+        // Note: new batch is in the same order as inner
+        let new_batch = self.emit()?;
+
+        // clear all old entires in store (this invalidates all
+        // store_ids in `inner`)
+        self.store.clear();
+
+        let mut batch_entry = self.register_batch(new_batch);
+        batch_entry.uses = self.inner.len();
+
+        // rewrite all existing entries to use the new batch, and
+        // remove old entries. The sortedness and their relative
+        // position do not change
+        for (i, topk_row) in self.inner.iter_mut().enumerate() {
+            topk_row.batch_id = batch_entry.id;
+            topk_row.index = i;
+        }
+        self.insert_batch_entry(batch_entry);
+        Ok(())
     }
 
     /// return the size of memory used by this heap, in bytes
@@ -528,6 +567,12 @@ impl RecordBatchStore {
         }
     }
 
+    /// Clear all values in this store, invalidating all previous batch ids
+    fn clear(&mut self) {
+        self.batches.clear();
+        self.batches_size = 0;
+    }
+
     fn get(&self, id: u32) -> Option<&RecordBatchEntry> {
         self.batches.get(&id)
     }
@@ -535,6 +580,11 @@ impl RecordBatchStore {
     /// returns the total number of batches stored in this store
     fn len(&self) -> usize {
         self.batches.len()
+    }
+
+    /// returns true if the store has nothing stored
+    fn is_empty(&self) -> bool {
+        self.batches.is_empty()
     }
 
     /// return the schema of batches stored
