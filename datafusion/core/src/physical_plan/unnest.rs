@@ -255,20 +255,12 @@ fn build_batch(
     match list_array.data_type() {
         DataType::List(_) => {
             let list_array = list_array.as_any().downcast_ref::<ListArray>().unwrap();
-            let (unnested_column, take_indicies): (
-                Arc<dyn Array>,
-                PrimitiveArray<Int32Type>,
-            ) = unnest_and_create_take_indicies_generic(
-                list_array,
-                list_array.values(),
-                options,
-            )?;
-            batch_from_indices(
+            unnest_and_create_take_indicies_generic::<i32, Int32Type>(
                 batch,
                 schema,
                 column.index(),
-                &unnested_column,
-                &take_indicies,
+                list_array,
+                options,
             )
         }
         DataType::LargeList(_) => {
@@ -276,20 +268,12 @@ fn build_batch(
                 .as_any()
                 .downcast_ref::<LargeListArray>()
                 .unwrap();
-            let (unnested_column, take_indicies): (
-                Arc<dyn Array>,
-                PrimitiveArray<Int64Type>,
-            ) = unnest_and_create_take_indicies_generic(
-                list_array,
-                list_array.values(),
-                options,
-            )?;
-            batch_from_indices(
+            unnest_and_create_take_indicies_generic::<i64, Int64Type>(
                 batch,
                 schema,
                 column.index(),
-                &unnested_column,
-                &take_indicies,
+                list_array,
+                options,
             )
         }
         DataType::FixedSizeList(_, _) => {
@@ -297,17 +281,12 @@ fn build_batch(
                 .as_any()
                 .downcast_ref::<FixedSizeListArray>()
                 .unwrap();
-            let (unnested_column, take_indicies) = unnest_and_create_take_indicies_fixed(
-                list_array,
-                list_array.values(),
-                options,
-            )?;
-            batch_from_indices(
+            unnest_and_create_take_indicies_fixed(
                 batch,
                 schema,
                 column.index(),
-                &unnested_column,
-                &take_indicies,
+                list_array,
+                options,
             )
         }
         _ => Err(DataFusionError::Execution(format!(
@@ -320,28 +299,37 @@ fn unnest_and_create_take_indicies_generic<
     T: OffsetSizeTrait,
     P: ArrowPrimitiveType<Native = T>,
 >(
+    batch: &RecordBatch,
+    schema: &SchemaRef,
+    unnest_column_idx: usize,
     list_array: &GenericListArray<T>,
-    values: &ArrayRef,
     options: &UnnestOptions,
-) -> Result<(Arc<dyn Array>, PrimitiveArray<P>)> {
-    let unnested_array = unnest_generic_list::<T, P>(list_array, values, options)?;
+) -> Result<RecordBatch> {
+    let unnested_array = unnest_generic_list::<T, P>(list_array, options)?;
 
-    let take_indices =
-        create_take_indices_generic(list_array, unnested_array.len(), options);
+    let take_indicies =
+        create_take_indicies_generic::<T, P>(list_array, unnested_array.len(), options);
 
-    Ok((unnested_array, take_indices))
+    batch_from_indices(
+        batch,
+        schema,
+        unnest_column_idx,
+        &unnested_array,
+        &take_indicies,
+    )
 }
 fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
     list_array: &GenericListArray<T>,
-    values: &ArrayRef,
     options: &UnnestOptions,
 ) -> Result<Arc<dyn Array + 'static>> {
+    let values = list_array.values();
     if list_array.null_count() == 0 || !options.preserve_nulls {
         Ok(values.clone())
     } else {
         let mut builder =
             PrimitiveArray::<P>::builder(values.len() + list_array.null_count());
         let mut take_offset = 0;
+
         list_array.iter().for_each(|elem| match elem {
             Some(array) => {
                 for i in 0..array.len() {
@@ -360,23 +348,32 @@ fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
 }
 
 fn unnest_and_create_take_indicies_fixed(
+    batch: &RecordBatch,
+    schema: &SchemaRef,
+    unnest_column_idx: usize,
     list_array: &FixedSizeListArray,
-    values: &ArrayRef,
     options: &UnnestOptions,
-) -> Result<(Arc<dyn Array + 'static>, PrimitiveArray<Int32Type>)> {
-    let unnested_array = unnest_fixed_list(list_array, values, options)?;
+) -> Result<RecordBatch> {
+    let unnested_array = unnest_fixed_list(list_array, options)?;
 
-    let take_indices =
-        create_take_indices_fixed(list_array, unnested_array.len(), options);
+    let take_indicies =
+        create_take_indicies_fixed(list_array, unnested_array.len(), options);
 
-    Ok((unnested_array, take_indices))
+    batch_from_indices(
+        batch,
+        schema,
+        unnest_column_idx,
+        &unnested_array,
+        &take_indicies,
+    )
 }
 
 fn unnest_fixed_list(
     list_array: &FixedSizeListArray,
-    values: &ArrayRef,
     options: &UnnestOptions,
 ) -> Result<Arc<dyn Array + 'static>> {
+    let values = list_array.values();
+
     if list_array.null_count() == 0 {
         Ok(values.clone())
     } else {
@@ -415,7 +412,7 @@ fn unnest_fixed_list(
     }
 }
 
-fn create_take_indices_generic<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
+fn create_take_indicies_generic<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
     list_array: &GenericListArray<T>,
     capacity: usize,
     options: &UnnestOptions,
@@ -438,7 +435,7 @@ fn create_take_indices_generic<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native 
     builder.finish()
 }
 
-fn create_take_indices_fixed(
+fn create_take_indicies_fixed(
     list_array: &FixedSizeListArray,
     capacity: usize,
     options: &UnnestOptions,
