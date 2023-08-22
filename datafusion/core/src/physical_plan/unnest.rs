@@ -147,12 +147,6 @@ impl ExecutionPlan for UnnestExec {
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
 
-        if !self.options.preserve_nulls {
-            return Err(DataFusionError::NotImplemented(
-                "Unnest with preserve_nulls=false".to_string(),
-            ));
-        }
-
         Ok(Box::pin(UnnestStream {
             input,
             schema: self.schema.clone(),
@@ -265,8 +259,8 @@ fn build_batch(
                 Arc<dyn Array>,
                 PrimitiveArray<Int32Type>,
             ) = unnest_and_create_take_indicies_generic(
-                &list_array,
-                &list_array.values(),
+                list_array,
+                list_array.values(),
                 options,
             )?;
             batch_from_indices(
@@ -286,8 +280,8 @@ fn build_batch(
                 Arc<dyn Array>,
                 PrimitiveArray<Int64Type>,
             ) = unnest_and_create_take_indicies_generic(
-                &list_array,
-                &list_array.values(),
+                list_array,
+                list_array.values(),
                 options,
             )?;
             batch_from_indices(
@@ -304,8 +298,8 @@ fn build_batch(
                 .downcast_ref::<FixedSizeListArray>()
                 .unwrap();
             let (unnested_column, take_indicies) = unnest_and_create_take_indicies_fixed(
-                &list_array,
-                &list_array.values(),
+                list_array,
+                list_array.values(),
                 options,
             )?;
             batch_from_indices(
@@ -322,15 +316,14 @@ fn build_batch(
     }
 }
 
-fn unnest_and_create_take_indicies_generic<T, P>(
+fn unnest_and_create_take_indicies_generic<
+    T: OffsetSizeTrait,
+    P: ArrowPrimitiveType<Native = T>,
+>(
     list_array: &GenericListArray<T>,
     values: &ArrayRef,
     options: &UnnestOptions,
-) -> Result<(Arc<dyn Array>, PrimitiveArray<P>)>
-where
-    T: OffsetSizeTrait,
-    P: ArrowPrimitiveType<Native = T>,
-{
+) -> Result<(Arc<dyn Array>, PrimitiveArray<P>)> {
     let unnested_array = unnest_generic_list::<T, P>(list_array, values, options)?;
 
     let take_indices =
@@ -352,11 +345,11 @@ fn unnest_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T>>(
         list_array.iter().for_each(|elem| match elem {
             Some(array) => {
                 for i in 0..array.len() {
-                    //take_offset + i is always positive
+                    // take_offset + i is always positive
                     let take_index = P::Native::from_usize(take_offset + i).unwrap();
                     builder.append_value(take_index);
-                    take_offset += 1;
                 }
+                take_offset += array.len();
             }
             None => {
                 builder.append_null();
@@ -370,9 +363,7 @@ fn unnest_and_create_take_indicies_fixed(
     list_array: &FixedSizeListArray,
     values: &ArrayRef,
     options: &UnnestOptions,
-) -> Result<(Arc<dyn Array + 'static>, PrimitiveArray<Int32Type>)>
-// Cases to handle : non null array, keep or remove nulls.
-{
+) -> Result<(Arc<dyn Array + 'static>, PrimitiveArray<Int32Type>)> {
     let unnested_array = unnest_fixed_list(list_array, values, options)?;
 
     let take_indices =
@@ -430,7 +421,7 @@ fn create_take_indices_generic<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native 
     options: &UnnestOptions,
 ) -> PrimitiveArray<P> {
     let mut builder = PrimitiveArray::<P>::builder(capacity);
-    let null_repeat: usize = if options.preserve_nulls { 0 } else { 1 };
+    let null_repeat: usize = if options.preserve_nulls { 1 } else { 0 };
 
     for row in 0..list_array.len() {
         let repeat = if list_array.is_null(row) {
@@ -453,7 +444,7 @@ fn create_take_indices_fixed(
     options: &UnnestOptions,
 ) -> PrimitiveArray<Int32Type> {
     let mut builder = PrimitiveArray::<Int32Type>::builder(capacity);
-    let null_repeat: usize = if options.preserve_nulls { 0 } else { 1 };
+    let null_repeat: usize = if options.preserve_nulls { 1 } else { 0 };
 
     for row in 0..list_array.len() {
         let repeat = if list_array.is_null(row) {
