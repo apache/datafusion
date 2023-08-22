@@ -29,7 +29,6 @@ use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
-use datafusion_common::internal_err;
 use datafusion_common::{exec_err, internal_err, DataFusionError, FileCompressionType};
 
 use async_trait::async_trait;
