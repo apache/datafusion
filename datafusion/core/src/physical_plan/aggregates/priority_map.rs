@@ -472,10 +472,11 @@ where
                     if self.is_full() {
                         // replace top node
                         self.take_children(new_hi, root);
-                        if let Some(_old_root) = self.root.replace(new_hi) {
-                            // TODO: audit all the places to free things
-                        }
+                        let old_root = self.root.replace(new_hi);
                         self.heapify_down(new_hi);
+                        if let Some(old_root) = old_root {
+                            let _old_root = unsafe { Box::from_raw(old_root) };
+                        }
                     } else {
                         // append to end of tree
                         let old = put_child(root, new_hi, tree_path(self.len() - 1));
@@ -633,7 +634,11 @@ where
         let tups: Vec<_> = unsafe {
             self.id_to_hi
                 .drain()
-                .map(|mi| (mi.id, (*mi.hi).val))
+                .map(|mi| {
+                    let val = (*mi.hi).val.clone();
+                    // TODO: free
+                    (mi.id, val)
+                })
                 .collect()
         };
         let mut tups: Vec<_> = tups
