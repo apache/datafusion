@@ -41,7 +41,7 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
+    exec_err, plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{
@@ -197,9 +197,7 @@ pub fn calculate_join_output_ordering(
     };
     let output_ordering = match (left_maintains, right_maintains) {
         (true, true) => {
-            return Err(DataFusionError::Execution(
-                "Cannot maintain ordering of both sides".to_string(),
-            ))
+            return exec_err!("Cannot maintain ordering of both sides");
         }
         (true, false) => {
             // Special case, we can prefix ordering of right side with the ordering of left side.

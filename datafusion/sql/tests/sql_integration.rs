@@ -238,6 +238,49 @@ CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
     "#
     .trim();
     quick_test(sql, plan);
+
+    let sql = "create table person (id int primary key, name string)";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+
+    let sql =
+        "create table person (id int, name string unique not null, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), Unique([1])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+
+    let sql = "create table person (id int, name varchar,  primary key(name,  id));";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([1, 0])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_create_table_with_multi_pk() {
+    let sql = "create table person (id int, name string primary key, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), PrimaryKey([1])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_create_table_with_unique() {
+    let sql = "create table person (id int unique, name string)";
+    let plan = "CreateMemoryTable: Bare { table: \"person\" } constraints=[Unique([0])]\n  EmptyRelation";
+    quick_test(sql, plan);
 }
 
 #[test]

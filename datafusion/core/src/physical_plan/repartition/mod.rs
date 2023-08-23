@@ -905,6 +905,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::exec_err;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use futures::FutureExt;
     use std::collections::HashSet;
@@ -1114,7 +1115,7 @@ mod tests {
 
         // input stream returns one good batch and then one error. The
         // error should be returned.
-        let err = Err(DataFusionError::Execution("bad data error".to_string()));
+        let err = exec_err!("bad data error");
 
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch), err], schema);

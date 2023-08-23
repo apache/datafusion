@@ -393,6 +393,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 substring_from,
                 substring_for,
+                special: false,
             } => self.sql_substring_to_expr(
                 expr,
                 substring_from,

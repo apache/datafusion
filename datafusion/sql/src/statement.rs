@@ -153,75 +153,92 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
                 or_replace,
                 ..
-            } if table_properties.is_empty() && with_options.is_empty() => match query {
-                Some(query) => {
-                    let plan = self.query_to_plan(*query, planner_context)?;
-                    let input_schema = plan.schema();
+            } if table_properties.is_empty() && with_options.is_empty() => {
+                let mut constraints = constraints;
+                for column in &columns {
+                    for option in &column.options {
+                        if let ast::ColumnOption::Unique { is_primary } = option.option {
+                            constraints.push(ast::TableConstraint::Unique {
+                                name: None,
+                                columns: vec![column.name.clone()],
+                                is_primary,
+                            })
+                        }
+                    }
+                }
+                match query {
+                    Some(query) => {
+                        let plan = self.query_to_plan(*query, planner_context)?;
+                        let input_schema = plan.schema();
 
-                    let plan = if !columns.is_empty() {
-                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                        if schema.fields().len() != input_schema.fields().len() {
-                            return plan_err!(
+                        let plan = if !columns.is_empty() {
+                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                            if schema.fields().len() != input_schema.fields().len() {
+                                return plan_err!(
                             "Mismatch: {} columns specified, but result has {} columns",
                             schema.fields().len(),
                             input_schema.fields().len()
                         );
-                        }
-                        let input_fields = input_schema.fields();
-                        let project_exprs = schema
-                            .fields()
-                            .iter()
-                            .zip(input_fields)
-                            .map(|(field, input_field)| {
-                                cast(col(input_field.name()), field.data_type().clone())
+                            }
+                            let input_fields = input_schema.fields();
+                            let project_exprs = schema
+                                .fields()
+                                .iter()
+                                .zip(input_fields)
+                                .map(|(field, input_field)| {
+                                    cast(
+                                        col(input_field.name()),
+                                        field.data_type().clone(),
+                                    )
                                     .alias(field.name())
-                            })
-                            .collect::<Vec<_>>();
-                        LogicalPlanBuilder::from(plan.clone())
-                            .project(project_exprs)?
-                            .build()?
-                    } else {
-                        plan
-                    };
+                                })
+                                .collect::<Vec<_>>();
+                            LogicalPlanBuilder::from(plan.clone())
+                                .project(project_exprs)?
+                                .build()?
+                        } else {
+                            plan
+                        };
 
-                    let constraints = Constraints::new_from_table_constraints(
-                        &constraints,
-                        plan.schema(),
-                    )?;
+                        let constraints = Constraints::new_from_table_constraints(
+                            &constraints,
+                            plan.schema(),
+                        )?;
 
-                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                        CreateMemoryTable {
-                            name: self.object_name_to_table_reference(name)?,
-                            constraints,
-                            input: Arc::new(plan),
-                            if_not_exists,
-                            or_replace,
-                        },
-                    )))
+                        Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                            CreateMemoryTable {
+                                name: self.object_name_to_table_reference(name)?,
+                                constraints,
+                                input: Arc::new(plan),
+                                if_not_exists,
+                                or_replace,
+                            },
+                        )))
+                    }
+
+                    None => {
+                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                        let plan = EmptyRelation {
+                            produce_one_row: false,
+                            schema,
+                        };
+                        let plan = LogicalPlan::EmptyRelation(plan);
+                        let constraints = Constraints::new_from_table_constraints(
+                            &constraints,
+                            plan.schema(),
+                        )?;
+                        Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                            CreateMemoryTable {
+                                name: self.object_name_to_table_reference(name)?,
+                                constraints,
+                                input: Arc::new(plan),
+                                if_not_exists,
+                                or_replace,
+                            },
+                        )))
+                    }
                 }
-
-                None => {
-                    let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                    let plan = EmptyRelation {
-                        produce_one_row: false,
-                        schema,
-                    };
-                    let plan = LogicalPlan::EmptyRelation(plan);
-                    let constraints = Constraints::new_from_table_constraints(
-                        &constraints,
-                        plan.schema(),
-                    )?;
-                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                        CreateMemoryTable {
-                            name: self.object_name_to_table_reference(name)?,
-                            constraints,
-                            input: Arc::new(plan),
-                            if_not_exists,
-                            or_replace,
-                        },
-                    )))
-                }
-            },
+            }
 
             Statement::CreateView {
                 or_replace,
@@ -275,6 +292,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 cascade,
                 restrict: _,
                 purge: _,
+                temporary: _,
             } => {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
@@ -431,7 +449,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.delete_to_plan(table_name, selection)
             }
 
-            Statement::StartTransaction { modes } => {
+            Statement::StartTransaction {
+                modes,
+                begin: false,
+            } => {
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &ast::TransactionMode| match m {

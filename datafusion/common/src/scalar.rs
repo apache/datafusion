@@ -30,7 +30,7 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array, as_list_array, as_struct_array,
 };
 use crate::delta::shift_months;
-use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
+use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use arrow::buffer::NullBuffer;
 use arrow::compute::nullif;
 use arrow::datatypes::{i256, FieldRef, Fields, SchemaBuilder};
@@ -645,9 +645,7 @@ macro_rules! primitive_checked_op {
                 if let Some(value) = (*a).$FUNCTION(*b) {
                     Ok(ScalarValue::$SCALAR(Some(value)))
                 } else {
-                    Err(DataFusionError::Execution(
-                        "Overflow while calculating ScalarValue.".to_string(),
-                    ))
+                    _exec_err!("Overflow while calculating ScalarValue.")
                 }
             }
         }
@@ -659,9 +657,7 @@ macro_rules! primitive_checked_right {
         if let Some(value) = $TERM.checked_neg() {
             Ok(ScalarValue::$SCALAR(Some(value)))
         } else {
-            Err(DataFusionError::Execution(
-                "Overflow while calculating ScalarValue.".to_string(),
-            ))
+            _exec_err!("Overflow while calculating ScalarValue.")
         }
     };
     ($TERM:expr, $OPERATION:tt, $SCALAR:ident) => {
@@ -1383,9 +1379,9 @@ where
             prior.add(Duration::microseconds(*v))
         }
         ScalarValue::DurationNanosecond(Some(v)) => prior.add(Duration::nanoseconds(*v)),
-        other => Err(DataFusionError::Execution(format!(
-            "DateIntervalExpr does not support non-interval type {other:?}"
-        )))?,
+        other => {
+            _exec_err!("DateIntervalExpr does not support non-interval type {other:?}")?
+        }
     })
 }
 

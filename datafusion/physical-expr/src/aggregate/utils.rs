@@ -23,7 +23,7 @@ use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PREC
 use arrow_array::cast::AsArray;
 use arrow_array::types::Decimal128Type;
 use arrow_schema::{DataType, Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -85,9 +85,7 @@ impl Decimal128Averager {
             })
         } else {
             // can't convert the lit decimal to the returned data type
-            Err(DataFusionError::Execution(
-                "Arithmetic Overflow in AvgAccumulator".to_string(),
-            ))
+            exec_err!("Arithmetic Overflow in AvgAccumulator")
         }
     }
 
@@ -104,15 +102,11 @@ impl Decimal128Averager {
             if new_value >= self.target_min && new_value <= self.target_max {
                 Ok(new_value)
             } else {
-                Err(DataFusionError::Execution(
-                    "Arithmetic Overflow in AvgAccumulator".to_string(),
-                ))
+                exec_err!("Arithmetic Overflow in AvgAccumulator")
             }
         } else {
             // can't convert the lit decimal to the returned data type
-            Err(DataFusionError::Execution(
-                "Arithmetic Overflow in AvgAccumulator".to_string(),
-            ))
+            exec_err!("Arithmetic Overflow in AvgAccumulator")
         }
     }
 }
