@@ -29,7 +29,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{GenericListArray, OffsetSizeTrait};
 use async_trait::async_trait;
 use datafusion_common::UnnestOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use futures::Stream;
 use futures::StreamExt;
@@ -283,9 +283,7 @@ fn build_batch(
                 .unwrap();
             build_batch_fixedsize_list(batch, schema, column.index(), list_array, options)
         }
-        _ => Err(DataFusionError::Execution(format!(
-            "Invalid unnest column {column}"
-        ))),
+        _ => exec_err!("Invalid unnest column {column}"),
     }
 }
 

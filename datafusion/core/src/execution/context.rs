@@ -30,7 +30,7 @@ use crate::{
 };
 use datafusion_common::{
     alias::AliasGenerator,
-    not_impl_err, plan_err,
+    exec_err, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion},
 };
 use datafusion_execution::registry::SerializerRegistry;
@@ -543,10 +543,7 @@ impl SessionContext {
             match cmd.if_not_exists {
                 true => return self.return_empty_dataframe(),
                 false => {
-                    return Err(DataFusionError::Execution(format!(
-                        "Table '{}' already exists",
-                        cmd.name
-                    )));
+                    return exec_err!("Table '{}' already exists", cmd.name);
                 }
             }
         }
@@ -582,9 +579,9 @@ impl SessionContext {
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
             }
-            (true, true, Ok(_)) => Err(DataFusionError::Execution(
-                "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
-            )),
+            (true, true, Ok(_)) => {
+                exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+            }
             (_, _, Err(_)) => {
                 let df_schema = input.schema();
                 let schema = Arc::new(df_schema.as_ref().into());
@@ -599,9 +596,7 @@ impl SessionContext {
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
             }
-            (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                "Table '{name}' already exists"
-            ))),
+            (false, false, Ok(_)) => exec_err!("Table '{name}' already exists"),
         }
     }
 
@@ -629,9 +624,7 @@ impl SessionContext {
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
             }
-            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                "Table '{name}' already exists"
-            ))),
+            (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
         }
     }
 
@@ -663,11 +656,7 @@ impl SessionContext {
                 })?;
                 (catalog, tokens[1])
             }
-            _ => {
-                return Err(DataFusionError::Execution(format!(
-                    "Unable to parse catalog from {schema_name}"
-                )))
-            }
+            _ => return exec_err!("Unable to parse catalog from {schema_name}"),
         };
         let schema = catalog.schema(schema_name);
 
@@ -678,9 +667,7 @@ impl SessionContext {
                 catalog.register_schema(schema_name, schema)?;
                 self.return_empty_dataframe()
             }
-            (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                "Schema '{schema_name}' already exists"
-            ))),
+            (false, Some(_)) => exec_err!("Schema '{schema_name}' already exists"),
         }
     }
 
@@ -702,9 +689,7 @@ impl SessionContext {
                     .register_catalog(catalog_name, new_catalog);
                 self.return_empty_dataframe()
             }
-            (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                "Catalog '{catalog_name}' already exists"
-            ))),
+            (false, Some(_)) => exec_err!("Catalog '{catalog_name}' already exists"),
         }
     }
 
@@ -716,9 +701,7 @@ impl SessionContext {
         match (result, if_exists) {
             (Ok(true), _) => self.return_empty_dataframe(),
             (_, true) => self.return_empty_dataframe(),
-            (_, _) => Err(DataFusionError::Execution(format!(
-                "Table '{name}' doesn't exist."
-            ))),
+            (_, _) => exec_err!("Table '{name}' doesn't exist."),
         }
     }
 
@@ -730,9 +713,7 @@ impl SessionContext {
         match (result, if_exists) {
             (Ok(true), _) => self.return_empty_dataframe(),
             (_, true) => self.return_empty_dataframe(),
-            (_, _) => Err(DataFusionError::Execution(format!(
-                "View '{name}' doesn't exist."
-            ))),
+            (_, _) => exec_err!("View '{name}' doesn't exist."),
         }
     }
 
@@ -771,9 +752,7 @@ impl SessionContext {
         &self,
         schemaref: SchemaReference<'_>,
     ) -> Result<DataFrame> {
-        Err(DataFusionError::Execution(format!(
-            "Schema '{schemaref}' doesn't exist."
-        )))
+        exec_err!("Schema '{schemaref}' doesn't exist.")
     }
 
     async fn set_variable(&self, stmt: SetVariable) -> Result<DataFrame> {
@@ -2452,12 +2431,7 @@ mod tests {
             vec![DataType::Float64],
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_| {
-                Ok(Box::new(AvgAccumulator::try_new(
-                    &DataType::Float64,
-                    &DataType::Float64,
-                )?))
-            }),
+            Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
 

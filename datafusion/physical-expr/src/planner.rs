@@ -26,7 +26,8 @@ use crate::{
 };
 use arrow::datatypes::Schema;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
@@ -198,9 +199,7 @@ pub fn create_physical_expr(
             case_insensitive,
         }) => {
             if escape_char.is_some() {
-                return Err(DataFusionError::Execution(
-                    "LIKE does not support escape_char".to_string(),
-                ));
+                return exec_err!("LIKE does not support escape_char");
             }
             let physical_expr = create_physical_expr(
                 expr,

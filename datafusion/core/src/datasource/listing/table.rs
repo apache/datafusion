@@ -33,7 +33,6 @@ use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
     file_format::{
@@ -52,6 +51,7 @@ use crate::{
     logical_expr::Expr,
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
+use datafusion_common::{FileCompressionType, FileType};
 
 use super::PartitionedFile;
 
@@ -963,7 +963,6 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::file_type::GetExt;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;
@@ -979,6 +978,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use chrono::DateTime;
     use datafusion_common::assert_contains;
+    use datafusion_common::GetExt;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::collections::HashMap;

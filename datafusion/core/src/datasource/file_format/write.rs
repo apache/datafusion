@@ -29,8 +29,7 @@ use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
-use datafusion_common::internal_err;
-use datafusion_common::DataFusionError;
+use datafusion_common::{exec_err, internal_err, DataFusionError, FileCompressionType};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -40,8 +39,6 @@ use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-
-use super::file_type::FileCompressionType;
 
 /// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends
@@ -181,9 +178,7 @@ impl<W: AsyncWrite + Unpin + Send> AbortableWrite<W> {
     pub(crate) fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
         match &self.mode {
             AbortMode::Put => Ok(async { Ok(()) }.boxed()),
-            AbortMode::Append => Err(DataFusionError::Execution(
-                "Cannot abort in append mode".to_string(),
-            )),
+            AbortMode::Append => exec_err!("Cannot abort in append mode"),
             AbortMode::MultiPart(MultiPart {
                 store,
                 multipart_id,

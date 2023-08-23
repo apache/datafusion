@@ -545,12 +545,26 @@ scalar_expr!(
     array element,
     "appends an element to the end of an array."
 );
+
+scalar_expr!(
+    ArrayPopBack,
+    array_pop_back,
+    array,
+    "returns the array without the last element."
+);
+
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
     ArrayHas,
     array_has,
     first_array second_array,
     "returns true, if the element appears in the first array, otherwise false."
+);
+scalar_expr!(
+    ArrayEmpty,
+    array_empty,
+    array,
+    "returns 1 for an empty array or 0 for a non-empty array."
 );
 scalar_expr!(
     ArrayHasAll,
@@ -1081,6 +1095,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);
