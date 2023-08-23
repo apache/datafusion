@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>SQL Reference &#8212; Arrow DataFusion  documentation</title>
+    <title>DML &#8212; Arrow DataFusion  documentation</title>
     
     <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -33,8 +33,8 @@
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Data Types" href="data_types.html" />
-    <link rel="prev" title="Expression API" href="../expressions.html" />
+    <link rel="next" title="EXPLAIN" href="explain.html" />
+    <link rel="prev" title="DDL" href="ddl.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -124,7 +124,7 @@
   </a>
  </li>
  <li class="toctree-l1 current active has-children">
-  <a class="current reference internal" href="#">
+  <a class="reference internal" href="index.html">
    SQL Reference
   </a>
   <input checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
@@ -132,7 +132,7 @@
    <i class="fas fa-chevron-down">
    </i>
   </label>
-  <ul>
+  <ul class="current">
    <li class="toctree-l2">
     <a class="reference internal" href="data_types.html">
      Data Types
@@ -153,8 +153,8 @@
      DDL
     </a>
    </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="dml.html">
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
      DML
     </a>
    </li>
@@ -334,9 +334,24 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#copy">
+   COPY
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#insert">
+   INSERT
+  </a>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -344,7 +359,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/index.rst">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/dml.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -363,106 +378,70 @@
               
               <div>
                 
-  <section id="sql-reference">
-<h1>SQL Reference<a class="headerlink" href="#sql-reference" title="Link to this heading">¶</a></h1>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="data_types.html">Data Types</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="data_types.html#character-types">Character Types</a></li>
-<li class="toctree-l2"><a class="reference internal" href="data_types.html#numeric-types">Numeric Types</a></li>
-<li class="toctree-l2"><a class="reference internal" href="data_types.html#date-time-types">Date/Time Types</a></li>
-<li class="toctree-l2"><a class="reference internal" href="data_types.html#boolean-types">Boolean Types</a></li>
-<li class="toctree-l2"><a class="reference internal" href="data_types.html#binary-types">Binary Types</a></li>
-<li class="toctree-l2"><a class="reference internal" href="data_types.html#unsupported-sql-types">Unsupported SQL Types</a></li>
-<li class="toctree-l2"><a class="reference internal" href="data_types.html#supported-arrow-types">Supported Arrow Types</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="select.html">SELECT syntax</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="select.html#with-clause">WITH clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#select-clause">SELECT clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#from-clause">FROM clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#where-clause">WHERE clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#join-clause">JOIN clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#group-by-clause">GROUP BY clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#having-clause">HAVING clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#union-clause">UNION clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#order-by-clause">ORDER BY clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#limit-clause">LIMIT clause</a></li>
-<li class="toctree-l2"><a class="reference internal" href="select.html#exclude-and-except-clause">EXCLUDE and EXCEPT clause</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="subqueries.html">Subqueries</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="subqueries.html#exists">EXISTS</a></li>
-<li class="toctree-l2"><a class="reference internal" href="subqueries.html#not-exists">NOT EXISTS</a></li>
-<li class="toctree-l2"><a class="reference internal" href="subqueries.html#in">IN</a></li>
-<li class="toctree-l2"><a class="reference internal" href="subqueries.html#not-in">NOT IN</a></li>
-<li class="toctree-l2"><a class="reference internal" href="subqueries.html#scalar-subquery">Scalar Subquery</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="ddl.html">DDL</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="ddl.html#create-database">CREATE DATABASE</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ddl.html#create-schema">CREATE SCHEMA</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ddl.html#create-external-table">CREATE EXTERNAL TABLE</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ddl.html#create-table">CREATE TABLE</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ddl.html#drop-table">DROP TABLE</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ddl.html#create-view">CREATE VIEW</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ddl.html#drop-view">DROP VIEW</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="dml.html">DML</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="dml.html#copy">COPY</a></li>
-<li class="toctree-l2"><a class="reference internal" href="dml.html#insert">INSERT</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="explain.html">EXPLAIN</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="explain.html#id1">EXPLAIN</a></li>
-<li class="toctree-l2"><a class="reference internal" href="explain.html#explain-analyze">EXPLAIN ANALYZE</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="information_schema.html">Information Schema</a></li>
-<li class="toctree-l1"><a class="reference internal" href="operators.html">Operators</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="operators.html#numerical-operators">Numerical Operators</a></li>
-<li class="toctree-l2"><a class="reference internal" href="operators.html#comparison-operators">Comparison Operators</a></li>
-<li class="toctree-l2"><a class="reference internal" href="operators.html#logical-operators">Logical Operators</a></li>
-<li class="toctree-l2"><a class="reference internal" href="operators.html#bitwise-operators">Bitwise Operators</a></li>
-<li class="toctree-l2"><a class="reference internal" href="operators.html#other-operators">Other Operators</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="aggregate_functions.html">Aggregate Functions</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="aggregate_functions.html#general">General</a></li>
-<li class="toctree-l2"><a class="reference internal" href="aggregate_functions.html#statistical">Statistical</a></li>
-<li class="toctree-l2"><a class="reference internal" href="aggregate_functions.html#approximate">Approximate</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="window_functions.html">Window Functions</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="window_functions.html#syntax">Syntax</a></li>
-<li class="toctree-l2"><a class="reference internal" href="window_functions.html#aggregate-functions">Aggregate functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="window_functions.html#ranking-functions">Ranking functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="window_functions.html#analytical-functions">Analytical functions</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="scalar_functions.html">Scalar Functions</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#math-functions">Math Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#conditional-functions">Conditional Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#string-functions">String Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#binary-string-functions">Binary String Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#regular-expression-functions">Regular Expression Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#time-and-date-functions">Time and Date Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#array-functions">Array Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#struct-functions">Struct Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#hashing-functions">Hashing Functions</a></li>
-<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html#other-functions">Other Functions</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="sql_status.html">Status</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="sql_status.html#general">General</a></li>
-<li class="toctree-l2"><a class="reference internal" href="sql_status.html#sql-support">SQL Support</a></li>
-<li class="toctree-l2"><a class="reference internal" href="sql_status.html#runtime">Runtime</a></li>
-<li class="toctree-l2"><a class="reference internal" href="sql_status.html#data-sources">Data Sources</a></li>
-</ul>
-</li>
-</ul>
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="dml">
+<h1>DML<a class="headerlink" href="#dml" title="Link to this heading">¶</a></h1>
+<section id="copy">
+<h2>COPY<a class="headerlink" href="#copy" title="Link to this heading">¶</a></h2>
+<p>Copy a table to file(s). Supported file formats are <code class="docutils literal notranslate"><span class="pre">parquet</span></code>, <code class="docutils literal notranslate"><span class="pre">csv</span></code>, and <code class="docutils literal notranslate"><span class="pre">json</span></code>.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">PER_THREAD_OUTPUT</span></code> option treats <code class="docutils literal notranslate"><span class="pre">file_name</span></code> as a directory and writes a file per thread within it.</p>
+<pre>
+COPY <i><b>table_name</i></b> TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
+
+where <i><b>option</i></b> can be one of:
+    FORMAT <i><b>format_name</i></b>
+    PER_THREAD_OUTPUT <i><b>boolean</i></b>
+    ROW_GROUP_SIZE <i><b>integer</i></b>
+    ROW_GROUP_LIMIT_BYTES <i><b>integer</i></b>
+</pre>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;file_name.json&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;dir_name&#39;</span><span class="w"> </span><span class="p">(</span><span class="n">FORMAT</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span><span class="w"> </span><span class="n">PER_THREAD_OUTPUT</span><span class="w"> </span><span class="k">true</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+</pre></div>
 </div>
+</section>
+<section id="insert">
+<h2>INSERT<a class="headerlink" href="#insert" title="Link to this heading">¶</a></h2>
+<p>Insert values into a table.</p>
+<pre>
+INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...] ) [, ...] | <i><b>query</i></b> }
+</pre>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">INSERT</span><span class="w"> </span><span class="k">INTO</span><span class="w"> </span><span class="n">target_table</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Foo&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Bar&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+</pre></div>
+</div>
+</section>
 </section>
 
 
@@ -471,17 +450,17 @@
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="../expressions.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="ddl.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Expression API</p>
+            <p class="prev-next-title">DDL</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="data_types.html" title="next page">
+    <a class='right-next' id="next-link" href="explain.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Data Types</p>
+        <p class="prev-next-title">EXPLAIN</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
