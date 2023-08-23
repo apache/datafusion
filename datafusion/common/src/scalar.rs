@@ -1191,18 +1191,17 @@ impl ScalarValue {
     /// Wrapping addition of `ScalarValue`
     ///
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
-    /// should instead make use of vectorized array kernels
+    /// should operate on Arrays directly, using vectorized array kernels
     pub fn add<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let s = self.to_array_of_size(1);
         let o = other.borrow().to_array_of_size(1);
         let r = add_wrapping(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
         Self::try_from_array(r.as_ref(), 0)
     }
-
     /// Checked addition of `ScalarValue`
     ///
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
-    /// should instead make use of vectorized array kernels
+    /// should operate on Arrays directly, using vectorized array kernels
     pub fn add_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let s = self.to_array_of_size(1);
         let o = other.borrow().to_array_of_size(1);
@@ -1213,7 +1212,7 @@ impl ScalarValue {
     /// Wrapping subtraction of `ScalarValue`
     ///
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
-    /// should instead make use of vectorized array kernels
+    /// should operate on Arrays directly, using vectorized array kernels
     pub fn sub<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let s = self.to_array_of_size(1);
         let o = other.borrow().to_array_of_size(1);
@@ -1224,7 +1223,7 @@ impl ScalarValue {
     /// Checked subtraction of `ScalarValue`
     ///
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
-    /// should instead make use of vectorized array kernels
+    /// should operate on Arrays directly, using vectorized array kernels
     pub fn sub_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let s = self.to_array_of_size(1);
         let o = other.borrow().to_array_of_size(1);
