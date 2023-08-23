@@ -276,6 +276,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 cascade,
                 restrict: _,
                 purge: _,
+                temporary: _,
             } => {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
@@ -432,7 +433,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.delete_to_plan(table_name, selection)
             }
 
-            Statement::StartTransaction { modes } => {
+            Statement::StartTransaction {
+                modes,
+                begin: false,
+            } => {
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &ast::TransactionMode| match m {
