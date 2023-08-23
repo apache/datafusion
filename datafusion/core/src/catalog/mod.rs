@@ -25,7 +25,7 @@ pub use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::catalog::schema::SchemaProvider;
 use dashmap::DashMap;
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -194,11 +194,11 @@ impl CatalogProvider for MemoryCatalogProvider {
                     let (_, removed) = self.schemas.remove(name).unwrap();
                     Ok(Some(removed))
                 }
-                (false, false) => Err(DataFusionError::Execution(format!(
+                (false, false) => exec_err!(
                     "Cannot drop schema {} because other tables depend on it: {}",
                     name,
                     itertools::join(table_names.iter(), ", ")
-                ))),
+                ),
             }
         } else {
             Ok(None)

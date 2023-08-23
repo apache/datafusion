@@ -29,8 +29,7 @@ use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
-use datafusion_common::internal_err;
-use datafusion_common::{DataFusionError, FileCompressionType};
+use datafusion_common::{exec_err, internal_err, DataFusionError, FileCompressionType};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -179,9 +178,7 @@ impl<W: AsyncWrite + Unpin + Send> AbortableWrite<W> {
     pub(crate) fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
         match &self.mode {
             AbortMode::Put => Ok(async { Ok(()) }.boxed()),
-            AbortMode::Append => Err(DataFusionError::Execution(
-                "Cannot abort in append mode".to_string(),
-            )),
+            AbortMode::Append => exec_err!("Cannot abort in append mode"),
             AbortMode::MultiPart(MultiPart {
                 store,
                 multipart_id,

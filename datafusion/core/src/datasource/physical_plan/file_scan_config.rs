@@ -33,7 +33,10 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_common::{
+    exec_err,
+    tree_node::{TreeNode, VisitRecursion},
+};
 use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
@@ -331,11 +334,11 @@ impl PartitionColumnProjector {
             self.projected_schema.fields().len() - self.projected_partition_indexes.len();
 
         if file_batch.columns().len() != expected_cols {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "Unexpected batch schema from file, expected {} cols but got {}",
                 expected_cols,
                 file_batch.columns().len()
-            )));
+            );
         }
         let mut cols = file_batch.columns().to_vec();
         for &(pidx, sidx) in &self.projected_partition_indexes {

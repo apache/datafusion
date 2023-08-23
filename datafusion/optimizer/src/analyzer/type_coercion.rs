@@ -24,7 +24,8 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{
-    internal_err, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
@@ -444,11 +445,7 @@ fn coerce_scalar_range_aware(
         // If type coercion fails, check if the largest type in family works:
         if let Some(largest_type) = get_widest_type_in_family(target_type) {
             coerce_scalar(largest_type, value).map_or_else(
-                |_| {
-                    Err(DataFusionError::Execution(format!(
-                        "Cannot cast {value:?} to {target_type:?}"
-                    )))
-                },
+                |_| exec_err!("Cannot cast {value:?} to {target_type:?}"),
                 |_| ScalarValue::try_from(target_type),
             )
         } else {

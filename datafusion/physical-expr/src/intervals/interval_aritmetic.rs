@@ -28,7 +28,7 @@ use crate::intervals::rounding::alter_fp_rounding_mode;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
@@ -464,10 +464,7 @@ impl Interval {
                         diff as u64,
                     ))
                 } else {
-                    Err(DataFusionError::Execution(format!(
-                        "Cardinality cannot be calculated for {:?}",
-                        self
-                    )))
+                    exec_err!("Cardinality cannot be calculated for {:?}", self)
                 }
             }
             // Ordering floating-point numbers according to their binary representations
@@ -502,17 +499,14 @@ impl Interval {
                         self.upper.open,
                         upper.to_bits().sub_checked(lower.to_bits())?,
                     )),
-                    _ => Err(DataFusionError::Execution(format!(
+                    _ => exec_err!(
                         "Cardinality cannot be calculated for the datatype {:?}",
                         data_type
-                    ))),
+                    ),
                 }
             }
             // If the cardinality cannot be calculated anyway, give an error.
-            _ => Err(DataFusionError::Execution(format!(
-                "Cardinality cannot be calculated for {:?}",
-                self
-            ))),
+            _ => exec_err!("Cardinality cannot be calculated for {:?}", self),
         }
     }
 
