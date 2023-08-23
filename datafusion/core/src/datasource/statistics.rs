@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use self::listing::PartitionedFile;
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use futures::Stream;
 use futures::StreamExt;
+
+use super::listing::PartitionedFile;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
@@ -131,7 +132,7 @@ pub async fn get_statistics_with_limit(
     Ok((result_files, statistics))
 }
 
-fn create_max_min_accs(
+pub(crate) fn create_max_min_accs(
     schema: &Schema,
 ) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
     let max_values: Vec<Option<MaxAccumulator>> = schema
@@ -147,7 +148,7 @@ fn create_max_min_accs(
     (max_values, min_values)
 }
 
-fn get_col_stats(
+pub(crate) fn get_col_stats(
     schema: &Schema,
     null_counts: Vec<usize>,
     max_values: &mut [Option<MaxAccumulator>],
