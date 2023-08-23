@@ -154,8 +154,8 @@ impl JoinHashMapType for PruningJoinHashMap {
     type NextType = VecDeque<u64>;
 
     // Extend with value
-    fn extend_with_value(&mut self, len: usize, value: u64) {
-        self.next.extend(repeat_n(value, len))
+    fn extend_zero(&mut self, len: usize) {
+        self.next.resize(self.next.len() + len, 0)
     }
 
     /// Get mutable references to the hash map and the next.
