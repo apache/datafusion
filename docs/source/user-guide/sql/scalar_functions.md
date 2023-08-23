@@ -1481,6 +1481,7 @@ from_unixtime(expression)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
 - [array_prepend](#array_prepend)
+- [array_pop_back](#array_pop_back)
 - [array_position](#array_position)
 - [array_positions](#array_positions)
 - [array_push_back](#array_push_back)
@@ -1829,6 +1830,30 @@ array_prepend(element, array)
 - array_push_front
 - list_prepend
 - list_push_front
+
+### `array_pop_back`
+
+Returns the array without the last element.
+
+```
+array_pop_back(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_pop_back([1, 2, 3]);
++-------------------------------+
+| array_pop_back(List([1,2,3])) |
++-------------------------------+
+| [1, 2]                        |
++-------------------------------+
+```
 
 ### `array_position`
 

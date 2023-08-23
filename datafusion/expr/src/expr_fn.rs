@@ -545,6 +545,14 @@ scalar_expr!(
     array element,
     "appends an element to the end of an array."
 );
+
+scalar_expr!(
+    ArrayPopBack,
+    array_pop_back,
+    array,
+    "returns the array without the last element."
+);
+
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
 scalar_expr!(
     ArrayHas,
@@ -1087,6 +1095,7 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArrayPopBack, array_pop_back, array);
         test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayLength, array_length, array, dimension);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);

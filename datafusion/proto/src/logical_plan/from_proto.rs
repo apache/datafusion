@@ -59,7 +59,7 @@ use datafusion_expr::{
     WindowFrameUnits,
 };
 use datafusion_expr::{
-    array_empty,
+    array_empty, array_pop_back,
     expr::{Alias, Placeholder},
 };
 use std::sync::Arc;
@@ -464,6 +464,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Flatten => Self::Flatten,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
+            ScalarFunction::ArrayPopBack => Self::ArrayPopBack,
             ScalarFunction::ArrayPosition => Self::ArrayPosition,
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
@@ -1272,6 +1273,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayPopBack => {
+                    Ok(array_pop_back(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayPrepend => Ok(array_prepend(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
