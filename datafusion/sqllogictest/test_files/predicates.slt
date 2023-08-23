@@ -192,6 +192,10 @@ statement ok
 CREATE TABLE IF NOT EXISTS test AS VALUES('foo'),('Barrr'),('Bazzz'),('ZZZZZ');
 
 # async fn test_regexp_is_match
+query error Error during planning: Cannot infer common argument type for regex operation Int64 \~ Utf8
+SELECT * FROM test WHERE 12 ~ 'z'
+
+
 query T
 SELECT * FROM test WHERE column1 ~ 'z'
 ----
