@@ -21,7 +21,7 @@ use arrow::{
     compute::interleave,
     row::{RowConverter, Rows, SortField},
 };
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
@@ -143,8 +143,6 @@ impl TopK {
     /// Insert `batch`, remembering it if any of its values are among
     /// the top k seen so far.
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
-        use log::info;
-        info!("INSERTING {} rows", batch.num_rows());
         // Updates on drop
         let _timer = self.metrics.baseline.elapsed_compute().timer();
 
@@ -168,12 +166,11 @@ impl TopK {
 
         let mut batch_entry = self.heap.register_batch(batch);
         for (index, row) in rows.iter().enumerate() {
-            match self.heap.k_largest() {
-                // heap has k items, and the current row is not
-                // smaller than the curret smallest k value, skip
-                Some(largest) if largest.row.as_slice() <= row.as_ref() => {}
-                // don't yet have k items or new item is greater than
-                // current min top k
+            match self.heap.max() {
+                // heap has k items, and the new row is greater than the
+                // current max in the heap ==> it is not a new topk
+                Some(max_row) if row.as_ref() >= max_row.row.as_slice() => {}
+                // don't yet have k items or new item is lower than the currently k low values
                 None | Some(_) => {
                     self.heap.add(&mut batch_entry, row, index);
                     self.metrics.row_replacements.add(1);
@@ -190,7 +187,7 @@ impl TopK {
         Ok(())
     }
 
-    /// Returns the top k results broken into `batch_size` [`RecordBatch`]es
+    /// Returns the top k results broken into `batch_size` [`RecordBatch`]es, consuming the heap
     pub fn emit(self) -> Result<SendableRecordBatchStream> {
         let Self {
             schema,
@@ -200,7 +197,7 @@ impl TopK {
             expr: _,
             row_converter: _,
             scratch_rows: _,
-            heap,
+            mut heap,
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
@@ -266,10 +263,9 @@ impl TopKMetrics {
 struct TopKHeap {
     /// The maximum number of elemenents to store in this heap.
     k: usize,
-    /// Storage for up at most `k` items, in ascending
-    /// order. `inner[0]` holds the smallest value of the smallest k
-    /// so far, `inner[len-1]` holds the largest value smallest k so far.
-    inner: Vec<TopKRow>,
+    /// Storage for up at most `k` items using a BinaryHeap. Reverserd
+    /// so that the smallest k so far is on the top
+    inner: BinaryHeap<TopKRow>,
     /// Storage the original row values (TopKRow only has the sort key)
     store: RecordBatchStore,
     /// The size of all owned data held by this heap
@@ -281,7 +277,7 @@ impl TopKHeap {
         assert!(k > 0);
         Self {
             k,
-            inner: Vec::with_capacity(k),
+            inner: BinaryHeap::new(),
             store: RecordBatchStore::new(schema),
             owned_bytes: 0,
         }
@@ -300,12 +296,13 @@ impl TopKHeap {
     }
 
     /// Returns the largest value stored by the heap if there are k
-    /// items, otherwise returns None
-    fn k_largest(&self) -> Option<&TopKRow> {
+    /// items, otherwise returns None. Remember this structure is
+    /// keeping the "smallest" k values
+    fn max(&self) -> Option<&TopKRow> {
         if self.inner.len() < self.k {
             None
         } else {
-            self.inner.last()
+            self.inner.peek()
         }
     }
 
@@ -344,26 +341,33 @@ impl TopKHeap {
 
         self.owned_bytes += new_top_k.owned_size();
 
-        // put the new row into the correct location to maintain that
-        // self.inner is sorted in descending order
-        let insertion_point = self
-            .inner
-            .partition_point(|current_row| current_row.row() <= row.as_ref());
-        self.inner.insert(insertion_point, new_top_k);
+        // put the new row into the heap
+        self.inner.push(new_top_k)
     }
 
-    /// Returns the values stored in this heap, from values low to high, as a single
-    /// [`RecordBatch`]
-    pub fn emit(&self) -> Result<RecordBatch> {
+    /// Returns the values stored in this heap, from values low to
+    /// high, as a single [`RecordBatch`], resetting the inner heap
+    pub fn emit(&mut self) -> Result<RecordBatch> {
+        Ok(self.emit_with_state()?.0)
+    }
+
+    /// Returns the values stored in this heap, from values low to
+    /// high, as a single [`RecordBatch`], and a sorted vec of heap contents
+
+    pub fn emit_with_state(&mut self) -> Result<(RecordBatch, Vec<TopKRow>)> {
         let schema = self.store.schema().clone();
 
+        let mut topk_rows = std::mem::take(&mut self.inner).into_vec();
+
+        // sort low to high (reverse the reverse)
+        topk_rows.sort();
+
         if self.store.is_empty() {
-            return Ok(RecordBatch::new_empty(schema));
+            return Ok((RecordBatch::new_empty(schema), topk_rows));
         }
 
         // Indicies for each row within its respective RecordBatch
-        let indicies: Vec<_> = self
-            .inner
+        let indicies: Vec<_> = topk_rows
             .iter()
             .enumerate()
             .map(|(i, k)| (i, k.index))
@@ -375,8 +379,7 @@ impl TopKHeap {
         // `interleave` kernel to pick rows from different arrays
         let output_columns: Vec<_> = (0..num_columns)
             .map(|col| {
-                let input_arrays: Vec<_> = self
-                    .inner
+                let input_arrays: Vec<_> = topk_rows
                     .iter()
                     .map(|k| {
                         let entry =
@@ -393,50 +396,50 @@ impl TopKHeap {
             })
             .collect::<Result<_>>()?;
 
-        Ok(RecordBatch::try_new(schema, output_columns)?)
+        let new_batch = RecordBatch::try_new(schema, output_columns)?;
+        Ok((new_batch, topk_rows))
     }
 
     /// Compact this heap, rewriting all stored batches into a single
     /// input batch
-    pub fn maybe_compact(&mut self) -> Result<()>{
+    pub fn maybe_compact(&mut self) -> Result<()> {
+        // // we compact if the number of "unused" rows in the store is
+        // // past some pre-defined threshold. Target holding up to
+        // // around 20 batches, but handle cases of large k where some
+        // // batches might be partially full
+        // let target_batch_size = 8024;
+        // let max_unused_rows = 20 * target_batch_size + self.k;
 
-        // we compact if the number of "unused" rows in the store is
-        // past some pre-defined threshold. Target holding up to
-        // around 20 batches, but handle cases of large k where some
-        // batches might be partially full
-        let target_batch_size = 8024;
-        let max_unused_rows = 20 * target_batch_size + self.k;
+        // // don't compact if the store has only one batch or
+        // if self.store.len() <= 2 || self.store.unused_rows() < max_unused_rows {
+        //     return Ok(());
+        // }
+        // use log::info;
+        // info!("Have {} batches in store, COMPACTING", self.store.len());
 
-        // don't compact if the store has only one batch or
-        if self.store.len() <= 2 || self.store.unused_rows() < max_unused_rows {
-            return Ok(());
-        }
-        use log::info;
-        info!("Have {} batches in store, COMPACTING", self.store.len());
+        // // at first, compact the entire thing always into a new batch
+        // // (maybe we can get fancier in the future about ignoring
+        // // batches that have a high usage ratio already
 
-        // at first, compact the entire thing always into a new batch
-        // (maybe we can get fancier in the future about ignoring
-        // batches that have a high usage ratio already
+        // // Note: new batch is in the same order as inner
+        // let new_batch = self.emit()?;
 
-        // Note: new batch is in the same order as inner
-        let new_batch = self.emit()?;
+        // // clear all old entires in store (this invalidates all
+        // // store_ids in `inner`)
+        // self.store.clear();
 
-        // clear all old entires in store (this invalidates all
-        // store_ids in `inner`)
-        self.store.clear();
+        // let mut batch_entry = self.register_batch(new_batch);
+        // batch_entry.uses = self.inner.len();
 
-        let mut batch_entry = self.register_batch(new_batch);
-        batch_entry.uses = self.inner.len();
-
-        // rewrite all existing entries to use the new batch, and
-        // remove old entries. The sortedness and their relative
-        // position do not change
-        for (i, topk_row) in self.inner.iter_mut().enumerate() {
-            topk_row.batch_id = batch_entry.id;
-            topk_row.index = i;
-        }
-        self.insert_batch_entry(batch_entry);
-        info!("COMPACTION DONE: Have {} batches in store", self.store.len());
+        // // rewrite all existing entries to use the new batch, and
+        // // remove old entries. The sortedness and their relative
+        // // position do not change
+        // for (i, topk_row) in self.inner.iter_mut().enumerate() {
+        //     topk_row.batch_id = batch_entry.id;
+        //     topk_row.index = i;
+        // }
+        // self.insert_batch_entry(batch_entry);
+        // info!("COMPACTION DONE: Have {} batches in store", self.store.len());
         Ok(())
     }
 
@@ -448,8 +451,6 @@ impl TopKHeap {
             + self.owned_bytes
     }
 }
-
-
 
 /// Represents one of the top K rows held in this heap. Orders
 /// according to memcmp of row (e.g. the arrow Row format, but could
@@ -598,9 +599,7 @@ impl RecordBatchStore {
     fn unused_rows(&self) -> usize {
         self.batches
             .values()
-            .map(|batch_entry| {
-                batch_entry.batch.num_rows() - batch_entry.uses
-            })
+            .map(|batch_entry| batch_entry.batch.num_rows() - batch_entry.uses)
             .sum()
     }
 
