@@ -64,7 +64,6 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
-use datafusion_common::cast::{as_dictionary_array, as_string_array};
 use datafusion_common::{
     exec_err, internal_err, plan_err, DataFusionError, JoinType, Result,
 };
