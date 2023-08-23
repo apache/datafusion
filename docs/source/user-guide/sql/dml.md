@@ -23,6 +23,8 @@
 
 Copy a table to file(s). Supported file formats are `parquet`, `csv`, and `json`.
 
+The `PER_THREAD_OUTPUT` option treats `file_name` as a directory and writes a file per thread within it.
+
 <pre>
 COPY <i><b>table_name</i></b> TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
 
@@ -34,7 +36,14 @@ where <i><b>option</i></b> can be one of:
 </pre>
 
 ```sql
-> COPY source_table TO 'table' (FORMAT parquet, PER_THREAD_OUTPUT true);
+> COPY source_table TO 'file_name.json';
++-------+
+| count |
++-------+
+| 2     |
++-------+
+
+> COPY source_table TO 'dir_name' (FORMAT parquet, PER_THREAD_OUTPUT true);
 +-------+
 | count |
 +-------+
@@ -51,7 +60,7 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
 </pre>
 
 ```sql
-> INSERT INTO source_table VALUES (1, 'Foo'), (2, 'Bar');
+> INSERT INTO target_table VALUES (1, 'Foo'), (2, 'Bar');
 +-------+
 | count |
 +-------+
