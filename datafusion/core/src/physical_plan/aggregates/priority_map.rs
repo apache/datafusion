@@ -187,10 +187,8 @@ where
                             if val < *worst {
                                 continue;
                             }
-                        } else {
-                            if val > *worst {
-                                continue;
-                            }
+                        } else if val > *worst {
+                            continue;
                         }
                     }
                 }
@@ -482,11 +480,7 @@ where
                     } else {
                         // append to end of tree
                         println!("Appending child at {}", self.len() - 1);
-                        let old = self.put_child(
-                            root,
-                            new_hi.clone(),
-                            tree_path(self.len() - 1),
-                        );
+                        let old = put_child(root, new_hi, tree_path(self.len() - 1));
                         assert!(old.is_none(), "Overwrote node!");
                         self.heapify_up(new_hi);
                     }
@@ -523,30 +517,6 @@ where
             (*new_parent).right = old_parent.right.take();
             (*new_parent).left.map(|n| (*n).parent.replace(new_parent));
             (*new_parent).right.map(|n| (*n).parent.replace(new_parent));
-        }
-    }
-
-    pub fn put_child(
-        &self,
-        node_ptr: *mut HeapItem<VAL>,
-        new_child: *mut HeapItem<VAL>,
-        mut path: Vec<bool>,
-    ) -> Option<*mut HeapItem<VAL>> {
-        let dir = path.pop().expect("empty path");
-        if path.is_empty() {
-            let old_parent = unsafe { (*new_child).parent.replace(node_ptr) };
-            assert!(old_parent.is_none(), "Replaced parent!");
-            if dir {
-                unsafe { (*node_ptr).right.replace(new_child) }
-            } else {
-                unsafe { (*node_ptr).left.replace(new_child) }
-            }
-        } else {
-            if dir {
-                unsafe { self.put_child((*node_ptr).right.unwrap(), new_child, path) }
-            } else {
-                unsafe { self.put_child((*node_ptr).left.unwrap(), new_child, path) }
-            }
         }
     }
 
@@ -685,12 +655,32 @@ where
             unsafe { (**root).tree_print(&mut builder) };
             builder
         } else {
-            let builder = ptree::TreeBuilder::new("Empty BinaryHeap".to_string());
-            builder
+            ptree::TreeBuilder::new("Empty BinaryHeap".to_string())
         };
         let mut actual = Vec::new();
         ptree::write_tree(&builder.build(), &mut actual).unwrap();
         String::from_utf8(actual).unwrap()
+    }
+}
+
+pub fn put_child<VAL: ValueType>(
+    node_ptr: *mut HeapItem<VAL>,
+    new_child: *mut HeapItem<VAL>,
+    mut path: Vec<bool>,
+) -> Option<*mut HeapItem<VAL>> {
+    let dir = path.pop().expect("empty path");
+    if path.is_empty() {
+        let old_parent = unsafe { (*new_child).parent.replace(node_ptr) };
+        assert!(old_parent.is_none(), "Replaced parent!");
+        if dir {
+            unsafe { (*node_ptr).right.replace(new_child) }
+        } else {
+            unsafe { (*node_ptr).left.replace(new_child) }
+        }
+    } else if dir {
+        unsafe { put_child((*node_ptr).right.unwrap(), new_child, path) }
+    } else {
+        unsafe { put_child((*node_ptr).left.unwrap(), new_child, path) }
     }
 }
 
