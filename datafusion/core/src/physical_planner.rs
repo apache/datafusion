@@ -73,7 +73,9 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{internal_err, not_impl_err, plan_err, DFSchema, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
@@ -233,14 +235,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }) => {
             // TODO: Add support for filter and order by in AggregateUDF
             if filter.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with filter is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with filter is not supported");
             }
             if order_by.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with order_by is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with order_by is not supported");
             }
             let mut names = Vec::with_capacity(args.len());
             for e in args {
@@ -606,9 +604,9 @@ impl DefaultPhysicalPlanner {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, false).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
                     }
                 }
                 LogicalPlan::Dml(DmlStatement {
@@ -623,9 +621,9 @@ impl DefaultPhysicalPlanner {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, true).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
                     }
                 }
                 LogicalPlan::Values(Values {

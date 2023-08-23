@@ -368,6 +368,7 @@ impl futures::Stream for ObservedStream {
 mod test {
     use super::*;
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::exec_err;
 
     use crate::test::exec::{
         assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
@@ -438,14 +439,9 @@ mod test {
         let schema = schema();
 
         // make an input that will error twice
-        let error_stream = MockExec::new(
-            vec![
-                Err(DataFusionError::Execution("Test1".to_string())),
-                Err(DataFusionError::Execution("Test2".to_string())),
-            ],
-            schema.clone(),
-        )
-        .with_use_task(false);
+        let error_stream =
+            MockExec::new(vec![exec_err!("Test1"), exec_err!("Test2")], schema.clone())
+                .with_use_task(false);
 
         let mut builder = RecordBatchReceiverStream::builder(schema, 2);
         builder.run_input(Arc::new(error_stream), 0, task_ctx.clone());

@@ -36,7 +36,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_common::{internal_err, DataFusionError};
+use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
@@ -285,18 +285,18 @@ fn check_not_null_contraits(
 ) -> Result<RecordBatch> {
     for &index in column_indices {
         if batch.num_columns() <= index {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "Invalid batch column count {} expected > {}",
                 batch.num_columns(),
                 index
-            )));
+            );
         }
 
         if batch.column(index).null_count() > 0 {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "Invalid batch column at '{}' has null but schema specifies non-nullable",
                 index
-            )));
+            );
         }
     }
 
