@@ -146,14 +146,15 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        assert!(
-            states.len() == 1,
+        assert_eq!(
+            states.len(),
+            1,
             "array_agg_distinct states must contain single array"
         );
 
-        let state = &states[0];
-        (0..state.len()).try_for_each(|i| {
-            let scalar = ScalarValue::try_from_array(state, i)?;
+        let array = &states[0];
+        (0..array.len()).try_for_each(|i| {
+            let scalar = ScalarValue::try_from_array(array, i)?;
             if let ScalarValue::List(Some(values), _) = scalar {
                 self.values.extend(values);
                 Ok(())
