@@ -49,14 +49,11 @@ pub mod utils;
 pub mod var_provider;
 pub mod window;
 
-pub use sort_properties::update_ordering;
-
 pub use aggregate::groups_accumulator::{
     EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
 };
 pub use aggregate::AggregateExpr;
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-
 pub use equivalence::{
     ordering_equivalence_properties_helper, project_equivalence_properties,
     project_ordering_equivalence_properties, EquivalenceProperties, EquivalentClass,
@@ -71,6 +68,7 @@ pub use sort_expr::{
     LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
+pub use sort_properties::update_ordering;
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order, find_orderings_of_exprs,
     normalize_expr_with_equivalence_properties, normalize_ordering_equivalence_classes,

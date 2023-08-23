@@ -16,8 +16,7 @@
 // under the License.
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -26,8 +25,7 @@ use crate::equivalence::{
     OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::sort_properties::ExprOrdering;
-use crate::sort_properties::SortProperties;
+use crate::sort_properties::{ExprOrdering, SortProperties};
 use crate::update_ordering;
 use crate::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,

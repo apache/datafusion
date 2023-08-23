@@ -15,16 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::{ops::Neg, sync::Arc};
+
+use crate::expressions::Column;
+use crate::utils::get_indices_of_matching_sort_exprs_with_order_eq;
+use crate::{
+    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+};
+
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::Result;
-use itertools::Itertools;
-use std::{ops::Neg, sync::Arc};
 
-use crate::{
-    expressions::Column, utils::get_indices_of_matching_sort_exprs_with_order_eq,
-    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
-};
+use itertools::Itertools;
 
 /// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between

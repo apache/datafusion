@@ -1961,7 +1961,7 @@ mod tests {
 
         let result = get_updated_right_ordering_equivalence_properties(
             &join_type,
-            &[right_oeq_classes.clone()],
+            &[right_oeq_classes],
             left_columns_len,
             &join_eq_properties,
         )?;
