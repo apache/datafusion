@@ -40,7 +40,6 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
-use itertools::repeat_n;
 use parking_lot::Mutex;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -116,8 +115,8 @@ impl JoinHashMap {
 pub trait JoinHashMapType {
     /// The type of list used to store the hash values.
     type NextType: IndexMut<usize, Output = u64>;
-    /// Returns a mutable reference to `self` as a `dyn Any` for dynamic downcasting.
-    fn extend_with_value(&mut self, len: usize, value: u64);
+    /// Extend with zero
+    fn extend_zero(&mut self, len: usize);
     /// Returns mutable references to the hash map and the next.
     fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
     /// Returns a reference to the hash map.
@@ -131,7 +130,7 @@ impl JoinHashMapType for JoinHashMap {
     type NextType = Vec<u64>;
 
     // Void implementation
-    fn extend_with_value(&mut self, _: usize, _: u64) {}
+    fn extend_zero(&mut self, _: usize) {}
 
     /// Get mutable references to the hash map and the next.
     fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
@@ -153,7 +152,7 @@ impl JoinHashMapType for JoinHashMap {
 impl JoinHashMapType for PruningJoinHashMap {
     type NextType = VecDeque<u64>;
 
-    // Extend with value
+    // Extend with zero
     fn extend_zero(&mut self, len: usize) {
         self.next.resize(self.next.len() + len, 0)
     }

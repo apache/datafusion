@@ -621,7 +621,7 @@ where
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
-    hash_map.extend_with_value(batch.num_rows(), 0);
+    hash_map.extend_zero(batch.num_rows());
 
     // insert hashes to key of the hashmap
     let (mut_map, mut_list) = hash_map.get_mut();
