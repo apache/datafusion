@@ -26,7 +26,7 @@ use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -119,10 +119,7 @@ async fn run_tests() -> Result<()> {
         for e in &errors {
             println!("{e}");
         }
-        Err(DataFusionError::Execution(format!(
-            "{} failures",
-            errors.len()
-        )))
+        exec_err!("{} failures", errors.len())
     } else {
         Ok(())
     }

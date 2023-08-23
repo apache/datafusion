@@ -32,7 +32,7 @@ use datafusion_common::{
     cast::{
         as_generic_string_array, as_int64_array, as_primitive_array, as_string_array,
     },
-    ScalarValue,
+    exec_err, ScalarValue,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -191,15 +191,13 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
             integer
                 .map(|integer| {
                     if integer == 0 {
-                        Err(DataFusionError::Execution(
-                            "null character not permitted.".to_string(),
-                        ))
+                        exec_err!("null character not permitted.")
                     } else {
                         match core::char::from_u32(integer as u32) {
                             Some(integer) => Ok(integer.to_string()),
-                            None => Err(DataFusionError::Execution(
-                                "requested character too large for encoding.".to_string(),
-                            )),
+                            None => {
+                                exec_err!("requested character too large for encoding.")
+                            }
                         }
                     }
                 })
@@ -474,9 +472,7 @@ pub fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
                 if n <= 0 {
-                    Err(DataFusionError::Execution(
-                        "field position must be greater than zero".to_string(),
-                    ))
+                    exec_err!("field position must be greater than zero")
                 } else {
                     let split_string: Vec<&str> = string.split(delimiter).collect();
                     match split_string.get(n as usize - 1) {
