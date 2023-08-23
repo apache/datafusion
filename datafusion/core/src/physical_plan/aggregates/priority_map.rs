@@ -450,7 +450,6 @@ where
                     Ok(bucket) => bucket,
                     Err(new_item) => {
                         // this should basically never happen, but if it does, we must rebuild
-                        println!("rebuilding");
                         let bucket =
                             self.id_to_hi.insert(new_hash, new_item, |mi| mi.hash);
                         unsafe {
@@ -479,7 +478,6 @@ where
                         self.heapify_down(new_hi);
                     } else {
                         // append to end of tree
-                        println!("Appending child at {}", self.len() - 1);
                         let old = put_child(root, new_hi, tree_path(self.len() - 1));
                         assert!(old.is_none(), "Overwrote node!");
                         self.heapify_up(new_hi);
