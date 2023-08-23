@@ -390,6 +390,10 @@ select to_timestamp_seconds(cast (1 as int));
 ## test date_bin function
 ##########
 
+# invalid second arg type
+query error DataFusion error: Error during planning: No function matches the given name and argument types 'date_bin\(Interval\(MonthDayNano\), Int64, Timestamp\(Nanosecond, None\)\)'\.
+SELECT DATE_BIN(INTERVAL '0 second', 25, TIMESTAMP '1970-01-01T00:00:00Z')
+
 # not support interval 0
 statement error Execution error: DATE_BIN stride must be non-zero
 SELECT DATE_BIN(INTERVAL '0 second', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')

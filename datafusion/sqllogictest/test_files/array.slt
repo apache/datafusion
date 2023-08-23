@@ -600,6 +600,11 @@ from arrays_values_without_nulls;
 
 ## array_element (aliases: array_extract, list_extract, list_element)
 
+# array_element error
+query error DataFusion error: Error during planning: The array_element function can only accept list as the first argument
+select array_element(1, 2);
+
+
 # array_element scalar function #1 (with positive index)
 query IT
 select array_element(make_array(1, 2, 3, 4, 5), 2), array_element(make_array('h', 'e', 'l', 'l', 'o'), 3);
@@ -1097,6 +1102,10 @@ select array_repeat([1], column3), array_repeat(column1, 3) from arrays_values_w
 [[1], [1], [1], [1]] [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [31, 32, 33, 34, 35, 26, 37, 38, 39, 40]]
 
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
+
+# array_concat error
+query error DataFusion error: Error during planning: The array_concat function can only accept list as the args\.
+select array_concat(1, 2);
 
 # array_concat scalar function #1
 query ??
@@ -2007,6 +2016,11 @@ NULL 10
 NULL 10
 
 ## array_dims (aliases: `list_dims`)
+
+# array dims error
+# TODO this is a separate bug
+query error Internal error: could not cast value to arrow_array::array::list_array::GenericListArray<i32>\.
+select array_dims(1);
 
 # array_dims scalar function
 query ???
