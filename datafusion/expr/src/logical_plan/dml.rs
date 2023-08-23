@@ -55,6 +55,13 @@ pub struct DmlStatement {
     pub input: Arc<LogicalPlan>,
 }
 
+impl DmlStatement {
+    /// Return a descriptive name of this [`DmlStatement`]
+    pub fn name(&self) -> &str {
+        self.op.name()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum WriteOp {
     InsertOverwrite,
@@ -64,14 +71,21 @@ pub enum WriteOp {
     Ctas,
 }
 
+impl WriteOp {
+    /// Return a descriptive name of this [`WriteOp`]
+    pub fn name(&self) -> &str {
+        match self {
+            WriteOp::InsertOverwrite => "Insert Overwrite",
+            WriteOp::InsertInto => "Insert Into",
+            WriteOp::Delete => "Delete",
+            WriteOp::Update => "Update",
+            WriteOp::Ctas => "Ctas",
+        }
+    }
+}
+
 impl Display for WriteOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            WriteOp::InsertOverwrite => write!(f, "Insert Overwrite"),
-            WriteOp::InsertInto => write!(f, "Insert Into"),
-            WriteOp::Delete => write!(f, "Delete"),
-            WriteOp::Update => write!(f, "Update"),
-            WriteOp::Ctas => write!(f, "Ctas"),
-        }
+        write!(f, "{}", self.name())
     }
 }
