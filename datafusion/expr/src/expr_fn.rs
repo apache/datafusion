@@ -561,6 +561,12 @@ scalar_expr!(
     "returns true, if the element appears in the first array, otherwise false."
 );
 scalar_expr!(
+    ArrayEmpty,
+    array_empty,
+    array,
+    "returns 1 for an empty array or 0 for a non-empty array."
+);
+scalar_expr!(
     ArrayHasAll,
     array_has_all,
     first_array second_array,

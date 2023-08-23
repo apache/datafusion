@@ -30,7 +30,7 @@ use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
 use datafusion_common::internal_err;
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, FileCompressionType};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -40,8 +40,6 @@ use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-
-use super::file_type::FileCompressionType;
 
 /// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends

@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
-use datafusion_common::{internal_err, plan_err, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools;
@@ -388,9 +388,7 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
         DataType::UInt32 => array!(args, UInt32Array, UInt32Builder),
         DataType::UInt64 => array!(args, UInt64Array, UInt64Builder),
         data_type => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Array is not implemented for type '{data_type:?}'."
-            )))
+            return not_impl_err!("Array is not implemented for type '{data_type:?}'.")
         }
     };
 
@@ -872,9 +870,7 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
         let (ndim, lower_data_type) =
             compute_array_ndims_with_datatype(Some(arg.clone()))?;
         if ndim.is_none() || ndim == Some(1) {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Array is not type '{lower_data_type:?}'."
-            )));
+            return not_impl_err!("Array is not type '{lower_data_type:?}'.");
         } else if !lower_data_type.equals_datatype(&DataType::Null) {
             new_args.push(arg.clone());
         }
@@ -1000,6 +996,21 @@ macro_rules! general_repeat_list {
             None,
         )?)
     }};
+}
+
+/// Array_empty SQL function
+pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
+    println!("args[0]: {:?}", &args[0]);
+    if args[0].as_any().downcast_ref::<NullArray>().is_some() {
+        return Ok(args[0].clone());
+    }
+
+    let array = as_list_array(&args[0])?;
+    let builder = array
+        .iter()
+        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
+        .collect::<BooleanArray>();
+    Ok(Arc::new(builder))
 }
 
 /// Array_repeat SQL function

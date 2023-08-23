@@ -27,7 +27,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use arrow_array::RecordBatch;
-use datafusion_common::DataFusionError;
+use datafusion_common::{not_impl_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -38,7 +38,6 @@ use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 
 use super::{FileFormat, DEFAULT_SCHEMA_INFER_MAX_RECORD};
-use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::write::{
     create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
@@ -50,10 +49,9 @@ use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, FileSinkExec};
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use datafusion_common::FileCompressionType;
 use rand::distributions::{Alphanumeric, DistString};
 
-/// The default file extension of csv files
-pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug)]
 pub struct CsvFormat {
@@ -267,15 +265,11 @@ impl FileFormat for CsvFormat {
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented yet for CSV".into(),
-            ));
+            return not_impl_err!("Overwrites are not implemented yet for CSV");
         }
 
         if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
-            return Err(DataFusionError::NotImplemented(
-                "Inserting compressed CSV is not implemented yet.".into(),
-            ));
+            return not_impl_err!("Inserting compressed CSV is not implemented yet.");
         }
 
         let sink_schema = conf.output_schema().clone();
@@ -512,7 +506,7 @@ impl DataSink for CsvSink {
         match self.config.writer_mode {
             FileWriterMode::Append => {
                 if !self.config.per_thread_output {
-                    return Err(DataFusionError::NotImplemented("per_thread_output=false is not implemented for CsvSink in Append mode".into()));
+                    return not_impl_err!("per_thread_output=false is not implemented for CsvSink in Append mode");
                 }
                 for file_group in &self.config.file_groups {
                     // In append mode, consider has_header flag only when file is empty (at the start).
@@ -538,9 +532,7 @@ impl DataSink for CsvSink {
                 }
             }
             FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented(
-                    "Put Mode is not implemented for CSV Sink yet".into(),
-                ))
+                return not_impl_err!("Put Mode is not implemented for CSV Sink yet")
             }
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
@@ -620,9 +612,6 @@ mod tests {
     use super::*;
     use crate::arrow::util::pretty;
     use crate::assert_batches_eq;
-    use crate::datasource::file_format::file_type::FileCompressionType;
-    use crate::datasource::file_format::file_type::FileType;
-    use crate::datasource::file_format::file_type::GetExt;
     use crate::datasource::file_format::test_util::VariableStream;
     use crate::datasource::listing::ListingOptions;
     use crate::physical_plan::collect;
@@ -633,6 +622,9 @@ mod tests {
     use chrono::DateTime;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
+    use datafusion_common::FileCompressionType;
+    use datafusion_common::FileType;
+    use datafusion_common::GetExt;
     use datafusion_expr::{col, lit};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;

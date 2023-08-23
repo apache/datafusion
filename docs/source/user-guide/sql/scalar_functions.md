@@ -1496,6 +1496,7 @@ from_unixtime(expression)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
+- [empty](#empty)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
@@ -1693,6 +1694,8 @@ array_element(array, index)
 - array_extract
 - list_element
 - list_extract
+
+### `array_empty`
 
 ### `array_extract`
 
@@ -2211,6 +2214,30 @@ cardinality(array)
 +--------------------------------------+
 | 8                                    |
 +--------------------------------------+
+```
+
+### `empty`
+
+Returns 1 for an empty array or 0 for a non-empty array.
+
+```
+empty(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select empty([1]);
++------------------+
+| empty(List([1])) |
++------------------+
+| 0                |
++------------------+
 ```
 
 ### `list_append`

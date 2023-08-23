@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::TableFactor;
 
@@ -64,9 +64,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ),
             // @todo Support TableFactory::TableFunction?
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return not_impl_err!(
                     "Unsupported ast node {relation:?} in create_relation"
-                )));
+                );
             }
         };
         if let Some(alias) = alias {

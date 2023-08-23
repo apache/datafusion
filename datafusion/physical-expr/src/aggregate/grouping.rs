@@ -24,7 +24,7 @@ use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 use crate::expressions::format_state_name;
@@ -62,17 +62,13 @@ impl AggregateExpr for Grouping {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.nullable,
-        ))
+        Ok(Field::new(&self.name, DataType::Int32, self.nullable))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             format_state_name(&self.name, "grouping"),
-            self.data_type.clone(),
+            DataType::Int32,
             true,
         )])
     }
@@ -82,10 +78,9 @@ impl AggregateExpr for Grouping {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Err(DataFusionError::NotImplemented(
+        not_impl_err!(
             "physical plan is not yet implemented for GROUPING aggregate function"
-                .to_owned(),
-        ))
+        )
     }
 
     fn name(&self) -> &str {

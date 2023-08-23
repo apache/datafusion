@@ -28,7 +28,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
@@ -63,9 +63,6 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
-
-/// The default file extension of parquet files
-pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 
 /// The number of files to read in parallel when inferring schema
 const SCHEMA_INFERENCE_CONCURRENCY: usize = 32;
@@ -231,9 +228,7 @@ impl FileFormat for ParquetFormat {
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented yet for Parquet".into(),
-            ));
+            return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
         let sink_schema = conf.output_schema().clone();
@@ -826,9 +821,9 @@ impl ParquetSink {
                     "Appending to Parquet files is not supported by the file format!"
                 )
             }
-            FileWriterMode::Put => Err(DataFusionError::NotImplemented(
-                "FileWriterMode::Put is not implemented for ParquetSink".into(),
-            )),
+            FileWriterMode::Put => {
+                not_impl_err!("FileWriterMode::Put is not implemented for ParquetSink")
+            }
             FileWriterMode::PutMultipart => {
                 let (_, multipart_writer) = object_store
                     .put_multipart(&object.location)
@@ -869,9 +864,7 @@ impl DataSink for ParquetSink {
                 )
             }
             FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented(
-                    "Put Mode is not implemented for ParquetSink yet".into(),
-                ))
+                return not_impl_err!("Put Mode is not implemented for ParquetSink yet")
             }
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)

@@ -29,8 +29,7 @@
 use crate::aggregate::regr::RegrType;
 use crate::{expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Schema;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::aggregate_function::sum_type_of_avg;
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
 
@@ -50,7 +49,7 @@ pub fn create_aggregate_expr(
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
-    let rt_type = fun.return_type(&input_phy_types)?;
+    let data_type = input_phy_types[0].clone();
     let ordering_types = ordering_req
         .iter()
         .map(|e| e.expr.data_type(input_schema))
@@ -58,72 +57,63 @@ pub fn create_aggregate_expr(
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(
-            expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, rt_type),
+            expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, data_type),
         ),
         (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
-            input_phy_types[0].clone(),
+            data_type,
             input_phy_exprs[0].clone(),
             name,
         )),
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::BitAnd, _) => Arc::new(expressions::BitAnd::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::BitOr, _) => Arc::new(expressions::BitOr::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::BitXor, false) => Arc::new(expressions::BitXor::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::BitXor, true) => Arc::new(expressions::DistinctBitXor::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::BoolAnd, _) => Arc::new(expressions::BoolAnd::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::BoolOr, _) => Arc::new(expressions::BoolOr::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
-        (AggregateFunction::Sum, false) => {
-            let cast_to_sum_type = rt_type != input_phy_types[0];
-            Arc::new(expressions::Sum::new_with_pre_cast(
-                input_phy_exprs[0].clone(),
-                name,
-                rt_type,
-                cast_to_sum_type,
-            ))
-        }
+        (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
+            input_phy_exprs[0].clone(),
+            name,
+            input_phy_types[0].clone(),
+        )),
         (AggregateFunction::Sum, true) => Arc::new(expressions::DistinctSum::new(
             vec![input_phy_exprs[0].clone()],
             name,
-            rt_type,
+            data_type,
         )),
-        (AggregateFunction::ApproxDistinct, _) => {
-            Arc::new(expressions::ApproxDistinct::new(
-                input_phy_exprs[0].clone(),
-                name,
-                input_phy_types[0].clone(),
-            ))
-        }
+        (AggregateFunction::ApproxDistinct, _) => Arc::new(
+            expressions::ApproxDistinct::new(input_phy_exprs[0].clone(), name, data_type),
+        ),
         (AggregateFunction::ArrayAgg, false) => {
             let expr = input_phy_exprs[0].clone();
-            let data_type = input_phy_types[0].clone();
             if ordering_req.is_empty() {
                 Arc::new(expressions::ArrayAgg::new(expr, name, data_type))
             } else {
@@ -138,179 +128,157 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::ArrayAgg, true) => {
             if !ordering_req.is_empty() {
-                return Err(DataFusionError::NotImplemented(
-                    "ARRAY_AGG(DISTINCT ORDER BY a ASC) order-sensitive aggregations are not available".to_string(),
-                ));
+                return not_impl_err!(
+                    "ARRAY_AGG(DISTINCT ORDER BY a ASC) order-sensitive aggregations are not available"
+                );
             }
             Arc::new(expressions::DistinctArrayAgg::new(
                 input_phy_exprs[0].clone(),
                 name,
-                input_phy_types[0].clone(),
+                data_type,
             ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
-        (AggregateFunction::Avg, false) => {
-            let sum_type = sum_type_of_avg(&input_phy_types)?;
-            let cast_to_sum_type = sum_type != input_phy_types[0];
-            Arc::new(expressions::Avg::new_with_pre_cast(
-                input_phy_exprs[0].clone(),
-                name,
-                sum_type,
-                rt_type,
-                cast_to_sum_type,
-            ))
-        }
+        (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
+            input_phy_exprs[0].clone(),
+            name,
+            data_type,
+        )),
         (AggregateFunction::Avg, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "AVG(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("AVG(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::Variance, false) => Arc::new(expressions::Variance::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::Variance, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "VAR(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("VAR(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::VariancePop, false) => Arc::new(
-            expressions::VariancePop::new(input_phy_exprs[0].clone(), name, rt_type),
+            expressions::VariancePop::new(input_phy_exprs[0].clone(), name, data_type),
         ),
         (AggregateFunction::VariancePop, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "VAR_POP(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::Covariance, false) => Arc::new(expressions::Covariance::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::Covariance, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "COVAR(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("COVAR(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::CovariancePop, false) => {
             Arc::new(expressions::CovariancePop::new(
                 input_phy_exprs[0].clone(),
                 input_phy_exprs[1].clone(),
                 name,
-                rt_type,
+                data_type,
             ))
         }
         (AggregateFunction::CovariancePop, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "COVAR_POP(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("COVAR_POP(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::Stddev, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "STDDEV(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("STDDEV(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::StddevPop, false) => Arc::new(expressions::StddevPop::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::StddevPop, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "STDDEV_POP(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("STDDEV_POP(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::Correlation, false) => {
             Arc::new(expressions::Correlation::new(
                 input_phy_exprs[0].clone(),
                 input_phy_exprs[1].clone(),
                 name,
-                rt_type,
+                data_type,
             ))
         }
         (AggregateFunction::Correlation, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "CORR(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("CORR(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::RegrSlope, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::Slope,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::RegrIntercept, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::Intercept,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::RegrCount, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::Count,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::RegrR2, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::R2,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::RegrAvgx, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::AvgX,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::RegrAvgy, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::AvgY,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::RegrSXX, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::SXX,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::RegrSYY, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::SYY,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::RegrSXY, false) => Arc::new(expressions::Regr::new(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
             RegrType::SXY,
-            rt_type,
+            data_type,
         )),
         (
             AggregateFunction::RegrSlope
@@ -324,10 +292,7 @@ pub fn create_aggregate_expr(
             | AggregateFunction::RegrSXY,
             true,
         ) => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "{}(DISTINCT) aggregations are not available",
-                fun
-            )));
+            return not_impl_err!("{}(DISTINCT) aggregations are not available", fun);
         }
         (AggregateFunction::ApproxPercentileCont, false) => {
             if input_phy_exprs.len() == 2 {
@@ -335,58 +300,54 @@ pub fn create_aggregate_expr(
                     // Pass in the desired percentile expr
                     input_phy_exprs,
                     name,
-                    rt_type,
+                    data_type,
                 )?)
             } else {
                 Arc::new(expressions::ApproxPercentileCont::new_with_max_size(
                     // Pass in the desired percentile expr
                     input_phy_exprs,
                     name,
-                    rt_type,
+                    data_type,
                 )?)
             }
         }
         (AggregateFunction::ApproxPercentileCont, true) => {
-            return Err(DataFusionError::NotImplemented(
+            return not_impl_err!(
                 "approx_percentile_cont(DISTINCT) aggregations are not available"
-                    .to_string(),
-            ));
+            );
         }
         (AggregateFunction::ApproxPercentileContWithWeight, false) => {
             Arc::new(expressions::ApproxPercentileContWithWeight::new(
                 // Pass in the desired percentile expr
                 input_phy_exprs,
                 name,
-                rt_type,
+                data_type,
             )?)
         }
         (AggregateFunction::ApproxPercentileContWithWeight, true) => {
-            return Err(DataFusionError::NotImplemented(
+            return not_impl_err!(
                 "approx_percentile_cont_with_weight(DISTINCT) aggregations are not available"
-                    .to_string(),
-            ));
+            );
         }
         (AggregateFunction::ApproxMedian, false) => {
             Arc::new(expressions::ApproxMedian::try_new(
                 input_phy_exprs[0].clone(),
                 name,
-                rt_type,
+                data_type,
             )?)
         }
         (AggregateFunction::ApproxMedian, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "APPROX_MEDIAN(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!(
+                "APPROX_MEDIAN(DISTINCT) aggregations are not available"
+            );
         }
         (AggregateFunction::Median, false) => Arc::new(expressions::Median::new(
             input_phy_exprs[0].clone(),
             name,
-            rt_type,
+            data_type,
         )),
         (AggregateFunction::Median, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "MEDIAN(DISTINCT) aggregations are not available".to_string(),
-            ));
+            return not_impl_err!("MEDIAN(DISTINCT) aggregations are not available");
         }
         (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
             input_phy_exprs[0].clone(),
