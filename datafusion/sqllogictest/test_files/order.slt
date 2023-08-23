@@ -412,7 +412,7 @@ statement ok
 drop table t;
 
 # Create a table having 3 columns which are ordering equivalent by the source. In the next step,
-# we will expect to observe the removed sort exec by propagating the orders across projection.
+# we will expect to observe the removed SortExec by propagating the orders across projection.
 statement ok
 CREATE EXTERNAL TABLE multiple_ordered_table (
   a0 INTEGER,
