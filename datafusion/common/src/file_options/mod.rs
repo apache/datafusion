@@ -134,7 +134,6 @@ impl StatementOptions {
     }
 }
 
-
 /// This type contains all options needed to initialize a particular
 /// RecordBatchWriter type. Each element in the enum contains a thin wrapper
 /// around a "writer builder" type (e.g. arrow::csv::WriterBuilder)
