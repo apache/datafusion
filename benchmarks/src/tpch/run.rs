@@ -299,6 +299,7 @@ struct QueryResult {
 #[cfg(feature = "ci")]
 mod tests {
     use super::*;
+    use datafusion::common::exec_err;
     use datafusion::error::{DataFusionError, Result};
     use std::path::Path;
 
@@ -311,10 +312,10 @@ mod tests {
         let path =
             std::env::var("TPCH_DATA").unwrap_or_else(|_| "benchmarks/data".to_string());
         if !Path::new(&path).exists() {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "Benchmark data not found (set TPCH_DATA env var to override): {}",
                 path
-            )));
+            );
         }
         Ok(path)
     }

@@ -140,6 +140,7 @@ pub(crate) mod tests {
     pub fn assert_aggregate(
         array: ArrayRef,
         function: AggregateFunction,
+        distinct: bool,
         expected: ScalarValue,
     ) {
         let data_type = array.data_type();
@@ -159,7 +160,7 @@ pub(crate) mod tests {
 
         let schema = Schema::new(vec![Field::new("a", coerced[0].clone(), true)]);
         let agg =
-            create_aggregate_expr(&function, false, &[input], &[], &schema, "aggregate")
+            create_aggregate_expr(&function, distinct, &[input], &[], &schema, "agg")
                 .unwrap();
 
         let result = aggregate(&batch, agg).unwrap();

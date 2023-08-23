@@ -18,7 +18,7 @@
 //! Partition evaluation module
 
 use arrow::array::ArrayRef;
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use std::fmt::Debug;
 use std::ops::Range;
 
@@ -109,9 +109,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// etc)
     fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
         if self.uses_window_frame() {
-            Err(DataFusionError::Execution(
-                "Range should be calculated from window frame".to_string(),
-            ))
+            exec_err!("Range should be calculated from window frame")
         } else {
             Ok(Range {
                 start: idx,

@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, Field, UInt64Type};
 use arrow_buffer::NullBuffer;
 use core::any::type_name;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array, as_list_array};
-use datafusion_common::{internal_err, not_impl_err, plan_err, ScalarValue};
+use datafusion_common::{exec_err, internal_err, not_impl_err, plan_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools;
@@ -599,6 +599,22 @@ pub fn array_slice(args: &[ArrayRef]) -> Result<ArrayRef> {
     define_array_slice(list_array, key, extra_key, false)
 }
 
+pub fn array_pop_back(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_array = as_list_array(&args[0])?;
+    let key = vec![0; list_array.len()];
+    let extra_key: Vec<_> = list_array
+        .iter()
+        .map(|x| x.map_or(0, |arr| arr.len() as i64 - 1))
+        .collect();
+
+    define_array_slice(
+        list_array,
+        &Int64Array::from(key),
+        &Int64Array::from(extra_key),
+        false,
+    )
+}
+
 macro_rules! append {
     ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
         let mut offsets: Vec<i32> = vec![0];
@@ -982,6 +998,21 @@ macro_rules! general_repeat_list {
     }};
 }
 
+/// Array_empty SQL function
+pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
+    println!("args[0]: {:?}", &args[0]);
+    if args[0].as_any().downcast_ref::<NullArray>().is_some() {
+        return Ok(args[0].clone());
+    }
+
+    let array = as_list_array(&args[0])?;
+    let builder = array
+        .iter()
+        .map(|arr| arr.map(|arr| arr.len() == arr.null_count()))
+        .collect::<BooleanArray>();
+    Ok(Arc::new(builder))
+}
+
 /// Array_repeat SQL function
 pub fn array_repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[0];
@@ -1025,11 +1056,7 @@ macro_rules! position {
                             i - 1
                         }
                     }
-                    None => {
-                        return Err(DataFusionError::Execution(
-                            "initial position must not be null".to_string(),
-                        ))
-                    }
+                    None => return exec_err!("initial position must not be null"),
                 };
 
                 match arr {
@@ -1988,6 +2015,151 @@ mod tests {
                 .unwrap()
                 .values()
         );
+    }
+
+    #[test]
+    fn test_array_pop_back() {
+        // array_pop_back([1, 2, 3, 4]) = [1, 2, 3]
+        let list_array = return_array().into_array(1);
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[1, 2, 3],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([1, 2, 3]) = [1, 2]
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[1, 2],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([1, 2]) = [1]
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[1],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([1]) = []
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+        // array_pop_back([]) = []
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(
+            &[],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([1, NULL, 3, NULL]) = [1, NULL, 3]
+        let list_array = return_array_with_nulls().into_array(1);
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert_eq!(3, result.values().len());
+        assert_eq!(
+            &[false, true, false],
+            &[
+                result.values().is_null(0),
+                result.values().is_null(1),
+                result.values().is_null(2)
+            ]
+        );
+    }
+    #[test]
+    fn test_nested_array_pop_back() {
+        // array_pop_back([[1, 2, 3, 4], [5, 6, 7, 8]]) = [[1, 2, 3, 4]]
+        let list_array = return_nested_array().into_array(1);
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_slice");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_slice");
+        assert_eq!(
+            &[1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // array_pop_back([[1, 2, 3, 4]]) = []
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert!(result
+            .value(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .is_empty());
+        // array_pop_back([]) = []
+        let list_array = Arc::new(result.clone());
+        let arr = array_pop_back(&[list_array])
+            .expect("failed to initialize function array_pop_back");
+        let result =
+            as_list_array(&arr).expect("failed to initialize function array_pop_back");
+        assert!(result
+            .value(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -27,7 +27,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use arrow_array::RecordBatch;
-use datafusion_common::{not_impl_err, DataFusionError};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -327,14 +327,12 @@ impl CsvFormat {
                 first_chunk = false;
             } else {
                 if fields.len() != column_type_possibilities.len() {
-                    return Err(DataFusionError::Execution(
-                        format!(
+                    return exec_err!(
                             "Encountered unequal lengths between records on CSV file whilst inferring schema. \
                              Expected {} records, found {} records",
                             column_type_possibilities.len(),
                             fields.len()
-                        )
-                    ));
+                        );
                 }
 
                 column_type_possibilities.iter_mut().zip(&fields).for_each(

@@ -40,7 +40,9 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{assert_contains, cast::as_primitive_array, DataFusionError};
+use datafusion_common::{
+    assert_contains, cast::as_primitive_array, exec_err, DataFusionError,
+};
 
 /// Test to show the contents of the setup
 #[tokio::test]
@@ -344,9 +346,7 @@ impl Accumulator for TimeSum {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if self.test_state.error_on_retract_batch() {
-            return Err(DataFusionError::Execution(
-                "Error in Retract Batch".to_string(),
-            ));
+            return exec_err!("Error in Retract Batch");
         }
 
         self.test_state.set_retract_batch();

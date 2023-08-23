@@ -18,6 +18,7 @@
 //! Implementation of `InList` expressions: [`InListExpr`]
 
 use ahash::RandomState;
+use datafusion_common::exec_err;
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -207,9 +208,9 @@ fn evaluate_list(
         .iter()
         .map(|expr| {
             expr.evaluate(batch).and_then(|r| match r {
-                ColumnarValue::Array(_) => Err(DataFusionError::Execution(
-                    "InList expression must evaluate to a scalar".to_string(),
-                )),
+                ColumnarValue::Array(_) => {
+                    exec_err!("InList expression must evaluate to a scalar")
+                }
                 // Flatten dictionary values
                 ColumnarValue::Scalar(ScalarValue::Dictionary(_, v)) => Ok(*v),
                 ColumnarValue::Scalar(s) => Ok(s),
