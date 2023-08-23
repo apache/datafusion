@@ -252,7 +252,7 @@ fazzz
 statement ok
 CREATE TABLE IF NOT EXISTS test_float AS VALUES(1.2),(2.1),(NULL),('NaN'::double),('-NaN'::double);
 
-# async fn in_list_float
+# IN expr for float
 query R
 SELECT * FROM test_float WHERE column1 IN (0.0, -1.2)
 ----
