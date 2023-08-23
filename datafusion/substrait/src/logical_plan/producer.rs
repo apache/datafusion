@@ -32,8 +32,8 @@ use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    Alias, BinaryExpr, Case, Cast, InList, ScalarFunction as DFScalarFunction, Sort,
-    WindowFunction,
+    Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    ScalarFunction as DFScalarFunction, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -220,12 +220,11 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Aggregate(agg) => {
             let input = to_substrait_rel(agg.input.as_ref(), ctx, extension_info)?;
-            // Translate aggregate expression to Substrait's groupings (repeated repeated Expression)
-            let grouping = agg
-                .group_expr
-                .iter()
-                .map(|e| to_substrait_rex(e, agg.input.schema(), 0, extension_info))
-                .collect::<Result<Vec<_>>>()?;
+            let groupings = to_substrait_groupings(
+                &agg.group_expr,
+                agg.input.schema(),
+                extension_info,
+            )?;
             let measures = agg
                 .aggr_expr
                 .iter()
@@ -236,9 +235,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
-                    groupings: vec![Grouping {
-                        grouping_expressions: grouping,
-                    }], //groupings,
+                    groupings,
                     measures,
                     advanced_extension: None,
                 }))),
@@ -491,6 +488,75 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::BitwiseXor => "bitwise_xor",
         Operator::BitwiseShiftRight => "bitwise_shift_right",
         Operator::BitwiseShiftLeft => "bitwise_shift_left",
+    }
+}
+
+pub fn parse_flat_grouping_exprs(
+    exprs: &Vec<Expr>,
+    schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Grouping> {
+    let grouping_expressions = exprs
+        .iter()
+        .map(|e| to_substrait_rex(e, schema, 0, extension_info))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Grouping {
+        grouping_expressions,
+    })
+}
+
+pub fn to_substrait_groupings(
+    exprs: &Vec<Expr>,
+    schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Vec<Grouping>> {
+    match exprs.len() {
+        1 => {
+            match &exprs[0] {
+                Expr::GroupingSet(gs) => {
+                    match gs {
+                        GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
+                            "GroupingSet CUBE is not yet supported".to_string(),
+                        )),
+                        GroupingSet::GroupingSets(sets) => Ok(sets
+                            .iter()
+                            .map(|set| {
+                                parse_flat_grouping_exprs(set, schema, extension_info)
+                            })
+                            .collect::<Result<Vec<_>>>()?),
+                        GroupingSet::Rollup(set) => {
+                            let mut sets: Vec<Vec<Expr>> = vec![vec![]];
+                            for i in 0..set.len() {
+                                sets.push(set[..=i].to_vec());
+                            }
+                            Ok(sets
+                                .iter()
+                                .rev()
+                                .map(|set| {
+                                    parse_flat_grouping_exprs(set, schema, extension_info)
+                                })
+                                .collect::<Result<Vec<_>>>()?)
+                        }
+                    }
+                }
+                _ => Ok(vec![parse_flat_grouping_exprs(
+                    exprs,
+                    schema,
+                    extension_info,
+                )?]),
+            }
+        }
+        _ => Ok(vec![parse_flat_grouping_exprs(
+            exprs,
+            schema,
+            extension_info,
+        )?]),
     }
 }
 
