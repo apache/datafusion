@@ -73,6 +73,9 @@ pub enum DataFusionError {
     /// This error happens whenever a plan is not valid. Examples include
     /// impossible casts.
     Plan(String),
+    /// This error happens when an invalid or unsupported option is passed
+    /// in a SQL statement
+    InvalidOption(String),
     /// This error happens with schema-related errors, such as schema inference not possible
     /// and non-unique column names.
     SchemaError(SchemaError),
@@ -288,6 +291,9 @@ impl Display for DataFusionError {
             DataFusionError::SQL(ref desc) => {
                 write!(f, "SQL error: {desc:?}")
             }
+            DataFusionError::InvalidOption(ref desc) => {
+                write!(f, "Invalid Option: {desc}")
+            }
             DataFusionError::NotImplemented(ref desc) => {
                 write!(f, "This feature is not implemented: {desc}")
             }
@@ -338,6 +344,7 @@ impl Error for DataFusionError {
             DataFusionError::SQL(e) => Some(e),
             DataFusionError::NotImplemented(_) => None,
             DataFusionError::Internal(_) => None,
+            DataFusionError::InvalidOption(_) => None,
             DataFusionError::Plan(_) => None,
             DataFusionError::SchemaError(e) => Some(e),
             DataFusionError::Execution(_) => None,

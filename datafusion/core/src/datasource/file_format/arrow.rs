@@ -27,7 +27,7 @@ use crate::physical_plan::ExecutionPlan;
 use arrow::ipc::reader::FileReader;
 use arrow_schema::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::Statistics;
+use datafusion_common::{FileType, Statistics};
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 use std::any::Any;
@@ -85,6 +85,10 @@ impl FileFormat for ArrowFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = ArrowExec::new(conf);
         Ok(Arc::new(exec))
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::ARROW
     }
 }
 

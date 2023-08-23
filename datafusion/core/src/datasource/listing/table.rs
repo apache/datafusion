@@ -25,6 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::{internal_err, plan_err, project_schema, SchemaExt, ToDFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
@@ -269,8 +270,14 @@ pub struct ListingOptions {
     /// In order to support infinite inputs, DataFusion may adjust query
     /// plans (e.g. joins) to run the given query in full pipelining mode.
     pub infinite_source: bool,
-    ///This setting controls how inserts to this table should be handled
+    /// This setting controls how inserts to this table should be handled
     pub insert_mode: ListingTableInsertMode,
+    /// This setting when true indicates that the table is backed by a single file.
+    /// Any inserts to the table may only append to this existing file.
+    pub single_file: bool,
+    /// This setting holds file format specific options which should be used
+    /// when inserting into this table.
+    pub file_type_write_options: Option<FileTypeWriterOptions>,
 }
 
 impl ListingOptions {
@@ -290,6 +297,8 @@ impl ListingOptions {
             file_sort_order: vec![],
             infinite_source: false,
             insert_mode: ListingTableInsertMode::AppendToFile,
+            single_file: false,
+            file_type_write_options: None,
         }
     }
 
@@ -461,6 +470,21 @@ impl ListingOptions {
     /// Configure how insertions to this table should be handled.
     pub fn with_insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self {
         self.insert_mode = insert_mode;
+        self
+    }
+
+    /// Configure if this table is backed by a sigle file
+    pub fn with_single_file(mut self, single_file: bool) -> Self {
+        self.single_file = single_file;
+        self
+    }
+
+    /// Configure file format specific writing options.
+    pub fn with_write_options(
+        mut self,
+        file_type_write_options: FileTypeWriterOptions,
+    ) -> Self {
+        self.file_type_write_options = Some(file_type_write_options);
         self
     }
 
@@ -873,6 +897,16 @@ impl TableProvider for ListingTable {
             }
         }
 
+        let file_format = self.options().format.as_ref();
+
+        let file_type_writer_options = match &self.options().file_type_write_options {
+            Some(opt) => opt.clone(),
+            None => FileTypeWriterOptions::build_default(
+                &file_format.file_type(),
+                state.config_options(),
+            )?,
+        };
+
         // Sink related option, apart from format
         let config = FileSinkConfig {
             object_store_url: self.table_paths()[0].object_store(),
@@ -881,9 +915,9 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             writer_mode,
-            // TODO: when listing table is known to be backed by a single file, this should be false
-            per_thread_output: true,
+            single_file_output: self.options.single_file,
             overwrite,
+            file_type_writer_options,
         };
 
         self.options()
@@ -1828,7 +1862,7 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
-        assert_eq!("Error during planning: zstd compression requires specifying a level such as zstd(4)", format!("{e}"));
+        assert_eq!("Invalid Option: zstd compression requires specifying a level such as zstd(4)", format!("{e}"));
         Ok(())
     }
 

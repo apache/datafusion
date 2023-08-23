@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
+use datafusion_common::file_options::{FileTypeWriterOptions, StatementOptions};
 use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
 
@@ -133,9 +134,21 @@ impl TableProviderFactory for ListingTableFactory {
         // look for 'infinite' as an option
         let infinite_source = cmd.unbounded;
 
-        let explicit_insert_mode = cmd.options.get("insert_mode");
+        let mut statement_options = StatementOptions::from(&cmd.options);
+
+        // Extract ListingTable specific options if present or set default
+        // Discard unbounded option if present
+        statement_options.get_str_option("unbounded");
+        let create_local_path = statement_options
+            .get_bool_option("create_local_path")?
+            .unwrap_or(false);
+        let single_file = statement_options
+            .get_bool_option("single_file")?
+            .unwrap_or(false);
+
+        let explicit_insert_mode = statement_options.get_str_option("insert_mode");
         let insert_mode = match explicit_insert_mode {
-            Some(mode) => ListingTableInsertMode::from_str(mode),
+            Some(mode) => ListingTableInsertMode::from_str(mode.as_str()),
             None => match file_type {
                 FileType::CSV => Ok(ListingTableInsertMode::AppendToFile),
                 FileType::PARQUET => Ok(ListingTableInsertMode::AppendNewFiles),
@@ -145,34 +158,50 @@ impl TableProviderFactory for ListingTableFactory {
             },
         }?;
 
-        let create_local_path_mode = cmd
-            .options
-            .get("create_local_path")
-            .map(|s| s.as_str())
-            .unwrap_or("false");
-        let single_file = cmd
-            .options
-            .get("single_file")
-            .map(|s| s.as_str())
-            .unwrap_or("false");
+        let file_type = file_format.file_type();
 
-        let single_file = match single_file {
-            "true" => Ok(true),
-            "false" => Ok(false),
-            _ => Err(DataFusionError::Plan(
-                "Invalid option single_file, must be 'true' or 'false'".into(),
-            )),
-        }?;
+        // Use remaining options and session state to build FileTypeWriterOptions
+        let file_type_writer_options = FileTypeWriterOptions::build(
+            &file_type,
+            state.config_options(),
+            &statement_options,
+        )?;
 
-        let table_path = match create_local_path_mode {
-            "true" => ListingTableUrl::parse_create_local_if_not_exists(
+        // Some options have special syntax which takes precedence
+        // e.g. "WITH HEADER ROW" overrides (header false, ...)
+        let file_type_writer_options = match file_type {
+            FileType::CSV => {
+                let mut csv_writer_options =
+                    file_type_writer_options.try_into_csv()?.clone();
+                csv_writer_options.has_header = cmd.has_header;
+                csv_writer_options.writer_options = csv_writer_options
+                    .writer_options
+                    .has_headers(cmd.has_header)
+                    .with_delimiter(cmd.delimiter.try_into().map_err(|_| {
+                        DataFusionError::Internal(
+                            "Unable to convert CSV delimiter into u8".into(),
+                        )
+                    })?);
+                csv_writer_options.compression = cmd.file_compression_type;
+                FileTypeWriterOptions::CSV(csv_writer_options)
+            }
+            FileType::JSON => {
+                let mut json_writer_options =
+                    file_type_writer_options.try_into_json()?.clone();
+                json_writer_options.compression = cmd.file_compression_type;
+                FileTypeWriterOptions::JSON(json_writer_options)
+            }
+            FileType::PARQUET => file_type_writer_options,
+            FileType::ARROW => file_type_writer_options,
+            FileType::AVRO => file_type_writer_options,
+        };
+
+        let table_path = match create_local_path {
+            true => ListingTableUrl::parse_create_local_if_not_exists(
                 &cmd.location,
                 !single_file,
             ),
-            "false" => ListingTableUrl::parse(&cmd.location),
-            _ => Err(DataFusionError::Plan(
-                "Invalid option create_local_path, must be 'true' or 'false'".into(),
-            )),
+            false => ListingTableUrl::parse(&cmd.location),
         }?;
 
         let options = ListingOptions::new(file_format)
@@ -182,7 +211,9 @@ impl TableProviderFactory for ListingTableFactory {
             .with_table_partition_cols(table_partition_cols)
             .with_infinite_source(infinite_source)
             .with_file_sort_order(cmd.order_exprs.clone())
-            .with_insert_mode(insert_mode);
+            .with_insert_mode(insert_mode)
+            .with_single_file(single_file)
+            .with_write_options(file_type_writer_options);
 
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,

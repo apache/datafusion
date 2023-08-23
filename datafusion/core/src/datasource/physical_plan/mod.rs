@@ -62,7 +62,7 @@ use crate::{
     physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay},
 };
 
-use datafusion_common::plan_err;
+use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
 use datafusion_physical_expr::expressions::Column;
 
 use arrow::compute::cast;
@@ -79,7 +79,6 @@ use super::listing::ListingTableUrl;
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
-#[derive(Debug, Clone)]
 pub struct FileSinkConfig {
     /// Object store URL, used to get an ObjectStore instance
     pub object_store_url: ObjectStoreUrl,
@@ -94,12 +93,14 @@ pub struct FileSinkConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// A writer mode that determines how data is written to the file
     pub writer_mode: FileWriterMode,
-    /// If false, it is assumed there is a single table_path which is a file to which all data should be written
+    /// If true, it is assumed there is a single table_path which is a file to which all data should be written
     /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
     /// to which each output partition is written to its own output file.
-    pub per_thread_output: bool,
+    pub single_file_output: bool,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
+    /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
+    pub file_type_writer_options: FileTypeWriterOptions,
 }
 
 impl FileSinkConfig {

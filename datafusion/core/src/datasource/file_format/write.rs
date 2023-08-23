@@ -327,14 +327,14 @@ pub(crate) async fn stateless_serialize_and_write_files(
     mut data: Vec<SendableRecordBatchStream>,
     mut serializers: Vec<Box<dyn BatchSerializer>>,
     mut writers: Vec<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>>,
-    per_thread_output: bool,
+    single_file_output: bool,
 ) -> Result<u64> {
-    if !per_thread_output && (serializers.len() != 1 || writers.len() != 1) {
-        return internal_err!("per_thread_output is false, but got more than 1 writer!");
+    if single_file_output && (serializers.len() != 1 || writers.len() != 1) {
+        return internal_err!("single_file_output is true, but got more than 1 writer!");
     }
     let num_partitions = data.len();
-    if per_thread_output && (num_partitions != writers.len()) {
-        return internal_err!("per_thread_output is true, but did not get 1 writer for each output partition!");
+    if !single_file_output && (num_partitions != writers.len()) {
+        return internal_err!("single_file_ouput is false, but did not get 1 writer for each output partition!");
     }
     let mut row_count = 0;
     // Map errors to DatafusionError.
@@ -343,9 +343,9 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // TODO parallelize serialization accross partitions and batches within partitions
     // see: https://github.com/apache/arrow-datafusion/issues/7079
     for (part_idx, data_stream) in data.iter_mut().enumerate().take(num_partitions) {
-        let idx = match per_thread_output {
-            true => part_idx,
-            false => 0,
+        let idx = match single_file_output {
+            false => part_idx,
+            true => 0,
         };
         while let Some(maybe_batch) = data_stream.next().await {
             // Write data to files in a round robin fashion:

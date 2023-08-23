@@ -21,27 +21,32 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # Copy to directory as multiple files
 query IT
-COPY source_table TO 'test_files/scratch/table' (format parquet, per_thread_output true);
+COPY source_table TO 'test_files/scratch/table' (format parquet, single_file_output false, compression 'zstd(10)');
 ----
 2
 
-# Error case
-query error DataFusion error: Error during planning: Copy To format not explicitly set and unable to get file extension!
-EXPLAIN COPY source_table to 'test_files/scratch/table'
-
 query TT
-EXPLAIN COPY source_table to 'test_files/scratch/table' (format parquet, per_thread_output true)
+EXPLAIN COPY source_table TO 'test_files/scratch/table' (format parquet, single_file_output false, compression 'zstd(10)');
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/table per_thread_output=true options: (format parquet, per_thread_output true)
+CopyTo: format=parquet output_url=test_files/scratch/table single_file_output=false options: (compression 'zstd(10)')
 --TableScan: source_table projection=[col1, col2]
 physical_plan
 InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
 --MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
+# Error case
+query error DataFusion error: Invalid Option: Format not explicitly set and unable to get file extension!
+EXPLAIN COPY source_table to 'test_files/scratch/table'
+
+query error DataFusion error: SQL error: ParserError\("Expected end of statement, found: query"\)
+EXPLAIN COPY source_table to 'test_files/scratch/table' (format parquet, single_file_output false)
+query TT
+EXPLAIN COPY source_table to 'test_files/scratch/table' (format parquet, per_thread_output true)
+
 # Copy more files to directory via query
 query IT
-COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/table' (format parquet, per_thread_output true);
+COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/table' (format parquet, single_file_output false);
 ----
 4
 
@@ -75,15 +80,31 @@ select * from validate_parquet_single;
 1 Foo
 2 Bar
 
-# copy from table to folder of csv files
+# copy from table to folder of compressed json files
 query IT
-COPY source_table  to 'test_files/scratch/table_csv' (format csv, per_thread_output true);
+COPY source_table  to 'test_files/scratch/table_json_gz' (format json, single_file_output false, compression 'gzip');
 ----
 2
 
 # validate folder of csv files
 statement ok
-CREATE EXTERNAL TABLE validate_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/table_csv';
+CREATE EXTERNAL TABLE validate_json_gz STORED AS json COMPRESSION TYPE gzip LOCATION 'test_files/scratch/table_json_gz';
+
+query IT
+select * from validate_json_gz;
+----
+1 Foo
+2 Bar
+
+# copy from table to folder of compressed csv files
+query IT
+COPY source_table  to 'test_files/scratch/table_csv' (format csv, single_file_output false, header false, compression 'gzip');
+----
+2
+
+# validate folder of csv files
+statement ok
+CREATE EXTERNAL TABLE validate_csv STORED AS csv COMPRESSION TYPE gzip LOCATION 'test_files/scratch/table_csv';
 
 query IT
 select * from validate_csv;
@@ -109,7 +130,7 @@ select * from validate_single_csv;
 
 # Copy from table to folder of json
 query IT
-COPY source_table to 'test_files/scratch/table_json' (format json, per_thread_output true);
+COPY source_table to 'test_files/scratch/table_json' (format json, single_file_output false);
 ----
 2
 
@@ -139,20 +160,11 @@ select * from validate_single_json;
 1 Foo
 2 Bar
 
-# Copy from table with options
-query IT
-COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55);
-----
-2
-
-# Copy from table with options (and trailing comma)
-query IT
-COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55, row_group_limit_bytes 9,);
-----
-2
-
-
 # Error cases:
+
+# Copy from table with options
+query error DataFusion error: Invalid Option: Found unsupported option row_group_size with value 55 for JSON format!
+COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55);
 
 # Incomplete statement
 query error DataFusion error: SQL error: ParserError\("Expected \), found: EOF"\)

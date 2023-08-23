@@ -1191,6 +1191,8 @@ mod tests {
             Field::new("c2", DataType::UInt64, false),
         ]));
 
+        println!("{out_dir}");
+
         // get name of first part
         let paths = fs::read_dir(&out_dir).unwrap();
         let mut part_0_name: String = "".to_owned();
