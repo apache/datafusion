@@ -38,6 +38,7 @@ pub mod planner;
 pub mod regex_expressions;
 mod scalar_function;
 mod sort_expr;
+pub mod sort_properties;
 pub mod string_expressions;
 pub mod struct_expressions;
 pub mod tree_node;
@@ -47,6 +48,8 @@ pub mod unicode_expressions;
 pub mod utils;
 pub mod var_provider;
 pub mod window;
+
+pub use sort_properties::update_ordering;
 
 pub use aggregate::groups_accumulator::{
     EmitTo, GroupsAccumulator, GroupsAccumulatorAdapter,
@@ -61,7 +64,7 @@ pub use equivalence::{
 };
 
 pub use partitioning::{Distribution, Partitioning};
-pub use physical_expr::{PhysicalExpr, PhysicalExprRef, SortProperties};
+pub use physical_expr::{PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::{
@@ -69,7 +72,7 @@ pub use sort_expr::{
     PhysicalSortRequirement,
 };
 pub use utils::{
-    expr_list_eq_any_order, expr_list_eq_strict_order,
+    expr_list_eq_any_order, expr_list_eq_strict_order, find_orderings_of_exprs,
     normalize_expr_with_equivalence_properties, normalize_ordering_equivalence_classes,
     normalize_out_expr_with_columns_map, reverse_order_bys, split_conjunction,
 };

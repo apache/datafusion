@@ -27,7 +27,8 @@ use crate::array_expressions::{
 };
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
-use crate::physical_expr::{down_cast_any_ref, SortProperties};
+use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -56,7 +57,6 @@ use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Datum, Scalar};
-use arrow_schema::SortOptions;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
@@ -702,80 +702,6 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Lt | Operator::LtEq => right_child.gt_or_gteq(left_child),
             Operator::And => left_child.and(right_child),
             _ => SortProperties::Unordered,
-        }
-    }
-}
-
-impl SortProperties {
-    fn add(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Self::Singleton, _) => *rhs,
-            (_, Self::Singleton) => *self,
-            (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending == rhs.descending =>
-            {
-                Self::Ordered(SortOptions {
-                    descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
-                })
-            }
-            _ => Self::Unordered,
-        }
-    }
-
-    fn sub(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Self::Singleton, Self::Singleton) => Self::Singleton,
-            (Self::Singleton, Self::Ordered(rhs)) => Self::Ordered(SortOptions {
-                descending: !rhs.descending,
-                nulls_first: rhs.nulls_first,
-            }),
-            (_, Self::Singleton) => *self,
-            (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending != rhs.descending =>
-            {
-                Self::Ordered(SortOptions {
-                    descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
-                })
-            }
-            _ => Self::Unordered,
-        }
-    }
-
-    fn gt_or_gteq(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Self::Singleton, Self::Ordered(rhs)) => Self::Ordered(SortOptions {
-                descending: !rhs.descending,
-                nulls_first: rhs.nulls_first,
-            }),
-            (_, Self::Singleton) => *self,
-            (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending != rhs.descending =>
-            {
-                *self
-            }
-            _ => Self::Unordered,
-        }
-    }
-
-    fn and(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending == rhs.descending =>
-            {
-                Self::Ordered(SortOptions {
-                    descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
-                })
-            }
-            (Self::Ordered(opt), Self::Singleton)
-            | (Self::Singleton, Self::Ordered(opt)) => Self::Ordered(SortOptions {
-                descending: opt.descending,
-                nulls_first: opt.nulls_first,
-            }),
-            (Self::Singleton, Self::Singleton) => Self::Singleton,
-            _ => Self::Unordered,
         }
     }
 }

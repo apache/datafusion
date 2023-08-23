@@ -26,6 +26,9 @@ use crate::equivalence::{
     OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
+use crate::sort_properties::ExprOrdering;
+use crate::sort_properties::SortProperties;
+use crate::update_ordering;
 use crate::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
@@ -852,14 +855,11 @@ fn get_lexicographical_match_indices(
 /// If a full match is found, returns the sort options and indices of the matches. If no full match is found,
 /// the function proceeds to check against ordering equivalence properties. If still no full match is found,
 /// the function returns `None`.
-pub fn get_indices_of_matching_sort_exprs_with_order_eq<
-    F: Fn() -> EquivalenceProperties,
-    F2: Fn() -> OrderingEquivalenceProperties,
->(
+pub fn get_indices_of_matching_sort_exprs_with_order_eq(
     provided_sorts: &[PhysicalSortExpr],
     required_columns: &[Column],
-    equal_properties: F,
-    ordering_equal_properties: F2,
+    eq_properties: &EquivalenceProperties,
+    order_eq_properties: &OrderingEquivalenceProperties,
 ) -> Option<(Vec<SortOptions>, Vec<usize>)> {
     // Create a vector of `PhysicalSortRequirement`s from the required columns:
     let sort_requirement_on_requirements = required_columns
@@ -869,9 +869,6 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq<
             options: None,
         })
         .collect::<Vec<_>>();
-
-    let order_eq_properties = ordering_equal_properties();
-    let eq_properties = equal_properties();
 
     let normalized_required = normalize_sort_requirements(
         &sort_requirement_on_requirements,
@@ -927,6 +924,58 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq<
     }
     // If no match found, return `None`:
     None
+}
+
+/// Calculates the output orderings for a set of expressions within the context of a given
+/// execution plan. The resulting orderings are all in the type of [`Column`], since these
+/// expressions become [`Column`] after the projection step. The expressions having an alias
+/// are renamed with those aliases in the returned [`PhysicalSortExpr`]'s. If an expression
+/// is found to be unordered, the corresponding entry in the output vector is `None`.
+///
+/// # Arguments
+///
+/// * `expr` - A slice of tuples containing expressions and their corresponding aliases.
+///
+/// * `input` - A reference to an execution plan that provides output ordering and equivalence
+/// properties.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of optional [`PhysicalSortExpr`]'s. Each element of the
+/// vector corresponds to an expression from the input slice. If an expression can be ordered,
+/// the corresponding entry is `Some(PhysicalSortExpr)`. If an expression cannot be ordered,
+/// the entry is `None`.
+pub fn find_orderings_of_exprs(
+    expr: &[(Arc<dyn PhysicalExpr>, String)],
+    input_output_ordering: Option<&[PhysicalSortExpr]>,
+    input_equal_properties: EquivalenceProperties,
+    input_ordering_equal_properties: OrderingEquivalenceProperties,
+) -> Result<Vec<Option<PhysicalSortExpr>>> {
+    let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
+    if let Some(leading_ordering) =
+        input_output_ordering.map(|output_ordering| &output_ordering[0])
+    {
+        for (index, (expression, name)) in expr.iter().enumerate() {
+            let initial_expr = ExprOrdering::new(expression.clone());
+            let transformed = initial_expr.transform_up(&|expr| {
+                update_ordering(
+                    expr,
+                    leading_ordering,
+                    &input_equal_properties,
+                    &input_ordering_equal_properties,
+                )
+            })?;
+            if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
+                orderings.push(Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new(name, index)),
+                    options: sort_options,
+                }));
+            } else {
+                orderings.push(None);
+            }
+        }
+    }
+    Ok(orderings)
 }
 
 #[cfg(test)]
@@ -1795,8 +1844,8 @@ mod tests {
             get_indices_of_matching_sort_exprs_with_order_eq(
                 &provided_sorts,
                 &required_columns,
-                || equal_properties.clone(),
-                || ordering_equal_properties.clone(),
+                &equal_properties,
+                &ordering_equal_properties,
             ),
             Some((vec![sort_options_not, sort_options], vec![0, 1]))
         );
@@ -1835,8 +1884,8 @@ mod tests {
             get_indices_of_matching_sort_exprs_with_order_eq(
                 &provided_sorts,
                 &required_columns,
-                || equal_properties.clone(),
-                || ordering_equal_properties.clone(),
+                &equal_properties,
+                &ordering_equal_properties,
             ),
             Some((vec![sort_options_not, sort_options], vec![0, 1]))
         );
@@ -1869,8 +1918,8 @@ mod tests {
             get_indices_of_matching_sort_exprs_with_order_eq(
                 &provided_sorts,
                 &required_columns,
-                || equal_properties.clone(),
-                || ordering_equal_properties.clone(),
+                &equal_properties,
+                &ordering_equal_properties,
             ),
             None
         );

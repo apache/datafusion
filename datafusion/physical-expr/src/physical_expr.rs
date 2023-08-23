@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::intervals::Interval;
+use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::SortOptions;
 use datafusion_common::utils::DataPtr;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -30,7 +30,6 @@ use datafusion_expr::ColumnarValue;
 use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
-use std::ops::Neg;
 use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
@@ -142,45 +141,6 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
 impl Hash for dyn PhysicalExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.dyn_hash(state);
-    }
-}
-
-/// To propagate [`SortOptions`] across the [`PhysicalExpr`], it is insufficient
-/// to simply use `Option<SortOptions>`: There must be a differentiation between
-/// unordered columns and literal values, since literals may not break the ordering
-/// when they are used as a child of some binary expression when the other child has
-/// some ordering. On the other hand, unordered columns cannot maintain ordering when
-/// they take part in such operations.
-///
-/// Example: ((a_ordered + b_unordered) + c_ordered) expression cannot end up with
-/// sorted data; however the ((a_ordered + 999) + c_ordered) expression can. Therefore,
-/// we need two different variants for literals and unordered columns as literals are
-/// often more ordering-friendly under most mathematical operations.
-#[derive(PartialEq, Debug, Clone, Copy)]
-pub enum SortProperties {
-    /// Use the ordinary [`SortOptions`] struct to represent ordered data:
-    Ordered(SortOptions),
-    // This alternative represents unordered data:
-    Unordered,
-    // Singleton is used for single-valued literal numbers:
-    Singleton,
-}
-
-impl Neg for SortProperties {
-    type Output = Self;
-
-    fn neg(self) -> Self::Output {
-        match self {
-            SortProperties::Ordered(SortOptions {
-                descending,
-                nulls_first,
-            }) => SortProperties::Ordered(SortOptions {
-                descending: !descending,
-                nulls_first,
-            }),
-            SortProperties::Singleton => SortProperties::Singleton,
-            SortProperties::Unordered => SortProperties::Unordered,
-        }
     }
 }
 

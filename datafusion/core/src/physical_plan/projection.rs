@@ -36,20 +36,16 @@ use crate::physical_plan::{
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use arrow_schema::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
-use datafusion_physical_expr::utils::get_indices_of_matching_sort_exprs_with_order_eq;
 use datafusion_physical_expr::{
-    normalize_out_expr_with_columns_map, project_equivalence_properties,
-    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
-    SortProperties,
+    find_orderings_of_exprs, normalize_out_expr_with_columns_map,
+    project_equivalence_properties, project_ordering_equivalence_properties,
+    OrderingEquivalenceProperties,
 };
 
 use futures::stream::{Stream, StreamExt};
-use itertools::Itertools;
 use log::trace;
 
 /// Execution plan for a projection
@@ -144,7 +140,12 @@ impl ProjectionExec {
             None => None,
         };
 
-        let orderings = find_orderings_of_exprs(&expr, &input)?;
+        let orderings = find_orderings_of_exprs(
+            &expr,
+            input.output_ordering(),
+            input.equivalence_properties(),
+            input.ordering_equivalence_properties(),
+        )?;
 
         let output_ordering =
             validate_output_ordering(output_ordering, &orderings, &expr);
@@ -339,57 +340,6 @@ impl ExecutionPlan for ProjectionExec {
     }
 }
 
-/// Calculates the output orderings for a set of expressions within the context of a given
-/// execution plan. The resulting orderings are all in the type of [`Column`], since these
-/// expressions become [`Column`] after the projection step. The expressions having an alias
-/// are renamed with those aliases in the returned [`PhysicalSortExpr`]'s. If an expression
-/// is found to be unordered, the corresponding entry in the output vector is `None`.
-///
-/// # Arguments
-///
-/// * `expr` - A slice of tuples containing expressions and their corresponding aliases.
-///
-/// * `input` - A reference to an execution plan that provides output ordering and equivalence
-/// properties.
-///
-/// # Returns
-///
-/// A `Result` containing a vector of optional [`PhysicalSortExpr`]'s. Each element of the
-/// vector corresponds to an expression from the input slice. If an expression can be ordered,
-/// the corresponding entry is `Some(PhysicalSortExpr)`. If an expression cannot be ordered,
-/// the entry is `None`.
-fn find_orderings_of_exprs(
-    expr: &[(Arc<dyn PhysicalExpr>, String)],
-    input: &Arc<dyn ExecutionPlan>,
-) -> Result<Vec<Option<PhysicalSortExpr>>> {
-    let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
-    if let Some(leading_ordering) = input
-        .output_ordering()
-        .map(|output_ordering| &output_ordering[0])
-    {
-        for (index, (expression, name)) in expr.iter().enumerate() {
-            let initial_expr = ExprOrdering::new(expression.clone());
-            let transformed = initial_expr.transform_up(&|expr| {
-                update_ordering(
-                    expr,
-                    leading_ordering,
-                    || input.equivalence_properties(),
-                    || input.ordering_equivalence_properties(),
-                )
-            })?;
-            if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
-                orderings.push(Some(PhysicalSortExpr {
-                    expr: Arc::new(Column::new(name, index)),
-                    options: sort_options,
-                }));
-            } else {
-                orderings.push(None);
-            }
-        }
-    }
-    Ok(orderings)
-}
-
 /// This function takes the current `output_ordering`, the `orderings` based on projected expressions,
 /// and the `expr` representing the projected expressions themselves. It aims to ensure that the output
 /// ordering is valid and correctly corresponds to the projected columns.
@@ -422,143 +372,6 @@ fn validate_output_ordering(
             Some(ordering)
         }
     })
-}
-
-/// The `ExprOrdering` struct is designed to aid in the determination of ordering (represented
-/// by [`SortProperties`]) for a given [`PhysicalExpr`]. When analyzing the orderings
-/// of a [`PhysicalExpr`], the process begins by assigning the ordering of its leaf nodes.
-/// By propagating these leaf node orderings upwards in the expression tree, the overall
-/// ordering of the entire [`PhysicalExpr`] can be derived.
-///
-/// This struct holds the necessary state information for each expression in the [`PhysicalExpr`].
-/// It encapsulates the orderings (`state`) associated with the expression (`expr`), and
-/// orderings of the children expressions (`children_states`). The [`ExprOrdering`] of a parent
-/// expression is determined based on the [`ExprOrdering`] states of its children expressions.
-#[derive(Debug)]
-struct ExprOrdering {
-    expr: Arc<dyn PhysicalExpr>,
-    state: Option<SortProperties>,
-    children_states: Option<Vec<SortProperties>>,
-}
-
-impl ExprOrdering {
-    fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        Self {
-            expr,
-            state: None,
-            children_states: None,
-        }
-    }
-
-    fn children(&self) -> Vec<ExprOrdering> {
-        self.expr
-            .children()
-            .into_iter()
-            .map(|e| ExprOrdering::new(e))
-            .collect()
-    }
-
-    pub fn new_with_children(
-        children_states: Vec<SortProperties>,
-        parent_expr: Arc<dyn PhysicalExpr>,
-    ) -> Self {
-        Self {
-            expr: parent_expr,
-            state: None,
-            children_states: Some(children_states),
-        }
-    }
-}
-
-/// Calculates the [`SortProperties`] of a given [`ExprOrdering`] node.
-/// The node is either a leaf node, or an intermediate node:
-/// - If it is a leaf node, the children states are `None`. We directly find
-/// the order of the node by looking at the given sort expression and equivalence
-/// properties if it is a `Column` leaf, or we mark it as unordered. In the case
-/// of a `Literal` leaf, we mark it as singleton so that it can cooperate with
-/// some ordered columns at the upper steps.
-/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-/// and operator has its own rules about how to propagate the children orderings.
-/// However, before the children order propagation, it is checked that whether
-/// the intermediate node can be directly matched with the sort expression. If there
-/// is a match, the sort expression emerges at that node immediately, discarding
-/// the order coming from the children.
-fn update_ordering<
-    F: Fn() -> EquivalenceProperties,
-    F2: Fn() -> OrderingEquivalenceProperties,
->(
-    mut node: ExprOrdering,
-    sort_expr: &PhysicalSortExpr,
-    equal_properties: F,
-    ordering_equal_properties: F2,
-) -> Result<Transformed<ExprOrdering>> {
-    // If we can directly match a sort expr with the current node, we can set
-    // its state and return early.
-    // TODO: If there is a PhysicalExpr other than a Column at this node (e.g.
-    //       a BinaryExpr like a + b), and there is an ordering equivalence of
-    //       it (let's say like c + d), we actually can find it at this step.
-    if sort_expr.expr.eq(&node.expr) {
-        node.state = Some(SortProperties::Ordered(sort_expr.options));
-        return Ok(Transformed::Yes(node));
-    }
-
-    if let Some(children_sort_options) = &node.children_states {
-        // We have an intermediate (non-leaf) node, account for its children:
-        node.state = Some(node.expr.get_ordering(children_sort_options));
-    } else if let Some(column) = node.expr.as_any().downcast_ref::<Column>() {
-        // We have a Column, which is one of the two possible leaf node types:
-        node.state = get_indices_of_matching_sort_exprs_with_order_eq(
-            &[sort_expr.clone()],
-            &[column.clone()],
-            equal_properties,
-            ordering_equal_properties,
-        )
-        .map(|(sort_options, _)| {
-            SortProperties::Ordered(SortOptions {
-                descending: sort_options[0].descending,
-                nulls_first: sort_options[0].nulls_first,
-            })
-        });
-    } else {
-        // We have a Literal, which is the other possible leaf node type:
-        node.state = Some(node.expr.get_ordering(&[]));
-    }
-    Ok(Transformed::Yes(node))
-}
-
-impl TreeNode for ExprOrdering {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        for child in self.children() {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-        Ok(VisitRecursion::Continue)
-    }
-
-    fn map_children<F>(self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        let children = self.children();
-        if children.is_empty() {
-            Ok(self)
-        } else {
-            Ok(ExprOrdering::new_with_children(
-                children
-                    .into_iter()
-                    .map(transform)
-                    .map_ok(|c| c.state.unwrap_or(SortProperties::Unordered))
-                    .collect::<Result<Vec<_>>>()?,
-                self.expr,
-            ))
-        }
-    }
 }
 
 /// If e is a direct column reference, returns the field level
