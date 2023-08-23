@@ -1000,7 +1000,6 @@ macro_rules! general_repeat_list {
 
 /// Array_empty SQL function
 pub fn array_empty(args: &[ArrayRef]) -> Result<ArrayRef> {
-    println!("args[0]: {:?}", &args[0]);
     if args[0].as_any().downcast_ref::<NullArray>().is_some() {
         return Ok(args[0].clone());
     }
