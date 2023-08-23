@@ -22,7 +22,6 @@
 DML stands for "Data Manipulation Lanaguage" and relates to inserting
 and modifying data in tables.
 
-
 ## COPY
 
 Copies the contents of a table or query to file(s). Supported file
@@ -40,7 +39,6 @@ where <i><b>option</i></b> can be one of:
     ROW_GROUP_SIZE <i><b>integer</i></b>
     ROW_GROUP_LIMIT_BYTES <i><b>integer</i></b>
 </pre>
-
 
 Copy the contents of `source_table` to `file_name.json` in JSON format:
 
@@ -64,7 +62,6 @@ files in the `dir_name` directory:
 | 2     |
 +-------+
 ```
-
 
 Run the query `SELECT * from source ORDER BY time` and write the
 results (maintaining the order) to a parquet file named
