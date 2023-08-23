@@ -68,12 +68,12 @@ async fn oom_sort() {
 #[tokio::test]
 async fn group_by_none() {
     TestCase::new()
-        .with_query("select median(image) from t")
+        .with_query("select median(request_bytes) from t")
         .with_expected_errors(vec![
             "Resources exhausted: Failed to allocate additional",
             "AggregateStream",
         ])
-        .with_memory_limit(20_000)
+        .with_memory_limit(2_000)
         .run()
         .await
 }

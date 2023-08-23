@@ -38,7 +38,8 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_expr::dml::{CopyTo, OutputFileFormat};
+use datafusion_common::FileType;
+use datafusion_expr::dml::CopyTo;
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -72,7 +73,9 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{internal_err, not_impl_err, plan_err, DFSchema, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
@@ -232,14 +235,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }) => {
             // TODO: Add support for filter and order by in AggregateUDF
             if filter.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with filter is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with filter is not supported");
             }
             if order_by.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with order_by is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with order_by is not supported");
             }
             let mut names = Vec::with_capacity(args.len());
             for e in args {
@@ -584,11 +583,11 @@ impl DefaultPhysicalPlanner {
                     // TODO: implement statement level overrides for each file type
                     // E.g. CsvFormat::from_options(options)
                     let sink_format: Arc<dyn FileFormat> = match file_format {
-                        OutputFileFormat::CSV => Arc::new(CsvFormat::default()),
-                        OutputFileFormat::PARQUET => Arc::new(ParquetFormat::default()),
-                        OutputFileFormat::JSON => Arc::new(JsonFormat::default()),
-                        OutputFileFormat::AVRO => Arc::new(AvroFormat {} ),
-                        OutputFileFormat::ARROW => Arc::new(ArrowFormat {}),
+                        FileType::CSV => Arc::new(CsvFormat::default()),
+                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
+                        FileType::JSON => Arc::new(JsonFormat::default()),
+                        FileType::AVRO => Arc::new(AvroFormat {} ),
+                        FileType::ARROW => Arc::new(ArrowFormat {}),
                     };
 
                     sink_format.create_writer_physical_plan(input_exec, session_state, config).await
@@ -605,9 +604,9 @@ impl DefaultPhysicalPlanner {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, false).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
                     }
                 }
                 LogicalPlan::Dml(DmlStatement {
@@ -622,9 +621,9 @@ impl DefaultPhysicalPlanner {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, true).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
                     }
                 }
                 LogicalPlan::Values(Values {

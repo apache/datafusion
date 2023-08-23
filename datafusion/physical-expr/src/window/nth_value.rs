@@ -23,7 +23,7 @@ use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::ScalarValue;
+use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
@@ -77,9 +77,7 @@ impl NthValue {
         n: u32,
     ) -> Result<Self> {
         match n {
-            0 => Err(DataFusionError::Execution(
-                "nth_value expect n to be > 0".to_owned(),
-            )),
+            0 => exec_err!("nth_value expect n to be > 0"),
             _ => Ok(Self {
                 name: name.into(),
                 expr,

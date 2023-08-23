@@ -28,7 +28,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use datafusion_common::{not_impl_err, plan_err, DataFusionError};
+use datafusion_common::{exec_err, not_impl_err, plan_err, DataFusionError};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::{StreamExt, TryStreamExt};
@@ -63,9 +63,6 @@ use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
     Statistics,
 };
-
-/// The default file extension of parquet files
-pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 
 /// The number of files to read in parallel when inferring schema
 const SCHEMA_INFERENCE_CONCURRENCY: usize = 32;
@@ -417,10 +414,7 @@ pub async fn fetch_parquet_metadata(
     size_hint: Option<usize>,
 ) -> Result<ParquetMetaData> {
     if meta.size < 8 {
-        return Err(DataFusionError::Execution(format!(
-            "file size of {} is less than footer",
-            meta.size
-        )));
+        return exec_err!("file size of {} is less than footer", meta.size);
     }
 
     // If a size hint is provided, read more than the minimum size
@@ -443,11 +437,11 @@ pub async fn fetch_parquet_metadata(
     let length = decode_footer(&footer)?;
 
     if meta.size < length + 8 {
-        return Err(DataFusionError::Execution(format!(
+        return exec_err!(
             "file size of {} is less than footer + metadata {}",
             meta.size,
             length + 8
-        )));
+        );
     }
 
     // Did not fetch the entire file metadata in the initial read, need to make a second request

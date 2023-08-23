@@ -35,7 +35,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
-    expressions::{Avg, CastExpr, Column, Sum},
+    expressions::Column,
     normalize_out_expr_with_columns_map, reverse_order_bys,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
@@ -1010,40 +1010,7 @@ fn aggregate_expressions(
         | AggregateMode::SinglePartitioned => Ok(aggr_expr
             .iter()
             .map(|agg| {
-                let pre_cast_type = if let Some(Sum {
-                    data_type,
-                    pre_cast_to_sum_type,
-                    ..
-                }) = agg.as_any().downcast_ref::<Sum>()
-                {
-                    if *pre_cast_to_sum_type {
-                        Some(data_type.clone())
-                    } else {
-                        None
-                    }
-                } else if let Some(Avg {
-                    sum_data_type,
-                    pre_cast_to_sum_type,
-                    ..
-                }) = agg.as_any().downcast_ref::<Avg>()
-                {
-                    if *pre_cast_to_sum_type {
-                        Some(sum_data_type.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let mut result = agg
-                    .expressions()
-                    .into_iter()
-                    .map(|expr| {
-                        pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
-                            Arc::new(CastExpr::new(expr, cast_type, None))
-                        })
-                    })
-                    .collect::<Vec<_>>();
+                let mut result = agg.expressions().clone();
                 // In partial mode, append ordering requirements to expressions' results.
                 // Ordering requirements are used by subsequent executors to satisfy the required
                 // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.

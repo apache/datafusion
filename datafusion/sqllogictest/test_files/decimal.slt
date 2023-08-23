@@ -618,7 +618,7 @@ select a / b from foo;
 statement ok
 create table t as values (arrow_cast(123, 'Decimal256(5,2)'));
 
-query error DataFusion error: Internal error: Operator \+ is not implemented for types Decimal256\(None,15,2\) and Decimal256\(Some\(12300\),15,2\)\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error DataFusion error: This feature is not implemented: AvgAccumulator for \(Decimal256\(5, 2\) \-\-> Decimal256\(9, 6\)\)
 select AVG(column1) from t;
 
 statement ok

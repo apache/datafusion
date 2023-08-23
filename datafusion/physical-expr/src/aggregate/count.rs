@@ -218,17 +218,13 @@ impl AggregateExpr for Count {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            self.data_type.clone(),
-            self.nullable,
-        ))
+        Ok(Field::new(&self.name, DataType::Int64, self.nullable))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             format_state_name(&self.name, "count"),
-            self.data_type.clone(),
+            DataType::Int64,
             true,
         )])
     }

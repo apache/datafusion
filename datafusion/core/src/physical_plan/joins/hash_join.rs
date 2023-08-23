@@ -64,7 +64,10 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
-use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
+use datafusion_common::cast::{as_dictionary_array, as_string_array};
+use datafusion_common::{
+    exec_err, internal_err, plan_err, DataFusionError, JoinType, Result,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
@@ -1004,9 +1007,9 @@ impl HashJoinStream {
                             self.join_metrics.output_rows.add(batch.num_rows());
                             Some(result)
                         }
-                        Err(err) => Some(Err(DataFusionError::Execution(format!(
-                            "Fail to build join indices in HashJoinExec, error:{err}",
-                        )))),
+                        Err(err) => Some(exec_err!(
+                            "Fail to build join indices in HashJoinExec, error:{err}"
+                        )),
                     };
                     timer.done();
                     result
@@ -2738,7 +2741,7 @@ mod tests {
 
         // right input stream returns one good batch and then one error.
         // The error should be returned.
-        let err = Err(DataFusionError::Execution("bad data error".to_string()));
+        let err = exec_err!("bad data error");
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
 
         let on = vec![(
