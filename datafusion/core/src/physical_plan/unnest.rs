@@ -433,12 +433,8 @@ fn unnest_fixed_list(
             Some(_) => {
                 for i in 0..fixed_value_length {
                     //take_offset + i is always positive
-                    let take_index =
-                        <Int32Type as ArrowPrimitiveType>::Native::from_usize(
-                            take_offset + i,
-                        )
-                        .unwrap();
-                    builder.append_value(take_index);
+                    let take_index = take_offset + i;
+                    builder.append_value(take_index as i32);
                 }
                 take_offset += fixed_value_length;
             }
