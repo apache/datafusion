@@ -399,13 +399,20 @@ impl TopKHeap {
     /// Compact this heap, rewriting all stored batches into a single
     /// input batch
     pub fn maybe_compact(&mut self) -> Result<()>{
-        use log::info;
-        info!("Have {} batches in store", self.store.len());
-        // don't compact if the store has less than ten batches
-        //if self.store.len() <= 10 {
-        if self.store.len() <= 2 {
+
+        // we compact if the number of "unused" rows in the store is
+        // past some pre-defined threshold. Target holding up to
+        // around 20 batches, but handle cases of large k where some
+        // batches might be partially full
+        let target_batch_size = 8024;
+        let max_unused_rows = 20 * target_batch_size + self.k;
+
+        // don't compact if the store has only one batch or
+        if self.store.len() <= 2 || self.store.unused_rows() < max_unused_rows {
             return Ok(());
         }
+        use log::info;
+        info!("Have {} batches in store, COMPACTING", self.store.len());
 
         // at first, compact the entire thing always into a new batch
         // (maybe we can get fancier in the future about ignoring
@@ -441,6 +448,8 @@ impl TopKHeap {
             + self.owned_bytes
     }
 }
+
+
 
 /// Represents one of the top K rows held in this heap. Orders
 /// according to memcmp of row (e.g. the arrow Row format, but could
@@ -582,6 +591,17 @@ impl RecordBatchStore {
     /// returns the total number of batches stored in this store
     fn len(&self) -> usize {
         self.batches.len()
+    }
+
+    /// Returns the total number of rows in batches minus the number
+    /// which are in use
+    fn unused_rows(&self) -> usize {
+        self.batches
+            .values()
+            .map(|batch_entry| {
+                batch_entry.batch.num_rows() - batch_entry.uses
+            })
+            .sum()
     }
 
     /// returns true if the store has nothing stored
