@@ -205,7 +205,7 @@ a 1 -5 12636 794623392 2909750622865366631 15 24022 2669374863 47766797847015095
 
 ## -- make tiny batches to trigger batch compaction
 statement ok
-set datafusion.execution.batch_size = 7
+set datafusion.execution.batch_size = 2
 
 query TIIIIIIIITRRT
 select * from aggregate_test_100 ORDER BY c13 desc limit 5;

@@ -136,7 +136,7 @@ impl TopK {
             expr,
             row_converter,
             scratch_rows,
-            heap: TopKHeap::new(k, schema),
+            heap: TopKHeap::new(k, batch_size, schema),
         })
     }
 
@@ -169,7 +169,7 @@ impl TopK {
             match self.heap.max() {
                 // heap has k items, and the new row is greater than the
                 // current max in the heap ==> it is not a new topk
-                Some(max_row) if row.as_ref() >= max_row.row.as_slice() => {}
+                Some(max_row) if row.as_ref() >= max_row.row() => {}
                 // don't yet have k items or new item is lower than the currently k low values
                 None | Some(_) => {
                     self.heap.add(&mut batch_entry, row, index);
@@ -263,6 +263,8 @@ impl TopKMetrics {
 struct TopKHeap {
     /// The maximum number of elemenents to store in this heap.
     k: usize,
+    /// The target number of rows for output batches
+    batch_size: usize,
     /// Storage for up at most `k` items using a BinaryHeap. Reverserd
     /// so that the smallest k so far is on the top
     inner: BinaryHeap<TopKRow>,
@@ -273,10 +275,15 @@ struct TopKHeap {
 }
 
 impl TopKHeap {
-    fn new(k: usize, schema: SchemaRef) -> Self {
+    fn new(
+        k: usize,
+        batch_size: usize,
+        schema: SchemaRef
+    ) -> Self {
         assert!(k > 0);
         Self {
             k,
+            batch_size,
             inner: BinaryHeap::new(),
             store: RecordBatchStore::new(schema),
             owned_bytes: 0,
@@ -403,43 +410,50 @@ impl TopKHeap {
     /// Compact this heap, rewriting all stored batches into a single
     /// input batch
     pub fn maybe_compact(&mut self) -> Result<()> {
-        // // we compact if the number of "unused" rows in the store is
-        // // past some pre-defined threshold. Target holding up to
-        // // around 20 batches, but handle cases of large k where some
-        // // batches might be partially full
-        // let target_batch_size = 8024;
-        // let max_unused_rows = 20 * target_batch_size + self.k;
+        // we compact if the number of "unused" rows in the store is
+        // past some pre-defined threshold. Target holding up to
+        // around 20 batches, but handle cases of large k where some
+        // batches might be partially full
+        let max_unused_rows = (20 * self.batch_size) + self.k;
+        let unused_rows = self.store.unused_rows();
+        use log::info;
+        //info!("{} batches in store, unused rows in store: {}, max unused rows: {}",
+        //self.store.len(), unused_rows, max_unused_rows);
 
-        // // don't compact if the store has only one batch or
-        // if self.store.len() <= 2 || self.store.unused_rows() < max_unused_rows {
-        //     return Ok(());
-        // }
-        // use log::info;
-        // info!("Have {} batches in store, COMPACTING", self.store.len());
+        // don't compact if the store has only one batch or
+        if self.store.len() <= 2 || unused_rows < max_unused_rows {
+            //if self.store.len() <= 2 {
+            return Ok(());
+        }
+        info!("Have {} batches in store, COMPACTING", self.store.len());
 
-        // // at first, compact the entire thing always into a new batch
-        // // (maybe we can get fancier in the future about ignoring
-        // // batches that have a high usage ratio already
+        // at first, compact the entire thing always into a new batch
+        // (maybe we can get fancier in the future about ignoring
+        // batches that have a high usage ratio already
 
-        // // Note: new batch is in the same order as inner
-        // let new_batch = self.emit()?;
+        // Note: new batch is in the same order as inner
+        let num_rows = self.inner.len();
+        let (new_batch, mut topk_rows) = self.emit_with_state()?;
 
-        // // clear all old entires in store (this invalidates all
-        // // store_ids in `inner`)
-        // self.store.clear();
+        // clear all old entires in store (this invalidates all
+        // store_ids in `inner`)
+        self.store.clear();
 
-        // let mut batch_entry = self.register_batch(new_batch);
-        // batch_entry.uses = self.inner.len();
+        let mut batch_entry = self.register_batch(new_batch);
+        batch_entry.uses = num_rows;
 
-        // // rewrite all existing entries to use the new batch, and
-        // // remove old entries. The sortedness and their relative
-        // // position do not change
-        // for (i, topk_row) in self.inner.iter_mut().enumerate() {
-        //     topk_row.batch_id = batch_entry.id;
-        //     topk_row.index = i;
-        // }
-        // self.insert_batch_entry(batch_entry);
-        // info!("COMPACTION DONE: Have {} batches in store", self.store.len());
+        // rewrite all existing entries to use the new batch, and
+        // remove old entries. The sortedness and their relative
+        // position do not change
+        for (i, topk_row) in topk_rows.iter_mut().enumerate() {
+            topk_row.batch_id = batch_entry.id;
+            topk_row.index = i;
+        }
+        self.insert_batch_entry(batch_entry);
+        // restore the heap
+        self.inner = BinaryHeap::from(topk_rows);
+
+        info!("COMPACTION DONE: Have {} batches in store", self.store.len());
         Ok(())
     }
 
