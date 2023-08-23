@@ -19,6 +19,9 @@
 
 # DDL
 
+DDL stands for "Data Definition Lanaguage" and relates to creating and
+modifying catalog objects such as Tables.
+
 ## CREATE DATABASE
 
 Create catalog with specified name.
