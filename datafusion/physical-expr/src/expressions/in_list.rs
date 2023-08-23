@@ -94,7 +94,7 @@ impl<T> Set for ArraySet<T>
 where
     T: Array + 'static,
     for<'a> &'a T: ArrayAccessor,
-    for<'a> <&'a T as ArrayAccessor>::Item: IsEqual + HashValue,
+    for<'a> <&'a T as ArrayAccessor>::Item: IsEqual,
 {
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
         downcast_dictionary_array! {
@@ -141,7 +141,7 @@ where
 fn make_hash_set<T>(array: T) -> ArrayHashSet
 where
     T: ArrayAccessor,
-    T::Item: IsEqual + HashValue,
+    T::Item: IsEqual,
 {
     let state = RandomState::new();
     let mut map: HashMap<usize, (), ()> =
