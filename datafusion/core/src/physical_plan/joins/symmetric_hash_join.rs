@@ -25,7 +25,6 @@
 //! This plan uses the [OneSideHashJoiner] object to facilitate join calculations
 //! for both its children.
 
-use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -33,29 +32,15 @@ use std::task::Poll;
 use std::vec;
 use std::{any::Any, usize};
 
-use ahash::RandomState;
-use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder};
-use arrow::compute::concat_batches;
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::builder::{UInt32BufferBuilder, UInt64BufferBuilder};
-use arrow_array::{UInt32Array, UInt64Array};
-use datafusion_physical_expr::hash_utils::create_hashes;
-use datafusion_physical_expr::PhysicalExpr;
-use futures::stream::{select, BoxStream};
-use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
-use parking_lot::Mutex;
-use smallvec::smallvec;
-
-use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::intervals::ExprIntervalGraph;
-
 use crate::physical_plan::common::SharedMemoryReservation;
+use crate::physical_plan::joins::hash_join::{
+    build_equal_condition_join_indices, update_hash,
+};
 use crate::physical_plan::joins::hash_join_utils::{
     build_filter_expression_graph, calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, record_visited_indices, IntervalCalculatorInnerState,
+    PruningJoinHashMap,
 };
 use crate::physical_plan::joins::StreamJoinPartitionMode;
 use crate::physical_plan::DisplayAs;
@@ -74,14 +59,23 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+
+use arrow::array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, PrimitiveBuilder};
+use arrow::compute::concat_batches;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::bisect;
 use datafusion_common::{internal_err, plan_err, JoinType};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::intervals::ExprIntervalGraph;
 
-use super::hash_join::equal_rows;
-use super::hash_join_utils::SymmetricJoinHashMap;
-use super::utils::apply_join_filter_to_indices;
+use ahash::RandomState;
+use futures::stream::{select, BoxStream};
+use futures::{Stream, StreamExt};
+use hashbrown::HashSet;
+use parking_lot::Mutex;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
@@ -620,41 +614,6 @@ impl Stream for SymmetricHashJoinStream {
     }
 }
 
-fn prune_hash_values(
-    prune_length: usize,
-    hashmap: &mut SymmetricJoinHashMap,
-    row_hash_values: &mut VecDeque<u64>,
-    offset: u64,
-) -> Result<()> {
-    // Create a (hash)-(row number set) map
-    let mut hash_value_map: HashMap<u64, HashSet<u64>> = HashMap::new();
-    for index in 0..prune_length {
-        let hash_value = row_hash_values.pop_front().unwrap();
-        if let Some(set) = hash_value_map.get_mut(&hash_value) {
-            set.insert(offset + index as u64);
-        } else {
-            let mut set = HashSet::new();
-            set.insert(offset + index as u64);
-            hash_value_map.insert(hash_value, set);
-        }
-    }
-    for (hash_value, index_set) in hash_value_map.iter() {
-        if let Some((_, separation_chain)) = hashmap
-            .0
-            .get_mut(*hash_value, |(hash, _)| hash_value == hash)
-        {
-            separation_chain.retain(|n| !index_set.contains(n));
-            if separation_chain.is_empty() {
-                hashmap
-                    .0
-                    .remove_entry(*hash_value, |(hash, _)| hash_value == hash);
-            }
-        }
-    }
-    hashmap.shrink_if_necessary(HASHMAP_SHRINK_SCALE_FACTOR);
-    Ok(())
-}
-
 /// Determine the pruning length for `buffer`.
 ///
 /// This function evaluates the build side filter expression, converts the
@@ -834,144 +793,6 @@ pub(crate) fn build_side_determined_results(
     }
 }
 
-/// Gets build and probe indices which satisfy the on condition (including
-/// the equality condition and the join filter) in the join.
-#[allow(clippy::too_many_arguments)]
-pub fn build_join_indices(
-    probe_batch: &RecordBatch,
-    build_hashmap: &SymmetricJoinHashMap,
-    build_input_buffer: &RecordBatch,
-    on_build: &[Column],
-    on_probe: &[Column],
-    filter: Option<&JoinFilter>,
-    random_state: &RandomState,
-    null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
-    offset: Option<usize>,
-    build_side: JoinSide,
-) -> Result<(UInt64Array, UInt32Array)> {
-    // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
-    let (build_indices, probe_indices) = build_equal_condition_join_indices(
-        build_hashmap,
-        build_input_buffer,
-        probe_batch,
-        on_build,
-        on_probe,
-        random_state,
-        null_equals_null,
-        hashes_buffer,
-        offset,
-    )?;
-    if let Some(filter) = filter {
-        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
-        apply_join_filter_to_indices(
-            build_input_buffer,
-            probe_batch,
-            build_indices,
-            probe_indices,
-            filter,
-            build_side,
-        )
-    } else {
-        Ok((build_indices, probe_indices))
-    }
-}
-
-// Returns build/probe indices satisfying the equality condition.
-// On LEFT.b1 = RIGHT.b2
-// LEFT Table:
-//  a1  b1  c1
-//  1   1   10
-//  3   3   30
-//  5   5   50
-//  7   7   70
-//  9   8   90
-//  11  8   110
-// 13   10  130
-// RIGHT Table:
-//  a2   b2  c2
-//  2    2   20
-//  4    4   40
-//  6    6   60
-//  8    8   80
-// 10   10  100
-// 12   10  120
-// The result is
-// "+----+----+-----+----+----+-----+",
-// "| a1 | b1 | c1  | a2 | b2 | c2  |",
-// "+----+----+-----+----+----+-----+",
-// "| 11 | 8  | 110 | 8  | 8  | 80  |",
-// "| 13 | 10 | 130 | 10 | 10 | 100 |",
-// "| 13 | 10 | 130 | 12 | 10 | 120 |",
-// "| 9  | 8  | 90  | 8  | 8  | 80  |",
-// "+----+----+-----+----+----+-----+"
-// And the result of build and probe indices are:
-// Build indices:  5, 6, 6, 4
-// Probe indices: 3, 4, 5, 3
-#[allow(clippy::too_many_arguments)]
-pub fn build_equal_condition_join_indices(
-    build_hashmap: &SymmetricJoinHashMap,
-    build_input_buffer: &RecordBatch,
-    probe_batch: &RecordBatch,
-    build_on: &[Column],
-    probe_on: &[Column],
-    random_state: &RandomState,
-    null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
-    offset: Option<usize>,
-) -> Result<(UInt64Array, UInt32Array)> {
-    let keys_values = probe_on
-        .iter()
-        .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
-        .collect::<Result<Vec<_>>>()?;
-    let build_join_values = build_on
-        .iter()
-        .map(|c| {
-            Ok(c.evaluate(build_input_buffer)?
-                .into_array(build_input_buffer.num_rows()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    hashes_buffer.clear();
-    hashes_buffer.resize(probe_batch.num_rows(), 0);
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-    // Using a buffer builder to avoid slower normal builder
-    let mut build_indices = UInt64BufferBuilder::new(0);
-    let mut probe_indices = UInt32BufferBuilder::new(0);
-    let offset_value = offset.unwrap_or(0);
-    // Visit all of the probe rows
-    for (row, hash_value) in hash_values.iter().enumerate() {
-        // Get the hash and find it in the build index
-        // For every item on the build and probe we check if it matches
-        // This possibly contains rows with hash collisions,
-        // So we have to check here whether rows are equal or not
-        if let Some((_, indices)) = build_hashmap
-            .0
-            .get(*hash_value, |(hash, _)| *hash_value == *hash)
-        {
-            for &i in indices {
-                // Check hash collisions
-                let offset_build_index = i as usize - offset_value;
-                // Check hash collisions
-                if equal_rows(
-                    offset_build_index,
-                    row,
-                    &build_join_values,
-                    &keys_values,
-                    null_equals_null,
-                )? {
-                    build_indices.append(offset_build_index as u64);
-                    probe_indices.append(row as u32);
-                }
-            }
-        }
-    }
-
-    Ok((
-        PrimitiveArray::new(build_indices.finish().into(), None),
-        PrimitiveArray::new(probe_indices.finish().into(), None),
-    ))
-}
-
 /// This method performs a join between the build side input buffer and the probe side batch.
 ///
 /// # Arguments
@@ -1006,18 +827,18 @@ pub(crate) fn join_with_probe_batch(
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
         return Ok(None);
     }
-    let (build_indices, probe_indices) = build_join_indices(
-        probe_batch,
+    let (build_indices, probe_indices) = build_equal_condition_join_indices(
         &build_hash_joiner.hashmap,
         &build_hash_joiner.input_buffer,
+        probe_batch,
         &build_hash_joiner.on,
         &probe_hash_joiner.on,
-        filter,
         random_state,
         null_equals_null,
         &mut build_hash_joiner.hashes_buffer,
-        Some(build_hash_joiner.deleted_offset),
+        filter,
         build_hash_joiner.build_side,
+        Some(build_hash_joiner.deleted_offset),
     )?;
     if need_to_produce_result_in_final(build_hash_joiner.build_side, join_type) {
         record_visited_indices(
@@ -1063,9 +884,7 @@ pub struct OneSideHashJoiner {
     /// Columns from the side
     pub(crate) on: Vec<Column>,
     /// Hashmap
-    pub(crate) hashmap: SymmetricJoinHashMap,
-    /// To optimize hash deleting in case of pruning, we hold them in memory
-    row_hash_values: VecDeque<u64>,
+    pub(crate) hashmap: PruningJoinHashMap,
     /// Reuse the hashes buffer
     pub(crate) hashes_buffer: Vec<u64>,
     /// Matched rows
@@ -1084,7 +903,6 @@ impl OneSideHashJoiner {
         size += self.input_buffer.get_array_memory_size();
         size += std::mem::size_of_val(&self.on);
         size += self.hashmap.size();
-        size += self.row_hash_values.capacity() * std::mem::size_of::<u64>();
         size += self.hashes_buffer.capacity() * std::mem::size_of::<u64>();
         size += self.visited_rows.capacity() * std::mem::size_of::<usize>();
         size += std::mem::size_of_val(&self.offset);
@@ -1096,46 +914,12 @@ impl OneSideHashJoiner {
             build_side,
             input_buffer: RecordBatch::new_empty(schema),
             on,
-            hashmap: SymmetricJoinHashMap::with_capacity(0),
-            row_hash_values: VecDeque::new(),
+            hashmap: PruningJoinHashMap::with_capacity(0),
             hashes_buffer: vec![],
             visited_rows: HashSet::new(),
             offset: 0,
             deleted_offset: 0,
         }
-    }
-
-    pub fn update_hash(
-        on: &[Column],
-        batch: &RecordBatch,
-        hash_map: &mut SymmetricJoinHashMap,
-        offset: usize,
-        random_state: &RandomState,
-        hashes_buffer: &mut Vec<u64>,
-    ) -> Result<()> {
-        // evaluate the keys
-        let keys_values = on
-            .iter()
-            .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-        // calculate the hash values
-        let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-        // insert hashes to key of the hashmap
-        for (row, hash_value) in hash_values.iter().enumerate() {
-            let item = hash_map
-                .0
-                .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-            if let Some((_, indices)) = item {
-                indices.push((row + offset) as u64);
-            } else {
-                hash_map.0.insert(
-                    *hash_value,
-                    (*hash_value, smallvec![(row + offset) as u64]),
-                    |(hash, _)| *hash,
-                );
-            }
-        }
-        Ok(())
     }
 
     /// Updates the internal state of the [OneSideHashJoiner] with the incoming batch.
@@ -1159,16 +943,15 @@ impl OneSideHashJoiner {
         self.hashes_buffer.resize(batch.num_rows(), 0);
         // Get allocation_info before adding the item
         // Update the hashmap with the join key values and hashes of the incoming batch:
-        Self::update_hash(
+        update_hash(
             &self.on,
             batch,
             &mut self.hashmap,
             self.offset,
             random_state,
             &mut self.hashes_buffer,
+            self.deleted_offset,
         )?;
-        // Add the hashes buffer to the hash value deque:
-        self.row_hash_values.extend(self.hashes_buffer.iter());
         Ok(())
     }
 
@@ -1228,11 +1011,10 @@ impl OneSideHashJoiner {
 
     pub(crate) fn prune_internal_state(&mut self, prune_length: usize) -> Result<()> {
         // Prune the hash values:
-        prune_hash_values(
+        self.hashmap.prune_hash_values(
             prune_length,
-            &mut self.hashmap,
-            &mut self.row_hash_values,
             self.deleted_offset as u64,
+            HASHMAP_SHRINK_SCALE_FACTOR,
         )?;
         // Remove pruned rows from the visited rows set:
         for row in self.deleted_offset..(self.deleted_offset + prune_length) {
@@ -1448,7 +1230,7 @@ mod tests {
     };
     use datafusion_common::ScalarValue;
 
-    const TABLE_SIZE: i32 = 100;
+    const TABLE_SIZE: i32 = 1000;
 
     pub async fn experiment(
         left: Arc<dyn ExecutionPlan>,
@@ -1582,6 +1364,61 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let (left_batch, right_batch) =
             build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: col("la1", left_schema)?,
+            options: SortOptions::default(),
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: col("ra1", right_schema)?,
+            options: SortOptions::default(),
+        }];
+        let (left, right) = create_memory_table(
+            left_batch,
+            right_batch,
+            vec![left_sorted],
+            vec![right_sorted],
+            13,
+        )?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
+        )];
+
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Int32, true),
+            Field::new("right", DataType::Int32, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture_i32(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
+        let column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ];
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn join_all_one_ascending_numeric_v2() -> Result<()> {
+        let join_type = JoinType::Inner;
+        let cardinality = (4, 5);
+        let case_expr = 2;
+        let task_ctx = Arc::new(TaskContext::default());
+        let (left_batch, right_batch) = build_sides_record_batches(1000, cardinality)?;
         let left_schema = &left_batch.schema();
         let right_schema = &right_batch.schema();
         let left_sorted = vec![PhysicalSortExpr {

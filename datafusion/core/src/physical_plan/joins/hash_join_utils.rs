@@ -18,30 +18,29 @@
 //! This file contains common subroutines for regular and symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::fmt::{Debug, Formatter};
+use std::ops::IndexMut;
 use std::sync::Arc;
 use std::{fmt, usize};
 
-use arrow::datatypes::{ArrowNativeType, SchemaRef};
+use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
+use crate::physical_plan::ExecutionPlan;
 
 use arrow::compute::concat_batches;
+use arrow::datatypes::{ArrowNativeType, SchemaRef};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
-use smallvec::SmallVec;
-use std::fmt::{Debug, Formatter};
-
-use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
-use crate::physical_plan::ExecutionPlan;
-use datafusion_common::Result;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 // By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
@@ -94,19 +93,14 @@ use datafusion_common::Result;
 // ---------------------
 // | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
 // ---------------------
-
 // TODO: speed up collision checks
 // https://github.com/apache/arrow-datafusion/issues/50
 pub struct JoinHashMap {
-    // Stores hash value to first index
+    // Stores hash value to last row index
     pub map: RawTable<(u64, u64)>,
     // Stores indices in chained list data structure
     pub next: Vec<u64>,
 }
-
-/// SymmetricJoinHashMap is similar to JoinHashMap, except that it stores the indices inline, allowing it to mutate
-/// and shrink the indices.
-pub struct SymmetricJoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
 
 impl JoinHashMap {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
@@ -117,37 +111,201 @@ impl JoinHashMap {
     }
 }
 
-impl SymmetricJoinHashMap {
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self(RawTable::with_capacity(capacity))
+/// Trait defining methods that must be implemented by a hash map type to be used for joins.
+pub trait JoinHashMapType {
+    /// The type of list used to store the hash values.
+    type NextType: IndexMut<usize, Output = u64>;
+    /// Extend with zero
+    fn extend_zero(&mut self, len: usize);
+    /// Returns mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
+    /// Returns a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)>;
+    /// Returns a reference to the next.
+    fn get_list(&self) -> &Self::NextType;
+}
+
+/// Implementation of `JoinHashMapType` for `JoinHashMap`.
+impl JoinHashMapType for JoinHashMap {
+    type NextType = Vec<u64>;
+
+    // Void implementation
+    fn extend_zero(&mut self, _: usize) {}
+
+    /// Get mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+        (&mut self.map, &mut self.next)
     }
 
-    /// In this implementation, the scale_factor variable determines how conservative the shrinking strategy is.
-    /// The value of scale_factor is set to 4, which means the capacity will be reduced by 25%
-    /// when necessary. You can adjust the scale_factor value to achieve the desired
-    /// balance between memory usage and performance.
-    //
-    // If you increase the scale_factor, the capacity will shrink less aggressively,
-    // leading to potentially higher memory usage but fewer resizes.
-    // Conversely, if you decrease the scale_factor, the capacity will shrink more aggressively,
-    // potentially leading to lower memory usage but more frequent resizing.
-    pub(crate) fn shrink_if_necessary(&mut self, scale_factor: usize) {
-        let capacity = self.0.capacity();
-        let len = self.0.len();
-
-        if capacity > scale_factor * len {
-            let new_capacity = (capacity * (scale_factor - 1)) / scale_factor;
-            self.0.shrink_to(new_capacity, |(hash, _)| *hash)
-        }
+    /// Get a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)> {
+        &self.map
     }
 
-    pub(crate) fn size(&self) -> usize {
-        self.0.allocation_info().1.size()
+    /// Get a reference to the next.
+    fn get_list(&self) -> &Self::NextType {
+        &self.next
+    }
+}
+
+/// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
+impl JoinHashMapType for PruningJoinHashMap {
+    type NextType = VecDeque<u64>;
+
+    // Extend with zero
+    fn extend_zero(&mut self, len: usize) {
+        self.next.resize(self.next.len() + len, 0)
+    }
+
+    /// Get mutable references to the hash map and the next.
+    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+        (&mut self.map, &mut self.next)
+    }
+
+    /// Get a reference to the hash map.
+    fn get_map(&self) -> &RawTable<(u64, u64)> {
+        &self.map
+    }
+
+    /// Get a reference to the next.
+    fn get_list(&self) -> &Self::NextType {
+        &self.next
     }
 }
 
 impl fmt::Debug for JoinHashMap {
     fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
+
+/// The `PruningJoinHashMap` is similar to a regular `JoinHashMap`, but with
+/// the capability of pruning elements in an efficient manner. This structure
+/// is particularly useful for cases where it's necessary to remove elements
+/// from the map based on their buffer order.
+///
+/// # Example
+///
+/// ``` text
+/// Let's continue the example of `JoinHashMap` and then show how `PruningJoinHashMap` would
+/// handle the pruning scenario.
+///
+/// Insert the pair (1,4) into the `PruningJoinHashMap`:
+/// map:
+/// ---------
+/// | 1 | 5 |
+/// | 2 | 3 |
+/// ---------
+/// list:
+/// ---------------------
+/// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
+/// ---------------------
+///
+/// Now, let's prune 3 rows from `PruningJoinHashMap`:
+/// map:
+/// ---------
+/// | 1 | 5 |
+/// ---------
+/// list:
+/// ---------
+/// | 2 | 4 | <--- hash value 1 maps to 2 (5 - 3), 1 (4 - 3), NA (2 - 3) (which means indices values 1,0)
+/// ---------
+///
+/// After pruning, the | 2 | 3 | entry is deleted from `PruningJoinHashMap` since
+/// there are no values left for this key.
+/// ```
+pub struct PruningJoinHashMap {
+    /// Stores hash value to last row index
+    pub map: RawTable<(u64, u64)>,
+    /// Stores indices in chained list data structure
+    pub next: VecDeque<u64>,
+}
+
+impl PruningJoinHashMap {
+    /// Constructs a new `PruningJoinHashMap` with the given capacity.
+    /// Both the map and the list are pre-allocated with the provided capacity.
+    ///
+    /// # Arguments
+    /// * `capacity`: The initial capacity of the hash map.
+    ///
+    /// # Returns
+    /// A new instance of `PruningJoinHashMap`.
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        PruningJoinHashMap {
+            map: RawTable::with_capacity(capacity),
+            next: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    /// Shrinks the capacity of the hash map, if necessary, based on the
+    /// provided scale factor.
+    ///
+    /// # Arguments
+    /// * `scale_factor`: The scale factor that determines how conservative the
+    ///   shrinking strategy is. The capacity will be reduced by 1/`scale_factor`
+    ///   when necessary.
+    ///
+    /// # Note
+    /// Increasing the scale factor results in less aggressive capacity shrinking,
+    /// leading to potentially higher memory usage but fewer resizes. Conversely,
+    /// decreasing the scale factor results in more aggressive capacity shrinking,
+    /// potentially leading to lower memory usage but more frequent resizing.
+    pub(crate) fn shrink_if_necessary(&mut self, scale_factor: usize) {
+        let capacity = self.map.capacity();
+
+        if capacity > scale_factor * self.map.len() {
+            let new_capacity = (capacity * (scale_factor - 1)) / scale_factor;
+            // Resize the map with the new capacity.
+            self.map.shrink_to(new_capacity, |(hash, _)| *hash)
+        }
+    }
+
+    /// Calculates the size of the `PruningJoinHashMap` in bytes.
+    ///
+    /// # Returns
+    /// The size of the hash map in bytes.
+    pub(crate) fn size(&self) -> usize {
+        self.map.allocation_info().1.size()
+            + self.next.capacity() * std::mem::size_of::<u64>()
+    }
+
+    /// Removes hash values from the map and the list based on the given pruning
+    /// length and deleting offset.
+    ///
+    /// # Arguments
+    /// * `prune_length`: The number of elements to remove from the list.
+    /// * `deleting_offset`: The offset used to determine which hash values to remove from the map.
+    ///
+    /// # Returns
+    /// A `Result` indicating whether the operation was successful.
+    pub(crate) fn prune_hash_values(
+        &mut self,
+        prune_length: usize,
+        deleting_offset: u64,
+        shrink_factor: usize,
+    ) -> Result<()> {
+        // Remove elements from the list based on the pruning length.
+        self.next.drain(0..prune_length);
+
+        // Calculate the keys that should be removed from the map.
+        let removable_keys = unsafe {
+            self.map
+                .iter()
+                .map(|bucket| bucket.as_ref())
+                .filter_map(|(hash, tail_index)| {
+                    (*tail_index < prune_length as u64 + deleting_offset).then_some(*hash)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Remove the keys from the map.
+        removable_keys.into_iter().for_each(|hash_value| {
+            self.map
+                .remove_entry(hash_value, |(hash, _)| hash_value == *hash);
+        });
+
+        // Shrink the map if necessary.
+        self.shrink_if_necessary(shrink_factor);
         Ok(())
     }
 }
@@ -682,7 +840,6 @@ pub mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
-    use smallvec::smallvec;
     use std::sync::Arc;
 
     /// Filter expr for a + b > c + 10 AND a + b < c + 100
@@ -1020,40 +1177,40 @@ pub mod tests {
     #[test]
     fn test_shrink_if_necessary() {
         let scale_factor = 4;
-        let mut join_hash_map = SymmetricJoinHashMap::with_capacity(100);
+        let mut join_hash_map = PruningJoinHashMap::with_capacity(100);
         let data_size = 2000;
         let deleted_part = 3 * data_size / 4;
         // Add elements to the JoinHashMap
         for hash_value in 0..data_size {
-            join_hash_map.0.insert(
+            join_hash_map.map.insert(
                 hash_value,
-                (hash_value, smallvec![hash_value]),
+                (hash_value, hash_value),
                 |(hash, _)| *hash,
             );
         }
 
-        assert_eq!(join_hash_map.0.len(), data_size as usize);
-        assert!(join_hash_map.0.capacity() >= data_size as usize);
+        assert_eq!(join_hash_map.map.len(), data_size as usize);
+        assert!(join_hash_map.map.capacity() >= data_size as usize);
 
         // Remove some elements from the JoinHashMap
         for hash_value in 0..deleted_part {
             join_hash_map
-                .0
+                .map
                 .remove_entry(hash_value, |(hash, _)| hash_value == *hash);
         }
 
-        assert_eq!(join_hash_map.0.len(), (data_size - deleted_part) as usize);
+        assert_eq!(join_hash_map.map.len(), (data_size - deleted_part) as usize);
 
         // Old capacity
-        let old_capacity = join_hash_map.0.capacity();
+        let old_capacity = join_hash_map.map.capacity();
 
         // Test shrink_if_necessary
         join_hash_map.shrink_if_necessary(scale_factor);
 
         // The capacity should be reduced by the scale factor
         let new_expected_capacity =
-            join_hash_map.0.capacity() * (scale_factor - 1) / scale_factor;
-        assert!(join_hash_map.0.capacity() >= new_expected_capacity);
-        assert!(join_hash_map.0.capacity() <= old_capacity);
+            join_hash_map.map.capacity() * (scale_factor - 1) / scale_factor;
+        assert!(join_hash_map.map.capacity() >= new_expected_capacity);
+        assert!(join_hash_map.map.capacity() <= old_capacity);
     }
 }
