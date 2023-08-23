@@ -35,7 +35,7 @@ path = "src/lib.rs"
 [features]
 avro = ["apache-avro"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
-default = ["compression"]
+default = ["compression", "parquet"]
 pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
