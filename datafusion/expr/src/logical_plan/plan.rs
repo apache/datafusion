@@ -1835,7 +1835,7 @@ impl Join {
         let on: Vec<(Expr, Expr)> = column_on
             .0
             .into_iter()
-            .zip(column_on.1.into_iter())
+            .zip(column_on.1)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
@@ -1994,7 +1994,7 @@ mod tests {
     fn test_display_graphviz() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected_graphviz = r###"
+        let expected_graphviz = r#"
 // Begin DataFusion GraphViz Plan,
 // display it online here: https://dreampuf.github.io/GraphvizOnline
 
@@ -2027,7 +2027,7 @@ digraph {
   }
 }
 // End DataFusion GraphViz Plan
-"###;
+"#;
 
         // just test for a few key lines in the output rather than the
         // whole thing to make test mainteance easier.

@@ -203,7 +203,9 @@ fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
     match v.len() {
         2 => Some(lit("")),
         3 => {
-            let HirKind::Literal(l) = v[1].kind() else { return None };
+            let HirKind::Literal(l) = v[1].kind() else {
+                return None;
+            };
             like_str_from_literal(l).map(lit)
         }
         _ => None,

@@ -163,7 +163,7 @@ pub trait PartitionEvaluator: Debug + Send {
             let res = (0..num_rows)
                 .map(|idx| self.evaluate(values, &self.get_range(idx, num_rows)?))
                 .collect::<Result<Vec<_>>>()?;
-            ScalarValue::iter_to_array(res.into_iter())
+            ScalarValue::iter_to_array(res)
         } else {
             not_impl_err!("evaluate_all is not implemented by default")
         }

@@ -30,13 +30,11 @@ async fn projection_same_fields() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     #[rustfmt::skip]
-    let expected = vec![
-        "+---+",
+    let expected = ["+---+",
         "| a |",
         "+---+",
         "| 2 |",
-        "+---+"
-    ];
+        "+---+"];
     assert_batches_eq!(expected, &actual);
 
     Ok(())
@@ -52,7 +50,7 @@ async fn projection_type_alias() -> Result<()> {
     let sql = "SELECT c1 as c3 FROM aggregate_simple ORDER BY c3 LIMIT 2";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec![
+    let expected = [
         "+---------+",
         "| c3      |",
         "+---------+",
@@ -71,7 +69,7 @@ async fn csv_query_group_by_avg_with_projection() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(c12), c1 FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+-----------------------------+----+",
         "| AVG(aggregate_test_100.c12) | c1 |",
         "+-----------------------------+----+",
@@ -149,7 +147,7 @@ async fn subquery_alias_case_insensitive() -> Result<()> {
     let results =
         partitioned_csv::execute("SELECT V1.c1, v1.C2 FROM (SELECT test.C1, TEST.c2 FROM test) V1 ORDER BY v1.c1, V1.C2 LIMIT 1", partition_count).await?;
 
-    let expected = vec![
+    let expected = [
         "+----+----+",
         "| c1 | c2 |",
         "+----+----+",
@@ -246,15 +244,13 @@ async fn project_cast_dictionary() {
     let df = DataFrame::new(ctx.state(), logical_plan);
     let actual = df.collect().await.unwrap();
 
-    let expected = vec![
-        "+----------------------------------------------------------------------------------+",
+    let expected = ["+----------------------------------------------------------------------------------+",
         "| CASE WHEN cpu_load_short.host IS NULL THEN Utf8(\"\") ELSE cpu_load_short.host END |",
         "+----------------------------------------------------------------------------------+",
         "| host1                                                                            |",
         "|                                                                                  |",
         "| host2                                                                            |",
-        "+----------------------------------------------------------------------------------+",
-    ];
+        "+----------------------------------------------------------------------------------+"];
     assert_batches_eq!(expected, &actual);
 }
 
@@ -331,7 +327,7 @@ async fn project_column_with_same_name_as_relation() -> Result<()> {
     let sql = "select a.a from (select 1 as a) as a;";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "+---+"];
+    let expected = ["+---+", "| a |", "+---+", "| 1 |", "+---+"];
     assert_batches_sorted_eq!(expected, &actual);
 
     Ok(())
@@ -344,7 +340,7 @@ async fn project_column_with_filters_that_cant_pushed_down_always_false() -> Res
     let sql = "select * from (select 1 as a) f where f.a=2;";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec!["++", "++"];
+    let expected = ["++", "++"];
     assert_batches_sorted_eq!(expected, &actual);
 
     Ok(())
@@ -357,7 +353,7 @@ async fn project_column_with_filters_that_cant_pushed_down_always_true() -> Resu
     let sql = "select * from (select 1 as a) f where f.a=1;";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "+---+"];
+    let expected = ["+---+", "| a |", "+---+", "| 1 |", "+---+"];
     assert_batches_sorted_eq!(expected, &actual);
 
     Ok(())
@@ -370,7 +366,7 @@ async fn project_columns_in_memory_without_propagation() -> Result<()> {
     let sql = "select column1 as a from (values (1), (2)) f where f.column1 = 2;";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec!["+---+", "| a |", "+---+", "| 2 |", "+---+"];
+    let expected = ["+---+", "| a |", "+---+", "| 2 |", "+---+"];
     assert_batches_sorted_eq!(expected, &actual);
 
     Ok(())

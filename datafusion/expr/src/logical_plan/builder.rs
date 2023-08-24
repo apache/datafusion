@@ -666,7 +666,7 @@ impl LogicalPlanBuilder {
             join_keys
                 .0
                 .into_iter()
-                .zip(join_keys.1.into_iter())
+                .zip(join_keys.1)
                 .map(|(l, r)| {
                     let l = l.into();
                     let r = r.into();
@@ -743,7 +743,7 @@ impl LogicalPlanBuilder {
 
         let on = left_keys
             .into_iter()
-            .zip(right_keys.into_iter())
+            .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
@@ -778,7 +778,7 @@ impl LogicalPlanBuilder {
             .map(|c| Self::normalize(&right, c))
             .collect::<Result<_>>()?;
 
-        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];

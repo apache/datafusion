@@ -852,15 +852,13 @@ mod tests {
             .collect()
             .await?;
         #[rustfmt::skip]
-            let expected = vec![
-            "+----+------+",
+            let expected = ["+----+------+",
             "| c2 | c3   |",
             "+----+------+",
             "| 5  | 36   |",
             "| 5  | -31  |",
             "| 5  | -101 |",
-            "+----+------+",
-        ];
+            "+----+------+"];
         assert_batches_eq!(expected, &record_batch);
         Ok(())
     }
@@ -967,13 +965,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+--------------+",
+        let expected = ["+--------------+",
             "| SUM(aggr.c2) |",
             "+--------------+",
             "| 285          |",
-            "+--------------+",
-        ];
+            "+--------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions);
 
@@ -1006,13 +1002,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+--------------+",
+        let expected = ["+--------------+",
             "| SUM(aggr.c3) |",
             "+--------------+",
             "| 781          |",
-            "+--------------+",
-        ];
+            "+--------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(1, actual_partitions); // Compressed csv won't be scanned in parallel
 
@@ -1044,10 +1038,8 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
+        let expected = ["++",
+            "++"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -1079,10 +1071,8 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
+        let expected = ["++",
+            "++"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions);
 
@@ -1125,10 +1115,8 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
+        let expected = ["++",
+            "++"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -1180,13 +1168,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+---------------------+",
+        let expected = ["+---------------------+",
             "| SUM(empty.column_1) |",
             "+---------------------+",
             "| 10                  |",
-            "+---------------------+",
-        ];
+            "+---------------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -1221,13 +1207,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+-----------------------+",
+        let expected = ["+-----------------------+",
             "| SUM(one_col.column_1) |",
             "+-----------------------+",
             "| 50                    |",
-            "+-----------------------+",
-        ];
+            "+-----------------------+"];
         let file_size = if cfg!(target_os = "windows") {
             30 // new line on Win is '\r\n'
         } else {
@@ -1271,13 +1255,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+---------------+",
+        let expected = ["+---------------+",
             "| sum_of_5_cols |",
             "+---------------+",
             "| 15            |",
-            "+---------------+",
-        ];
+            "+---------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions);
 

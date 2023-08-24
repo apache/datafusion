@@ -784,7 +784,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter.into_iter());
+                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
@@ -2695,7 +2695,7 @@ mod tests {
 
         let plan = plan(&logical_plan).await.unwrap();
 
-        let expected_graph = r###"
+        let expected_graph = r#"
 // Begin DataFusion GraphViz Plan,
 // display it online here: https://dreampuf.github.io/GraphvizOnline
 
@@ -2705,7 +2705,7 @@ digraph {
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan
-"###;
+"#;
 
         let generated_graph = format!("{}", displayable(&*plan).graphviz());
 

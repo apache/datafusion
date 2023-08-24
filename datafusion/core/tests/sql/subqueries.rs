@@ -48,7 +48,7 @@ async fn correlated_scalar_subquery_sum_agg_bug() -> Result<()> {
 
     // assert data
     let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+--------+",
         "| t1_int |",
         "+--------+",

@@ -211,7 +211,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let input1 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
     let input2 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.1));
     let input3 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.2));
-    let input4 = Int64Array::from_iter_values(input4.into_iter());
+    let input4 = Int64Array::from_iter_values(input4);
 
     // split into several record batches
     let mut remainder = RecordBatch::try_from_iter(vec![

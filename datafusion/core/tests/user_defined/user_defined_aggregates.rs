@@ -49,7 +49,7 @@ use datafusion_common::{
 async fn test_setup() {
     let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "SELECT * from t order by time";
-    let expected = vec![
+    let expected = [
         "+-------+----------------------------+",
         "| value | time                       |",
         "+-------+----------------------------+",
@@ -69,7 +69,7 @@ async fn test_udaf() {
     let TestContext { ctx, test_state } = TestContext::new();
     assert!(!test_state.update_batch());
     let sql = "SELECT time_sum(time) from t";
-    let expected = vec![
+    let expected = [
         "+----------------------------+",
         "| time_sum(t.time)           |",
         "+----------------------------+",
@@ -87,7 +87,7 @@ async fn test_udaf() {
 async fn test_udaf_as_window() {
     let TestContext { ctx, test_state } = TestContext::new();
     let sql = "SELECT time_sum(time) OVER() as time_sum from t";
-    let expected = vec![
+    let expected = [
         "+----------------------------+",
         "| time_sum                   |",
         "+----------------------------+",
@@ -109,7 +109,7 @@ async fn test_udaf_as_window() {
 async fn test_udaf_as_window_with_frame() {
     let TestContext { ctx, test_state } = TestContext::new();
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
-    let expected = vec![
+    let expected = [
         "+----------------------------+",
         "| time_sum                   |",
         "+----------------------------+",
@@ -144,7 +144,7 @@ async fn test_udaf_as_window_with_frame_without_retract_batch() {
 async fn test_udaf_returning_struct() {
     let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "SELECT first(value, time) from t";
-    let expected = vec![
+    let expected = [
         "+------------------------------------------------+",
         "| first(t.value,t.time)                          |",
         "+------------------------------------------------+",
@@ -159,7 +159,7 @@ async fn test_udaf_returning_struct() {
 async fn test_udaf_returning_struct_subquery() {
     let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "select sq.first['value'], sq.first['time'] from (SELECT first(value, time) as first from t) as sq";
-    let expected = vec![
+    let expected = [
         "+-----------------+----------------------------+",
         "| sq.first[value] | sq.first[time]             |",
         "+-----------------+----------------------------+",
