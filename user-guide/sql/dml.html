@@ -398,12 +398,16 @@
 -->
 <section id="dml">
 <h1>DML<a class="headerlink" href="#dml" title="Link to this heading">¶</a></h1>
+<p>DML stands for “Data Manipulation Language” and relates to inserting
+and modifying data in tables.</p>
 <section id="copy">
 <h2>COPY<a class="headerlink" href="#copy" title="Link to this heading">¶</a></h2>
-<p>Copy a table to file(s). Supported file formats are <code class="docutils literal notranslate"><span class="pre">parquet</span></code>, <code class="docutils literal notranslate"><span class="pre">csv</span></code>, and <code class="docutils literal notranslate"><span class="pre">json</span></code>.</p>
+<p>Copies the contents of a table or query to file(s). Supported file
+formats are <code class="docutils literal notranslate"><span class="pre">parquet</span></code>, <code class="docutils literal notranslate"><span class="pre">csv</span></code>, and <code class="docutils literal notranslate"><span class="pre">json</span></code> and can be inferred based on
+filename if writing to a single file.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">PER_THREAD_OUTPUT</span></code> option treats <code class="docutils literal notranslate"><span class="pre">file_name</span></code> as a directory and writes a file per thread within it.</p>
 <pre>
-COPY <i><b>table_name</i></b> TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
+COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
 
 where <i><b>option</i></b> can be one of:
     FORMAT <i><b>format_name</i></b>
@@ -411,14 +415,29 @@ where <i><b>option</i></b> can be one of:
     ROW_GROUP_SIZE <i><b>integer</i></b>
     ROW_GROUP_LIMIT_BYTES <i><b>integer</i></b>
 </pre>
+<p>Copy the contents of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> to <code class="docutils literal notranslate"><span class="pre">file_name.json</span></code> in JSON format:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;file_name.json&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------+</span>
 <span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">     </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------+</span>
-
-<span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;dir_name&#39;</span><span class="w"> </span><span class="p">(</span><span class="n">FORMAT</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span><span class="w"> </span><span class="n">PER_THREAD_OUTPUT</span><span class="w"> </span><span class="k">true</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Copy the contents of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> to one or more Parquet formatted
+files in the <code class="docutils literal notranslate"><span class="pre">dir_name</span></code> directory:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;dir_name&#39;</span><span class="w"> </span><span class="p">(</span><span class="n">FORMAT</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span><span class="w"> </span><span class="n">PER_THREAD_OUTPUT</span><span class="w"> </span><span class="k">true</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+</pre></div>
+</div>
+<p>Run the query <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">*</span> <span class="pre">from</span> <span class="pre">source</span> <span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">time</span></code> and write the
+results (maintaining the order) to a parquet file named
+<code class="docutils literal notranslate"><span class="pre">output.parquet</span></code> with a maximum parquet row group size of 10MB:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="k">source</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">time</span><span class="p">)</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;output.parquet&#39;</span><span class="w"> </span><span class="p">(</span><span class="n">ROW_GROUP_LIMIT_BYTES</span><span class="w"> </span><span class="mi">10000000</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------+</span>
@@ -484,7 +503,7 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.2.3.<br>
 </p>
     </div>
     
