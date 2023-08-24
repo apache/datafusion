@@ -18,13 +18,13 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    compute::interleave,
+    error::ArrowError,
     row::{RowConverter, Rows, SortField},
 };
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::Result;
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
@@ -359,8 +359,8 @@ impl TopKHeap {
     }
 
     /// Returns the values stored in this heap, from values low to
-    /// high, as a single [`RecordBatch`], and a sorted vec of heap contents
-
+    /// high, as a single [`RecordBatch`], and a sorted vec of the
+    /// current heap's contents
     pub fn emit_with_state(&mut self) -> Result<(RecordBatch, Vec<TopKRow>)> {
         let schema = self.store.schema().clone();
 
@@ -657,3 +657,25 @@ impl RecordBatchStore {
             + self.batches_size
     }
 }
+
+
+/// wrapper over [`arrow::compute::interleave`] that re-encodes
+/// dictionaries that have a low usage (values referenced)
+ fn interleave(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+     // for now, always re-encode only string dictionaries
+     if !values.is_empty() {
+         match values[0].data_type() {
+             DataType::Dictionary(_key_type, value_type) if value_type.as_ref() == &DataType::Utf8 => {
+
+                 //todo!()
+                 return arrow::compute::interleave(values, indices);
+             }
+             _ => { }
+         }
+     }
+     // fallback to arrow
+     arrow::compute::interleave(values, indices)
+ }
