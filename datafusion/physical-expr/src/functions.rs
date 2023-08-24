@@ -2899,6 +2899,7 @@ mod tests {
             expr.data_type(&schema)?,
             DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
         );
+        
         // evaluate works
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
