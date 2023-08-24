@@ -23,7 +23,7 @@ use arrow::{
 };
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
-use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_array::{downcast_dictionary_array, Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::Result;
 use datafusion_execution::{
@@ -275,11 +275,7 @@ struct TopKHeap {
 }
 
 impl TopKHeap {
-    fn new(
-        k: usize,
-        batch_size: usize,
-        schema: SchemaRef
-    ) -> Self {
+    fn new(k: usize, batch_size: usize, schema: SchemaRef) -> Self {
         assert!(k > 0);
         Self {
             k,
@@ -453,7 +449,10 @@ impl TopKHeap {
         // restore the heap
         self.inner = BinaryHeap::from(topk_rows);
 
-        info!("COMPACTION DONE: Have {} batches in store", self.store.len());
+        info!(
+            "COMPACTION DONE: Have {} batches in store",
+            self.store.len()
+        );
         Ok(())
     }
 
@@ -658,24 +657,39 @@ impl RecordBatchStore {
     }
 }
 
-
 /// wrapper over [`arrow::compute::interleave`] that re-encodes
 /// dictionaries that have a low usage (values referenced)
- fn interleave(
+fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
-     // for now, always re-encode only string dictionaries
-     if !values.is_empty() {
-         match values[0].data_type() {
-             DataType::Dictionary(_key_type, value_type) if value_type.as_ref() == &DataType::Utf8 => {
+    // for now, always re-encode only string dictionaries
+    if !values.is_empty() {
+        match values[0].data_type() {
+            DataType::Dictionary(_key_type, value_type)
+                if value_type.as_ref() == &DataType::Utf8 =>
+            {
+                return interleave_dictionary(values, indices);
+            }
+            _ => {}
+        }
+    }
+    // fallback to arrow
+    arrow::compute::interleave(values, indices)
+}
 
-                 //todo!()
-                 return arrow::compute::interleave(values, indices);
-             }
-             _ => { }
-         }
-     }
-     // fallback to arrow
-     arrow::compute::interleave(values, indices)
- }
+// we don't need specialized version for each index type, simply need
+fn interleave_dictionary(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    todo!()
+}
+
+/// returns a reference to the values of this dictioanry
+fn values(array: &ArrayRef) -> &ArrayRef {
+    downcast_dictionary_array!(
+        array => return array.values(),
+        _ => unreachable!("Non dictionary type")
+    )
+}

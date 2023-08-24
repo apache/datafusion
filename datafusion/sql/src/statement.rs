@@ -499,10 +499,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "DELETE FROM only supports single table, got: joins".to_string(),
             ));
         }
-        let TableFactor::Table{name, ..} = table_factor.relation else {
+        let TableFactor::Table { name, .. } = table_factor.relation else {
             return Err(DataFusionError::NotImplemented(format!(
                 "DELETE FROM only supports single table, got: {table_factor:?}"
-            )))
+            )));
         };
 
         Ok(name)
