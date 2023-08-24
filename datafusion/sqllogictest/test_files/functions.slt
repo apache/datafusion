@@ -53,6 +53,11 @@ SELECT character_length('josé')
 ----
 4
 
+query I
+SELECT character_length(X'6a6f73c3a9')
+----
+4
+
 query ?
 SELECT character_length(NULL)
 ----
