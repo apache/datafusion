@@ -471,7 +471,7 @@ where
 
         let array: PrimitiveArray<T> = if nulls.null_count() > 0 {
             let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len());
-            let iter = sums.into_iter().zip(counts.into_iter()).zip(nulls.iter());
+            let iter = sums.into_iter().zip(counts).zip(nulls.iter());
 
             for ((sum, count), is_valid) in iter {
                 if is_valid {

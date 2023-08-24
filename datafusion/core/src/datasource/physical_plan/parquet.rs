@@ -1002,7 +1002,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
             "+-----+----+----+",
@@ -1037,7 +1037,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+-----+----+----+",
             "| c1  | c3 | c2 |",
             "+-----+----+----+",
@@ -1075,7 +1075,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+-----+----+----+",
             "| c1  | c3 | c2 |",
             "+-----+----+----+",
@@ -1114,7 +1114,7 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+",
             "| c1 | c3 | c2 |",
             "+----+----+----+",
@@ -1156,7 +1156,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+-----+-----+",
             "| c1  | c4  |",
             "+-----+-----+",
@@ -1230,7 +1230,7 @@ mod tests {
         // a null array, then the pruning predicate (currently) can not be applied.
         // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `ParquetExec`,
         // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
-        let expected = vec![
+        let expected = [
             "+-----+----+",
             "| c1  | c2 |",
             "+-----+----+",
@@ -1267,7 +1267,7 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        let expected = vec![
+        let expected = [
             "+----+----+",
             "| c1 | c2 |",
             "+----+----+",
@@ -1374,7 +1374,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = vec![
+        let expected = [
             "+-----+----+",
             "| c1  | c2 |",
             "+-----+----+",
@@ -1405,7 +1405,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = vec![
+        let expected = [
             "+-----+----+",
             "| c1  | c2 |",
             "+-----+----+",
@@ -1651,7 +1651,7 @@ mod tests {
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
         assert_eq!(batch.schema().as_ref(), &expected_schema);
-        let expected = vec![
+        let expected = [
             "+----+----------+-------------+-------+-----+",
             "| id | bool_col | tinyint_col | month | day |",
             "+----+----------+-------------+-------+-----+",
@@ -1742,14 +1742,12 @@ mod tests {
 
         // assert the batches and some metrics
         #[rustfmt::skip]
-        let expected = vec![
-            "+-----+",
+        let expected = ["+-----+",
             "| int |",
             "+-----+",
             "| 4   |",
             "| 5   |",
-            "+-----+",
-        ];
+            "+-----+"];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
         assert!(
@@ -1786,7 +1784,7 @@ mod tests {
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // assert the batches and some metrics
-        let expected = vec![
+        let expected = [
             "+-----+", "| c1  |", "+-----+", "| Foo |", "| zzz |", "+-----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());

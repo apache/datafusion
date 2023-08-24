@@ -774,7 +774,7 @@ impl OptimizerRule for PushDownFilter {
                 let results = scan
                     .source
                     .supports_filters_pushdown(filter_predicates.as_slice())?;
-                let zip = filter_predicates.iter().zip(results.into_iter());
+                let zip = filter_predicates.iter().zip(results);
 
                 let new_scan_filters = zip
                     .clone()

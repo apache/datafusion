@@ -55,7 +55,7 @@ async fn group_by_date_trunc() -> Result<()> {
         "SELECT date_trunc('week', t1) as week, SUM(c2) FROM test GROUP BY date_trunc('week', t1)",
     ).await?;
 
-    let expected = vec![
+    let expected = [
         "+---------------------+--------------+",
         "| week                | SUM(test.c2) |",
         "+---------------------+--------------+",
@@ -103,7 +103,7 @@ async fn group_by_dictionary() {
                 .await
                 .expect("ran plan correctly");
 
-        let expected = vec![
+        let expected = [
             "+------+--------------+",
             "| dict | COUNT(t.val) |",
             "+------+--------------+",
@@ -120,7 +120,7 @@ async fn group_by_dictionary() {
                 .await
                 .expect("ran plan correctly");
 
-        let expected = vec![
+        let expected = [
             "+-----+---------------+",
             "| val | COUNT(t.dict) |",
             "+-----+---------------+",
@@ -139,7 +139,7 @@ async fn group_by_dictionary() {
         .await
         .expect("ran plan correctly");
 
-        let expected = vec![
+        let expected = [
             "+-------+------------------------+",
             "| t.val | COUNT(DISTINCT t.dict) |",
             "+-------+------------------------+",

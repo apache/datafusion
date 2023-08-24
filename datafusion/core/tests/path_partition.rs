@@ -81,7 +81,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+------+-------+-----+",
         "| year | month | day |",
         "+------+-------+-----+",
@@ -217,7 +217,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+----+",
         "| c1 | c2 |",
         "+----+----+",
@@ -253,7 +253,7 @@ async fn csv_filter_with_file_nonstring_col() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+----+------------+",
         "| c1 | c2 | date       |",
         "+----+----+------------+",
@@ -289,7 +289,7 @@ async fn csv_projection_on_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+------------+",
         "| c1 | date       |",
         "+----+------------+",
@@ -326,7 +326,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+------------+----------+----------------------+",
         "| date       | COUNT(*) | COUNT(DISTINCT t.c1) |",
         "+------------+----------+----------------------+",
@@ -366,7 +366,7 @@ async fn parquet_multiple_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+-----+",
         "| id | day |",
         "+----+-----+",
@@ -412,7 +412,7 @@ async fn parquet_multiple_nonstring_partitions() -> Result<()> {
         .collect()
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+----+-----+",
         "| id | day |",
         "+----+-----+",
