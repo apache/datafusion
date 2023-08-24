@@ -1392,10 +1392,8 @@ macro_rules! make_utf8_to_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
         fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
             Ok(match arg_type {
-                DataType::LargeUtf8 => $largeUtf8Type,
-                DataType::Utf8 => $utf8Type,
-                DataType::Binary => $utf8Type,
-                DataType::LargeBinary => $largeUtf8Type,
+                DataType::LargeUtf8 | DataType::LargeBinary => $largeUtf8Type,
+                DataType::Utf8 | DataType::Binary => $utf8Type,
                 DataType::Null => DataType::Null,
                 DataType::Dictionary(_, value_type) => {
                     match **value_type {

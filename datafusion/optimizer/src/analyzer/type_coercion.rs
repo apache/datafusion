@@ -591,6 +591,20 @@ fn coerce_arguments_for_fun(
             .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
             .collect();
     }
+
+    if *fun == BuiltinScalarFunction::CharacterLength {
+        expressions = expressions
+            .into_iter()
+            .map(|expr| {
+                let data_type = expr.get_type(schema).unwrap();
+                if let DataType::Binary = data_type {
+                    expr.cast_to(&DataType::Utf8, schema)
+                } else {
+                    Ok(expr)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+    }
     Ok(expressions)
 }
 
