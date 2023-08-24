@@ -22,7 +22,7 @@ use arrow::{
 };
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
-use arrow_array::{downcast_dictionary_array, Array, ArrayRef, RecordBatch, builder::StringBuilder, cast::AsArray, StringArray, Int32Array, types::Int32Type, DictionaryArray};
+use arrow_array::{downcast_dictionary_array, Array, ArrayRef, RecordBatch, builder::StringBuilder, cast::AsArray, StringArray, Int32Array, DictionaryArray};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::Result;
 use datafusion_execution::{
@@ -30,7 +30,7 @@ use datafusion_execution::{
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::PhysicalSortExpr;
-use hashbrown::{HashMap, HashSet};
+use hashbrown::{HashMap};
 
 use crate::physical_plan::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
@@ -683,14 +683,11 @@ fn interleave_and_repack_dictionary(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef> {
-    let existing_values = HashSet::new();
-
     let data_type = values[0].data_type();
 
-    // repack to a new StringArray
+    // maps strings to new keys ( indexes)
+    let mut new_value_to_key = HashMap::new();
     let mut new_values = StringBuilder::new();
-    // we could specialize this and avoid the copy of the index, but
-    // that seems like a lot of codegen overhead
     let mut new_keys  = vec![];
 
     for (array_idx, row_idx) in indices {
@@ -702,8 +699,16 @@ fn interleave_and_repack_dictionary(
                     let values: &StringArray = array.values().as_string();
                     if values.is_valid(key) {
                         let current_value = values.value(key);
-                        println!("Current value is {current_value}");
-                        todo!();
+                        if let Some(new_key) = new_value_to_key.get(current_value) {
+                            // value was already in the set
+                            new_keys.push(Some(*new_key))
+                        } else {
+                            // value not yet seen
+                            let new_key = new_value_to_key.len();
+                            new_values.append_value(current_value);
+                            new_keys.push(Some(new_key));
+                            new_value_to_key.insert(current_value, new_key);
+                        }
                     } else {
                         new_keys.push(None)
                     }
@@ -720,7 +725,7 @@ fn interleave_and_repack_dictionary(
     }
 
     // form the output
-    let DataType::Dictionary(key_type, value_type) = data_type else {
+    let DataType::Dictionary(key_type, _value_type) = data_type else {
         unreachable!("non dictionary type");
     };
 
@@ -741,15 +746,4 @@ fn interleave_and_repack_dictionary(
             todo!()
         }
     }
-
-
-
-}
-
-/// returns a reference to the values of this dictioanry
-fn get_dict_values(array: &ArrayRef) -> &ArrayRef {
-    downcast_dictionary_array!(
-        array => return array.values(),
-        _ => unreachable!("Non dictionary type")
-    )
 }
