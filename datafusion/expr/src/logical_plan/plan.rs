@@ -551,12 +551,12 @@ impl LogicalPlan {
         }
     }
 
-    /// Returns a new logical plan based on the original one with inputs
-    /// and expressions replaced.
+    /// Returns a new `LogicalPlan` based on `self` with inputs and
+    /// expressions replaced.
     ///
-    /// The exprs correspond to the same order of expressions returned by
-    /// [`Self::expressions`]. This function is used in optimizers in
-    /// the following way:
+    /// The exprs correspond to the same order of expressions returned
+    /// by [`Self::expressions`]. This function is used by optimizers
+    /// to rewrite plans using the following pattern:
     ///
     /// ```text
     /// let new_inputs = optimize_children(..., plan, props);
@@ -568,11 +568,12 @@ impl LogicalPlan {
     /// let rewritten_exprs = rewrite_exprs(exprs);
     ///
     /// // create new plan using rewritten_exprs in same position
-    /// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
+    /// let new_plan = plan.new_with_exprs(rewritten_exprs, new_inputs);
     /// ```
     ///
-    /// Note: sometimes [`with_new_exprs`] will use schema of original plan, it will not change the scheam.
-    /// Such as `Projection/Aggregate/Window`
+    /// Note: sometimes [`Self::with_new_exprs`] will use schema of
+    /// original plan, it will not change the scheam.  Such as
+    /// `Projection/Aggregate/Window`
     pub fn with_new_exprs(
         &self,
         mut expr: Vec<Expr>,
