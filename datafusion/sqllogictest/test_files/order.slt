@@ -410,3 +410,38 @@ SELECT DISTINCT time as "first_seen" FROM t ORDER BY 1;
 ## Cleanup
 statement ok
 drop table t;
+
+# Create a table having 3 columns which are ordering equivalent by the source. In the next step,
+# we will expect to observe the removed SortExec by propagating the orders across projection.
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC)
+WITH ORDER (b ASC)
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/window_2.csv';
+
+query TT
+EXPLAIN SELECT (b+a+c) AS result 
+FROM multiple_ordered_table
+ORDER BY result;
+----
+logical_plan
+Sort: result ASC NULLS LAST
+--Projection: multiple_ordered_table.b + multiple_ordered_table.a + multiple_ordered_table.c AS result
+----TableScan: multiple_ordered_table projection=[a, b, c]
+physical_plan
+SortPreservingMergeExec: [result@0 ASC NULLS LAST]
+--ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+
+statement ok
+drop table multiple_ordered_table;

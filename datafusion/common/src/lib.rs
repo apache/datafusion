@@ -19,7 +19,6 @@ pub mod alias;
 pub mod cast;
 mod column;
 pub mod config;
-pub mod delta;
 mod dfschema;
 pub mod display;
 mod error;

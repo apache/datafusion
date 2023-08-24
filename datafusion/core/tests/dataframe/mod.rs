@@ -27,6 +27,7 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
+use arrow_schema::ArrowError;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -1045,25 +1046,6 @@ async fn unnest_columns() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unnest_column_preserve_nulls_not_supported() -> Result<()> {
-    // Unnest, preserving nulls not yet supported
-    let options = UnnestOptions::new().with_preserve_nulls(false);
-
-    let results = table_with_lists_and_nulls()
-        .await?
-        .clone()
-        .unnest_column_with_options("list", options)?
-        .collect()
-        .await;
-
-    assert_eq!(
-        results.unwrap_err().to_string(),
-        "This feature is not implemented: Unnest with preserve_nulls=false"
-    );
-    Ok(())
-}
-#[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/7087
 async fn unnest_column_nulls() -> Result<()> {
     let df = table_with_lists_and_nulls().await?;
     let results = df.clone().collect().await?;
@@ -1099,7 +1081,6 @@ async fn unnest_column_nulls() -> Result<()> {
     ];
     assert_batches_eq!(expected, &results);
 
-    // NOTE this is incorrect,
     let options = UnnestOptions::new().with_preserve_nulls(false);
     let results = df
         .unnest_column_with_options("list", options)?
@@ -1111,7 +1092,6 @@ async fn unnest_column_nulls() -> Result<()> {
         "+------+----+",
         "| 1    | A  |",
         "| 2    | A  |",
-        "|      | B  |", // this row should not be here
         "| 3    | D  |",
         "+------+----+",
     ];
@@ -1122,32 +1102,7 @@ async fn unnest_column_nulls() -> Result<()> {
 
 #[tokio::test]
 async fn unnest_fixed_list() -> Result<()> {
-    let mut shape_id_builder = UInt32Builder::new();
-    let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
-
-    for idx in 0..6 {
-        // Append shape id.
-        shape_id_builder.append_value(idx as u32 + 1);
-
-        if idx % 3 != 0 {
-            tags_builder
-                .values()
-                .append_value(format!("tag{}1", idx + 1));
-            tags_builder
-                .values()
-                .append_value(format!("tag{}2", idx + 1));
-            tags_builder.append(true);
-        } else {
-            tags_builder.values().append_null();
-            tags_builder.values().append_null();
-            tags_builder.append(false);
-        }
-    }
-
-    let batch = RecordBatch::try_from_iter(vec![
-        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
-        ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
-    ])?;
+    let batch = get_fixed_list_batch()?;
 
     let ctx = SessionContext::new();
     ctx.register_batch("shapes", batch)?;
@@ -1168,7 +1123,12 @@ async fn unnest_fixed_list() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &results);
 
-    let results = df.unnest_column("tags")?.collect().await?;
+    let options = UnnestOptions::new().with_preserve_nulls(true);
+
+    let results = df
+        .unnest_column_with_options("tags", options)?
+        .collect()
+        .await?;
     let expected = vec![
         "+----------+-------+",
         "| shape_id | tags  |",
@@ -1191,7 +1151,54 @@ async fn unnest_fixed_list() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/7087
+async fn unnest_fixed_list_drop_nulls() -> Result<()> {
+    let batch = get_fixed_list_batch()?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df.clone().collect().await?;
+    let expected = vec![
+        "+----------+----------------+",
+        "| shape_id | tags           |",
+        "+----------+----------------+",
+        "| 1        |                |",
+        "| 2        | [tag21, tag22] |",
+        "| 3        | [tag31, tag32] |",
+        "| 4        |                |",
+        "| 5        | [tag51, tag52] |",
+        "| 6        | [tag61, tag62] |",
+        "+----------+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    let options = UnnestOptions::new().with_preserve_nulls(false);
+
+    let results = df
+        .unnest_column_with_options("tags", options)?
+        .collect()
+        .await?;
+    let expected = vec![
+        "+----------+-------+",
+        "| shape_id | tags  |",
+        "+----------+-------+",
+        "| 2        | tag21 |",
+        "| 2        | tag22 |",
+        "| 3        | tag31 |",
+        "| 3        | tag32 |",
+        "| 5        | tag51 |",
+        "| 5        | tag52 |",
+        "| 6        | tag61 |",
+        "| 6        | tag62 |",
+        "+----------+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn unnest_fixed_list_nonull() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
@@ -1529,6 +1536,37 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
     let ctx = SessionContext::new();
     ctx.register_batch("shapes", batch)?;
     ctx.table("shapes").await
+}
+
+fn get_fixed_list_batch() -> Result<RecordBatch, ArrowError> {
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
+
+    for idx in 0..6 {
+        // Append shape id.
+        shape_id_builder.append_value(idx as u32 + 1);
+
+        if idx % 3 != 0 {
+            tags_builder
+                .values()
+                .append_value(format!("tag{}1", idx + 1));
+            tags_builder
+                .values()
+                .append_value(format!("tag{}2", idx + 1));
+            tags_builder.append(true);
+        } else {
+            tags_builder.values().append_null();
+            tags_builder.values().append_null();
+            tags_builder.append(false);
+        }
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
+    ])?;
+
+    Ok(batch)
 }
 
 /// A a data frame that a list of integers and string IDs

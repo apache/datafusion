@@ -177,14 +177,32 @@ You can update the tests / generate expected output by passing the `--complete` 
 cargo test --test sqllogictests -- ddl --complete
 ```
 
-#### sqllogictests
+#### Running tests: `scratchdir`
 
-sqllogictest is a program originally written for SQLite to verify the correctness of SQL queries against the SQLite
-engine. The program is engine-agnostic and can parse sqllogictest files (`.slt`), runs queries against an SQL engine and
-compare the output to the expected output.
+The DataFusion sqllogictest runner automatically creates a directory
+named `test_files/scratch/<filename>`, creating it if needed and
+clearing any file contents if it exists.
 
-Tests in the `.slt` file are a sequence of query record generally starting with `CREATE` statements to populate tables
-and then further queries to test the populated data (arrow-datafusion exception).
+For example, the `test_files/copy.slt` file should use scratch
+directory `test_files/scratch/copy`.
+
+Tests that need to write temporary files should write (only) to this
+directory to ensure they do not interfere with others concurrently
+running tests.
+
+#### `.slt` file format
+
+[`sqllogictest`] was originally written for SQLite to verify the
+correctness of SQL queries against the SQLite engine. The format is designed
+engine-agnostic and can parse sqllogictest files (`.slt`), runs
+queries against an SQL engine and compares the output to the expected
+output.
+
+[`sqllogictest`]: https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
+
+Tests in the `.slt` file are a sequence of query records generally
+starting with `CREATE` statements to populate tables and then further
+queries to test the populated data.
 
 Each `.slt` file runs in its own, isolated `SessionContext`, to make the test setup explicit and so they can run in
 parallel. Thus it important to keep the tests from having externally visible side effects (like writing to a global
