@@ -754,7 +754,7 @@ mod tests {
         // total_byte_size after ceil => 532.0... => 533
         assert_eq!(statistics.num_rows, Some(134));
         assert_eq!(statistics.total_byte_size, Some(533));
-        let exp_col_stats = Some(vec![
+        let exp_col_stats = vec![
             ColumnStatistics {
                 min_value: Some(ScalarValue::Int32(Some(4))),
                 max_value: Some(ScalarValue::Int32(Some(53))),
@@ -770,9 +770,8 @@ mod tests {
                 max_value: Some(ScalarValue::Float32(Some(1075.0))),
                 ..Default::default()
             },
-        ]);
+        ];
         let _ = exp_col_stats
-            .unwrap()
             .into_iter()
             .zip(statistics.column_statistics.unwrap())
             .map(|(expected, actual)| {
