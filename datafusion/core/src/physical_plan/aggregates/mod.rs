@@ -676,6 +676,7 @@ impl AggregateExec {
     }
 
     /// Only for testing. When `force_spill` is true, it spills every batch.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new_for_test(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,

@@ -480,17 +480,16 @@ impl Stream for GroupedHashAggregateStream {
                             // Re-group the stream-merged results.
                             extract_ok!(self.group_aggregate_batch(batch_result?, true));
                             // Output first batch_size rows.
-                            if let Some(to_emit) = self.group_ordering.emit_to() {
-                                if let EmitTo::First(ready) = to_emit {
-                                    let batch_size = self.batch_size;
-                                    if ready >= batch_size {
-                                        let batch =
-                                            extract_ok!(self
-                                                .emit(EmitTo::First(batch_size), false));
-                                        return Poll::Ready(Some(Ok(
-                                            batch.record_output(&self.baseline_metrics)
-                                        )));
-                                    }
+                            if let Some(EmitTo::First(n)) = self.group_ordering.emit_to()
+                            {
+                                let batch_size = self.batch_size;
+                                if n >= batch_size {
+                                    let batch = extract_ok!(
+                                        self.emit(EmitTo::First(batch_size), false)
+                                    );
+                                    return Poll::Ready(Some(Ok(
+                                        batch.record_output(&self.baseline_metrics)
+                                    )));
                                 }
                             }
                         }
@@ -661,8 +660,8 @@ impl GroupedHashAggregateStream {
             let should_spill = self
                 .accumulators
                 .iter_mut()
-                .any(|x| x.try_reserve(&batch).is_err())
-                || self.group_values.try_reserve(&batch).is_err()
+                .any(|x| x.try_reserve(batch).is_err())
+                || self.group_values.try_reserve(batch).is_err()
                 || self
                     .current_group_indices
                     .try_reserve(batch.num_rows())
@@ -702,8 +701,8 @@ impl GroupedHashAggregateStream {
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         self.accumulators
             .iter_mut()
-            .for_each(|x| x.clear_shrink(&batch));
-        self.group_values.clear_shrink(&batch);
+            .for_each(|x| x.clear_shrink(batch));
+        self.group_values.clear_shrink(batch);
         self.current_group_indices.clear();
         self.current_group_indices.shrink_to(batch.num_rows());
     }
