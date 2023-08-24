@@ -57,12 +57,15 @@ mod tests {
             let mut handles = Vec::new();
             for i in 0..n {
                 let test_idx = i % test_cases.len();
-                let group_by_columns = test_cases[test_idx].clone();
-                let job = tokio::spawn(run_aggregate_test(
-                    make_staggered_batches::<true>(1000, distinct, i as u64),
-                    group_by_columns,
-                ));
-                handles.push(job);
+                for spill in [false, true] {
+                    let group_by_columns = test_cases[test_idx].clone();
+                    let job = tokio::spawn(run_aggregate_test(
+                        make_staggered_batches::<true>(1000, distinct, i as u64),
+                        group_by_columns,
+                        spill,
+                    ));
+                    handles.push(job);
+                }
             }
             for job in handles {
                 job.await.unwrap();
@@ -74,7 +77,11 @@ mod tests {
 /// Perform batch and streaming aggregation with same input
 /// and verify outputs of `AggregateExec` with pipeline breaking stream `GroupedHashAggregateStream`
 /// and non-pipeline breaking stream `BoundedAggregateStream` produces same result.
-async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
+async fn run_aggregate_test(
+    input1: Vec<RecordBatch>,
+    group_by_columns: Vec<&str>,
+    spill: bool,
+) {
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::with_config(session_config);
@@ -109,7 +116,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let group_by = PhysicalGroupBy::new_single(expr);
 
     let aggregate_exec_running = Arc::new(
-        AggregateExec::try_new(
+        AggregateExec::try_new_for_test(
             AggregateMode::Partial,
             group_by.clone(),
             aggregate_expr.clone(),
@@ -117,12 +124,13 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             vec![None],
             running_source,
             schema.clone(),
+            spill,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
 
     let aggregate_exec_usual = Arc::new(
-        AggregateExec::try_new(
+        AggregateExec::try_new_for_test(
             AggregateMode::Partial,
             group_by.clone(),
             aggregate_expr.clone(),
@@ -130,6 +138,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
             vec![None],
             usual_source,
             schema.clone(),
+            spill,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;

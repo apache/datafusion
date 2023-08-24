@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::TryReserveError;
 use std::sync::Arc;
 
 use arrow::array::AsArray;
+use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use datafusion_common::Result;
@@ -136,5 +138,17 @@ where
     fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
         self.values.capacity() / 8 + self.null_state.size()
+    }
+
+    fn try_reserve(&mut self, batch: &RecordBatch) -> Result<(), TryReserveError> {
+        let additional = batch.num_rows();
+        // FIXME: there is no good way to try_reserve for self.values and self.null_state
+        self.values.reserve(additional);
+        Ok(())
+    }
+
+    fn clear_shrink(&mut self, _batch: &RecordBatch) {
+        self.values.truncate(0);
+        self.null_state = NullState::new();
     }
 }

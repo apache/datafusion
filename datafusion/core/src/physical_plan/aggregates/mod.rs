@@ -281,6 +281,8 @@ pub struct AggregateExec {
     /// Stores mode and output ordering information for the `AggregateExec`.
     aggregation_ordering: Option<AggregationOrdering>,
     required_input_ordering: Option<LexOrderingReq>,
+    /// Force spilling for debugging
+    force_spill: bool,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -669,7 +671,32 @@ impl AggregateExec {
             metrics: ExecutionPlanMetricsSet::new(),
             aggregation_ordering,
             required_input_ordering,
+            force_spill: false,
         })
+    }
+
+    /// Only for testing. When `force_spill` is true, it spills every batch.
+    pub fn try_new_for_test(
+        mode: AggregateMode,
+        group_by: PhysicalGroupBy,
+        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        order_by_expr: Vec<Option<LexOrdering>>,
+        input: Arc<dyn ExecutionPlan>,
+        input_schema: SchemaRef,
+        force_spill: bool,
+    ) -> Result<Self> {
+        let mut exec = AggregateExec::try_new(
+            mode,
+            group_by,
+            aggr_expr,
+            filter_expr,
+            order_by_expr,
+            input,
+            input_schema,
+        )?;
+        exec.force_spill = force_spill;
+        Ok(exec)
     }
 
     /// Aggregation mode (full, partial)
@@ -1389,7 +1416,10 @@ mod tests {
         )
     }
 
-    async fn check_grouping_sets(input: Arc<dyn ExecutionPlan>) -> Result<()> {
+    async fn check_grouping_sets(
+        input: Arc<dyn ExecutionPlan>,
+        spill: bool,
+    ) -> Result<()> {
         let input_schema = input.schema();
 
         let grouping_set = PhysicalGroupBy {
@@ -1416,7 +1446,7 @@ mod tests {
 
         let task_ctx = Arc::new(TaskContext::default());
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new(
+        let partial_aggregate = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
@@ -1424,6 +1454,7 @@ mod tests {
             vec![None],
             input,
             input_schema.clone(),
+            spill,
         )?);
 
         let result =
@@ -1460,7 +1491,7 @@ mod tests {
 
         let final_grouping_set = PhysicalGroupBy::new_single(final_group);
 
-        let merged_aggregate = Arc::new(AggregateExec::try_new(
+        let merged_aggregate = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
@@ -1468,6 +1499,7 @@ mod tests {
             vec![None],
             merge,
             input_schema,
+            spill,
         )?);
 
         let result =
@@ -1505,7 +1537,7 @@ mod tests {
     }
 
     /// build the aggregates on the data from some_data() and check the results
-    async fn check_aggregates(input: Arc<dyn ExecutionPlan>) -> Result<()> {
+    async fn check_aggregates(input: Arc<dyn ExecutionPlan>, spill: bool) -> Result<()> {
         let input_schema = input.schema();
 
         let grouping_set = PhysicalGroupBy {
@@ -1522,7 +1554,7 @@ mod tests {
 
         let task_ctx = Arc::new(TaskContext::default());
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new(
+        let partial_aggregate = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
@@ -1530,6 +1562,7 @@ mod tests {
             vec![None],
             input,
             input_schema.clone(),
+            spill,
         )?);
 
         let result =
@@ -1556,7 +1589,7 @@ mod tests {
 
         let final_grouping_set = PhysicalGroupBy::new_single(final_group);
 
-        let merged_aggregate = Arc::new(AggregateExec::try_new(
+        let merged_aggregate = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
@@ -1564,6 +1597,7 @@ mod tests {
             vec![None],
             merge,
             input_schema,
+            spill,
         )?);
 
         let result =
@@ -1707,7 +1741,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: false });
 
-        check_aggregates(input).await
+        check_aggregates(input, false).await
     }
 
     #[tokio::test]
@@ -1715,7 +1749,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: false });
 
-        check_grouping_sets(input).await
+        check_grouping_sets(input, false).await
     }
 
     #[tokio::test]
@@ -1723,7 +1757,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
 
-        check_aggregates(input).await
+        check_aggregates(input, false).await
     }
 
     #[tokio::test]
@@ -1731,7 +1765,39 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(TestYieldingExec { yield_first: true });
 
-        check_grouping_sets(input).await
+        check_grouping_sets(input, false).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_source_not_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: false });
+
+        check_aggregates(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_grouping_sets_source_not_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: false });
+
+        check_grouping_sets(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_source_with_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: true });
+
+        check_aggregates(input, true).await
+    }
+
+    #[tokio::test]
+    async fn aggregate_grouping_sets_with_yielding_with_spill() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: true });
+
+        check_grouping_sets(input, true).await
     }
 
     #[tokio::test]
@@ -1899,7 +1965,10 @@ mod tests {
     async fn run_first_last_multi_partitions() -> Result<()> {
         for use_coalesce_batches in [false, true] {
             for is_first_acc in [false, true] {
-                first_last_multi_partitions(use_coalesce_batches, is_first_acc).await?
+                for spill in [false, true] {
+                    first_last_multi_partitions(use_coalesce_batches, is_first_acc, spill)
+                        .await?
+                }
             }
         }
         Ok(())
@@ -1925,6 +1994,7 @@ mod tests {
     async fn first_last_multi_partitions(
         use_coalesce_batches: bool,
         is_first_acc: bool,
+        spill: bool,
     ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
@@ -1969,7 +2039,7 @@ mod tests {
             schema.clone(),
             None,
         )?);
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -1977,6 +2047,7 @@ mod tests {
             vec![Some(ordering_req.clone())],
             memory_exec,
             schema.clone(),
+            spill,
         )?);
         let coalesce = if use_coalesce_batches {
             let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
@@ -1985,7 +2056,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(aggregate_exec))
                 as Arc<dyn ExecutionPlan>
         };
-        let aggregate_final = Arc::new(AggregateExec::try_new(
+        let aggregate_final = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Final,
             groups,
             aggregates.clone(),
@@ -1993,6 +2064,7 @@ mod tests {
             vec![Some(ordering_req)],
             coalesce,
             schema,
+            spill,
         )?) as Arc<dyn ExecutionPlan>;
 
         let result = crate::physical_plan::collect(aggregate_final, task_ctx).await?;

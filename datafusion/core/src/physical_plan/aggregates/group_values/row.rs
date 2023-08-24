@@ -17,6 +17,7 @@
 
 use crate::physical_plan::aggregates::group_values::GroupValues;
 use ahash::RandomState;
+use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::ArrayRef;
 use arrow_schema::SchemaRef;
@@ -59,17 +60,19 @@ pub struct GroupValuesRows {
 
     /// Random state for creating hashes
     random_state: RandomState,
+
+    /// Schema fields for the row converter
+    fields: Vec<SortField>,
 }
 
 impl GroupValuesRows {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
-        let row_converter = RowConverter::new(
-            schema
-                .fields()
-                .iter()
-                .map(|f| SortField::new(f.data_type().clone()))
-                .collect(),
-        )?;
+        let fields: Vec<SortField> = schema
+            .fields()
+            .iter()
+            .map(|f| SortField::new(f.data_type().clone()))
+            .collect();
+        let row_converter = RowConverter::new(fields.clone())?;
 
         let map = RawTable::with_capacity(0);
         let group_values = row_converter.empty_rows(0, 0);
@@ -81,6 +84,7 @@ impl GroupValuesRows {
             group_values,
             hashes_buffer: Default::default(),
             random_state: Default::default(),
+            fields,
         })
     }
 }
@@ -180,5 +184,31 @@ impl GroupValues for GroupValuesRows {
                 output
             }
         })
+    }
+
+    // FIXME: cannot return std::collections::TryReserveError because std::collections::TryReserveErrorKind
+    //   is unstable. For now, use hashbrown::TryReserveError instead.
+    fn try_reserve(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(), hashbrown::TryReserveError> {
+        let additional = batch.num_rows();
+        // FIXME: there is no good way to try_reserve for self.row_converter self.group_values
+        self.map.try_reserve(additional, |(hash, _)| *hash).and(
+            self.hashes_buffer
+                .try_reserve(additional)
+                .map_err(|_| hashbrown::TryReserveError::CapacityOverflow),
+        )
+    }
+
+    fn clear_shrink(&mut self, batch: &RecordBatch) {
+        let count = batch.num_rows();
+        // FIXME: there is no good way to clear_shrink for self.row_converter self.group_values
+        self.row_converter = RowConverter::new(self.fields.clone()).unwrap();
+        self.group_values = self.row_converter.empty_rows(count, 0);
+        self.map.clear();
+        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to(count);
     }
 }

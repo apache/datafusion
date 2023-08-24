@@ -241,7 +241,7 @@ impl GroupOrderingPartial {
         Ok(())
     }
 
-    /// Return the size of memor allocated by this structure
+    /// Return the size of memory allocated by this structure
     pub(crate) fn size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.order_indices.allocated_size()

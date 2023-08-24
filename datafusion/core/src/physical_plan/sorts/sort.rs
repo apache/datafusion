@@ -568,7 +568,7 @@ impl Debug for ExternalSorter {
     }
 }
 
-fn sort_batch(
+pub(crate) fn sort_batch(
     batch: &RecordBatch,
     expressions: &[PhysicalSortExpr],
     fetch: Option<usize>,
@@ -602,7 +602,7 @@ async fn spill_sorted_batches(
     }
 }
 
-fn read_spill_as_stream(
+pub(crate) fn read_spill_as_stream(
     path: NamedTempFile,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream> {
