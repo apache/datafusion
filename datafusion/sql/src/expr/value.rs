@@ -29,6 +29,18 @@ use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::HashSet;
 
+macro_rules! coerce_scalar_value {
+    ($data_type:ty, $coerced_type:ty, $e:expr) => {{
+        let val: $data_type = $e.clone().try_into().unwrap();
+        let casted_sv = ScalarValue::try_from(val as $coerced_type);
+        if let Ok(casted_sv) = casted_sv {
+            Ok(casted_sv)
+        } else {
+            internal_err!("Failed to cast value")
+        }
+    }};
+}
+
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn parse_value(
         &self,
@@ -183,20 +195,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     ScalarValue::try_from(&coerced_type)
                                 }
                                 data_type => {
-                                    // convert to coerced type
-
-                                    // Extend to support more types
+                                    // Convert to coerced type
+                                    // Values has only three types: Int64, Float64, UInt64
+                                    // comparison_coercion: Float64 > Int64 > UInt64
                                     match (data_type, &coerced_type) {
                                         (&DataType::Int64, &DataType::Float64) => {
-                                            let val: i64 = e.clone().try_into().unwrap();
-                                            let casted_sv = ScalarValue::try_from(val as f64);
-                                            if casted_sv.is_err() {
-                                                internal_err!("Failed to cast i64 to f64")
-                                            }
-                                            else {
-                                                Ok(casted_sv.unwrap())
-                                            }
-
+                                            coerce_scalar_value!(i64, f64, e)
+                                        }
+                                        (&DataType::UInt64, &DataType::Float64) => {
+                                            coerce_scalar_value!(u64, f64, e)
+                                        }
+                                        (&DataType::UInt64, &DataType::Int64) => {
+                                            coerce_scalar_value!(u64, i64, e)
                                         }
                                         _ => {
                                             not_impl_err!("Unsupported array literal type coercion from {:?} to {:?}", data_type, coerced_type)
