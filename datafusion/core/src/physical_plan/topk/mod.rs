@@ -18,12 +18,11 @@
 //! TopK: Combination of Sort / LIMIT
 
 use arrow::{
-    error::ArrowError,
     row::{RowConverter, Rows, SortField},
 };
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
-use arrow_array::{downcast_dictionary_array, Array, ArrayRef, RecordBatch};
+use arrow_array::{downcast_dictionary_array, Array, ArrayRef, RecordBatch, builder::StringBuilder, cast::AsArray, StringArray, Int32Array, types::Int32Type, DictionaryArray};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::Result;
 use datafusion_execution::{
@@ -31,7 +30,7 @@ use datafusion_execution::{
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::PhysicalSortExpr;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 
 use crate::physical_plan::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
@@ -662,32 +661,93 @@ impl RecordBatchStore {
 fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
-) -> Result<ArrayRef, ArrowError> {
+) -> Result<ArrayRef> {
     // for now, always re-encode only string dictionaries
     if !values.is_empty() {
         match values[0].data_type() {
             DataType::Dictionary(_key_type, value_type)
                 if value_type.as_ref() == &DataType::Utf8 =>
             {
-                return interleave_dictionary(values, indices);
+                return interleave_and_repack_dictionary(values, indices);
             }
             _ => {}
         }
     }
     // fallback to arrow
-    arrow::compute::interleave(values, indices)
+    Ok(arrow::compute::interleave(values, indices)?)
 }
 
-// we don't need specialized version for each index type, simply need
-fn interleave_dictionary(
+/// Special interleave kernel that re-creates the dictionary values,
+/// ensuring no unused space
+fn interleave_and_repack_dictionary(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
-) -> Result<ArrayRef, ArrowError> {
-    todo!()
+) -> Result<ArrayRef> {
+    let existing_values = HashSet::new();
+
+    let data_type = values[0].data_type();
+
+    // repack to a new StringArray
+    let mut new_values = StringBuilder::new();
+    // we could specialize this and avoid the copy of the index, but
+    // that seems like a lot of codegen overhead
+    let mut new_keys  = vec![];
+
+    for (array_idx, row_idx) in indices {
+        // look up value,
+        let array = values[*array_idx];
+        downcast_dictionary_array!(
+            array=> {
+                if let Some(key) = array.key(*row_idx) {
+                    let values: &StringArray = array.values().as_string();
+                    if values.is_valid(key) {
+                        let current_value = values.value(key);
+                        println!("Current value is {current_value}");
+                        todo!();
+                    } else {
+                        new_keys.push(None)
+                    }
+                }
+                else {
+                    new_keys.push(None);
+                }
+
+
+            }
+        _ => unreachable!("Non dictionary type")
+
+        )
+    }
+
+    // form the output
+    let DataType::Dictionary(key_type, value_type) = data_type else {
+        unreachable!("non dictionary type");
+    };
+
+    let new_values: ArrayRef = Arc::new(new_values.finish());
+    match key_type.as_ref() {
+        DataType::Int32  => {
+            // check the keys will fit in this array
+            if new_values.len() >= i32::MAX as usize {
+                panic!("todo make a real error message");
+            }
+
+            let new_keys: Int32Array = new_keys.iter().map(|v| v.map(|v| v as i32)).collect();
+
+            Ok(Arc::new(DictionaryArray::try_new(new_keys, new_values)?))
+        }
+        _ => {
+            // handle other keys
+            todo!()
+        }
+    }
+
+
+
 }
 
 /// returns a reference to the values of this dictioanry
-fn values(array: &ArrayRef) -> &ArrayRef {
+fn get_dict_values(array: &ArrayRef) -> &ArrayRef {
     downcast_dictionary_array!(
         array => return array.values(),
         _ => unreachable!("Non dictionary type")
