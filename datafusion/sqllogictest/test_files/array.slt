@@ -1014,6 +1014,16 @@ select array_append([1, 2, null, 4], 5);
 ----
 [1, 2, , 4, 5]
 
+query ?
+select array_append([1, 2.1, 3], 4.0);
+----
+[1.0, 2.1, 3.0, 4.0]
+
+query ?
+select array_append([1, 2.1, 3], null);
+----
+[1.0, 2.1, 3.0, ]
+
 # array_append with columns #1
 query ?
 select array_append(column1, column2) from arrays_values;

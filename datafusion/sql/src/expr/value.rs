@@ -19,9 +19,10 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow_schema::DataType;
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
@@ -150,53 +151,65 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        let data_types: HashSet<DataType> =
+        let data_types = values.iter().map(|e| e.get_datatype()).collect::<Vec<_>>();
+        let seen_types: HashSet<DataType> =
             values.iter().map(|e| e.get_datatype()).collect();
+        let coerced_type = data_types
+            .iter()
+            .skip(1)
+            .fold(data_types[0].clone(), |acc, d| {
+                comparison_coercion(&acc, d).unwrap_or(acc)
+            });
 
-        match data_types.len() {
+        match seen_types.len() {
             0 => Ok(lit(ScalarValue::new_list(None, DataType::Utf8))),
             1 => {
                 let data_type = values[0].get_datatype();
                 Ok(lit(ScalarValue::new_list(Some(values), data_type)))
             }
-            // Check whether one of them is null
-            2 => {
-                let has_null_type = data_types.contains(&DataType::Null);
-                if has_null_type {
-                    // convert to Vec for indexing
-                    let data_types = data_types.into_iter().collect::<Vec<_>>();
-                    let non_null_type = if data_types[0] == DataType::Null {
-                        &data_types[1]
-                    } else {
-                        &data_types[0]
-                    };
-
-                    // Convert null type to the same type as the other elements
-                    let values = values
+            _ => {
+                let values = values
                         .iter()
                         .map(|e| {
-                            if e.get_datatype() == DataType::Null {
-                                // i.e. Int64 ScalarValue(Int64(None))
-                                ScalarValue::try_from(non_null_type)
-                            } else {
-                                Ok(e.clone())
+
+                            let data_type = e.get_datatype();
+                            if data_type == coerced_type {
+                                return Ok(e.clone());
+                            }
+
+                            match &e.get_datatype() {
+                                DataType::Null => {
+                                    // i.e. Int64 ScalarValue(Int64(None))
+                                    ScalarValue::try_from(&coerced_type)
+                                }
+                                data_type => {
+                                    // convert to coerced type
+
+                                    // Extend to support more types
+                                    match (data_type, &coerced_type) {
+                                        (&DataType::Int64, &DataType::Float64) => {
+                                            let val: i64 = e.clone().try_into().unwrap();
+                                            let casted_sv = ScalarValue::try_from(val as f64);
+                                            if casted_sv.is_err() {
+                                                internal_err!("Failed to cast i64 to f64")
+                                            }
+                                            else {
+                                                Ok(casted_sv.unwrap())
+                                            }
+
+                                        }
+                                        _ => {
+                                            not_impl_err!("Unsupported array literal type coercion from {:?} to {:?}", data_type, coerced_type)
+                                        }
+                                    }
+
+                                }
                             }
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    Ok(lit(ScalarValue::new_list(
-                        Some(values),
-                        non_null_type.clone(),
-                    )))
-                } else {
-                    not_impl_err!(
-                        "Arrays with different types are not supported: {data_types:?}"
-                    )
-                }
+                Ok(lit(ScalarValue::new_list(Some(values), coerced_type)))
             }
-            _ => not_impl_err!(
-                "Arrays with different types are not supported: {data_types:?}"
-            ),
         }
     }
 
