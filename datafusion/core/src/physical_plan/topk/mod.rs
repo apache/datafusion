@@ -17,12 +17,14 @@
 
 //! TopK: Combination of Sort / LIMIT
 
-use arrow::{
-    row::{RowConverter, Rows, SortField},
-};
+use arrow::row::{RowConverter, Rows, SortField};
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
-use arrow_array::{downcast_dictionary_array, Array, ArrayRef, RecordBatch, builder::StringBuilder, cast::AsArray, StringArray, Int32Array, DictionaryArray};
+use arrow_array::{
+    builder::StringBuilder, cast::AsArray, downcast_dictionary_array, Array, ArrayRef,
+    DictionaryArray, Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch,
+    StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::Result;
 use datafusion_execution::{
@@ -30,7 +32,7 @@ use datafusion_execution::{
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::PhysicalSortExpr;
-use hashbrown::{HashMap};
+use hashbrown::HashMap;
 
 use crate::physical_plan::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
@@ -658,10 +660,7 @@ impl RecordBatchStore {
 
 /// wrapper over [`arrow::compute::interleave`] that re-encodes
 /// dictionaries that have a low usage (values referenced)
-fn interleave(
-    values: &[&dyn Array],
-    indices: &[(usize, usize)],
-) -> Result<ArrayRef> {
+fn interleave(values: &[&dyn Array], indices: &[(usize, usize)]) -> Result<ArrayRef> {
     // for now, always re-encode only string dictionaries
     if !values.is_empty() {
         match values[0].data_type() {
@@ -688,7 +687,7 @@ fn interleave_and_repack_dictionary(
     // maps strings to new keys ( indexes)
     let mut new_value_to_key = HashMap::new();
     let mut new_values = StringBuilder::new();
-    let mut new_keys  = vec![];
+    let mut new_keys = vec![];
 
     for (array_idx, row_idx) in indices {
         // look up value,
@@ -728,19 +727,37 @@ fn interleave_and_repack_dictionary(
     };
 
     let new_values: ArrayRef = Arc::new(new_values.finish());
-    match key_type.as_ref() {
-        DataType::Int32  => {
-            // check the keys will fit in this array
-            if new_values.len() >= i32::MAX as usize {
-                panic!("todo make a real error message");
-            }
-            let new_keys: Int32Array = new_keys.iter().map(|v| v.map(|v| v as i32)).collect();
 
+    // creates a $ARRAY_TYPE array from $NEW_KEYS ad $NEW_VALUES
+    use datafusion_common::DataFusionError;
+    macro_rules! make_keys {
+        ($PRIM_TYPE:ty, $ARRAY_TYPE:ty, $NEW_KEYS:ident, $NEW_VALUES:ident) => {{
+            // check the keys will fit in this array
+            if $NEW_VALUES.len() >= <$PRIM_TYPE>::MAX as usize {
+                return Err(DataFusionError::Execution(format!(
+                    "keys did not fit in prim type -- TODO MAKE BETTER"
+                )));
+            }
+            let new_keys: $ARRAY_TYPE = new_keys
+                .iter()
+                .map(|v| v.map(|v| v as $PRIM_TYPE))
+                .collect();
             Ok(Arc::new(DictionaryArray::try_new(new_keys, new_values)?))
-        }
+        }};
+    }
+
+    match key_type.as_ref() {
+        DataType::Int8 => make_keys!(i8, Int8Array, new_keys, new_values),
+        DataType::Int16 => make_keys!(i16, Int16Array, new_keys, new_values),
+        DataType::Int32 => make_keys!(i32, Int32Array, new_keys, new_values),
+        DataType::Int64 => make_keys!(i64, Int64Array, new_keys, new_values),
+        DataType::UInt8 => make_keys!(u8, UInt8Array, new_keys, new_values),
+        DataType::UInt16 => make_keys!(u16, UInt16Array, new_keys, new_values),
+        DataType::UInt32 => make_keys!(u32, UInt32Array, new_keys, new_values),
+        DataType::UInt64 => make_keys!(u64, UInt64Array, new_keys, new_values),
         _ => {
             // handle other keys
-            todo!()
+            unreachable!("unvalid key type");
         }
     }
 }
