@@ -31,8 +31,8 @@
 
 use crate::functions::FuncMonotonicity;
 use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
 use crate::utils::expr_list_eq_strict_order;
-use crate::ExtendedSortOptions;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
@@ -175,11 +175,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // Add `self.fun` when hash is available
     }
 
-    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         self.monotonicity
             .as_ref()
             .map(|monotonicity| monotonicity.out_ordering(children))
-            .unwrap_or(ExtendedSortOptions::Unordered)
+            .unwrap_or(SortProperties::Unordered)
     }
 }
 

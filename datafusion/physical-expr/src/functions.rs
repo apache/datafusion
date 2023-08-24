@@ -31,11 +31,12 @@
 //! argument is automatically is coerced to f64.
 
 use crate::execution_props::ExecutionProps;
+use crate::sort_properties::SortProperties;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
     expressions::{cast_column, nullif_func},
-    math_expressions, string_expressions, struct_expressions, ExtendedSortOptions,
-    PhysicalExpr, ScalarFunctionExpr,
+    math_expressions, string_expressions, struct_expressions, PhysicalExpr,
+    ScalarFunctionExpr,
 };
 use arrow::{
     array::ArrayRef,
@@ -893,10 +894,7 @@ pub struct FuncMonotonicity {
 }
 
 impl FuncMonotonicity {
-    pub fn out_ordering(
-        &self,
-        arg_orderings: &[ExtendedSortOptions],
-    ) -> ExtendedSortOptions {
+    pub fn out_ordering(&self, arg_orderings: &[SortProperties]) -> SortProperties {
         if self.is_ascending {
             arg_orderings[self.idx]
         } else {

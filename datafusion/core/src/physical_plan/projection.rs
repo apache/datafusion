@@ -36,8 +36,6 @@ use crate::physical_plan::{
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use arrow_schema::SortOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
@@ -119,8 +117,6 @@ impl ProjectionExec {
                 entry.push(Column::new(name, expr_idx));
             };
         }
-
-        let orderings = find_orderings_of_exprs(&expr, &input)?;
 
         // Output Ordering need to respect the alias
         let child_output_ordering = input.output_ordering();
