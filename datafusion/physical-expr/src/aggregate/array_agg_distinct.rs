@@ -134,11 +134,13 @@ impl Accumulator for DistinctArrayAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         assert_eq!(values.len(), 1, "batch input should only include 1 column!");
 
-        let arr = &values[0];
-        for i in 0..arr.len() {
-            self.values.insert(ScalarValue::try_from_array(arr, i)?);
-        }
-        Ok(())
+        let array = &values[0];
+        (0..array.len()).try_for_each(|i| {
+            if !array.is_null(i) {
+                self.values.insert(ScalarValue::try_from_array(array, i)?);
+            }
+            Ok(())
+        })
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {

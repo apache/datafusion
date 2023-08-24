@@ -1271,18 +1271,31 @@ NULL 4 29 1.260869565217 123 -117 23
 NULL 5 -194 -13.857142857143 118 -101 14
 NULL NULL 781 7.81 125 -117 100
 
-# TODO this querys output is non determinisitic (the order of the elements
-# differs run to run
+# TODO: array_agg_distinct output is non-determinisitic -- rewrite with array_sort(list_sort)
+#       unnest is also not available, so manually unnesting via CROSS JOIN
+# additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
 #
 # csv_query_array_agg_distinct
-# query T
-# SELECT array_agg(distinct c2) FROM aggregate_test_100
-# ----
-# [4, 2, 3, 5, 1]
-
-# additional count(1) forces array_agg_distinct instead of array_agg over aggregated by c2 data
-statement ok
-SELECT array_agg(distinct c2), count(1) FROM aggregate_test_100
+query III
+WITH indices AS (
+  SELECT 1 AS idx UNION ALL
+  SELECT 2 AS idx UNION ALL
+  SELECT 3 AS idx UNION ALL
+  SELECT 4 AS idx UNION ALL
+  SELECT 5 AS idx
+)
+SELECT data.arr[indices.idx] as element, array_length(data.arr) as array_len, dummy
+FROM (
+  SELECT array_agg(distinct c2) as arr, count(1) as dummy FROM aggregate_test_100
+) data
+  CROSS JOIN indices
+ORDER BY 1
+----
+1 5 100
+2 5 100
+3 5 100
+4 5 100
+5 5 100
 
 # aggregate_time_min_and_max
 query TT
