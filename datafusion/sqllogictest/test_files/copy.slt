@@ -21,19 +21,19 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # Copy to directory as multiple files
 query IT
-COPY source_table TO 'test_files/scratch/table' (format parquet, per_thread_output true);
+COPY source_table TO 'test_files/scratch/copy/table' (format parquet, per_thread_output true);
 ----
 2
 
 # Error case
 query error DataFusion error: Error during planning: Copy To format not explicitly set and unable to get file extension!
-EXPLAIN COPY source_table to 'test_files/scratch/table'
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table'
 
 query TT
-EXPLAIN COPY source_table to 'test_files/scratch/table' (format parquet, per_thread_output true)
+EXPLAIN COPY source_table to 'test_files/scratch/copy/table' (format parquet, per_thread_output true)
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/table per_thread_output=true options: (format parquet, per_thread_output true)
+CopyTo: format=parquet output_url=test_files/scratch/copy/table per_thread_output=true options: (format parquet, per_thread_output true)
 --TableScan: source_table projection=[col1, col2]
 physical_plan
 InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
@@ -41,13 +41,13 @@ InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
 
 # Copy more files to directory via query
 query IT
-COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/table' (format parquet, per_thread_output true);
+COPY (select * from source_table UNION ALL select * from source_table) to 'test_files/scratch/copy/table' (format parquet, per_thread_output true);
 ----
 4
 
 # validate multiple parquet file output
 statement ok
-CREATE EXTERNAL TABLE validate_parquet STORED AS PARQUET LOCATION 'test_files/scratch/table/';
+CREATE EXTERNAL TABLE validate_parquet STORED AS PARQUET LOCATION 'test_files/scratch/copy/table/';
 
 query IT
 select * from validate_parquet;
@@ -61,13 +61,13 @@ select * from validate_parquet;
 
 # Copy from table to single file
 query IT
-COPY source_table to 'test_files/scratch/table.parquet';
+COPY source_table to 'test_files/scratch/copy/table.parquet';
 ----
 2
 
 # validate single parquet file output
 statement ok
-CREATE EXTERNAL TABLE validate_parquet_single STORED AS PARQUET LOCATION 'test_files/scratch/table.parquet';
+CREATE EXTERNAL TABLE validate_parquet_single STORED AS PARQUET LOCATION 'test_files/scratch/copy/table.parquet';
 
 query IT
 select * from validate_parquet_single;
@@ -77,13 +77,13 @@ select * from validate_parquet_single;
 
 # copy from table to folder of csv files
 query IT
-COPY source_table  to 'test_files/scratch/table_csv' (format csv, per_thread_output true);
+COPY source_table  to 'test_files/scratch/copy/table_csv' (format csv, per_thread_output true);
 ----
 2
 
 # validate folder of csv files
 statement ok
-CREATE EXTERNAL TABLE validate_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/table_csv';
+CREATE EXTERNAL TABLE validate_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/copy/table_csv';
 
 query IT
 select * from validate_csv;
@@ -93,13 +93,13 @@ select * from validate_csv;
 
 # Copy from table to single csv
 query IT
-COPY source_table  to 'test_files/scratch/table.csv';
+COPY source_table  to 'test_files/scratch/copy/table.csv';
 ----
 2
 
 # Validate single csv output
 statement ok
-CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/table.csv';
+CREATE EXTERNAL TABLE validate_single_csv STORED AS csv WITH HEADER ROW LOCATION 'test_files/scratch/copy/table.csv';
 
 query IT
 select * from validate_single_csv;
@@ -109,13 +109,13 @@ select * from validate_single_csv;
 
 # Copy from table to folder of json
 query IT
-COPY source_table to 'test_files/scratch/table_json' (format json, per_thread_output true);
+COPY source_table to 'test_files/scratch/copy/table_json' (format json, per_thread_output true);
 ----
 2
 
 # Validate json output
 statement ok
-CREATE EXTERNAL TABLE validate_json STORED AS json LOCATION 'test_files/scratch/table_json';
+CREATE EXTERNAL TABLE validate_json STORED AS json LOCATION 'test_files/scratch/copy/table_json';
 
 query IT
 select * from validate_json;
@@ -125,13 +125,13 @@ select * from validate_json;
 
 # Copy from table to single json file
 query IT
-COPY source_table  to 'test_files/scratch/table.json';
+COPY source_table  to 'test_files/scratch/copy/table.json';
 ----
 2
 
 # Validate single JSON file`
 statement ok
-CREATE EXTERNAL TABLE validate_single_json STORED AS json LOCATION 'test_files/scratch/table_json';
+CREATE EXTERNAL TABLE validate_single_json STORED AS json LOCATION 'test_files/scratch/copy/table_json';
 
 query IT
 select * from validate_single_json;
@@ -141,13 +141,13 @@ select * from validate_single_json;
 
 # Copy from table with options
 query IT
-COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55);
+COPY source_table  to 'test_files/scratch/copy/table.json' (row_group_size 55);
 ----
 2
 
 # Copy from table with options (and trailing comma)
 query IT
-COPY source_table  to 'test_files/scratch/table.json' (row_group_size 55, row_group_limit_bytes 9,);
+COPY source_table  to 'test_files/scratch/copy/table.json' (row_group_size 55, row_group_limit_bytes 9,);
 ----
 2
 
