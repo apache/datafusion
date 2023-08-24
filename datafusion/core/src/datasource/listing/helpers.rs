@@ -321,7 +321,6 @@ pub async fn pruned_partition_list<'a>(
     file_extension: &'a str,
     partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
-
     // if no partition col => simply list all the files
     if partition_cols.is_empty() {
         return Ok(Box::pin(
