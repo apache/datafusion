@@ -456,7 +456,7 @@ CREATE EXTERNAL TABLE csv_with_timestamps (
 )
 STORED AS CSV
 WITH ORDER (ts ASC NULLS LAST)
-LOCATION 'tests/data/timestamps.csv';
+LOCATION '../core/tests/data/timestamps.csv';
 
 query TT
 EXPLAIN SELECT DATE_BIN(INTERVAL '15 minutes', ts, TIMESTAMP '2022-08-03 14:40:00Z') as db15
