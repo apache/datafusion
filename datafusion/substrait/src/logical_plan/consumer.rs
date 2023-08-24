@@ -542,7 +542,7 @@ pub async fn from_substrait_sorts(
                     let Some(direction) = SortDirection::from_i32(*d) else {
                         return not_impl_err!(
                             "Unsupported Substrait SortDirection value {d}"
-                        )
+                        );
                     };
 
                     match direction {
@@ -1250,27 +1250,21 @@ async fn make_datafusion_like(
     }
 
     let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
-        return not_impl_err!(
-            "Invalid arguments type for `{fn_name}` expr"
-        )
+        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
     };
     let expr = from_substrait_rex(expr_substrait, input_schema, extensions)
         .await?
         .as_ref()
         .clone();
     let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
-        return not_impl_err!(
-            "Invalid arguments type for `{fn_name}` expr"
-        )
+        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
     };
     let pattern = from_substrait_rex(pattern_substrait, input_schema, extensions)
         .await?
         .as_ref()
         .clone();
     let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
-        return not_impl_err!(
-            "Invalid arguments type for `{fn_name}` expr"
-        )
+        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
     };
     let escape_char_expr =
         from_substrait_rex(escape_char_substrait, input_schema, extensions)
@@ -1280,7 +1274,7 @@ async fn make_datafusion_like(
     let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr else {
         return Err(DataFusionError::Substrait(format!(
             "Expect Utf8 literal for escape char, but found {escape_char_expr:?}",
-        )))
+        )));
     };
 
     Ok(Arc::new(Expr::Like(Like {

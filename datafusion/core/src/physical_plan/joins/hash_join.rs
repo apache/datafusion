@@ -1246,7 +1246,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1290,7 +1290,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1327,7 +1327,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1373,7 +1373,7 @@ mod tests {
 
         assert_eq!(batches.len(), 1);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b2 | c1 | a1 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1427,7 +1427,7 @@ mod tests {
 
         assert_eq!(batches.len(), 1);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b2 | c1 | a1 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1479,7 +1479,7 @@ mod tests {
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1492,7 +1492,7 @@ mod tests {
         let stream = join.execute(1, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1544,7 +1544,7 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1586,7 +1586,7 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1626,7 +1626,7 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1662,7 +1662,7 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1704,7 +1704,7 @@ mod tests {
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1747,7 +1747,7 @@ mod tests {
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1801,7 +1801,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         // ignore the order
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -1861,7 +1861,7 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -1889,7 +1889,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -1921,7 +1921,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -1981,7 +1981,7 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2007,7 +2007,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2039,7 +2039,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+",
             "| a1 | b1 | c1 |",
             "+----+----+----+",
@@ -2097,7 +2097,7 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -2129,7 +2129,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -2164,7 +2164,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2222,7 +2222,7 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2258,7 +2258,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2296,7 +2296,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2335,7 +2335,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2376,7 +2376,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2480,7 +2480,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+----+",
             "| a | b | c | a  | b | c  |",
             "+---+---+---+----+---+----+",
@@ -2544,7 +2544,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
@@ -2584,7 +2584,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
@@ -2627,7 +2627,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
@@ -2669,7 +2669,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
@@ -2716,7 +2716,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+------------+---+------------+---+",
             "| date       | n | date       | n |",
             "+------------+---+------------+---+",

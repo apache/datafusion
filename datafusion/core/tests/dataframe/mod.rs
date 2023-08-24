@@ -287,8 +287,7 @@ async fn describe() -> Result<()> {
         .await?;
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
+        let expected = ["+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
         "| describe   | id                | bool_col | tinyint_col        | smallint_col       | int_col            | bigint_col         | float_col          | double_col         | date_string_col | string_col | timestamp_col           | year               | month             |",
         "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
         "| count      | 7300.0            | 7300     | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300            | 7300       | 7300                    | 7300.0             | 7300.0            |",
@@ -298,8 +297,7 @@ async fn describe() -> Result<()> {
         "| min        | 0.0               | null     | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 01/01/09        | 0          | 2008-12-31T23:00:00     | 2009.0             | 1.0               |",
         "| max        | 7299.0            | null     | 9.0                | 9.0                | 9.0                | 90.0               | 9.899999618530273  | 90.89999999999999  | 12/31/10        | 9          | 2010-12-31T04:09:13.860 | 2010.0             | 12.0              |",
         "| median     | 3649.0            | null     | 4.0                | 4.0                | 4.0                | 45.0               | 4.949999809265137  | 45.45              | null            | null       | null                    | 2009.0             | 7.0               |",
-        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
-    ];
+        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+"];
     assert_batches_eq!(expected, &describe_record_batch);
 
     //add test case for only boolean boolean/binary column
@@ -311,8 +309,7 @@ async fn describe() -> Result<()> {
         .collect()
         .await?;
     #[rustfmt::skip]
-        let expected = vec![
-        "+------------+------+------+",
+        let expected = ["+------------+------+------+",
         "| describe   | a    | b    |",
         "+------------+------+------+",
         "| count      | 1    | 1    |",
@@ -322,8 +319,7 @@ async fn describe() -> Result<()> {
         "| min        | a    | null |",
         "| max        | a    | null |",
         "| median     | null | null |",
-        "+------------+------+------+",
-    ];
+        "+------------+------+------+"];
     assert_batches_eq!(expected, &result);
 
     Ok(())
@@ -406,16 +402,14 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+-----+",
+        let expected = ["+-----+",
         "| a   |",
         "+-----+",
         "| 100 |",
         "| 10  |",
         "| 10  |",
         "| 1   |",
-        "+-----+",
-    ];
+        "+-----+"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -452,15 +446,13 @@ async fn sort_on_distinct_columns() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+-----+",
+        let expected = ["+-----+",
         "| a   |",
         "+-----+",
         "| 100 |",
         "| 10  |",
         "| 1   |",
-        "+-----+",
-    ];
+        "+-----+"];
     assert_batches_eq!(expected, &results);
     Ok(())
 }
@@ -594,14 +586,12 @@ async fn filter_with_alias_overwrite() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+------+",
+        let expected = ["+------+",
         "| a    |",
         "+------+",
         "| true |",
         "| true |",
-        "+------+",
-    ];
+        "+------+"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -629,16 +619,14 @@ async fn select_with_alias_overwrite() -> Result<()> {
     let results = df.collect().await?;
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+-------+",
+        let expected = ["+-------+",
         "| a     |",
         "+-------+",
         "| false |",
         "| true  |",
         "| true  |",
         "| false |",
-        "+-------+",
-    ];
+        "+-------+"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -946,22 +934,20 @@ async fn unnest_columns() -> Result<()> {
     const NUM_ROWS: usize = 4;
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.collect().await?;
-    let expected = vec![
-        "+----------+------------------------------------------------+--------------------+",
+    let expected = ["+----------+------------------------------------------------+--------------------+",
         "| shape_id | points                                         | tags               |",
         "+----------+------------------------------------------------+--------------------+",
         "| 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | [tag1]             |",
         "| 2        |                                                | [tag1, tag2]       |",
         "| 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |                    |",
         "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |",
-        "+----------+------------------------------------------------+--------------------+",
-    ];
+        "+----------+------------------------------------------------+--------------------+"];
     assert_batches_sorted_eq!(expected, &results);
 
     // Unnest tags
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.unnest_column("tags")?.collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+------------------------------------------------+------+",
         "| shape_id | points                                         | tags |",
         "+----------+------------------------------------------------+------+",
@@ -984,7 +970,7 @@ async fn unnest_columns() -> Result<()> {
     // Unnest points
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.unnest_column("points")?.collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+-----------------+--------------------+",
         "| shape_id | points          | tags               |",
         "+----------+-----------------+--------------------+",
@@ -1049,7 +1035,7 @@ async fn unnest_columns() -> Result<()> {
 async fn unnest_column_nulls() -> Result<()> {
     let df = table_with_lists_and_nulls().await?;
     let results = df.clone().collect().await?;
-    let expected = vec![
+    let expected = [
         "+--------+----+",
         "| list   | id |",
         "+--------+----+",
@@ -1069,7 +1055,7 @@ async fn unnest_column_nulls() -> Result<()> {
         .unnest_column_with_options("list", options)?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         "+------+----+",
         "| list | id |",
         "+------+----+",
@@ -1086,7 +1072,7 @@ async fn unnest_column_nulls() -> Result<()> {
         .unnest_column_with_options("list", options)?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         "+------+----+",
         "| list | id |",
         "+------+----+",
@@ -1109,7 +1095,7 @@ async fn unnest_fixed_list() -> Result<()> {
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+----------------+",
         "| shape_id | tags           |",
         "+----------+----------------+",
@@ -1159,7 +1145,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+----------------+",
         "| shape_id | tags           |",
         "+----------+----------------+",
@@ -1179,7 +1165,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
         .unnest_column_with_options("tags", options)?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         "+----------+-------+",
         "| shape_id | tags  |",
         "+----------+-------+",
@@ -1226,7 +1212,7 @@ async fn unnest_fixed_list_nonull() -> Result<()> {
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+----------------+",
         "| shape_id | tags           |",
         "+----------+----------------+",
@@ -1274,7 +1260,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
 
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.select_columns(&["tags"])?.collect().await?;
-    let expected = vec![
+    let expected = [
         r#"+--------------------+"#,
         r#"| tags               |"#,
         r#"+--------------------+"#,
@@ -1293,7 +1279,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
         .aggregate(vec![], vec![count(col("tags"))])?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         r#"+--------------------+"#,
         r#"| COUNT(shapes.tags) |"#,
         r#"+--------------------+"#,
@@ -1353,7 +1339,7 @@ async fn unnest_array_agg() -> Result<()> {
         )?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         "+----------+--------------+",
         "| shape_id | tag_id       |",
         "+----------+--------------+",
@@ -1658,7 +1644,7 @@ async fn test_array_agg() -> Result<()> {
 
     let results = df.collect().await?;
 
-    let expected = vec![
+    let expected = [
         "+-------------------------------------+",
         "| ARRAY_AGG(test.a)                   |",
         "+-------------------------------------+",

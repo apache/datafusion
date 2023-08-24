@@ -294,7 +294,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+-------------+",
             "| id | bool_col | tinyint_col |",
             "+----+----------+-------------+",
@@ -367,7 +367,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+-------------+-------------+",
             "| id | bool_col | tinyint_col | missing_col |",
             "+----+----------+-------------+-------------+",
@@ -439,7 +439,7 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        let expected = vec![
+        let expected = [
             "+----+----------+------------+-------------+",
             "| id | bool_col | date       | tinyint_col |",
             "+----+----------+------------+-------------+",

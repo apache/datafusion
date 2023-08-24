@@ -157,9 +157,7 @@ pub fn scan_empty_with_partitions(
 /// Get the schema for the aggregate_test_* csv files
 pub fn aggr_test_schema() -> SchemaRef {
     let mut f1 = Field::new("c1", DataType::Utf8, false);
-    f1.set_metadata(HashMap::from_iter(
-        vec![("testing".into(), "test".into())].into_iter(),
-    ));
+    f1.set_metadata(HashMap::from_iter(vec![("testing".into(), "test".into())]));
     let schema = Schema::new(vec![
         f1,
         Field::new("c2", DataType::UInt32, false),

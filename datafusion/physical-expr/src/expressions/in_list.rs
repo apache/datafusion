@@ -454,9 +454,8 @@ mod tests {
     fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
         list_type
             .iter()
-            .fold(Some(expr_type.clone()), |left, right_type| match left {
-                None => None,
-                Some(left_type) => comparison_coercion(&left_type, right_type),
+            .try_fold(expr_type.clone(), |left_type, right_type| {
+                comparison_coercion(&left_type, right_type)
             })
     }
 

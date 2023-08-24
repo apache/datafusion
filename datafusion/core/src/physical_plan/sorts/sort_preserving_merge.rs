@@ -910,7 +910,7 @@ mod tests {
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge.clone(), task_ctx).await.unwrap();
-        let expected = vec![
+        let expected = [
             "+----+---+",
             "| a  | b |",
             "+----+---+",

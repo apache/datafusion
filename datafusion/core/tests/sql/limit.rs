@@ -29,15 +29,13 @@ async fn limit() -> Result<()> {
         .unwrap();
 
     #[rustfmt::skip]
-    let expected = vec![
-        "+------+",
+    let expected = ["+------+",
         "| i    |",
         "+------+",
         "| 1000 |",
         "| 999  |",
         "| 998  |",
-        "+------+",
-    ];
+        "+------+"];
 
     assert_batches_eq!(expected, &results);
 
@@ -46,15 +44,13 @@ async fn limit() -> Result<()> {
         .unwrap();
 
     #[rustfmt::skip]
-    let expected = vec![
-        "+---+",
+    let expected = ["+---+",
         "| i |",
         "+---+",
         "| 1 |",
         "| 2 |",
         "| 3 |",
-        "+---+",
-    ];
+        "+---+"];
 
     assert_batches_eq!(expected, &results);
 

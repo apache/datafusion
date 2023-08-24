@@ -533,10 +533,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if !table_factor.joins.is_empty() {
             return not_impl_err!("DELETE FROM only supports single table, got: joins");
         }
-        let TableFactor::Table{name, ..} = table_factor.relation else {
+        let TableFactor::Table { name, .. } = table_factor.relation else {
             return not_impl_err!(
                 "DELETE FROM only supports single table, got: {table_factor:?}"
-            )
+            );
         };
 
         Ok(name)
