@@ -231,6 +231,7 @@ fn check_inner_plan(
                 Ok(())
             }
         },
+        LogicalPlan::Extension(_) => Ok(()),
         _ => Err(DataFusionError::Plan(
             "Unsupported operator in the subquery plan.".to_string(),
         )),
