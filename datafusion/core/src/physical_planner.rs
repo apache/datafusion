@@ -38,7 +38,8 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_expr::dml::{CopyTo, OutputFileFormat};
+use datafusion_common::FileType;
+use datafusion_expr::dml::CopyTo;
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -72,7 +73,9 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{internal_err, plan_err, DFSchema, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
@@ -232,14 +235,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }) => {
             // TODO: Add support for filter and order by in AggregateUDF
             if filter.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with filter is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with filter is not supported");
             }
             if order_by.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with order_by is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with order_by is not supported");
             }
             let mut names = Vec::with_capacity(args.len());
             for e in args {
@@ -291,15 +290,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{expr} IN ({list:?})"))
             }
         }
-        Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
-            "EXISTS is not yet supported in the physical plan".to_string(),
-        )),
-        Expr::InSubquery(_) => Err(DataFusionError::NotImplemented(
-            "IN subquery is not yet supported in the physical plan".to_string(),
-        )),
-        Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
-            "Scalar subqueries are not yet supported in the physical plan".to_string(),
-        )),
+        Expr::Exists { .. } => {
+            not_impl_err!("EXISTS is not yet supported in the physical plan")
+        }
+        Expr::InSubquery(_) => {
+            not_impl_err!("IN subquery is not yet supported in the physical plan")
+        }
+        Expr::ScalarSubquery(_) => {
+            not_impl_err!("Scalar subqueries are not yet supported in the physical plan")
+        }
         Expr::Between(Between {
             expr,
             negated,
@@ -584,11 +583,11 @@ impl DefaultPhysicalPlanner {
                     // TODO: implement statement level overrides for each file type
                     // E.g. CsvFormat::from_options(options)
                     let sink_format: Arc<dyn FileFormat> = match file_format {
-                        OutputFileFormat::CSV => Arc::new(CsvFormat::default()),
-                        OutputFileFormat::PARQUET => Arc::new(ParquetFormat::default()),
-                        OutputFileFormat::JSON => Arc::new(JsonFormat::default()),
-                        OutputFileFormat::AVRO => Arc::new(AvroFormat {} ),
-                        OutputFileFormat::ARROW => Arc::new(ArrowFormat {}),
+                        FileType::CSV => Arc::new(CsvFormat::default()),
+                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
+                        FileType::JSON => Arc::new(JsonFormat::default()),
+                        FileType::AVRO => Arc::new(AvroFormat {} ),
+                        FileType::ARROW => Arc::new(ArrowFormat {}),
                     };
 
                     sink_format.create_writer_physical_plan(input_exec, session_state, config).await
@@ -605,9 +604,9 @@ impl DefaultPhysicalPlanner {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, false).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
                     }
                 }
                 LogicalPlan::Dml(DmlStatement {
@@ -622,9 +621,9 @@ impl DefaultPhysicalPlanner {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, true).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
                     }
                 }
                 LogicalPlan::Values(Values {
@@ -780,7 +779,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter.into_iter());
+                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
@@ -940,7 +939,7 @@ impl DefaultPhysicalPlanner {
                             Partitioning::Hash(runtime_expr, *n)
                         }
                         LogicalPartitioning::DistributeBy(_) => {
-                            return Err(DataFusionError::NotImplemented("Physical plan does not support DistributeBy partitioning".to_string()));
+                            return not_impl_err!("Physical plan does not support DistributeBy partitioning");
                         }
                     };
                     Ok(Arc::new(RepartitionExec::try_new(
@@ -1136,7 +1135,7 @@ impl DefaultPhysicalPlanner {
                         // Sort-Merge join support currently is experimental
                         if join_filter.is_some() {
                             // TODO SortMergeJoinExec need to support join filter
-                            Err(DataFusionError::NotImplemented("SortMergeJoinExec does not support join_filter now.".to_string()))
+                            not_impl_err!("SortMergeJoinExec does not support join_filter now.")
                         } else {
                             let join_on_len = join_on.len();
                             Ok(Arc::new(SortMergeJoinExec::try_new(
@@ -1226,30 +1225,30 @@ impl DefaultPhysicalPlanner {
                     // the appropriate table can be registered with
                     // the context)
                     let name = ddl.name();
-                    Err(DataFusionError::NotImplemented(
-                        format!("Unsupported logical plan: {name}")
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: {name}"
+                    )
                 }
                 LogicalPlan::Prepare(_) => {
                     // There is no default plan for "PREPARE" -- it must be
                     // handled at a higher level (so that the appropriate
                     // statement can be prepared)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: Prepare".to_string(),
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Prepare"
+                    )
                 }
                 LogicalPlan::Dml(_) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: Dml".to_string(),
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Dml"
+                    )
                 }
                 LogicalPlan::Statement(statement) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                     let name = statement.name();
-                    Err(DataFusionError::NotImplemented(
-                        format!("Unsupported logical plan: Statement({name})")
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Statement({name})"
+                    )
                 }
                 LogicalPlan::DescribeTable(_) => {
                     internal_err!(
@@ -2691,7 +2690,7 @@ mod tests {
 
         let plan = plan(&logical_plan).await.unwrap();
 
-        let expected_graph = r###"
+        let expected_graph = r#"
 // Begin DataFusion GraphViz Plan,
 // display it online here: https://dreampuf.github.io/GraphvizOnline
 
@@ -2701,7 +2700,7 @@ digraph {
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan
-"###;
+"#;
 
         let generated_graph = format!("{}", displayable(&*plan).graphviz());
 

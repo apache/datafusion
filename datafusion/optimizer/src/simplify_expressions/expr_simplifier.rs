@@ -32,7 +32,7 @@ use arrow::{
 };
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
-    internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
@@ -317,10 +317,10 @@ impl<'a> ConstEvaluator<'a> {
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
-                    Err(DataFusionError::Execution(format!(
+                    exec_err!(
                         "Could not evaluate the expression, found a result of length {}",
                         a.len()
-                    )))
+                    )
                 } else {
                     Ok(ScalarValue::try_from_array(&a, 0)?)
                 }
@@ -412,7 +412,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if list.len() == 1
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
             {
-                let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
+                let Expr::ScalarSubquery(subquery) = list.remove(0) else {
+                    unreachable!()
+                };
                 Expr::InSubquery(InSubquery::new(expr, subquery, negated))
             }
 

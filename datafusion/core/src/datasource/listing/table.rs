@@ -33,7 +33,6 @@ use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
     file_format::{
@@ -52,6 +51,7 @@ use crate::{
     logical_expr::Expr,
     physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics},
 };
+use datafusion_common::{FileCompressionType, FileType};
 
 use super::PartitionedFile;
 
@@ -963,7 +963,6 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::file_type::GetExt;
     use crate::datasource::{provider_as_source, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::physical_plan::collect;
@@ -979,6 +978,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use chrono::DateTime;
     use datafusion_common::assert_contains;
+    use datafusion_common::GetExt;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::collections::HashMap;
@@ -1948,7 +1948,7 @@ mod tests {
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -1963,7 +1963,7 @@ mod tests {
         let batches = session_ctx.sql("select * from t").await?.collect().await?;
 
         // Define the expected result as a vector of strings.
-        let expected = vec![
+        let expected = [
             "+---------+",
             "| column1 |",
             "+---------+",
@@ -1992,7 +1992,7 @@ mod tests {
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2152,7 +2152,7 @@ mod tests {
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2169,7 +2169,7 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2193,7 +2193,7 @@ mod tests {
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2212,7 +2212,7 @@ mod tests {
             .await?;
 
         // Define the expected result after the second append.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2277,7 +2277,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+-----+-----+---+",
             "| a   | b   | c |",
             "+-----+-----+---+",

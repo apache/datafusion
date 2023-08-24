@@ -318,15 +318,15 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
 /// Find excluded columns in the schema, if any
 /// SELECT * EXCLUDE(col1, col2), would return `vec![col1, col2]`
 fn get_excluded_columns(
-    opt_exclude: Option<ExcludeSelectItem>,
-    opt_except: Option<ExceptSelectItem>,
+    opt_exclude: Option<&ExcludeSelectItem>,
+    opt_except: Option<&ExceptSelectItem>,
     schema: &DFSchema,
     qualifier: &Option<TableReference>,
 ) -> Result<Vec<Column>> {
     let mut idents = vec![];
     if let Some(excepts) = opt_except {
-        idents.push(excepts.first_element);
-        idents.extend(excepts.additional_elements);
+        idents.push(&excepts.first_element);
+        idents.extend(&excepts.additional_elements);
     }
     if let Some(exclude) = opt_exclude {
         match exclude {
@@ -387,7 +387,7 @@ fn get_exprs_except_skipped(
 pub fn expand_wildcard(
     schema: &DFSchema,
     plan: &LogicalPlan,
-    wildcard_options: Option<WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let using_columns = plan.using_columns()?;
     let mut columns_to_skip = using_columns
@@ -417,7 +417,7 @@ pub fn expand_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude, opt_except, schema, &None)?
+        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, &None)?
     } else {
         vec![]
     };
@@ -430,7 +430,7 @@ pub fn expand_wildcard(
 pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
-    wildcard_options: Option<WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
@@ -451,7 +451,12 @@ pub fn expand_qualified_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude, opt_except, schema, &Some(qualifier))?
+        get_excluded_columns(
+            opt_exclude.as_ref(),
+            opt_except.as_ref(),
+            schema,
+            &Some(qualifier),
+        )?
     } else {
         vec![]
     };

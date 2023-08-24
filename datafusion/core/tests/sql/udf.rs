@@ -92,7 +92,7 @@ async fn scalar_udf() -> Result<()> {
 
     let result = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    let expected = vec![
+    let expected = [
         "+-----+-----+-----------------+",
         "| a   | b   | my_add(t.a,t.b) |",
         "+-----+-----+-----------------+",
@@ -148,7 +148,7 @@ async fn scalar_udf_zero_params() -> Result<()> {
     ));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
-    let expected = vec![
+    let expected = [
         "+-----+", //
         "| a   |", //
         "+-----+", //
@@ -156,22 +156,22 @@ async fn scalar_udf_zero_params() -> Result<()> {
         "| 100 |", //
         "| 100 |", //
         "| 100 |", //
-        "+-----+", //
+        "+-----+",
     ];
     assert_batches_eq!(expected, &result);
 
     let result = plan_and_collect(&ctx, "select get_100() a").await?;
-    let expected = vec![
+    let expected = [
         "+-----+", //
         "| a   |", //
         "+-----+", //
         "| 100 |", //
-        "+-----+", //
+        "+-----+",
     ];
     assert_batches_eq!(expected, &result);
 
     let result = plan_and_collect(&ctx, "select get_100() from t where a=999").await?;
-    let expected = vec![
+    let expected = [
         "++", //
         "++",
     ];
@@ -201,12 +201,12 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
 
     // Make sure that the UDF is used instead of the built-in function
     let result = plan_and_collect(&ctx, "select abs(a) a from t").await?;
-    let expected = vec![
+    let expected = [
         "+---+", //
         "| a |", //
         "+---+", //
         "| 1 |", //
-        "+---+", //
+        "+---+",
     ];
     assert_batches_eq!(expected, &result);
     Ok(())
@@ -237,12 +237,7 @@ async fn simple_udaf() -> Result<()> {
         vec![DataType::Float64],
         Arc::new(DataType::Float64),
         Volatility::Immutable,
-        Arc::new(|_| {
-            Ok(Box::new(AvgAccumulator::try_new(
-                &DataType::Float64,
-                &DataType::Float64,
-            )?))
-        }),
+        Arc::new(|_| Ok(Box::<AvgAccumulator>::default())),
         Arc::new(vec![DataType::UInt64, DataType::Float64]),
     );
 
@@ -250,7 +245,7 @@ async fn simple_udaf() -> Result<()> {
 
     let result = plan_and_collect(&ctx, "SELECT MY_AVG(a) FROM t").await?;
 
-    let expected = vec![
+    let expected = [
         "+-------------+",
         "| my_avg(t.a) |",
         "+-------------+",

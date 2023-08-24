@@ -36,7 +36,7 @@ use crate::physical_plan::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
-    joins::hash_join_utils::JoinHashMap,
+    joins::hash_join_utils::{JoinHashMap, JoinHashMapType},
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         combine_join_equivalence_properties, estimate_join_statistics,
@@ -53,30 +53,20 @@ use super::{
     PartitionMode,
 };
 
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
+    UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
+};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::{and, take, FilterBuilder};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::{
-    array::{
-        Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Date32Array, Date64Array,
-        Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray,
-        PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-        UInt16Array, UInt32Array, UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
-        UInt8Array,
-    },
-    datatypes::{
-        ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema,
-        SchemaRef, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
-    util::bit_util,
-};
+use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
-use datafusion_common::cast::{as_dictionary_array, as_string_array};
-use datafusion_common::{internal_err, plan_err, DataFusionError, JoinType, Result};
+use datafusion_common::{
+    exec_err, internal_err, plan_err, DataFusionError, JoinType, Result,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
@@ -599,6 +589,7 @@ async fn collect_left_input(
             offset,
             &random_state,
             &mut hashes_buffer,
+            0,
         )?;
         offset += batch.num_rows();
     }
@@ -611,14 +602,18 @@ async fn collect_left_input(
 
 /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
 /// assuming that the [RecordBatch] corresponds to the `index`th
-pub fn update_hash(
+pub fn update_hash<T>(
     on: &[Column],
     batch: &RecordBatch,
-    hash_map: &mut JoinHashMap,
+    hash_map: &mut T,
     offset: usize,
     random_state: &RandomState,
     hashes_buffer: &mut Vec<u64>,
-) -> Result<()> {
+    deleted_offset: usize,
+) -> Result<()>
+where
+    T: JoinHashMapType,
+{
     // evaluate the keys
     let keys_values = on
         .iter()
@@ -628,20 +623,22 @@ pub fn update_hash(
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
+    // For usual JoinHashmap, the implementation is void.
+    hash_map.extend_zero(batch.num_rows());
+
     // insert hashes to key of the hashmap
+    let (mut_map, mut_list) = hash_map.get_mut();
     for (row, hash_value) in hash_values.iter().enumerate() {
-        let item = hash_map
-            .map
-            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+        let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
         if let Some((_, index)) = item {
             // Already exists: add index to next array
             let prev_index = *index;
             // Store new value inside hashmap
             *index = (row + offset + 1) as u64;
             // Update chained Vec at row + offset with previous value
-            hash_map.next[row + offset] = prev_index;
+            mut_list[row + offset - deleted_offset] = prev_index;
         } else {
-            hash_map.map.insert(
+            mut_map.insert(
                 *hash_value,
                 // store the value + 1 as 0 value reserved for end of list
                 (*hash_value, (row + offset + 1) as u64),
@@ -724,8 +721,8 @@ impl RecordBatchStream for HashJoinStream {
 // Build indices: 4, 5, 6, 6
 // Probe indices: 3, 3, 4, 5
 #[allow(clippy::too_many_arguments)]
-pub fn build_equal_condition_join_indices(
-    build_hashmap: &JoinHashMap,
+pub fn build_equal_condition_join_indices<T: JoinHashMapType>(
+    build_hashmap: &T,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
     build_on: &[Column],
@@ -735,6 +732,7 @@ pub fn build_equal_condition_join_indices(
     hashes_buffer: &mut Vec<u64>,
     filter: Option<&JoinFilter>,
     build_side: JoinSide,
+    deleted_offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
@@ -782,22 +780,33 @@ pub fn build_equal_condition_join_indices(
     //     (5,1)
     //
     // With this approach, the lexicographic order on both the probe side and the build side is preserved.
+    let hash_map = build_hashmap.get_map();
+    let next_chain = build_hashmap.get_list();
     for (row, hash_value) in hash_values.iter().enumerate().rev() {
         // Get the hash and find it in the build index
 
         // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
-        if let Some((_, index)) = build_hashmap
-            .map
-            .get(*hash_value, |(hash, _)| *hash_value == *hash)
+        if let Some((_, index)) =
+            hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
             let mut i = *index - 1;
             loop {
-                build_indices.append(i);
+                let build_row_value = if let Some(offset) = deleted_offset {
+                    // This arguments means that we prune the next index way before here.
+                    if i < offset as u64 {
+                        // End of the list due to pruning
+                        break;
+                    }
+                    i - offset as u64
+                } else {
+                    i
+                };
+                build_indices.append(build_row_value);
                 probe_indices.append(row as u32);
                 // Follow the chain to get the next index value
-                let next = build_hashmap.next[i as usize];
+                let next = next_chain[build_row_value as usize];
                 if next == 0 {
                     // end of list
                     break;
@@ -834,338 +843,6 @@ pub fn build_equal_condition_join_indices(
         &keys_values,
         null_equals_null,
     )
-}
-
-macro_rules! equal_rows_elem {
-    ($array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
-        let left_array = $l.as_any().downcast_ref::<$array_type>().unwrap();
-        let right_array = $r.as_any().downcast_ref::<$array_type>().unwrap();
-
-        match (left_array.is_null($left), right_array.is_null($right)) {
-            (false, false) => left_array.value($left) == right_array.value($right),
-            (true, true) => $null_equals_null,
-            _ => false,
-        }
-    }};
-}
-
-macro_rules! equal_rows_elem_with_string_dict {
-    ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
-        let left_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($l).unwrap();
-        let right_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($r).unwrap();
-
-        let (left_values, left_values_index) = {
-            let keys_col = left_array.keys();
-            if keys_col.is_valid($left) {
-                let values_index = keys_col
-                    .value($left)
-                    .to_usize()
-                    .expect("Can not convert index to usize in dictionary");
-
-                (
-                    as_string_array(left_array.values()).unwrap(),
-                    Some(values_index),
-                )
-            } else {
-                (as_string_array(left_array.values()).unwrap(), None)
-            }
-        };
-        let (right_values, right_values_index) = {
-            let keys_col = right_array.keys();
-            if keys_col.is_valid($right) {
-                let values_index = keys_col
-                    .value($right)
-                    .to_usize()
-                    .expect("Can not convert index to usize in dictionary");
-
-                (
-                    as_string_array(right_array.values()).unwrap(),
-                    Some(values_index),
-                )
-            } else {
-                (as_string_array(right_array.values()).unwrap(), None)
-            }
-        };
-
-        match (left_values_index, right_values_index) {
-            (Some(left_values_index), Some(right_values_index)) => {
-                left_values.value(left_values_index)
-                    == right_values.value(right_values_index)
-            }
-            (None, None) => $null_equals_null,
-            _ => false,
-        }
-    }};
-}
-
-/// Left and right row have equal values
-/// If more data types are supported here, please also add the data types in can_hash function
-/// to generate hash join logical plan.
-pub fn equal_rows(
-    left: usize,
-    right: usize,
-    left_arrays: &[ArrayRef],
-    right_arrays: &[ArrayRef],
-    null_equals_null: bool,
-) -> Result<bool> {
-    let mut err = None;
-    let res = left_arrays
-        .iter()
-        .zip(right_arrays)
-        .all(|(l, r)| match l.data_type() {
-            DataType::Null => {
-                // lhs and rhs are both `DataType::Null`, so the equal result
-                // is dependent on `null_equals_null`
-                null_equals_null
-            }
-            DataType::Boolean => {
-                equal_rows_elem!(BooleanArray, l, r, left, right, null_equals_null)
-            }
-            DataType::Int8 => {
-                equal_rows_elem!(Int8Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Int16 => {
-                equal_rows_elem!(Int16Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Int32 => {
-                equal_rows_elem!(Int32Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Int64 => {
-                equal_rows_elem!(Int64Array, l, r, left, right, null_equals_null)
-            }
-            DataType::UInt8 => {
-                equal_rows_elem!(UInt8Array, l, r, left, right, null_equals_null)
-            }
-            DataType::UInt16 => {
-                equal_rows_elem!(UInt16Array, l, r, left, right, null_equals_null)
-            }
-            DataType::UInt32 => {
-                equal_rows_elem!(UInt32Array, l, r, left, right, null_equals_null)
-            }
-            DataType::UInt64 => {
-                equal_rows_elem!(UInt64Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Float32 => {
-                equal_rows_elem!(Float32Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Float64 => {
-                equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Date32 => {
-                equal_rows_elem!(Date32Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Date64 => {
-                equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Time32(time_unit) => match time_unit {
-                TimeUnit::Second => {
-                    equal_rows_elem!(Time32SecondArray, l, r, left, right, null_equals_null)
-                }
-                TimeUnit::Millisecond => {
-                    equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
-                }
-                _ => {
-                    err = Some(internal_err!(
-                        "Unsupported data type in hasher"
-                    ));
-                    false
-                }
-            }
-            DataType::Time64(time_unit) => match time_unit {
-                TimeUnit::Microsecond => {
-                    equal_rows_elem!(Time64MicrosecondArray, l, r, left, right, null_equals_null)
-                }
-                TimeUnit::Nanosecond => {
-                    equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
-                }
-                _ => {
-                    err = Some(internal_err!(
-                        "Unsupported data type in hasher"
-                    ));
-                    false
-                }
-            }
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => {
-                    equal_rows_elem!(
-                        TimestampSecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Millisecond => {
-                    equal_rows_elem!(
-                        TimestampMillisecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Microsecond => {
-                    equal_rows_elem!(
-                        TimestampMicrosecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Nanosecond => {
-                    equal_rows_elem!(
-                        TimestampNanosecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-            },
-            DataType::Utf8 => {
-                equal_rows_elem!(StringArray, l, r, left, right, null_equals_null)
-            }
-            DataType::LargeUtf8 => {
-                equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
-            }
-            DataType::FixedSizeBinary(_) => {
-                equal_rows_elem!(FixedSizeBinaryArray, l, r, left, right, null_equals_null)
-            }
-            DataType::Decimal128(_, lscale) => match r.data_type() {
-                DataType::Decimal128(_, rscale) => {
-                    if lscale == rscale {
-                        equal_rows_elem!(
-                            Decimal128Array,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                    } else {
-                        err = Some(internal_err!(
-                            "Inconsistent Decimal data type in hasher, the scale should be same"
-                        ));
-                        false
-                    }
-                }
-                _ => {
-                    err = Some(internal_err!(
-                        "Unsupported data type in hasher"
-                    ));
-                    false
-                }
-            },
-            DataType::Dictionary(key_type, value_type)
-            if *value_type.as_ref() == DataType::Utf8 =>
-                {
-                    match key_type.as_ref() {
-                        DataType::Int8 => {
-                            equal_rows_elem_with_string_dict!(
-                            Int8Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::Int16 => {
-                            equal_rows_elem_with_string_dict!(
-                            Int16Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::Int32 => {
-                            equal_rows_elem_with_string_dict!(
-                            Int32Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::Int64 => {
-                            equal_rows_elem_with_string_dict!(
-                            Int64Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::UInt8 => {
-                            equal_rows_elem_with_string_dict!(
-                            UInt8Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::UInt16 => {
-                            equal_rows_elem_with_string_dict!(
-                            UInt16Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::UInt32 => {
-                            equal_rows_elem_with_string_dict!(
-                            UInt32Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::UInt64 => {
-                            equal_rows_elem_with_string_dict!(
-                            UInt64Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        _ => {
-                            // should not happen
-                            err = Some(internal_err!(
-                                "Unsupported data type in hasher"
-                            ));
-                            false
-                        }
-                    }
-                }
-            other => {
-                // This is internal because we should have caught this before.
-                err = Some(internal_err!(
-                    "Unsupported data type in hasher: {other}"
-                ));
-                false
-            }
-        });
-
-    err.unwrap_or(Ok(res))
 }
 
 // version of eq_dyn supporting equality on null arrays
@@ -1285,6 +962,7 @@ impl HashJoinStream {
                         &mut hashes_buffer,
                         self.filter.as_ref(),
                         JoinSide::Left,
+                        None,
                     );
 
                     let result = match left_right_indices {
@@ -1318,9 +996,9 @@ impl HashJoinStream {
                             self.join_metrics.output_rows.add(batch.num_rows());
                             Some(result)
                         }
-                        Err(err) => Some(Err(DataFusionError::Execution(format!(
-                            "Fail to build join indices in HashJoinExec, error:{err}",
-                        )))),
+                        Err(err) => Some(exec_err!(
+                            "Fail to build join indices in HashJoinExec, error:{err}"
+                        )),
                     };
                     timer.done();
                     result
@@ -1558,7 +1236,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1602,7 +1280,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1639,7 +1317,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1685,7 +1363,7 @@ mod tests {
 
         assert_eq!(batches.len(), 1);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b2 | c1 | a1 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1739,7 +1417,7 @@ mod tests {
 
         assert_eq!(batches.len(), 1);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b2 | c1 | a1 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1791,7 +1469,7 @@ mod tests {
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1804,7 +1482,7 @@ mod tests {
         let stream = join.execute(1, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1856,7 +1534,7 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1898,7 +1576,7 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1938,7 +1616,7 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -1974,7 +1652,7 @@ mod tests {
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2016,7 +1694,7 @@ mod tests {
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2059,7 +1737,7 @@ mod tests {
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2113,7 +1791,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         // ignore the order
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -2173,7 +1851,7 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -2201,7 +1879,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -2233,7 +1911,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2293,7 +1971,7 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2319,7 +1997,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2351,7 +2029,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+",
             "| a1 | b1 | c1 |",
             "+----+----+----+",
@@ -2409,7 +2087,7 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -2441,7 +2119,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -2476,7 +2154,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2534,7 +2212,7 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2570,7 +2248,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
@@ -2608,7 +2286,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2647,7 +2325,7 @@ mod tests {
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2688,7 +2366,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -2747,6 +2425,7 @@ mod tests {
             &mut vec![0; right.num_rows()],
             None,
             JoinSide::Left,
+            None,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);
@@ -2791,7 +2470,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+----+",
             "| a | b | c | a  | b | c  |",
             "+---+---+---+----+---+----+",
@@ -2855,7 +2534,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
@@ -2895,7 +2574,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
@@ -2938,7 +2617,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
@@ -2980,7 +2659,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
@@ -3027,7 +2706,7 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        let expected = vec![
+        let expected = [
             "+------------+---+------------+---+",
             "| date       | n | date       | n |",
             "+------------+---+------------+---+",
@@ -3051,7 +2730,7 @@ mod tests {
 
         // right input stream returns one good batch and then one error.
         // The error should be returned.
-        let err = Err(DataFusionError::Execution("bad data error".to_string()));
+        let err = exec_err!("bad data error");
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
 
         let on = vec![(

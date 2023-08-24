@@ -18,10 +18,9 @@
 //! This module provides ScalarValue, an enum that can be used for storage of single elements
 
 use std::borrow::Borrow;
-use std::cmp::{max, Ordering};
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
-use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
@@ -29,9 +28,9 @@ use crate::cast::{
     as_decimal128_array, as_decimal256_array, as_dictionary_array,
     as_fixed_size_binary_array, as_fixed_size_list_array, as_list_array, as_struct_array,
 };
-use crate::delta::shift_months;
-use crate::error::{DataFusionError, Result, _internal_err};
+use crate::error::{DataFusionError, Result, _internal_err, _not_impl_err};
 use arrow::buffer::NullBuffer;
+use arrow::compute::kernels::numeric::*;
 use arrow::compute::nullif;
 use arrow::datatypes::{i256, FieldRef, Fields, SchemaBuilder};
 use arrow::{
@@ -46,8 +45,7 @@ use arrow::{
         DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_array::{timezone::Tz, ArrowNativeTypeOp, Scalar};
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
+use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 // Constants we use throughout this file:
 const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
@@ -551,889 +549,6 @@ pub fn mdn_to_nano(val: &Option<i128>) -> Option<i128> {
 
 impl Eq for ScalarValue {}
 
-// TODO implement this in arrow-rs with simd
-// https://github.com/apache/arrow-rs/issues/1010
-macro_rules! decimal_op {
-    ($LHS:expr, $RHS:expr, $PRECISION:expr, $LHS_SCALE:expr, $RHS_SCALE:expr, $OPERATION:tt) => {{
-        let (difference, side) = if $LHS_SCALE > $RHS_SCALE {
-            ($LHS_SCALE - $RHS_SCALE, true)
-        } else {
-            ($RHS_SCALE - $LHS_SCALE, false)
-        };
-        let scale = max($LHS_SCALE, $RHS_SCALE);
-        Ok(match ($LHS, $RHS, difference) {
-            (None, None, _) => ScalarValue::Decimal128(None, $PRECISION, scale),
-            (lhs, None, 0) => ScalarValue::Decimal128(*lhs, $PRECISION, scale),
-            (Some(lhs_value), None, _) => {
-                let mut new_value = *lhs_value;
-                if !side {
-                    new_value *= 10_i128.pow(difference as u32)
-                }
-                ScalarValue::Decimal128(Some(new_value), $PRECISION, scale)
-            }
-            (None, Some(rhs_value), 0) => {
-                let value = decimal_right!(*rhs_value, $OPERATION);
-                ScalarValue::Decimal128(Some(value), $PRECISION, scale)
-            }
-            (None, Some(rhs_value), _) => {
-                let mut new_value = decimal_right!(*rhs_value, $OPERATION);
-                if side {
-                    new_value *= 10_i128.pow(difference as u32)
-                };
-                ScalarValue::Decimal128(Some(new_value), $PRECISION, scale)
-            }
-            (Some(lhs_value), Some(rhs_value), 0) => {
-                decimal_binary_op!(lhs_value, rhs_value, $OPERATION, $PRECISION, scale)
-            }
-            (Some(lhs_value), Some(rhs_value), _) => {
-                let (left_arg, right_arg) = if side {
-                    (*lhs_value, rhs_value * 10_i128.pow(difference as u32))
-                } else {
-                    (lhs_value * 10_i128.pow(difference as u32), *rhs_value)
-                };
-                decimal_binary_op!(left_arg, right_arg, $OPERATION, $PRECISION, scale)
-            }
-        })
-    }};
-}
-
-macro_rules! decimal_binary_op {
-    ($LHS:expr, $RHS:expr, $OPERATION:tt, $PRECISION:expr, $SCALE:expr) => {
-        // TODO: This simple implementation loses precision for calculations like
-        //       multiplication and division. Improve this implementation for such
-        //       operations.
-        ScalarValue::Decimal128(Some($LHS $OPERATION $RHS), $PRECISION, $SCALE)
-    };
-}
-
-macro_rules! decimal_right {
-    ($TERM:expr, +) => {
-        $TERM
-    };
-    ($TERM:expr, *) => {
-        $TERM
-    };
-    ($TERM:expr, -) => {
-        -$TERM
-    };
-    ($TERM:expr, /) => {
-        Err(DataFusionError::NotImplemented(format!(
-            "Decimal reciprocation not yet supported",
-        )))
-    };
-}
-
-// Returns the result of applying operation to two scalar values.
-macro_rules! primitive_op {
-    ($LEFT:expr, $RIGHT:expr, $SCALAR:ident, $OPERATION:tt) => {
-        match ($LEFT, $RIGHT) {
-            (lhs, None) => Ok(ScalarValue::$SCALAR(*lhs)),
-            #[allow(unused_variables)]
-            (None, Some(b)) => { primitive_right!(*b, $OPERATION, $SCALAR) },
-            (Some(a), Some(b)) => Ok(ScalarValue::$SCALAR(Some(*a $OPERATION *b))),
-        }
-    };
-}
-macro_rules! primitive_checked_op {
-    ($LEFT:expr, $RIGHT:expr, $SCALAR:ident, $FUNCTION:ident, $OPERATION:tt) => {
-        match ($LEFT, $RIGHT) {
-            (lhs, None) => Ok(ScalarValue::$SCALAR(*lhs)),
-            #[allow(unused_variables)]
-            (None, Some(b)) => {
-                primitive_checked_right!(*b, $OPERATION, $SCALAR)
-            }
-            (Some(a), Some(b)) => {
-                if let Some(value) = (*a).$FUNCTION(*b) {
-                    Ok(ScalarValue::$SCALAR(Some(value)))
-                } else {
-                    Err(DataFusionError::Execution(
-                        "Overflow while calculating ScalarValue.".to_string(),
-                    ))
-                }
-            }
-        }
-    };
-}
-
-macro_rules! primitive_checked_right {
-    ($TERM:expr, -, $SCALAR:ident) => {
-        if let Some(value) = $TERM.checked_neg() {
-            Ok(ScalarValue::$SCALAR(Some(value)))
-        } else {
-            Err(DataFusionError::Execution(
-                "Overflow while calculating ScalarValue.".to_string(),
-            ))
-        }
-    };
-    ($TERM:expr, $OPERATION:tt, $SCALAR:ident) => {
-        primitive_right!($TERM, $OPERATION, $SCALAR)
-    };
-}
-
-macro_rules! primitive_right {
-    ($TERM:expr, +, $SCALAR:ident) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM)))
-    };
-    ($TERM:expr, *, $SCALAR:ident) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM)))
-    };
-    ($TERM:expr, -, UInt64) => {
-        unsigned_subtraction_error!("UInt64")
-    };
-    ($TERM:expr, -, UInt32) => {
-        unsigned_subtraction_error!("UInt32")
-    };
-    ($TERM:expr, -, UInt16) => {
-        unsigned_subtraction_error!("UInt16")
-    };
-    ($TERM:expr, -, UInt8) => {
-        unsigned_subtraction_error!("UInt8")
-    };
-    ($TERM:expr, -, $SCALAR:ident) => {
-        Ok(ScalarValue::$SCALAR(Some(-$TERM)))
-    };
-    ($TERM:expr, /, Float64) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM.recip())))
-    };
-    ($TERM:expr, /, Float32) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM.recip())))
-    };
-    ($TERM:expr, /, $SCALAR:ident) => {
-        internal_err!(
-            "Can not divide an uninitialized value to a non-floating point value"
-        )
-    };
-    ($TERM:expr, &, $SCALAR:ident) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM)))
-    };
-    ($TERM:expr, |, $SCALAR:ident) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM)))
-    };
-    ($TERM:expr, ^, $SCALAR:ident) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM)))
-    };
-    ($TERM:expr, &&, $SCALAR:ident) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM)))
-    };
-    ($TERM:expr, ||, $SCALAR:ident) => {
-        Ok(ScalarValue::$SCALAR(Some($TERM)))
-    };
-}
-
-macro_rules! unsigned_subtraction_error {
-    ($SCALAR:expr) => {{
-        _internal_err!(
-            "Can not subtract a {} value from an uninitialized value",
-            $SCALAR
-        )
-    }};
-}
-
-macro_rules! impl_checked_op {
-    ($LHS:expr, $RHS:expr, $FUNCTION:ident, $OPERATION:tt) => {
-        // Only covering primitive types that support checked_* operands, and fall back to raw operation for other types.
-        match ($LHS, $RHS) {
-            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
-                primitive_checked_op!(lhs, rhs, UInt64, $FUNCTION, $OPERATION)
-            },
-            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
-                primitive_checked_op!(lhs, rhs, Int64, $FUNCTION, $OPERATION)
-            },
-            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
-                primitive_checked_op!(lhs, rhs, UInt32, $FUNCTION, $OPERATION)
-            },
-            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
-                primitive_checked_op!(lhs, rhs, Int32, $FUNCTION, $OPERATION)
-            },
-            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
-                primitive_checked_op!(lhs, rhs, UInt16, $FUNCTION, $OPERATION)
-            },
-            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
-                primitive_checked_op!(lhs, rhs, Int16, $FUNCTION, $OPERATION)
-            },
-            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
-                primitive_checked_op!(lhs, rhs, UInt8, $FUNCTION, $OPERATION)
-            },
-            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
-                primitive_checked_op!(lhs, rhs, Int8, $FUNCTION, $OPERATION)
-            },
-            _ => {
-                impl_op!($LHS, $RHS, $OPERATION)
-            }
-        }
-    };
-}
-
-macro_rules! impl_op {
-    ($LHS:expr, $RHS:expr, +) => {
-        impl_op_arithmetic!($LHS, $RHS, +)
-    };
-    ($LHS:expr, $RHS:expr, -) => {
-        match ($LHS, $RHS) {
-            (
-                ScalarValue::TimestampSecond(Some(ts_lhs), _),
-                ScalarValue::TimestampSecond(Some(ts_rhs), _),
-            ) => Ok(ScalarValue::DurationSecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
-            (
-                ScalarValue::TimestampMillisecond(Some(ts_lhs), _),
-                ScalarValue::TimestampMillisecond(Some(ts_rhs), _),
-            ) => Ok(ScalarValue::DurationMillisecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
-            (
-                ScalarValue::TimestampMicrosecond(Some(ts_lhs), _),
-                ScalarValue::TimestampMicrosecond(Some(ts_rhs), _),
-            ) => Ok(ScalarValue::DurationMicrosecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
-            (
-                ScalarValue::TimestampNanosecond(Some(ts_lhs), _),
-                ScalarValue::TimestampNanosecond(Some(ts_rhs), _),
-            ) => Ok(ScalarValue::DurationNanosecond(Some(ts_lhs.sub_checked(*ts_rhs)?))),
-            _ => impl_op_arithmetic!($LHS, $RHS, -)
-        }
-    };
-    ($LHS:expr, $RHS:expr, &) => {
-        impl_bit_op_arithmetic!($LHS, $RHS, &)
-    };
-    ($LHS:expr, $RHS:expr, |) => {
-        impl_bit_op_arithmetic!($LHS, $RHS, |)
-    };
-    ($LHS:expr, $RHS:expr, ^) => {
-        impl_bit_op_arithmetic!($LHS, $RHS, ^)
-    };
-    ($LHS:expr, $RHS:expr, &&) => {
-        impl_bool_op_arithmetic!($LHS, $RHS, &&)
-    };
-    ($LHS:expr, $RHS:expr, ||) => {
-        impl_bool_op_arithmetic!($LHS, $RHS, ||)
-    };
-}
-
-macro_rules! impl_bit_op_arithmetic {
-    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
-        match ($LHS, $RHS) {
-            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
-                primitive_op!(lhs, rhs, UInt64, $OPERATION)
-            }
-            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
-                primitive_op!(lhs, rhs, Int64, $OPERATION)
-            }
-            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
-                primitive_op!(lhs, rhs, UInt32, $OPERATION)
-            }
-            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
-                primitive_op!(lhs, rhs, Int32, $OPERATION)
-            }
-            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
-                primitive_op!(lhs, rhs, UInt16, $OPERATION)
-            }
-            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
-                primitive_op!(lhs, rhs, Int16, $OPERATION)
-            }
-            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
-                primitive_op!(lhs, rhs, UInt8, $OPERATION)
-            }
-            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
-                primitive_op!(lhs, rhs, Int8, $OPERATION)
-            }
-            _ => _internal_err!(
-                "Operator {} is not implemented for types {:?} and {:?}",
-                stringify!($OPERATION),
-                $LHS,
-                $RHS
-            ),
-        }
-    };
-}
-
-macro_rules! impl_bool_op_arithmetic {
-    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
-        match ($LHS, $RHS) {
-            (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
-                primitive_op!(lhs, rhs, Boolean, $OPERATION)
-            }
-            _ => _internal_err!(
-                "Operator {} is not implemented for types {:?} and {:?}",
-                stringify!($OPERATION),
-                $LHS,
-                $RHS
-            ),
-        }
-    };
-}
-
-macro_rules! impl_op_arithmetic {
-    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
-        match ($LHS, $RHS) {
-            // Binary operations on arguments with the same type:
-            (
-                ScalarValue::Decimal128(v1, p1, s1),
-                ScalarValue::Decimal128(v2, p2, s2),
-            ) => {
-                decimal_op!(v1, v2, *p1.max(p2), *s1, *s2, $OPERATION)
-            }
-            (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
-                primitive_op!(lhs, rhs, Float64, $OPERATION)
-            }
-            (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
-                primitive_op!(lhs, rhs, Float32, $OPERATION)
-            }
-            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
-                primitive_op!(lhs, rhs, UInt64, $OPERATION)
-            }
-            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
-                primitive_op!(lhs, rhs, Int64, $OPERATION)
-            }
-            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
-                primitive_op!(lhs, rhs, UInt32, $OPERATION)
-            }
-            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
-                primitive_op!(lhs, rhs, Int32, $OPERATION)
-            }
-            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
-                primitive_op!(lhs, rhs, UInt16, $OPERATION)
-            }
-            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
-                primitive_op!(lhs, rhs, Int16, $OPERATION)
-            }
-            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
-                primitive_op!(lhs, rhs, UInt8, $OPERATION)
-            }
-            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
-                primitive_op!(lhs, rhs, Int8, $OPERATION)
-            }
-            (
-                ScalarValue::IntervalYearMonth(Some(lhs)),
-                ScalarValue::IntervalYearMonth(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalYearMonth(Some(op_ym(
-                *lhs,
-                *rhs,
-                get_sign!($OPERATION),
-            )))),
-            (
-                ScalarValue::IntervalDayTime(Some(lhs)),
-                ScalarValue::IntervalDayTime(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalDayTime(Some(op_dt(
-                *lhs,
-                *rhs,
-                get_sign!($OPERATION),
-            )))),
-            (
-                ScalarValue::IntervalMonthDayNano(Some(lhs)),
-                ScalarValue::IntervalMonthDayNano(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_mdn(
-                *lhs,
-                *rhs,
-                get_sign!($OPERATION),
-            )))),
-            // Binary operations on arguments with different types:
-            (ScalarValue::Date32(Some(days)), _) => {
-                let value = date32_op(*days, $RHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::Date32(Some(value)))
-            }
-            (ScalarValue::Date64(Some(ms)), _) => {
-                let value = date64_op(*ms, $RHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::Date64(Some(value)))
-            }
-            (ScalarValue::TimestampSecond(Some(ts_s), zone), _) => {
-                let value = seconds_add(*ts_s, $RHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::TimestampSecond(Some(value), zone.clone()))
-            }
-            (_, ScalarValue::TimestampSecond(Some(ts_s), zone)) => {
-                let value = seconds_add(*ts_s, $LHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::TimestampSecond(Some(value), zone.clone()))
-            }
-            (ScalarValue::TimestampMillisecond(Some(ts_ms), zone), _) => {
-                let value = milliseconds_add(*ts_ms, $RHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::TimestampMillisecond(Some(value), zone.clone()))
-            }
-            (_, ScalarValue::TimestampMillisecond(Some(ts_ms), zone)) => {
-                let value = milliseconds_add(*ts_ms, $LHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::TimestampMillisecond(Some(value), zone.clone()))
-            }
-            (ScalarValue::TimestampMicrosecond(Some(ts_us), zone), _) => {
-                let value = microseconds_add(*ts_us, $RHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::TimestampMicrosecond(Some(value), zone.clone()))
-            }
-            (_, ScalarValue::TimestampMicrosecond(Some(ts_us), zone)) => {
-                let value = microseconds_add(*ts_us, $LHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::TimestampMicrosecond(Some(value), zone.clone()))
-            }
-            (ScalarValue::TimestampNanosecond(Some(ts_ns), zone), _) => {
-                let value = nanoseconds_add(*ts_ns, $RHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::TimestampNanosecond(Some(value), zone.clone()))
-            }
-            (_, ScalarValue::TimestampNanosecond(Some(ts_ns), zone)) => {
-                let value = nanoseconds_add(*ts_ns, $LHS, get_sign!($OPERATION))?;
-                Ok(ScalarValue::TimestampNanosecond(Some(value), zone.clone()))
-            }
-            (
-                ScalarValue::IntervalYearMonth(Some(lhs)),
-                ScalarValue::IntervalDayTime(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_ym_dt(
-                *lhs,
-                *rhs,
-                get_sign!($OPERATION),
-                false,
-            )))),
-            (
-                ScalarValue::IntervalYearMonth(Some(lhs)),
-                ScalarValue::IntervalMonthDayNano(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_ym_mdn(
-                *lhs,
-                *rhs,
-                get_sign!($OPERATION),
-                false,
-            )))),
-            (
-                ScalarValue::IntervalDayTime(Some(lhs)),
-                ScalarValue::IntervalYearMonth(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_ym_dt(
-                *rhs,
-                *lhs,
-                get_sign!($OPERATION),
-                true,
-            )))),
-            (
-                ScalarValue::IntervalDayTime(Some(lhs)),
-                ScalarValue::IntervalMonthDayNano(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_dt_mdn(
-                *lhs,
-                *rhs,
-                get_sign!($OPERATION),
-                false,
-            )))),
-            (
-                ScalarValue::IntervalMonthDayNano(Some(lhs)),
-                ScalarValue::IntervalYearMonth(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_ym_mdn(
-                *rhs,
-                *lhs,
-                get_sign!($OPERATION),
-                true,
-            )))),
-            (
-                ScalarValue::IntervalMonthDayNano(Some(lhs)),
-                ScalarValue::IntervalDayTime(Some(rhs)),
-            ) => Ok(ScalarValue::IntervalMonthDayNano(Some(op_dt_mdn(
-                *rhs,
-                *lhs,
-                get_sign!($OPERATION),
-                true,
-            )))),
-            // todo: Add Decimal256 support
-            _ => _internal_err!(
-                "Operator {} is not implemented for types {:?} and {:?}",
-                stringify!($OPERATION),
-                $LHS,
-                $RHS
-            ),
-        }
-    };
-}
-
-/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
-/// types ([`IntervalYearMonthType`] and [`IntervalDayTimeType`], respectively).
-/// The argument `sign` chooses between addition and subtraction, the argument
-/// `commute` swaps `lhs` and `rhs`. The return value is an 128-bit integer.
-/// It can be involved in a [`IntervalMonthDayNanoType`] in the outer scope.
-#[inline]
-pub fn op_ym_dt(mut lhs: i32, rhs: i64, sign: i32, commute: bool) -> i128 {
-    let (mut days, millis) = IntervalDayTimeType::to_parts(rhs);
-    let mut nanos = (millis as i64) * 1_000_000;
-    if commute {
-        lhs *= sign;
-    } else {
-        days *= sign;
-        nanos *= sign as i64;
-    };
-    IntervalMonthDayNanoType::make_value(lhs, days, nanos)
-}
-
-/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
-/// types ([`IntervalYearMonthType`] and [`IntervalMonthDayNanoType`], respectively).
-/// The argument `sign` chooses between addition and subtraction, the argument
-/// `commute` swaps `lhs` and `rhs`. The return value is an 128-bit integer.
-/// It can be involved in a [`IntervalMonthDayNanoType`] in the outer scope.
-#[inline]
-pub fn op_ym_mdn(lhs: i32, rhs: i128, sign: i32, commute: bool) -> i128 {
-    let (mut months, mut days, mut nanos) = IntervalMonthDayNanoType::to_parts(rhs);
-    if commute {
-        months += lhs * sign;
-    } else {
-        months = lhs + (months * sign);
-        days *= sign;
-        nanos *= sign as i64;
-    }
-    IntervalMonthDayNanoType::make_value(months, days, nanos)
-}
-
-/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of different
-/// types ([`IntervalDayTimeType`] and [`IntervalMonthDayNanoType`], respectively).
-/// The argument `sign` chooses between addition and subtraction, the argument
-/// `commute` swaps `lhs` and `rhs`. The return value is an 128-bit integer.
-/// It can be involved in a [`IntervalMonthDayNanoType`] in the outer scope.
-#[inline]
-pub fn op_dt_mdn(lhs: i64, rhs: i128, sign: i32, commute: bool) -> i128 {
-    let (lhs_days, lhs_millis) = IntervalDayTimeType::to_parts(lhs);
-    let (rhs_months, rhs_days, rhs_nanos) = IntervalMonthDayNanoType::to_parts(rhs);
-    if commute {
-        IntervalMonthDayNanoType::make_value(
-            rhs_months,
-            lhs_days * sign + rhs_days,
-            (lhs_millis * sign) as i64 * 1_000_000 + rhs_nanos,
-        )
-    } else {
-        IntervalMonthDayNanoType::make_value(
-            rhs_months * sign,
-            lhs_days + rhs_days * sign,
-            (lhs_millis as i64) * 1_000_000 + rhs_nanos * (sign as i64),
-        )
-    }
-}
-
-/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of
-/// the same type [`IntervalYearMonthType`]. The argument `sign` chooses between
-/// addition and subtraction. The return value is an 32-bit integer. It can be
-/// involved in a [`IntervalYearMonthType`] in the outer scope.
-#[inline]
-pub fn op_ym(lhs: i32, rhs: i32, sign: i32) -> i32 {
-    lhs + rhs * sign
-}
-
-/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of
-/// the same type [`IntervalDayTimeType`]. The argument `sign` chooses between
-/// addition and subtraction. The return value is an 64-bit integer. It can be
-/// involved in a [`IntervalDayTimeType`] in the outer scope.
-#[inline]
-pub fn op_dt(lhs: i64, rhs: i64, sign: i32) -> i64 {
-    let (lhs_days, lhs_millis) = IntervalDayTimeType::to_parts(lhs);
-    let (rhs_days, rhs_millis) = IntervalDayTimeType::to_parts(rhs);
-    IntervalDayTimeType::make_value(
-        lhs_days + rhs_days * sign,
-        lhs_millis + rhs_millis * sign,
-    )
-}
-
-/// This function adds/subtracts two "raw" intervals (`lhs` and `rhs`) of
-/// the same type [`IntervalMonthDayNanoType`]. The argument `sign` chooses between
-/// addition and subtraction. The return value is an 128-bit integer. It can be
-/// involved in a [`IntervalMonthDayNanoType`] in the outer scope.
-#[inline]
-pub fn op_mdn(lhs: i128, rhs: i128, sign: i32) -> i128 {
-    let (lhs_months, lhs_days, lhs_nanos) = IntervalMonthDayNanoType::to_parts(lhs);
-    let (rhs_months, rhs_days, rhs_nanos) = IntervalMonthDayNanoType::to_parts(rhs);
-    IntervalMonthDayNanoType::make_value(
-        lhs_months + rhs_months * sign,
-        lhs_days + rhs_days * sign,
-        lhs_nanos + rhs_nanos * (sign as i64),
-    )
-}
-
-macro_rules! get_sign {
-    (+) => {
-        1
-    };
-    (-) => {
-        -1
-    };
-}
-
-pub const YM_MODE: i8 = 0;
-pub const DT_MODE: i8 = 1;
-pub const MDN_MODE: i8 = 2;
-
-pub const MILLISECOND_MODE: bool = false;
-pub const NANOSECOND_MODE: bool = true;
-
-/// This function parses the timezone from string to Tz.
-/// If it cannot parse or timezone field is [`None`], it returns [`None`].
-pub fn parse_timezones(tz: Option<&str>) -> Result<Option<Tz>> {
-    if let Some(tz) = tz {
-        let parsed_tz: Tz = tz.parse().map_err(|_| {
-            DataFusionError::Execution("cannot parse given timezone".to_string())
-        })?;
-        Ok(Some(parsed_tz))
-    } else {
-        Ok(None)
-    }
-}
-
-/// This function takes two timestamps with an optional timezone,
-/// and returns the duration between them. If one of the timestamps
-/// has a [`None`] timezone, the other one is also treated as having [`None`].
-pub fn calculate_naives<const TIME_MODE: bool>(
-    lhs_ts: i64,
-    parsed_lhs_tz: Option<Tz>,
-    rhs_ts: i64,
-    parsed_rhs_tz: Option<Tz>,
-) -> Result<(NaiveDateTime, NaiveDateTime)> {
-    let err = || {
-        DataFusionError::Execution(String::from(
-            "error while converting Int64 to DateTime in timestamp subtraction",
-        ))
-    };
-    match (parsed_lhs_tz, parsed_rhs_tz, TIME_MODE) {
-        (Some(lhs_tz), Some(rhs_tz), MILLISECOND_MODE) => {
-            let lhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
-                arrow_array::types::TimestampMillisecondType,
-            >(lhs_ts, rhs_tz)
-            .ok_or_else(err)?
-            .naive_local();
-            let rhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
-                arrow_array::types::TimestampMillisecondType,
-            >(rhs_ts, lhs_tz)
-            .ok_or_else(err)?
-            .naive_local();
-            Ok((lhs, rhs))
-        }
-        (Some(lhs_tz), Some(rhs_tz), NANOSECOND_MODE) => {
-            let lhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
-                arrow_array::types::TimestampNanosecondType,
-            >(lhs_ts, rhs_tz)
-            .ok_or_else(err)?
-            .naive_local();
-            let rhs = arrow_array::temporal_conversions::as_datetime_with_timezone::<
-                arrow_array::types::TimestampNanosecondType,
-            >(rhs_ts, lhs_tz)
-            .ok_or_else(err)?
-            .naive_local();
-            Ok((lhs, rhs))
-        }
-        (_, _, MILLISECOND_MODE) => {
-            let lhs = arrow_array::temporal_conversions::as_datetime::<
-                arrow_array::types::TimestampMillisecondType,
-            >(lhs_ts)
-            .ok_or_else(err)?;
-            let rhs = arrow_array::temporal_conversions::as_datetime::<
-                arrow_array::types::TimestampMillisecondType,
-            >(rhs_ts)
-            .ok_or_else(err)?;
-            Ok((lhs, rhs))
-        }
-        (_, _, NANOSECOND_MODE) => {
-            let lhs = arrow_array::temporal_conversions::as_datetime::<
-                arrow_array::types::TimestampNanosecondType,
-            >(lhs_ts)
-            .ok_or_else(err)?;
-            let rhs = arrow_array::temporal_conversions::as_datetime::<
-                arrow_array::types::TimestampNanosecondType,
-            >(rhs_ts)
-            .ok_or_else(err)?;
-            Ok((lhs, rhs))
-        }
-    }
-}
-
-#[inline]
-pub fn date32_op(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let prior = epoch.add(Duration::days(days as i64));
-    do_date_math(prior, scalar, sign).map(|d| d.sub(epoch).num_days() as i32)
-}
-
-#[inline]
-pub fn date64_op(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let prior = epoch.add(Duration::milliseconds(ms));
-    do_date_math(prior, scalar, sign).map(|d| d.sub(epoch).num_milliseconds())
-}
-
-#[inline]
-pub fn seconds_add(ts_s: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    do_date_time_math(ts_s, 0, scalar, sign).map(|dt| dt.timestamp())
-}
-
-#[inline]
-pub fn seconds_add_array<const INTERVAL_MODE: i8>(
-    ts_s: i64,
-    interval: i128,
-    sign: i32,
-) -> Result<i64> {
-    do_date_time_math_array::<INTERVAL_MODE>(ts_s, 0, interval, sign)
-        .map(|dt| dt.timestamp())
-}
-
-#[inline]
-pub fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_ms.div_euclid(1000);
-    let nsecs = ts_ms.rem_euclid(1000) * 1_000_000;
-    do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_millis())
-}
-
-#[inline]
-pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
-    ts_ms: i64,
-    interval: i128,
-    sign: i32,
-) -> Result<i64> {
-    let secs = ts_ms.div_euclid(1000);
-    let nsecs = ts_ms.rem_euclid(1000) * 1_000_000;
-    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
-        .map(|dt| dt.timestamp_millis())
-}
-
-#[inline]
-pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_us.div_euclid(1_000_000);
-    let nsecs = ts_us.rem_euclid(1_000_000) * 1_000;
-    do_date_time_math(secs, nsecs as u32, scalar, sign)
-        .map(|dt| dt.timestamp_nanos() / 1000)
-}
-
-#[inline]
-pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
-    ts_us: i64,
-    interval: i128,
-    sign: i32,
-) -> Result<i64> {
-    let secs = ts_us.div_euclid(1_000_000);
-    let nsecs = ts_us.rem_euclid(1_000_000) * 1_000;
-    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
-        .map(|dt| dt.timestamp_nanos() / 1000)
-}
-
-#[inline]
-pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_ns.div_euclid(1_000_000_000);
-    let nsecs = ts_ns.rem_euclid(1_000_000_000);
-    do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_nanos())
-}
-
-#[inline]
-pub fn nanoseconds_add_array<const INTERVAL_MODE: i8>(
-    ts_ns: i64,
-    interval: i128,
-    sign: i32,
-) -> Result<i64> {
-    let secs = ts_ns.div_euclid(1_000_000_000);
-    let nsecs = ts_ns.rem_euclid(1_000_000_000);
-    do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
-        .map(|dt| dt.timestamp_nanos())
-}
-
-#[inline]
-pub fn seconds_sub(ts_lhs: i64, ts_rhs: i64) -> i64 {
-    let diff_ms = (ts_lhs - ts_rhs) * 1000;
-    let days = (diff_ms / MILLISECS_IN_ONE_DAY) as i32;
-    let millis = (diff_ms % MILLISECS_IN_ONE_DAY) as i32;
-    IntervalDayTimeType::make_value(days, millis)
-}
-#[inline]
-pub fn milliseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i64 {
-    let diff_ms = ts_lhs - ts_rhs;
-    let days = (diff_ms / MILLISECS_IN_ONE_DAY) as i32;
-    let millis = (diff_ms % MILLISECS_IN_ONE_DAY) as i32;
-    IntervalDayTimeType::make_value(days, millis)
-}
-#[inline]
-pub fn microseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i128 {
-    let diff_ns = (ts_lhs - ts_rhs) * 1000;
-    let days = (diff_ns / NANOSECS_IN_ONE_DAY) as i32;
-    let nanos = diff_ns % NANOSECS_IN_ONE_DAY;
-    IntervalMonthDayNanoType::make_value(0, days, nanos)
-}
-#[inline]
-pub fn nanoseconds_sub(ts_lhs: i64, ts_rhs: i64) -> i128 {
-    let diff_ns = ts_lhs - ts_rhs;
-    let days = (diff_ns / NANOSECS_IN_ONE_DAY) as i32;
-    let nanos = diff_ns % NANOSECS_IN_ONE_DAY;
-    IntervalMonthDayNanoType::make_value(0, days, nanos)
-}
-
-#[inline]
-fn do_date_time_math(
-    secs: i64,
-    nsecs: u32,
-    scalar: &ScalarValue,
-    sign: i32,
-) -> Result<NaiveDateTime> {
-    let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Could not convert to NaiveDateTime: secs {secs} nsecs {nsecs} scalar {scalar:?} sign {sign}"
-        ))
-    })?;
-    do_date_math(prior, scalar, sign)
-}
-
-#[inline]
-fn do_date_time_math_array<const INTERVAL_MODE: i8>(
-    secs: i64,
-    nsecs: u32,
-    interval: i128,
-    sign: i32,
-) -> Result<NaiveDateTime> {
-    let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Could not convert to NaiveDateTime: secs {secs} nsecs {nsecs}"
-        ))
-    })?;
-    do_date_math_array::<_, INTERVAL_MODE>(prior, interval, sign)
-}
-
-fn do_date_math<D>(prior: D, scalar: &ScalarValue, sign: i32) -> Result<D>
-where
-    D: Datelike + Add<Duration, Output = D>,
-{
-    Ok(match scalar {
-        ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
-        ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i, sign),
-        ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
-        ScalarValue::DurationSecond(Some(v)) => prior.add(Duration::seconds(*v)),
-        ScalarValue::DurationMillisecond(Some(v)) => {
-            prior.add(Duration::milliseconds(*v))
-        }
-        ScalarValue::DurationMicrosecond(Some(v)) => {
-            prior.add(Duration::microseconds(*v))
-        }
-        ScalarValue::DurationNanosecond(Some(v)) => prior.add(Duration::nanoseconds(*v)),
-        other => Err(DataFusionError::Execution(format!(
-            "DateIntervalExpr does not support non-interval type {other:?}"
-        )))?,
-    })
-}
-
-fn do_date_math_array<D, const INTERVAL_MODE: i8>(
-    prior: D,
-    interval: i128,
-    sign: i32,
-) -> Result<D>
-where
-    D: Datelike + Add<Duration, Output = D>,
-{
-    Ok(match INTERVAL_MODE {
-        YM_MODE => shift_months(prior, interval as i32, sign),
-        DT_MODE => add_day_time(prior, interval as i64, sign),
-        MDN_MODE => add_m_d_nano(prior, interval, sign),
-        _ => {
-            return _internal_err!("Undefined interval mode for interval calculations");
-        }
-    })
-}
-
-// Can remove once chrono:0.4.23 is released
-pub fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
-where
-    D: Datelike + Add<Duration, Output = D>,
-{
-    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(interval);
-    let months = months * sign;
-    let days = days * sign;
-    let nanos = nanos * sign as i64;
-    let a = shift_months(prior, months, 1);
-    let b = a.add(Duration::days(days as i64));
-    b.add(Duration::nanoseconds(nanos))
-}
-
-// Can remove once chrono:0.4.23 is released
-pub fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
-where
-    D: Datelike + Add<Duration, Output = D>,
-{
-    let (days, ms) = IntervalDayTimeType::to_parts(interval);
-    let days = days * sign;
-    let ms = ms * sign;
-    let intermediate = prior.add(Duration::days(days as i64));
-    intermediate.add(Duration::milliseconds(ms as i64))
-}
-
 //Float wrapper over f32/f64. Just because we cannot build std::hash::Hash for floats directly we have to do it through type wrapper
 struct Fl<T>(T);
 
@@ -1781,6 +896,25 @@ macro_rules! eq_array_primitive {
 }
 
 impl ScalarValue {
+    /// Create a [`ScalarValue`] with the provided value and datatype
+    ///
+    /// # Panics
+    ///
+    /// Panics if d is not compatible with T
+    pub fn new_primitive<T: ArrowPrimitiveType>(
+        a: Option<T::Native>,
+        d: &DataType,
+    ) -> Self {
+        match a {
+            None => d.try_into().unwrap(),
+            Some(v) => {
+                let array = PrimitiveArray::<T>::new(vec![v].into(), None)
+                    .with_data_type(d.clone());
+                Self::try_from_array(&array, 0).unwrap()
+            }
+        }
+    }
+
     /// Create a decimal Scalar from value/precision and scale.
     pub fn try_new_decimal128(value: i128, precision: u8, scale: i8) -> Result<Self> {
         // make sure the precision and scale is valid
@@ -1870,9 +1004,9 @@ impl ScalarValue {
                 ScalarValue::DurationNanosecond(None)
             }
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -1892,9 +1026,9 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(1.0)),
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create an one scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -1910,9 +1044,9 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a negative one scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -1931,9 +1065,9 @@ impl ScalarValue {
             DataType::Float32 => ScalarValue::Float32(Some(10.0)),
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a negative one scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -2054,51 +1188,47 @@ impl ScalarValue {
         }
     }
 
+    /// Wrapping addition of `ScalarValue`
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels
     pub fn add<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_op!(self, rhs, +)
+        let s = self.to_array_of_size(1);
+        let o = other.borrow().to_array_of_size(1);
+        let r = add_wrapping(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
+        Self::try_from_array(r.as_ref(), 0)
     }
-
+    /// Checked addition of `ScalarValue`
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels
     pub fn add_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_checked_op!(self, rhs, checked_add, +)
+        let s = self.to_array_of_size(1);
+        let o = other.borrow().to_array_of_size(1);
+        let r = add(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
+        Self::try_from_array(r.as_ref(), 0)
     }
 
+    /// Wrapping subtraction of `ScalarValue`
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels
     pub fn sub<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_op!(self, rhs, -)
+        let s = self.to_array_of_size(1);
+        let o = other.borrow().to_array_of_size(1);
+        let r = sub_wrapping(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
+        Self::try_from_array(r.as_ref(), 0)
     }
 
+    /// Checked subtraction of `ScalarValue`
+    ///
+    /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
+    /// should operate on Arrays directly, using vectorized array kernels
     pub fn sub_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_checked_op!(self, rhs, checked_sub, -)
-    }
-
-    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
-    pub fn and<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_op!(self, rhs, &&)
-    }
-
-    #[deprecated(note = "Use arrow kernels or specialization (#6842)")]
-    pub fn or<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_op!(self, rhs, ||)
-    }
-
-    pub fn bitand<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_op!(self, rhs, &)
-    }
-
-    pub fn bitor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_op!(self, rhs, |)
-    }
-
-    pub fn bitxor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let rhs = other.borrow();
-        impl_op!(self, rhs, ^)
+        let s = self.to_array_of_size(1);
+        let o = other.borrow().to_array_of_size(1);
+        let r = sub(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
+        Self::try_from_array(r.as_ref(), 0)
     }
 
     pub fn is_unsigned(&self) -> bool {
@@ -3262,9 +2392,9 @@ impl ScalarValue {
             }
 
             other => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a scalar from array of type \"{other:?}\""
-                )));
+                );
             }
         })
     }
@@ -3825,9 +2955,9 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             DataType::Null => ScalarValue::Null,
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return _not_impl_err!(
                     "Can't create a scalar from data_type \"{datatype:?}\""
-                )));
+                );
             }
         })
     }
@@ -4066,6 +3196,7 @@ mod tests {
     use arrow::datatypes::ArrowPrimitiveType;
     use arrow::util::pretty::pretty_format_columns;
     use arrow_array::ArrowNumericType;
+    use chrono::NaiveDate;
     use rand::Rng;
 
     use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
@@ -4112,14 +3243,14 @@ mod tests {
     }
 
     #[test]
-    fn scalar_sub_trait_int32_overflow_test() -> Result<()> {
+    fn scalar_sub_trait_int32_overflow_test() {
         let int_value = ScalarValue::Int32(Some(i32::MAX));
         let int_value_2 = ScalarValue::Int32(Some(i32::MIN));
-        assert!(matches!(
-            int_value.sub_checked(&int_value_2),
-            Err(DataFusionError::Execution(msg)) if msg == "Overflow while calculating ScalarValue."
-        ));
-        Ok(())
+        let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Arrow error: Compute error: Overflow happened on: 2147483647 - -2147483648"
+        )
     }
 
     #[test]
@@ -4132,14 +3263,11 @@ mod tests {
     }
 
     #[test]
-    fn scalar_sub_trait_int64_overflow_test() -> Result<()> {
+    fn scalar_sub_trait_int64_overflow_test() {
         let int_value = ScalarValue::Int64(Some(i64::MAX));
         let int_value_2 = ScalarValue::Int64(Some(i64::MIN));
-        assert!(matches!(
-            int_value.sub_checked(&int_value_2),
-            Err(DataFusionError::Execution(msg)) if msg == "Overflow while calculating ScalarValue."
-        ));
-        Ok(())
+        let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
+        assert_eq!(err, "Arrow error: Compute error: Overflow happened on: 9223372036854775807 - -9223372036854775808")
     }
 
     #[test]
@@ -4282,7 +3410,7 @@ mod tests {
             ScalarValue::Decimal128(Some(3), 10, 2),
         ];
         // convert the vec to decimal array and check the result
-        let array = ScalarValue::iter_to_array(decimal_vec.into_iter()).unwrap();
+        let array = ScalarValue::iter_to_array(decimal_vec).unwrap();
         assert_eq!(3, array.len());
         assert_eq!(DataType::Decimal128(10, 2), array.data_type().clone());
 
@@ -4292,7 +3420,7 @@ mod tests {
             ScalarValue::Decimal128(Some(3), 10, 2),
             ScalarValue::Decimal128(None, 10, 2),
         ];
-        let array = ScalarValue::iter_to_array(decimal_vec.into_iter()).unwrap();
+        let array = ScalarValue::iter_to_array(decimal_vec).unwrap();
         assert_eq!(4, array.len());
         assert_eq!(DataType::Decimal128(10, 2), array.data_type().clone());
 
@@ -4455,6 +3583,8 @@ mod tests {
     }
 
     #[test]
+    // despite clippy claiming they are useless, the code doesn't compile otherwise.
+    #[allow(clippy::useless_vec)]
     fn scalar_iter_to_array_boolean() {
         check_scalar_iter!(Boolean, BooleanArray, vec![Some(true), None, Some(false)]);
         check_scalar_iter!(Float32, Float32Array, vec![Some(1.9), None, Some(-2.1)]);
@@ -4517,7 +3647,7 @@ mod tests {
     fn scalar_iter_to_array_empty() {
         let scalars = vec![] as Vec<ScalarValue>;
 
-        let result = ScalarValue::iter_to_array(scalars.into_iter()).unwrap_err();
+        let result = ScalarValue::iter_to_array(scalars).unwrap_err();
         assert!(
             result
                 .to_string()
@@ -4535,13 +3665,13 @@ mod tests {
             ScalarValue::Dictionary(Box::new(key_type), Box::new(value))
         }
 
-        let scalars = vec![
+        let scalars = [
             make_val(Some("Foo".into())),
             make_val(None),
             make_val(Some("Bar".into())),
         ];
 
-        let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
+        let array = ScalarValue::iter_to_array(scalars).unwrap();
         let array = as_dictionary_array::<Int32Type>(&array).unwrap();
         let values_array = as_string_array(array.values()).unwrap();
 
@@ -4563,9 +3693,9 @@ mod tests {
     fn scalar_iter_to_array_mismatched_types() {
         use ScalarValue::*;
         // If the scalar values are not all the correct type, error here
-        let scalars: Vec<ScalarValue> = vec![Boolean(Some(true)), Int32(Some(5))];
+        let scalars = [Boolean(Some(true)), Int32(Some(5))];
 
-        let result = ScalarValue::iter_to_array(scalars.into_iter()).unwrap_err();
+        let result = ScalarValue::iter_to_array(scalars).unwrap_err();
         assert!(result.to_string().contains("Inconsistent types in ScalarValue::iter_to_array. Expected Boolean, got Int32(5)"),
                 "{}", result);
     }
@@ -4653,21 +3783,21 @@ mod tests {
             }};
         }
 
-        let bool_vals = vec![Some(true), None, Some(false)];
-        let f32_vals = vec![Some(-1.0), None, Some(1.0)];
+        let bool_vals = [Some(true), None, Some(false)];
+        let f32_vals = [Some(-1.0), None, Some(1.0)];
         let f64_vals = make_typed_vec!(f32_vals, f64);
 
-        let i8_vals = vec![Some(-1), None, Some(1)];
+        let i8_vals = [Some(-1), None, Some(1)];
         let i16_vals = make_typed_vec!(i8_vals, i16);
         let i32_vals = make_typed_vec!(i8_vals, i32);
         let i64_vals = make_typed_vec!(i8_vals, i64);
 
-        let u8_vals = vec![Some(0), None, Some(1)];
+        let u8_vals = [Some(0), None, Some(1)];
         let u16_vals = make_typed_vec!(u8_vals, u16);
         let u32_vals = make_typed_vec!(u8_vals, u32);
         let u64_vals = make_typed_vec!(u8_vals, u64);
 
-        let str_vals = vec![Some("foo"), None, Some("bar")];
+        let str_vals = [Some("foo"), None, Some("bar")];
 
         /// Test each value in `scalar` with the corresponding element
         /// at `array`. Assumes each element is unique (aka not equal
@@ -5549,8 +4679,16 @@ mod tests {
         };
     }
 
-    expect_operation_error!(expect_add_error, add, "Operator + is not implemented");
-    expect_operation_error!(expect_sub_error, sub, "Operator - is not implemented");
+    expect_operation_error!(
+        expect_add_error,
+        add,
+        "Invalid arithmetic operation: UInt64 + Int32"
+    );
+    expect_operation_error!(
+        expect_sub_error,
+        sub,
+        "Invalid arithmetic operation: UInt64 - Int32"
+    );
 
     macro_rules! decimal_op_test_cases {
     ($OPERATION:ident, [$([$L_VALUE:expr, $L_PRECISION:expr, $L_SCALE:expr, $R_VALUE:expr, $R_PRECISION:expr, $R_SCALE:expr, $O_VALUE:expr, $O_PRECISION:expr, $O_SCALE:expr]),+]) => {
@@ -5570,7 +4708,7 @@ mod tests {
         decimal_op_test_cases!(
             add,
             [
-                [Some(123), 10, 2, Some(124), 10, 2, Some(123 + 124), 10, 2],
+                [Some(123), 10, 2, Some(124), 10, 2, Some(123 + 124), 11, 2],
                 // test sum decimal with diff scale
                 [
                     Some(123),
@@ -5580,7 +4718,7 @@ mod tests {
                     10,
                     2,
                     Some(123 + 124 * 10_i128.pow(1)),
-                    10,
+                    12,
                     3
                 ],
                 // diff precision and scale for decimal data type
@@ -5592,7 +4730,7 @@ mod tests {
                     11,
                     3,
                     Some(123 * 10_i128.pow(3 - 2) + 124),
-                    11,
+                    12,
                     3
                 ]
             ]
@@ -5605,17 +4743,17 @@ mod tests {
             add,
             [
                 // Case: (None, Some, 0)
-                [None, 10, 2, Some(123), 10, 2, Some(123), 10, 2],
+                [None, 10, 2, Some(123), 10, 2, None, 11, 2],
                 // Case: (Some, None, 0)
-                [Some(123), 10, 2, None, 10, 2, Some(123), 10, 2],
+                [Some(123), 10, 2, None, 10, 2, None, 11, 2],
                 // Case: (Some, None, _) + Side=False
-                [Some(123), 8, 2, None, 10, 3, Some(1230), 10, 3],
+                [Some(123), 8, 2, None, 10, 3, None, 11, 3],
                 // Case: (None, Some, _) + Side=False
-                [None, 8, 2, Some(123), 10, 3, Some(123), 10, 3],
+                [None, 8, 2, Some(123), 10, 3, None, 11, 3],
                 // Case: (Some, None, _) + Side=True
-                [Some(123), 8, 4, None, 10, 3, Some(123), 10, 4],
+                [Some(123), 8, 4, None, 10, 3, None, 12, 4],
                 // Case: (None, Some, _) + Side=True
-                [None, 10, 3, Some(123), 8, 4, Some(123), 10, 4]
+                [None, 10, 3, Some(123), 8, 4, None, 12, 4]
             ]
         );
     }
@@ -5815,36 +4953,6 @@ mod tests {
                 ScalarValue::new_interval_mdn(12, 15, 123_456),
                 ScalarValue::new_interval_mdn(24, 30, 246_912),
             ),
-            (
-                ScalarValue::new_interval_ym(0, 1),
-                ScalarValue::new_interval_dt(29, 86_390),
-                ScalarValue::new_interval_mdn(1, 29, 86_390_000_000),
-            ),
-            (
-                ScalarValue::new_interval_ym(0, 1),
-                ScalarValue::new_interval_mdn(2, 10, 999_999_999),
-                ScalarValue::new_interval_mdn(3, 10, 999_999_999),
-            ),
-            (
-                ScalarValue::new_interval_dt(400, 123_456),
-                ScalarValue::new_interval_ym(1, 1),
-                ScalarValue::new_interval_mdn(13, 400, 123_456_000_000),
-            ),
-            (
-                ScalarValue::new_interval_dt(65, 321),
-                ScalarValue::new_interval_mdn(2, 5, 1_000_000),
-                ScalarValue::new_interval_mdn(2, 70, 322_000_000),
-            ),
-            (
-                ScalarValue::new_interval_mdn(12, 15, 123_456),
-                ScalarValue::new_interval_ym(2, 0),
-                ScalarValue::new_interval_mdn(36, 15, 123_456),
-            ),
-            (
-                ScalarValue::new_interval_mdn(12, 15, 100_000),
-                ScalarValue::new_interval_dt(370, 1),
-                ScalarValue::new_interval_mdn(12, 385, 1_100_000),
-            ),
         ];
         for (lhs, rhs, expected) in cases.iter() {
             let result = lhs.add(rhs).unwrap();
@@ -5871,36 +4979,6 @@ mod tests {
                 ScalarValue::new_interval_mdn(12, 15, 123_456),
                 ScalarValue::new_interval_mdn(12, 15, 123_456),
                 ScalarValue::new_interval_mdn(0, 0, 0),
-            ),
-            (
-                ScalarValue::new_interval_ym(0, 1),
-                ScalarValue::new_interval_dt(29, 999_999),
-                ScalarValue::new_interval_mdn(1, -29, -999_999_000_000),
-            ),
-            (
-                ScalarValue::new_interval_ym(0, 1),
-                ScalarValue::new_interval_mdn(2, 10, 999_999_999),
-                ScalarValue::new_interval_mdn(-1, -10, -999_999_999),
-            ),
-            (
-                ScalarValue::new_interval_dt(400, 123_456),
-                ScalarValue::new_interval_ym(1, 1),
-                ScalarValue::new_interval_mdn(-13, 400, 123_456_000_000),
-            ),
-            (
-                ScalarValue::new_interval_dt(65, 321),
-                ScalarValue::new_interval_mdn(2, 5, 1_000_000),
-                ScalarValue::new_interval_mdn(-2, 60, 320_000_000),
-            ),
-            (
-                ScalarValue::new_interval_mdn(12, 15, 123_456),
-                ScalarValue::new_interval_ym(2, 0),
-                ScalarValue::new_interval_mdn(-12, 15, 123_456),
-            ),
-            (
-                ScalarValue::new_interval_mdn(12, 15, 100_000),
-                ScalarValue::new_interval_dt(370, 1),
-                ScalarValue::new_interval_mdn(12, -355, -900_000),
             ),
         ];
         for (lhs, rhs, expected) in cases.iter() {

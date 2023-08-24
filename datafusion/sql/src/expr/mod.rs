@@ -30,8 +30,10 @@ mod value;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, plan_err};
-use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
+    ScalarValue,
+};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
@@ -191,9 +193,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         planner_context,
                     )
                 } else {
-                    Err(DataFusionError::NotImplemented(format!(
+                    not_impl_err!(
                         "map access requires an identifier, found column {column} instead"
-                    )))
+                    )
                 }
             }
 
@@ -391,6 +393,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 substring_from,
                 substring_for,
+                special: false,
             } => self.sql_substring_to_expr(
                 expr,
                 substring_from,
@@ -475,9 +478,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.parse_array_agg(array_agg, schema, planner_context)
             }
 
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported ast node in sqltorel: {sql:?}"
-            ))),
+            _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }
     }
 
@@ -503,15 +504,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         if let Some(limit) = limit {
-            return Err(DataFusionError::NotImplemented(format!(
-                "LIMIT not supported in ARRAY_AGG: {limit}"
-            )));
+            return not_impl_err!("LIMIT not supported in ARRAY_AGG: {limit}");
         }
 
         if within_group {
-            return Err(DataFusionError::NotImplemented(
-                "WITHIN GROUP not supported in ARRAY_AGG".to_string(),
-            ));
+            return not_impl_err!("WITHIN GROUP not supported in ARRAY_AGG");
         }
 
         let args =

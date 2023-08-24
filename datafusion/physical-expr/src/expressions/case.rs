@@ -29,6 +29,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::exec_err;
 use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -87,9 +88,7 @@ impl CaseExpr {
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         if when_then_expr.is_empty() {
-            Err(DataFusionError::Execution(
-                "There must be at least one WHEN clause".to_string(),
-            ))
+            exec_err!("There must be at least one WHEN clause")
         } else {
             Ok(Self {
                 expr,
@@ -1010,11 +1009,10 @@ mod tests {
         };
         thens_type
             .iter()
-            .fold(Some(else_type), |left, right_type| match left {
-                None => None,
+            .try_fold(else_type, |left_type, right_type| {
                 // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
                 // refactor again.
-                Some(left_type) => comparison_coercion(&left_type, right_type),
+                comparison_coercion(&left_type, right_type)
             })
     }
 }

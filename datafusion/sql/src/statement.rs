@@ -17,7 +17,7 @@
 
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
-    LexOrdering, Statement as DFStatement,
+    ExplainStatement, LexOrdering, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -27,11 +27,11 @@ use crate::utils::normalize_ident;
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    unqualified_field_not_found, Column, Constraints, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, ExprSchema, OwnedTableReference, Result, SchemaReference,
-    TableReference, ToDFSchema,
+    not_impl_err, unqualified_field_not_found, Column, Constraints, DFField, DFSchema,
+    DFSchemaRef, DataFusionError, ExprSchema, FileType, OwnedTableReference, Result,
+    SchemaReference, TableReference, ToDFSchema,
 };
-use datafusion_expr::dml::{CopyTo, OutputFileFormat};
+use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -93,16 +93,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
+            DFStatement::Explain(ExplainStatement {
+                verbose,
+                analyze,
+                statement,
+            }) => self.explain_to_plan(verbose, analyze, *statement),
         }
     }
 
     /// Generate a logical plan from an SQL statement
     pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context(statement, &mut PlannerContext::new())
+        self.sql_statement_to_plan_with_context_impl(
+            statement,
+            &mut PlannerContext::new(),
+        )
     }
 
     /// Generate a logical plan from an SQL statement
-    fn sql_statement_to_plan_with_context(
+    pub fn sql_statement_to_plan_with_context(
+        &self,
+        statement: Statement,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        self.sql_statement_to_plan_with_context_impl(statement, planner_context)
+    }
+
+    fn sql_statement_to_plan_with_context_impl(
         &self,
         statement: Statement,
         planner_context: &mut PlannerContext,
@@ -116,7 +132,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 format: _,
                 describe_alias: _,
                 ..
-            } => self.explain_statement_to_plan(verbose, analyze, *statement),
+            } => {
+                self.explain_to_plan(verbose, analyze, DFStatement::Statement(statement))
+            }
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::SetVariable {
@@ -136,75 +154,92 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
                 or_replace,
                 ..
-            } if table_properties.is_empty() && with_options.is_empty() => match query {
-                Some(query) => {
-                    let plan = self.query_to_plan(*query, planner_context)?;
-                    let input_schema = plan.schema();
+            } if table_properties.is_empty() && with_options.is_empty() => {
+                let mut constraints = constraints;
+                for column in &columns {
+                    for option in &column.options {
+                        if let ast::ColumnOption::Unique { is_primary } = option.option {
+                            constraints.push(ast::TableConstraint::Unique {
+                                name: None,
+                                columns: vec![column.name.clone()],
+                                is_primary,
+                            })
+                        }
+                    }
+                }
+                match query {
+                    Some(query) => {
+                        let plan = self.query_to_plan(*query, planner_context)?;
+                        let input_schema = plan.schema();
 
-                    let plan = if !columns.is_empty() {
-                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                        if schema.fields().len() != input_schema.fields().len() {
-                            return plan_err!(
+                        let plan = if !columns.is_empty() {
+                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                            if schema.fields().len() != input_schema.fields().len() {
+                                return plan_err!(
                             "Mismatch: {} columns specified, but result has {} columns",
                             schema.fields().len(),
                             input_schema.fields().len()
                         );
-                        }
-                        let input_fields = input_schema.fields();
-                        let project_exprs = schema
-                            .fields()
-                            .iter()
-                            .zip(input_fields)
-                            .map(|(field, input_field)| {
-                                cast(col(input_field.name()), field.data_type().clone())
+                            }
+                            let input_fields = input_schema.fields();
+                            let project_exprs = schema
+                                .fields()
+                                .iter()
+                                .zip(input_fields)
+                                .map(|(field, input_field)| {
+                                    cast(
+                                        col(input_field.name()),
+                                        field.data_type().clone(),
+                                    )
                                     .alias(field.name())
-                            })
-                            .collect::<Vec<_>>();
-                        LogicalPlanBuilder::from(plan.clone())
-                            .project(project_exprs)?
-                            .build()?
-                    } else {
-                        plan
-                    };
+                                })
+                                .collect::<Vec<_>>();
+                            LogicalPlanBuilder::from(plan.clone())
+                                .project(project_exprs)?
+                                .build()?
+                        } else {
+                            plan
+                        };
 
-                    let constraints = Constraints::new_from_table_constraints(
-                        &constraints,
-                        plan.schema(),
-                    )?;
+                        let constraints = Constraints::new_from_table_constraints(
+                            &constraints,
+                            plan.schema(),
+                        )?;
 
-                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                        CreateMemoryTable {
-                            name: self.object_name_to_table_reference(name)?,
-                            constraints,
-                            input: Arc::new(plan),
-                            if_not_exists,
-                            or_replace,
-                        },
-                    )))
+                        Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                            CreateMemoryTable {
+                                name: self.object_name_to_table_reference(name)?,
+                                constraints,
+                                input: Arc::new(plan),
+                                if_not_exists,
+                                or_replace,
+                            },
+                        )))
+                    }
+
+                    None => {
+                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                        let plan = EmptyRelation {
+                            produce_one_row: false,
+                            schema,
+                        };
+                        let plan = LogicalPlan::EmptyRelation(plan);
+                        let constraints = Constraints::new_from_table_constraints(
+                            &constraints,
+                            plan.schema(),
+                        )?;
+                        Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                            CreateMemoryTable {
+                                name: self.object_name_to_table_reference(name)?,
+                                constraints,
+                                input: Arc::new(plan),
+                                if_not_exists,
+                                or_replace,
+                            },
+                        )))
+                    }
                 }
-
-                None => {
-                    let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                    let plan = EmptyRelation {
-                        produce_one_row: false,
-                        schema,
-                    };
-                    let plan = LogicalPlan::EmptyRelation(plan);
-                    let constraints = Constraints::new_from_table_constraints(
-                        &constraints,
-                        plan.schema(),
-                    )?;
-                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                        CreateMemoryTable {
-                            name: self.object_name_to_table_reference(name)?,
-                            constraints,
-                            input: Arc::new(plan),
-                            if_not_exists,
-                            or_replace,
-                        },
-                    )))
-                }
-            },
+            }
 
             Statement::CreateView {
                 or_replace,
@@ -226,9 +261,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
                 ShowCreateObject::Table => self.show_create_table_to_plan(obj_name),
-                _ => Err(DataFusionError::NotImplemented(
-                    "Only `SHOW CREATE TABLE  ...` statement is supported".to_string(),
-                )),
+                _ => {
+                    not_impl_err!("Only `SHOW CREATE TABLE  ...` statement is supported")
+                }
             },
             Statement::CreateSchema {
                 schema_name,
@@ -258,6 +293,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 cascade,
                 restrict: _,
                 purge: _,
+                temporary: _,
             } => {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
@@ -299,10 +335,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             cascade,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))},
-                    _ => Err(DataFusionError::NotImplemented(
+                    _ => not_impl_err!(
                         "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
-                            .to_string(),
-                    )),
+                    ),
                 }
             }
             Statement::Prepare {
@@ -321,7 +356,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .with_prepare_param_data_types(data_types.clone());
 
                 // Build logical plan for inner statement of the prepare statement
-                let plan = self.sql_statement_to_plan_with_context(
+                let plan = self.sql_statement_to_plan_with_context_impl(
                     *statement,
                     &mut planner_context,
                 )?;
@@ -415,7 +450,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.delete_to_plan(table_name, selection)
             }
 
-            Statement::StartTransaction { modes } => {
+            Statement::StartTransaction {
+                modes,
+                begin: false,
+            } => {
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &ast::TransactionMode| match m {
@@ -480,29 +518,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(LogicalPlan::Statement(statement))
             }
 
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported SQL statement: {sql:?}"
-            ))),
+            _ => not_impl_err!("Unsupported SQL statement: {sql:?}"),
         }
     }
 
     fn get_delete_target(&self, mut from: Vec<TableWithJoins>) -> Result<ObjectName> {
         if from.len() != 1 {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "DELETE FROM only supports single table, got {}: {from:?}",
                 from.len()
-            )));
+            );
         }
         let table_factor = from.pop().unwrap();
         if !table_factor.joins.is_empty() {
-            return Err(DataFusionError::NotImplemented(
-                "DELETE FROM only supports single table, got: joins".to_string(),
-            ));
+            return not_impl_err!("DELETE FROM only supports single table, got: joins");
         }
-        let TableFactor::Table{name, ..} = table_factor.relation else {
-            return Err(DataFusionError::NotImplemented(format!(
+        let TableFactor::Table { name, .. } = table_factor.relation else {
+            return not_impl_err!(
                 "DELETE FROM only supports single table, got: {table_factor:?}"
-            )))
+            );
         };
 
         Ok(name)
@@ -579,7 +613,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let (k, v) = (key.to_lowercase(), value.to_string().to_lowercase());
             // check for options important to planning
             if k == "format" {
-                explicit_format = Some(OutputFileFormat::from_str(&v)?);
+                explicit_format = Some(FileType::from_str(&v)?);
             }
             if k == "per_thread_output" {
                 per_thread_output = match v.as_str(){
@@ -604,7 +638,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .ok_or(DataFusionError::Plan("Copy to format not explicitly set and failed to parse file extension!".to_string()))?
                     .to_lowercase();
 
-                OutputFileFormat::from_str(extension)?
+                FileType::from_str(extension)?
             }
         };
         Ok(LogicalPlan::Copy(CopyTo {
@@ -706,13 +740,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Generate a plan for EXPLAIN ... that will print out a plan
     ///
-    fn explain_statement_to_plan(
+    /// Note this is the sqlparser explain statement, not the
+    /// datafusion `EXPLAIN` statement.
+    fn explain_to_plan(
         &self,
         verbose: bool,
         analyze: bool,
-        statement: Statement,
+        statement: DFStatement,
     ) -> Result<LogicalPlan> {
-        let plan = self.sql_statement_to_plan(statement)?;
+        let plan = self.statement_to_plan(statement)?;
+        if matches!(plan, LogicalPlan::Explain(_)) {
+            return plan_err!("Nested EXPLAINs are not supported");
+        }
         let plan = Arc::new(plan);
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
@@ -775,15 +814,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         value: Vec<sqlparser::ast::Expr>,
     ) -> Result<LogicalPlan> {
         if local {
-            return Err(DataFusionError::NotImplemented(
-                "LOCAL is not supported".to_string(),
-            ));
+            return not_impl_err!("LOCAL is not supported");
         }
 
         if hivevar {
-            return Err(DataFusionError::NotImplemented(
-                "HIVEVAR is not supported".to_string(),
-            ));
+            return not_impl_err!("HIVEVAR is not supported");
         }
 
         let variable = object_name_to_string(variable);

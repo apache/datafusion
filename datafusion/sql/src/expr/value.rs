@@ -18,7 +18,9 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow_schema::DataType;
-use datafusion_common::{plan_err, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
@@ -141,9 +143,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     values.push(scalar);
                 }
                 _ => {
-                    return Err(DataFusionError::NotImplemented(format!(
+                    return not_impl_err!(
                         "Arrays with elements other than literal are not supported: {value}"
-                    )));
+                    );
                 }
             }
         }
@@ -154,9 +156,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if data_types.is_empty() {
             Ok(lit(ScalarValue::new_list(None, DataType::Utf8)))
         } else if data_types.len() > 1 {
-            Err(DataFusionError::NotImplemented(format!(
-                "Arrays with different types are not supported: {data_types:?}",
-            )))
+            not_impl_err!("Arrays with different types are not supported: {data_types:?}")
         } else {
             let data_type = values[0].get_datatype();
 
@@ -174,24 +174,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         if interval.leading_precision.is_some() {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "Unsupported Interval Expression with leading_precision {:?}",
-                interval.leading_precision,
-            )));
+                interval.leading_precision
+            );
         }
 
         if interval.last_field.is_some() {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "Unsupported Interval Expression with last_field {:?}",
-                interval.last_field,
-            )));
+                interval.last_field
+            );
         }
 
         if interval.fractional_seconds_precision.is_some() {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "Unsupported Interval Expression with fractional_seconds_precision {:?}",
-                interval.fractional_seconds_precision,
-            )));
+                interval.fractional_seconds_precision
+            );
         }
 
         // Only handle string exprs for now
@@ -226,9 +226,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     BinaryOperator::Plus => Operator::Plus,
                     BinaryOperator::Minus => Operator::Minus,
                     _ => {
-                        return Err(DataFusionError::NotImplemented(format!(
-                            "Unsupported interval operator: {op:?}"
-                        )));
+                        return not_impl_err!("Unsupported interval operator: {op:?}");
                     }
                 };
                 match (interval.leading_field, left.as_ref(), right.as_ref()) {
@@ -294,17 +292,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     _ => {
                         let value = SQLExpr::BinaryOp { left, op, right };
-                        return Err(DataFusionError::NotImplemented(format!(
+                        return not_impl_err!(
                             "Unsupported interval argument. Expected string literal, got: {value:?}"
-                        )));
+                        );
                     }
                 }
             }
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return not_impl_err!(
                     "Unsupported interval argument. Expected string literal, got: {:?}",
-                    interval.value,
-                )));
+                    interval.value
+                );
             }
         };
 

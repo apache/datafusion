@@ -17,11 +17,10 @@
 
 use std::{
     fmt::{self, Display},
-    str::FromStr,
     sync::Arc,
 };
 
-use datafusion_common::{DFSchemaRef, DataFusionError, OwnedTableReference};
+use datafusion_common::{DFSchemaRef, FileType, OwnedTableReference};
 
 use crate::LogicalPlan;
 
@@ -33,53 +32,13 @@ pub struct CopyTo {
     /// The location to write the file(s)
     pub output_url: String,
     /// The file format to output (explicitly defined or inferred from file extension)
-    pub file_format: OutputFileFormat,
+    pub file_format: FileType,
     /// If false, it is assumed output_url is a file to which all data should be written
     /// regardless of input partitioning. Otherwise, output_url is assumed to be a directory
     /// to which each output partition is written to its own output file
     pub per_thread_output: bool,
     /// Arbitrary options as tuples
     pub options: Vec<(String, String)>,
-}
-
-/// The file formats that CopyTo can output
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum OutputFileFormat {
-    CSV,
-    JSON,
-    PARQUET,
-    AVRO,
-    ARROW,
-}
-
-impl FromStr for OutputFileFormat {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, DataFusionError> {
-        match s {
-            "csv" => Ok(OutputFileFormat::CSV),
-            "json" => Ok(OutputFileFormat::JSON),
-            "parquet" => Ok(OutputFileFormat::PARQUET),
-            "avro" => Ok(OutputFileFormat::AVRO),
-            "arrow" => Ok(OutputFileFormat::ARROW),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown or not supported file format {s}!"
-            ))),
-        }
-    }
-}
-
-impl Display for OutputFileFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let out = match self {
-            OutputFileFormat::CSV => "csv",
-            OutputFileFormat::JSON => "json",
-            OutputFileFormat::PARQUET => "parquet",
-            OutputFileFormat::AVRO => "avro",
-            OutputFileFormat::ARROW => "arrow",
-        };
-        write!(f, "{}", out)
-    }
 }
 
 /// The operator that modifies the content of a database (adapted from
@@ -96,6 +55,13 @@ pub struct DmlStatement {
     pub input: Arc<LogicalPlan>,
 }
 
+impl DmlStatement {
+    /// Return a descriptive name of this [`DmlStatement`]
+    pub fn name(&self) -> &str {
+        self.op.name()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum WriteOp {
     InsertOverwrite,
@@ -105,14 +71,21 @@ pub enum WriteOp {
     Ctas,
 }
 
+impl WriteOp {
+    /// Return a descriptive name of this [`WriteOp`]
+    pub fn name(&self) -> &str {
+        match self {
+            WriteOp::InsertOverwrite => "Insert Overwrite",
+            WriteOp::InsertInto => "Insert Into",
+            WriteOp::Delete => "Delete",
+            WriteOp::Update => "Update",
+            WriteOp::Ctas => "Ctas",
+        }
+    }
+}
+
 impl Display for WriteOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            WriteOp::InsertOverwrite => write!(f, "Insert Overwrite"),
-            WriteOp::InsertInto => write!(f, "Insert Into"),
-            WriteOp::Delete => write!(f, "Delete"),
-            WriteOp::Update => write!(f, "Update"),
-            WriteOp::Ctas => write!(f, "Ctas"),
-        }
+        write!(f, "{}", self.name())
     }
 }

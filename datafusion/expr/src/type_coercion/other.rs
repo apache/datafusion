@@ -28,9 +28,8 @@ pub fn get_coerce_type_for_list(
 ) -> Option<DataType> {
     list_types
         .iter()
-        .fold(Some(expr_type.clone()), |left, right_type| match left {
-            None => None,
-            Some(left_type) => comparison_coercion(&left_type, right_type),
+        .try_fold(expr_type.clone(), |left_type, right_type| {
+            comparison_coercion(&left_type, right_type)
         })
 }
 
@@ -47,11 +46,9 @@ pub fn get_coerce_type_for_case_expression(
     };
     when_or_then_types
         .iter()
-        .fold(Some(case_or_else_type), |left, right_type| match left {
-            // failed to find a valid coercion in a previous iteration
-            None => None,
+        .try_fold(case_or_else_type, |left_type, right_type| {
             // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
             // refactor again.
-            Some(left_type) => comparison_coercion(&left_type, right_type),
+            comparison_coercion(&left_type, right_type)
         })
 }

@@ -412,7 +412,7 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_dict_arrays() {
-        let strings = vec![Some("foo"), None, Some("bar"), Some("foo"), None];
+        let strings = [Some("foo"), None, Some("bar"), Some("foo"), None];
 
         let string_array = Arc::new(strings.iter().cloned().collect::<StringArray>());
         let dict_array = Arc::new(
@@ -456,8 +456,8 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_multi_column_hash_for_dict_arrays() {
-        let strings1 = vec![Some("foo"), None, Some("bar")];
-        let strings2 = vec![Some("blarg"), Some("blah"), None];
+        let strings1 = [Some("foo"), None, Some("bar")];
+        let strings2 = [Some("blarg"), Some("blah"), None];
 
         let string_array = Arc::new(strings1.iter().cloned().collect::<StringArray>());
         let dict_array = Arc::new(

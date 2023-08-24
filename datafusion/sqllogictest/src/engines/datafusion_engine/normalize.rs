@@ -107,7 +107,7 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
             })
             .collect();
 
-        Either::Right(once(row).chain(new_lines.into_iter()))
+        Either::Right(once(row).chain(new_lines))
     } else {
         Either::Left(once(row))
     }

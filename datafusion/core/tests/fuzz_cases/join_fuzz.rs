@@ -195,8 +195,8 @@ fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
     input12.sort_unstable();
     let input1 = Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.0));
     let input2 = Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.1));
-    let input3 = Int32Array::from_iter_values(input3.into_iter());
-    let input4 = Int32Array::from_iter_values(input4.into_iter());
+    let input3 = Int32Array::from_iter_values(input3);
+    let input4 = Int32Array::from_iter_values(input4);
 
     // split into several record batches
     let batch = RecordBatch::try_from_iter(vec![

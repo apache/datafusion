@@ -134,10 +134,14 @@ pub enum BuiltinScalarFunction {
     ArrayHasAll,
     /// array_has_any
     ArrayHasAny,
+    /// array_pop_back
+    ArrayPopBack,
     /// array_dims
     ArrayDims,
     /// array_element
     ArrayElement,
+    /// array_empty
+    ArrayEmpty,
     /// array_length
     ArrayLength,
     /// array_ndims
@@ -360,6 +364,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayEmpty => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
@@ -367,6 +372,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
@@ -525,7 +531,7 @@ impl BuiltinScalarFunction {
                             }
                         }
                         _ => {
-                            return internal_err!(
+                            return plan_err!(
                                 "The {self} function can only accept list as the args."
                             )
                         }
@@ -536,18 +542,20 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
-            | BuiltinScalarFunction::ArrayHas => Ok(Boolean),
+            | BuiltinScalarFunction::ArrayHas
+            | BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
             BuiltinScalarFunction::ArrayDims => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field) => Ok(field.data_type().clone()),
-                _ => internal_err!(
+                _ => plan_err!(
                     "The {self} function can only accept list as the first argument"
                 ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
+            BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
             BuiltinScalarFunction::ArrayPositions => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
@@ -608,7 +616,7 @@ impl BuiltinScalarFunction {
                     Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
                     Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
                     Timestamp(Second, _) => Ok(Timestamp(Second, None)),
-                    _ => internal_err!(
+                    _ => plan_err!(
                     "The {self} function can only accept timestamp as the second arg."
                 ),
                 }
@@ -677,8 +685,7 @@ impl BuiltinScalarFunction {
                 LargeBinary => LargeUtf8,
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
+                    return plan_err!(
                         "The encode function can only accept utf8 or binary."
                     );
                 }
@@ -690,8 +697,7 @@ impl BuiltinScalarFunction {
                 LargeBinary => LargeBinary,
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
+                    return plan_err!(
                         "The decode function can only accept utf8 or binary."
                     );
                 }
@@ -709,10 +715,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ToHex => Ok(match input_expr_types[0] {
                 Int8 | Int16 | Int32 | Int64 => Utf8,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
-                        "The to_hex function can only accept integers."
-                    );
+                    return plan_err!("The to_hex function can only accept integers.");
                 }
             }),
             BuiltinScalarFunction::ToTimestamp => Ok(Timestamp(Nanosecond, None)),
@@ -737,8 +740,7 @@ impl BuiltinScalarFunction {
                 Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
+                    return plan_err!(
                         "The regexp_extract function can only accept strings."
                     );
                 }
@@ -825,10 +827,12 @@ impl BuiltinScalarFunction {
         // for now, the list is small, as we do not have many built-in functions.
         match self {
             BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll
@@ -1319,6 +1323,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             &["array_concat", "array_cat", "list_concat", "list_cat"]
         }
         BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
+        BuiltinScalarFunction::ArrayEmpty => &["empty"],
         BuiltinScalarFunction::ArrayElement => &[
             "array_element",
             "array_extract",
@@ -1333,6 +1338,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         }
         BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
+        BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
         BuiltinScalarFunction::ArrayPosition => &[
             "array_position",
             "list_position",
@@ -1395,25 +1401,23 @@ macro_rules! make_utf8_to_return_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
                 DataType::Null => DataType::Null,
-                DataType::Dictionary(_, value_type) => {
-                    match **value_type {
-                        DataType::LargeUtf8 => $largeUtf8Type,
-                        DataType::Utf8 => $utf8Type,
-                        DataType::Null => DataType::Null,
-                        _ => {
-                            // this error is internal as `data_types` should have captured this.
-                            return internal_err!(
-                                "The {:?} function can only accept strings.",
-                                name
-                            );
-                        }
+                DataType::Dictionary(_, value_type) => match **value_type {
+                    DataType::LargeUtf8 => $largeUtf8Type,
+                    DataType::Utf8 => $utf8Type,
+                    DataType::Null => DataType::Null,
+                    _ => {
+                        return plan_err!(
+                            "The {:?} function can only accept strings, but got {:?}.",
+                            name,
+                            **value_type
+                        );
                     }
-                }
-                _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return internal_err!(
-                        "The {:?} function can only accept strings.",
-                        name
+                },
+                data_type => {
+                    return plan_err!(
+                        "The {:?} function can only accept strings, but got {:?}.",
+                        name,
+                        data_type
                     );
                 }
             })
@@ -1432,8 +1436,7 @@ fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<Data
         | DataType::LargeBinary => DataType::Binary,
         DataType::Null => DataType::Null,
         _ => {
-            // this error is internal as `data_types` should have captured this.
-            return internal_err!(
+            return plan_err!(
                 "The {name:?} function can only accept strings or binary arrays."
             );
         }

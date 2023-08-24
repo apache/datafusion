@@ -451,9 +451,17 @@ make_error!(plan_err, Plan);
 // Exposes a macro to create `DataFusionError::Internal`
 make_error!(internal_err, Internal);
 
+// Exposes a macro to create `DataFusionError::NotImplemented`
+make_error!(not_impl_err, NotImplemented);
+
+// Exposes a macro to create `DataFusionError::Execution`
+make_error!(exec_err, Execution);
+
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
+pub use exec_err as _exec_err;
 pub use internal_err as _internal_err;
+pub use not_impl_err as _not_impl_err;
 
 #[cfg(test)]
 mod test {
@@ -533,6 +541,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_make_error_parse_input() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();

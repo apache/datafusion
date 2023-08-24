@@ -17,7 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::dml::{CopyTo, OutputFileFormat};
+use crate::dml::CopyTo;
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -45,8 +45,8 @@ use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
-    ToDFSchema,
+    FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -237,7 +237,7 @@ impl LogicalPlanBuilder {
     pub fn copy_to(
         input: LogicalPlan,
         output_url: String,
-        file_format: OutputFileFormat,
+        file_format: FileType,
         per_thread_output: bool,
         options: Vec<(String, String)>,
     ) -> Result<Self> {
@@ -593,15 +593,8 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        // unwrap top-level Distincts, to avoid duplication
-        let left_plan: LogicalPlan = match self.plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
-            _ => self.plan,
-        };
-        let right_plan: LogicalPlan = match plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
-            _ => plan,
-        };
+        let left_plan: LogicalPlan = self.plan;
+        let right_plan: LogicalPlan = plan;
 
         Ok(Self::from(LogicalPlan::Distinct(Distinct {
             input: Arc::new(union(left_plan, right_plan)?),
@@ -672,7 +665,7 @@ impl LogicalPlanBuilder {
             join_keys
                 .0
                 .into_iter()
-                .zip(join_keys.1.into_iter())
+                .zip(join_keys.1)
                 .map(|(l, r)| {
                     let l = l.into();
                     let r = r.into();
@@ -749,7 +742,7 @@ impl LogicalPlanBuilder {
 
         let on = left_keys
             .into_iter()
-            .zip(right_keys.into_iter())
+            .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
@@ -784,7 +777,7 @@ impl LogicalPlanBuilder {
             .map(|c| Self::normalize(&right, c))
             .collect::<Result<_>>()?;
 
-        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
@@ -1629,13 +1622,16 @@ mod tests {
             .union_distinct(plan.build()?)?
             .build()?;
 
-        // output has only one union
         let expected = "\
         Distinct:\
         \n  Union\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    Distinct:\
+        \n      Union\
+        \n        Distinct:\
+        \n          Union\
+        \n            TableScan: employee_csv projection=[state, salary]\
+        \n            TableScan: employee_csv projection=[state, salary]\
+        \n        TableScan: employee_csv projection=[state, salary]\
         \n    TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan:?}"));

@@ -22,6 +22,7 @@ use std::{
     str::FromStr,
 };
 
+use crate::error::_not_impl_err;
 use crate::{DataFusionError, Result};
 
 /// Join type
@@ -81,9 +82,7 @@ impl FromStr for JoinType {
             "RIGHTSEMI" => Ok(JoinType::RightSemi),
             "LEFTANTI" => Ok(JoinType::LeftAnti),
             "RIGHTANTI" => Ok(JoinType::RightAnti),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "The join type {s} does not exist or is not implemented"
-            ))),
+            _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }
 }

@@ -20,6 +20,7 @@
 use std::any::Any;
 
 use bytes::Bytes;
+use datafusion_common::not_impl_err;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use rand::distributions::Alphanumeric;
@@ -49,7 +50,6 @@ use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
 use super::FileFormat;
 use super::FileScanConfig;
-use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::write::{
     create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
@@ -59,9 +59,8 @@ use crate::datasource::physical_plan::NdJsonExec;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
+use datafusion_common::FileCompressionType;
 
-/// The default file extension of json files
-pub const DEFAULT_JSON_EXTENSION: &str = ".json";
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
 pub struct JsonFormat {
@@ -175,15 +174,11 @@ impl FileFormat for JsonFormat {
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented yet for Json".into(),
-            ));
+            return not_impl_err!("Overwrites are not implemented yet for Json");
         }
 
         if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
-            return Err(DataFusionError::NotImplemented(
-                "Inserting compressed JSON is not implemented yet.".into(),
-            ));
+            return not_impl_err!("Inserting compressed JSON is not implemented yet.");
         }
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(JsonSink::new(conf, self.file_compression_type));
@@ -282,7 +277,7 @@ impl DataSink for JsonSink {
         match self.config.writer_mode {
             FileWriterMode::Append => {
                 if !self.config.per_thread_output {
-                    return Err(DataFusionError::NotImplemented("per_thread_output=false is not implemented for JsonSink in Append mode".into()));
+                    return not_impl_err!("per_thread_output=false is not implemented for JsonSink in Append mode");
                 }
                 for file_group in &self.config.file_groups {
                     let serializer = JsonSerializer::new();
@@ -300,9 +295,7 @@ impl DataSink for JsonSink {
                 }
             }
             FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented(
-                    "Put Mode is not implemented for Json Sink yet".into(),
-                ))
+                return not_impl_err!("Put Mode is not implemented for Json Sink yet")
             }
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)

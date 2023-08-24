@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::{CastExpr, Column};
+use crate::expressions::Column;
+use crate::utils::collect_columns;
 use crate::{
     normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
     PhysicalSortExpr,
@@ -24,7 +25,6 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
 
-use crate::utils::collect_columns;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -132,6 +132,24 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
 pub type OrderingEquivalenceProperties = EquivalenceProperties<LexOrdering>;
+
+impl OrderingEquivalenceProperties {
+    /// Checks whether `leading_ordering` is contained in any of the ordering
+    /// equivalence classes.
+    pub fn satisfies_leading_ordering(
+        &self,
+        leading_ordering: &PhysicalSortExpr,
+    ) -> bool {
+        for cls in &self.classes {
+            for ordering in cls.others.iter().chain(std::iter::once(&cls.head)) {
+                if ordering[0].eq(leading_ordering) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
 
 /// EquivalentClass is a set of [`Column`]s or [`PhysicalSortExpr`]s that are known
 /// to have the same value in all tuples in a relation. `EquivalentClass<Column>`
@@ -414,7 +432,13 @@ pub fn project_equivalence_properties(
             class.remove(&column);
         }
     }
-    eq_classes.retain(|props| props.len() > 1);
+
+    eq_classes.retain(|props| {
+        props.len() > 1
+            &&
+            // A column should not give an equivalence with itself.
+             !(props.len() == 2 && props.head.eq(props.others().iter().next().unwrap()))
+    });
 
     output_eq.extend(eq_classes);
 }
@@ -446,7 +470,7 @@ pub fn project_ordering_equivalence_properties(
         class.update_with_aliases(&oeq_alias_map, fields);
     }
 
-    // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
+    // Prune columns that are no longer in the schema from the OrderingEquivalenceProperties.
     for class in eq_classes.iter_mut() {
         let sort_exprs_to_remove = class
             .iter()
@@ -469,42 +493,6 @@ pub fn project_ordering_equivalence_properties(
     eq_classes.retain(|props| props.len() > 1);
 
     output_eq.extend(eq_classes);
-}
-
-/// Update `ordering` if it contains cast expression with target column
-/// after projection, if there is no cast expression among `ordering` expressions,
-/// returns `None`.
-fn update_with_cast_exprs(
-    cast_exprs: &[(CastExpr, Column)],
-    mut ordering: LexOrdering,
-) -> Option<LexOrdering> {
-    let mut is_changed = false;
-    for sort_expr in ordering.iter_mut() {
-        for (cast_expr, target_col) in cast_exprs.iter() {
-            if sort_expr.expr.eq(cast_expr.expr()) {
-                sort_expr.expr = Arc::new(target_col.clone()) as _;
-                is_changed = true;
-            }
-        }
-    }
-    is_changed.then_some(ordering)
-}
-
-/// Update cast expressions inside ordering equivalence
-/// properties with its target column after projection
-pub fn update_ordering_equivalence_with_cast(
-    cast_exprs: &[(CastExpr, Column)],
-    input_oeq: &mut OrderingEquivalenceProperties,
-) {
-    for cls in input_oeq.classes.iter_mut() {
-        for ordering in
-            std::iter::once(cls.head().clone()).chain(cls.others().clone().into_iter())
-        {
-            if let Some(updated_ordering) = update_with_cast_exprs(cast_exprs, ordering) {
-                cls.insert(updated_ordering);
-            }
-        }
-    }
 }
 
 /// Retrieves the ordering equivalence properties for a given schema and output ordering.

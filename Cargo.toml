@@ -29,7 +29,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.70"
-version = "29.0.0"
+version = "30.0.0"
 
 [workspace.dependencies]
 arrow = { version = "46.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
@@ -38,7 +38,7 @@ arrow-buffer = { version = "46.0.0", default-features = false }
 arrow-flight = { version = "46.0.0", features = ["flight-sql-experimental"] }
 arrow-schema = { version = "46.0.0", default-features = false }
 parquet = { version = "46.0.0", features = ["arrow", "async", "object_store"] }
-sqlparser = { version = "0.36.1", features = ["visitor"] }
+sqlparser = { version = "0.37.0", features = ["visitor"] }
 
 [profile.release]
 codegen-units = 1

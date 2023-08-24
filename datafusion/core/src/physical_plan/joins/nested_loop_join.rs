@@ -38,7 +38,7 @@ use arrow::array::{
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use datafusion_common::{DataFusionError, Statistics};
+use datafusion_common::{exec_err, DataFusionError, Statistics};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
@@ -586,9 +586,9 @@ fn join_left_and_right_batch(
     let mut left_indices_builder = UInt64Builder::new();
     let mut right_indices_builder = UInt32Builder::new();
     let left_right_indices = match indices_result {
-        Err(err) => Err(DataFusionError::Execution(format!(
-            "Fail to build join indices in NestedLoopJoinExec, error:{err}"
-        ))),
+        Err(err) => {
+            exec_err!("Fail to build join indices in NestedLoopJoinExec, error:{err}")
+        }
         Ok(indices) => {
             for (left_side, right_side) in indices {
                 left_indices_builder
@@ -893,7 +893,7 @@ mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",
@@ -922,7 +922,7 @@ mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = vec![
+        let expected = [
             "+----+----+-----+----+----+----+",
             "| a1 | b1 | c1  | a2 | b2 | c2 |",
             "+----+----+-----+----+----+----+",
@@ -953,7 +953,7 @@ mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+-----+",
             "| a1 | b1 | c1 | a2 | b2 | c2  |",
             "+----+----+----+----+----+-----+",
@@ -984,7 +984,7 @@ mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = vec![
+        let expected = [
             "+----+----+-----+----+----+-----+",
             "| a1 | b1 | c1  | a2 | b2 | c2  |",
             "+----+----+-----+----+----+-----+",
@@ -1017,7 +1017,7 @@ mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        let expected = vec![
+        let expected = [
             "+----+----+----+",
             "| a1 | b1 | c1 |",
             "+----+----+----+",
@@ -1046,7 +1046,7 @@ mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a1 | b1 | c1  |",
             "+----+----+-----+",
@@ -1076,7 +1076,7 @@ mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        let expected = vec![
+        let expected = [
             "+----+----+----+",
             "| a2 | b2 | c2 |",
             "+----+----+----+",
@@ -1105,7 +1105,7 @@ mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        let expected = vec![
+        let expected = [
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",

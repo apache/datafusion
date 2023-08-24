@@ -17,7 +17,6 @@
 
 //! Execution plan for reading CSV files
 
-use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::listing::{FileRange, ListingTableUrl};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -32,6 +31,7 @@ use crate::physical_plan::{
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::FileCompressionType;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     ordering_equivalence_properties_helper, LexOrdering, OrderingEquivalenceProperties,
@@ -580,9 +580,10 @@ mod tests {
     use crate::datasource::file_format::file_type::FileType;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
-    use crate::test_util::{aggr_test_schema_with_missing_col, arrow_test_data};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
+    use datafusion_common::test_util::arrow_test_data;
+    use datafusion_common::FileType;
     use futures::StreamExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
@@ -642,7 +643,7 @@ mod tests {
         assert_eq!(100, batch.num_rows());
 
         // slice of the first 5 lines
-        let expected = vec![
+        let expected = [
             "+----+-----+------------+",
             "| c1 | c3  | c5         |",
             "+----+-----+------------+",
@@ -708,7 +709,7 @@ mod tests {
         assert_eq!(100, batch.num_rows());
 
         // slice of the first 5 lines
-        let expected = vec![
+        let expected = [
             "+------------+----+-----+",
             "| c5         | c1 | c3  |",
             "+------------+----+-----+",
@@ -773,8 +774,7 @@ mod tests {
         assert_eq!(13, batch.num_columns());
         assert_eq!(5, batch.num_rows());
 
-        let expected = vec![
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
+        let expected = ["+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
             "| c1 | c2 | c3  | c4     | c5         | c6                   | c7  | c8    | c9         | c10                  | c11         | c12                 | c13                            |",
             "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
             "| c  | 2  | 1   | 18109  | 2033001162 | -6513304855495910254 | 25  | 43062 | 1491205016 | 5863949479783605708  | 0.110830784 | 0.9294097332465232  | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |",
@@ -782,8 +782,7 @@ mod tests {
             "| b  | 1  | 29  | -18218 | 994303988  | 5983957848665088916  | 204 | 9489  | 3275293996 | 14857091259186476033 | 0.53840446  | 0.17909035118828576 | AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz |",
             "| a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |",
             "| b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |",
-            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
-        ];
+            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+"];
 
         crate::assert_batches_eq!(expected, &[batch]);
 
@@ -904,7 +903,7 @@ mod tests {
         assert_eq!(100, batch.num_rows());
 
         // slice of the first 5 lines
-        let expected = vec![
+        let expected = [
             "+----+------------+",
             "| c1 | date       |",
             "+----+------------+",
@@ -1045,7 +1044,7 @@ mod tests {
 
         let result = df.collect().await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+---+---+",
             "| a | b |",
             "+---+---+",
@@ -1175,5 +1174,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Get the schema for the aggregate_test_* csv files with an additional filed not present in the files.
+    fn aggr_test_schema_with_missing_col() -> SchemaRef {
+        let fields =
+            Fields::from_iter(aggr_test_schema().fields().iter().cloned().chain(
+                std::iter::once(Arc::new(Field::new(
+                    "missing_col",
+                    DataType::Int64,
+                    true,
+                ))),
+            ));
+
+        let schema = Schema::new(fields);
+
+        Arc::new(schema)
     }
 }
