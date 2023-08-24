@@ -19,16 +19,14 @@
 
 use arrow::array::*;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
 fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return Err(DataFusionError::Execution(
-            "struct requires at least one argument".to_string(),
-        ));
+        return exec_err!("struct requires at least one argument");
     }
 
     let vec: Vec<_> = args
@@ -57,9 +55,9 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
                     )),
                     arg.clone(),
                 )),
-                data_type => Err(DataFusionError::NotImplemented(format!(
-                    "Struct is not implemented for type '{data_type:?}'."
-                ))),
+                data_type => {
+                    not_impl_err!("Struct is not implemented for type '{data_type:?}'.")
+                }
             }
         })
         .collect::<Result<Vec<_>>>()?;

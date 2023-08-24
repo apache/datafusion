@@ -38,6 +38,8 @@
 - [factorial](#factorial)
 - [floor](#floor)
 - [gcd](#gcd)
+- [isnan](#isnan)
+- [iszero](#iszero)
 - [lcm](#lcm)
 - [ln](#ln)
 - [log](#log)
@@ -281,6 +283,32 @@ gcd(expression_x, expression_y)
 - **expression_x**: First numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **expression_y**: Second numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `isnan`
+
+Returns true if a given number is +NaN or -NaN otherwise returns false.
+
+```
+isnan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `iszero`
+
+Returns true if a given number is +0.0 or -0.0 otherwise returns false.
+
+```
+iszero(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `lcm`
@@ -1453,6 +1481,7 @@ from_unixtime(expression)
 - [array_length](#array_length)
 - [array_ndims](#array_ndims)
 - [array_prepend](#array_prepend)
+- [array_pop_back](#array_pop_back)
 - [array_position](#array_position)
 - [array_positions](#array_positions)
 - [array_push_back](#array_push_back)
@@ -1467,6 +1496,7 @@ from_unixtime(expression)
 - [array_slice](#array_slice)
 - [array_to_string](#array_to_string)
 - [cardinality](#cardinality)
+- [empty](#empty)
 - [list_append](#list_append)
 - [list_cat](#list_cat)
 - [list_concat](#list_concat)
@@ -1665,6 +1695,8 @@ array_element(array, index)
 - list_element
 - list_extract
 
+### `array_empty`
+
 ### `array_extract`
 
 _Alias of [array_element](#array_element)._
@@ -1798,6 +1830,30 @@ array_prepend(element, array)
 - array_push_front
 - list_prepend
 - list_push_front
+
+### `array_pop_back`
+
+Returns the array without the last element.
+
+```
+array_pop_back(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_pop_back([1, 2, 3]);
++-------------------------------+
+| array_pop_back(List([1,2,3])) |
++-------------------------------+
+| [1, 2]                        |
++-------------------------------+
+```
 
 ### `array_position`
 
@@ -2158,6 +2214,30 @@ cardinality(array)
 +--------------------------------------+
 | 8                                    |
 +--------------------------------------+
+```
+
+### `empty`
+
+Returns 1 for an empty array or 0 for a non-empty array.
+
+```
+empty(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select empty([1]);
++------------------+
+| empty(List([1])) |
++------------------+
+| 0                |
++------------------+
 ```
 
 ### `list_append`

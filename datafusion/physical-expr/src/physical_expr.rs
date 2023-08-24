@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::intervals::Interval;
+use crate::sort_properties::SortProperties;
 use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
@@ -24,7 +25,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::SortOptions;
 use datafusion_common::utils::DataPtr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use std::any::Any;
@@ -78,9 +79,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
 
     /// Computes bounds for the expression using interval arithmetic.
     fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
-        Err(DataFusionError::NotImplemented(format!(
-            "Not implemented for {self}"
-        )))
+        not_impl_err!("Not implemented for {self}")
     }
 
     /// Updates/shrinks bounds for the expression using interval arithmetic.
@@ -92,9 +91,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         _interval: &Interval,
         _children: &[&Interval],
     ) -> Result<Vec<Option<Interval>>> {
-        Err(DataFusionError::NotImplemented(format!(
-            "Not implemented for {self}"
-        )))
+        not_impl_err!("Not implemented for {self}")
     }
 
     /// Update the hash `state` with this expression requirements from
@@ -129,9 +126,17 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// directly because it must remain object safe.
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 
-    /// Providing children's [`ExtendedSortOptions`], returns the [`ExtendedSortOptions`] of a [`PhysicalExpr`].
-    fn get_ordering(&self, _children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
-        ExtendedSortOptions::Unordered
+    /// The order information of a PhysicalExpr can be estimated from its children.
+    /// This is especially helpful for projection expressions. If we can ensure that the
+    /// order of a PhysicalExpr to project matches with the order of SortExec, we can
+    /// eliminate that SortExecs.
+    ///
+    /// By recursively calling this function, we can obtain the overall order
+    /// information of the PhysicalExpr. Since `SortOptions` cannot fully handle
+    /// the propagation of unordered columns and literals, the `SortProperties`
+    /// struct is used.
+    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
+        SortProperties::Unordered
     }
 }
 
@@ -184,9 +189,7 @@ pub fn with_new_children_if_necessary(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let old_children = expr.children();
     if children.len() != old_children.len() {
-        Err(DataFusionError::Internal(
-            "PhysicalExpr: Wrong number of children".to_string(),
-        ))
+        internal_err!("PhysicalExpr: Wrong number of children")
     } else if children.is_empty()
         || children
             .iter()

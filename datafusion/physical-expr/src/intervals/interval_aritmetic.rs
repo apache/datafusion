@@ -23,12 +23,12 @@ use std::fmt::{Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
 use crate::aggregate::min_max::{max, min};
-use crate::intervals::rounding::alter_fp_rounding_mode;
+use crate::intervals::rounding::{alter_fp_rounding_mode, next_down, next_up};
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow_array::ArrowNativeTypeOp;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
@@ -252,15 +252,15 @@ impl Interval {
 
     /// This function returns the data type of this interval. If both endpoints
     /// do not have the same data type, returns an error.
-    pub(crate) fn get_datatype(&self) -> Result<DataType> {
+    pub fn get_datatype(&self) -> Result<DataType> {
         let lower_type = self.lower.get_datatype();
         let upper_type = self.upper.get_datatype();
         if lower_type == upper_type {
             Ok(lower_type)
         } else {
-            Err(DataFusionError::Internal(format!(
-                "Interval bounds have different types: {lower_type} != {upper_type}",
-            )))
+            internal_err!(
+                "Interval bounds have different types: {lower_type} != {upper_type}"
+            )
         }
     }
 
@@ -379,9 +379,7 @@ impl Interval {
                     upper: IntervalBound::new(ScalarValue::Boolean(Some(upper)), false),
                 })
             }
-            _ => Err(DataFusionError::Internal(
-                "Incompatible types for logical conjunction".to_string(),
-            )),
+            _ => internal_err!("Incompatible types for logical conjunction"),
         }
     }
 
@@ -466,10 +464,7 @@ impl Interval {
                         diff as u64,
                     ))
                 } else {
-                    Err(DataFusionError::Execution(format!(
-                        "Cardinality cannot be calculated for {:?}",
-                        self
-                    )))
+                    exec_err!("Cardinality cannot be calculated for {:?}", self)
                 }
             }
             // Ordering floating-point numbers according to their binary representations
@@ -504,17 +499,14 @@ impl Interval {
                         self.upper.open,
                         upper.to_bits().sub_checked(lower.to_bits())?,
                     )),
-                    _ => Err(DataFusionError::Execution(format!(
+                    _ => exec_err!(
                         "Cardinality cannot be calculated for the datatype {:?}",
                         data_type
-                    ))),
+                    ),
                 }
             }
             // If the cardinality cannot be calculated anyway, give an error.
-            _ => Err(DataFusionError::Execution(format!(
-                "Cardinality cannot be calculated for {:?}",
-                self
-            ))),
+            _ => exec_err!("Cardinality cannot be calculated for {:?}", self),
         }
     }
 
@@ -560,28 +552,60 @@ fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
     val
 }
 
+macro_rules! check_infinite_bounds {
+    ($value:expr, $val:expr, $type:ident, $inc:expr) => {
+        if ($val == $type::MAX && $inc) || ($val == $type::MIN && !$inc) {
+            return $value;
+        }
+    };
+}
+
 /// This function returns the next/previous value depending on the `ADD` value.
 /// If `true`, it returns the next value; otherwise it returns the previous value.
 fn next_value<const INC: bool>(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
     match value {
         Float32(Some(val)) => {
-            let incremented_bits = increment_decrement::<INC, u32>(val.to_bits());
-            Float32(Some(f32::from_bits(incremented_bits)))
+            let new_float = if INC { next_up(val) } else { next_down(val) };
+            Float32(Some(new_float))
         }
         Float64(Some(val)) => {
-            let incremented_bits = increment_decrement::<INC, u64>(val.to_bits());
-            Float64(Some(f64::from_bits(incremented_bits)))
+            let new_float = if INC { next_up(val) } else { next_down(val) };
+            Float64(Some(new_float))
         }
-        Int8(Some(val)) => Int8(Some(increment_decrement::<INC, i8>(val))),
-        Int16(Some(val)) => Int16(Some(increment_decrement::<INC, i16>(val))),
-        Int32(Some(val)) => Int32(Some(increment_decrement::<INC, i32>(val))),
-        Int64(Some(val)) => Int64(Some(increment_decrement::<INC, i64>(val))),
-        UInt8(Some(val)) => UInt8(Some(increment_decrement::<INC, u8>(val))),
-        UInt16(Some(val)) => UInt16(Some(increment_decrement::<INC, u16>(val))),
-        UInt32(Some(val)) => UInt32(Some(increment_decrement::<INC, u32>(val))),
-        UInt64(Some(val)) => UInt64(Some(increment_decrement::<INC, u64>(val))),
-        _ => value, // Infinite bounds or unsupported datatypes
+        Int8(Some(val)) => {
+            check_infinite_bounds!(value, val, i8, INC);
+            Int8(Some(increment_decrement::<INC, i8>(val)))
+        }
+        Int16(Some(val)) => {
+            check_infinite_bounds!(value, val, i16, INC);
+            Int16(Some(increment_decrement::<INC, i16>(val)))
+        }
+        Int32(Some(val)) => {
+            check_infinite_bounds!(value, val, i32, INC);
+            Int32(Some(increment_decrement::<INC, i32>(val)))
+        }
+        Int64(Some(val)) => {
+            check_infinite_bounds!(value, val, i64, INC);
+            Int64(Some(increment_decrement::<INC, i64>(val)))
+        }
+        UInt8(Some(val)) => {
+            check_infinite_bounds!(value, val, u8, INC);
+            UInt8(Some(increment_decrement::<INC, u8>(val)))
+        }
+        UInt16(Some(val)) => {
+            check_infinite_bounds!(value, val, u16, INC);
+            UInt16(Some(increment_decrement::<INC, u16>(val)))
+        }
+        UInt32(Some(val)) => {
+            check_infinite_bounds!(value, val, u32, INC);
+            UInt32(Some(increment_decrement::<INC, u32>(val)))
+        }
+        UInt64(Some(val)) => {
+            check_infinite_bounds!(value, val, u64, INC);
+            UInt64(Some(increment_decrement::<INC, u64>(val)))
+        }
+        _ => value, // Unsupported datatypes
     }
 }
 
@@ -1421,7 +1445,7 @@ mod tests {
             ScalarValue::new_one(&DataType::Int8)?,
         ];
 
-        let _ = zeros.into_iter().zip(ones.into_iter()).map(|(z, o)| {
+        zeros.into_iter().zip(ones.into_iter()).for_each(|(z, o)| {
             assert_eq!(next_value::<true>(z.clone()), o);
             assert_eq!(next_value::<false>(o), z);
         });
@@ -1437,29 +1461,35 @@ mod tests {
             ScalarValue::Float64(Some(1e-6)),
         ];
 
-        let _ = values.into_iter().zip(eps.into_iter()).map(|(v, e)| {
+        values.into_iter().zip(eps.into_iter()).for_each(|(v, e)| {
             assert!(next_value::<true>(v.clone()).sub(v.clone()).unwrap().lt(&e));
             assert!(v.clone().sub(next_value::<false>(v)).unwrap().lt(&e));
         });
 
-        // Min / Max values do not change
+        // Min / Max values do not change for integer values
         let min = vec![
             ScalarValue::UInt64(Some(u64::MIN)),
             ScalarValue::Int8(Some(i8::MIN)),
-            ScalarValue::Float32(Some(f32::MIN)),
-            ScalarValue::Float64(Some(f64::MIN)),
         ];
         let max = vec![
             ScalarValue::UInt64(Some(u64::MAX)),
             ScalarValue::Int8(Some(i8::MAX)),
-            ScalarValue::Float32(Some(f32::MAX)),
-            ScalarValue::Float64(Some(f64::MAX)),
         ];
 
-        let _ = min.into_iter().zip(max.into_iter()).map(|(min, max)| {
+        min.into_iter().zip(max.into_iter()).for_each(|(min, max)| {
             assert_eq!(next_value::<true>(max.clone()), max);
             assert_eq!(next_value::<false>(min.clone()), min);
         });
+
+        // Min / Max values results in infinity for floating point values
+        assert_eq!(
+            next_value::<true>(ScalarValue::Float32(Some(f32::MAX))),
+            ScalarValue::Float32(Some(f32::INFINITY))
+        );
+        assert_eq!(
+            next_value::<false>(ScalarValue::Float64(Some(f64::MIN))),
+            ScalarValue::Float64(Some(f64::NEG_INFINITY))
+        );
 
         Ok(())
     }

@@ -24,7 +24,7 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, SchemaError};
+use datafusion_common::{DataFusionError, FileType, SchemaError, UnnestOptions};
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -37,7 +37,6 @@ use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
-use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::{
@@ -178,6 +177,11 @@ impl DataFrame {
 
     /// Expand each list element of a column to multiple rows.
     ///
+    /// Seee also:
+    ///
+    /// 1. [`UnnestOptions`] documentation for the behavior of `unnest`
+    /// 2. [`Self::unnest_column_with_options`]
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -190,8 +194,21 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
+        self.unnest_column_with_options(column, UnnestOptions::new())
+    }
+
+    /// Expand each list element of a column to multiple rows, with
+    /// behavior controlled by [`UnnestOptions`].
+    ///
+    /// Please see the documentation on [`UnnestOptions`] for more
+    /// details about the meaning of unnest.
+    pub fn unnest_column_with_options(
+        self,
+        column: &str,
+        options: UnnestOptions,
+    ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
-            .unnest_column(column)?
+            .unnest_column_with_options(column, options)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
@@ -974,28 +991,55 @@ impl DataFrame {
     }
 
     /// Write a `DataFrame` to a CSV file.
-    pub async fn write_csv(self, path: &str) -> Result<()> {
-        let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        let task_ctx = Arc::new(self.task_ctx());
-        plan_to_csv(task_ctx, plan, path).await
+    pub async fn write_csv(
+        self,
+        path: &str,
+    ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        let plan = LogicalPlanBuilder::copy_to(
+            self.plan,
+            path.into(),
+            FileType::CSV,
+            true,
+            // TODO implement options
+            vec![],
+        )?
+        .build()?;
+        DataFrame::new(self.session_state, plan).collect().await
     }
 
     /// Write a `DataFrame` to a Parquet file.
     pub async fn write_parquet(
         self,
         path: &str,
-        writer_properties: Option<WriterProperties>,
-    ) -> Result<()> {
-        let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        let task_ctx = Arc::new(self.task_ctx());
-        plan_to_parquet(task_ctx, plan, path, writer_properties).await
+        _writer_properties: Option<WriterProperties>,
+    ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        let plan = LogicalPlanBuilder::copy_to(
+            self.plan,
+            path.into(),
+            FileType::PARQUET,
+            true,
+            // TODO implement options
+            vec![],
+        )?
+        .build()?;
+        DataFrame::new(self.session_state, plan).collect().await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
-    pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
-        let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        let task_ctx = Arc::new(self.task_ctx());
-        plan_to_json(task_ctx, plan, path).await
+    pub async fn write_json(
+        self,
+        path: &str,
+    ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        let plan = LogicalPlanBuilder::copy_to(
+            self.plan,
+            path.into(),
+            FileType::JSON,
+            true,
+            // TODO implement options
+            vec![],
+        )?
+        .build()?;
+        DataFrame::new(self.session_state, plan).collect().await
     }
 
     /// Add an additional column to the DataFrame.

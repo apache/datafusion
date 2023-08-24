@@ -202,7 +202,7 @@ fn optimize_partitions(
                     child.clone(),
                     false, // child is not root
                     can_reorder_child,
-                    plan.benefits_from_input_partitioning(),
+                    plan.benefits_from_input_partitioning()[idx],
                     repartition_file_scans,
                     repartition_file_min_size,
                 )
@@ -333,7 +333,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use super::*;
-    use crate::datasource::file_format::file_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
@@ -350,6 +349,7 @@ mod tests {
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
+    use datafusion_common::FileCompressionType;
     use datafusion_physical_expr::PhysicalSortRequirement;
 
     fn schema() -> SchemaRef {

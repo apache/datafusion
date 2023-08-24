@@ -25,7 +25,7 @@ use crate::physical_plan::{
     Statistics,
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::StreamExt;
 
 use super::expressions::PhysicalSortExpr;
@@ -93,9 +93,7 @@ impl ExecutionPlan for AnalyzeExec {
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
-        Err(DataFusionError::Internal(
-            "Optimization not supported for ANALYZE".to_string(),
-        ))
+        internal_err!("Optimization not supported for ANALYZE")
     }
 
     /// Get the output partitioning of this plan
@@ -124,9 +122,9 @@ impl ExecutionPlan for AnalyzeExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "AnalyzeExec invalid partition. Expected 0, got {partition}"
-            )));
+            );
         }
 
         // Gather futures that will run each input partition in

@@ -17,6 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use crate::dml::CopyTo;
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -41,10 +42,11 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::plan_err;
+use datafusion_common::UnnestOptions;
 use datafusion_common::{
     display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, OwnedTableReference, Result, ScalarValue, TableReference,
-    ToDFSchema,
+    FileType, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
+    TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -229,6 +231,23 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
+    }
+
+    /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
+    pub fn copy_to(
+        input: LogicalPlan,
+        output_url: String,
+        file_format: FileType,
+        per_thread_output: bool,
+        options: Vec<(String, String)>,
+    ) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(input),
+            output_url,
+            file_format,
+            per_thread_output,
+            options,
+        })))
     }
 
     /// Create a [DmlStatement] for inserting the contents of this builder into the named table
@@ -574,15 +593,8 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        // unwrap top-level Distincts, to avoid duplication
-        let left_plan: LogicalPlan = match self.plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
-            _ => self.plan,
-        };
-        let right_plan: LogicalPlan = match plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
-            _ => plan,
-        };
+        let left_plan: LogicalPlan = self.plan;
+        let right_plan: LogicalPlan = plan;
 
         Ok(Self::from(LogicalPlan::Distinct(Distinct {
             input: Arc::new(union(left_plan, right_plan)?),
@@ -1036,6 +1048,19 @@ impl LogicalPlanBuilder {
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
         Ok(Self::from(unnest(self.plan, column.into())?))
     }
+
+    /// Unnest the given column given [`UnnestOptions`]
+    pub fn unnest_column_with_options(
+        self,
+        column: impl Into<Column>,
+        options: UnnestOptions,
+    ) -> Result<Self> {
+        Ok(Self::from(unnest_with_options(
+            self.plan,
+            column.into(),
+            options,
+        )?))
+    }
 }
 
 /// Creates a schema for a join operation.
@@ -1379,8 +1404,17 @@ impl TableSource for LogicalTableSource {
     }
 }
 
-/// Create an unnest plan.
+/// Create a [`LogicalPlan::Unnest`] plan
 pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
+    unnest_with_options(input, column, UnnestOptions::new())
+}
+
+/// Create a [`LogicalPlan::Unnest`] plan with options
+pub fn unnest_with_options(
+    input: LogicalPlan,
+    column: Column,
+    options: UnnestOptions,
+) -> Result<LogicalPlan> {
     let unnest_field = input.schema().field_from_column(&column)?;
 
     // Extract the type of the nested field in the list.
@@ -1423,6 +1457,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         input: Arc::new(input),
         column: unnested_field.qualified_column(),
         schema,
+        options,
     }))
 }
 
@@ -1587,13 +1622,16 @@ mod tests {
             .union_distinct(plan.build()?)?
             .build()?;
 
-        // output has only one union
         let expected = "\
         Distinct:\
         \n  Union\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
-        \n    TableScan: employee_csv projection=[state, salary]\
+        \n    Distinct:\
+        \n      Union\
+        \n        Distinct:\
+        \n          Union\
+        \n            TableScan: employee_csv projection=[state, salary]\
+        \n            TableScan: employee_csv projection=[state, salary]\
+        \n        TableScan: employee_csv projection=[state, salary]\
         \n    TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan:?}"));

@@ -23,12 +23,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{plan_err, DataFusionError};
 
-use crate::datasource::file_format::arrow::{ArrowFormat, DEFAULT_ARROW_EXTENSION};
-use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
-use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
-use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
-use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::{ListingTableInsertMode, ListingTableUrl};
 use crate::datasource::{
@@ -40,6 +35,10 @@ use crate::datasource::{
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 use crate::logical_expr::Expr;
+use datafusion_common::{
+    FileCompressionType, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION,
+    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+};
 
 /// Options that control the reading of CSV files.
 ///
@@ -214,6 +213,13 @@ pub struct ParquetReadOptions<'a> {
     ///
     /// If None specified, uses value in SessionConfig
     pub skip_metadata: Option<bool>,
+    /// An optional schema representing the parquet files. If None, parquet reader will try to infer it
+    /// based on data in file.
+    pub schema: Option<&'a Schema>,
+    /// Indicates how the file is sorted
+    pub file_sort_order: Vec<Vec<Expr>>,
+    /// Setting controls how inserts to this file should be handled
+    pub insert_mode: ListingTableInsertMode,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
@@ -223,6 +229,9 @@ impl<'a> Default for ParquetReadOptions<'a> {
             table_partition_cols: vec![],
             parquet_pruning: None,
             skip_metadata: None,
+            schema: None,
+            file_sort_order: vec![],
+            insert_mode: ListingTableInsertMode::AppendNewFiles,
         }
     }
 }
@@ -242,12 +251,30 @@ impl<'a> ParquetReadOptions<'a> {
         self
     }
 
+    /// Specify schema to use for parquet read
+    pub fn schema(mut self, schema: &'a Schema) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(
         mut self,
         table_partition_cols: Vec<(String, DataType)>,
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Configure if file has known sort order
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+        self.file_sort_order = file_sort_order;
+        self
+    }
+
+    /// Configure how insertions to this table should be handled
+    pub fn insert_mode(mut self, insert_mode: ListingTableInsertMode) -> Self {
+        self.insert_mode = insert_mode;
         self
     }
 }
@@ -525,6 +552,8 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
+            .with_file_sort_order(self.file_sort_order.clone())
+            .with_insert_mode(self.insert_mode.clone())
     }
 
     async fn get_resolved_schema(
@@ -533,11 +562,8 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         state: SessionState,
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
-        // with parquet we resolve the schema in all cases
-        Ok(self
-            .to_listing_options(config)
-            .infer_schema(&state, &table_path)
-            .await?)
+        self._get_resolved_schema(config, state, table_path, self.schema, false)
+            .await
     }
 }
 

@@ -2375,6 +2375,10 @@ pub enum ScalarFunction {
     ArrayReplaceAll = 110,
     Nanvl = 111,
     Flatten = 112,
+    Isnan = 113,
+    Iszero = 114,
+    ArrayEmpty = 115,
+    ArrayPopBack = 116,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2496,6 +2500,10 @@ impl ScalarFunction {
             ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
             ScalarFunction::Nanvl => "Nanvl",
             ScalarFunction::Flatten => "Flatten",
+            ScalarFunction::Isnan => "Isnan",
+            ScalarFunction::Iszero => "Iszero",
+            ScalarFunction::ArrayEmpty => "ArrayEmpty",
+            ScalarFunction::ArrayPopBack => "ArrayPopBack",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2614,6 +2622,10 @@ impl ScalarFunction {
             "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             "Nanvl" => Some(Self::Nanvl),
             "Flatten" => Some(Self::Flatten),
+            "Isnan" => Some(Self::Isnan),
+            "Iszero" => Some(Self::Iszero),
+            "ArrayEmpty" => Some(Self::ArrayEmpty),
+            "ArrayPopBack" => Some(Self::ArrayPopBack),
             _ => None,
         }
     }

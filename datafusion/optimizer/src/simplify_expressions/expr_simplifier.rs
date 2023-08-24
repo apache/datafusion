@@ -31,7 +31,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
@@ -208,9 +210,7 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
         match self.can_evaluate.pop() {
             Some(true) => Ok(Expr::Literal(self.evaluate_to_scalar(expr)?)),
             Some(false) => Ok(expr),
-            _ => Err(DataFusionError::Internal(
-                "Failed to pop can_evaluate".to_string(),
-            )),
+            _ => internal_err!("Failed to pop can_evaluate"),
         }
     }
 }
@@ -317,10 +317,10 @@ impl<'a> ConstEvaluator<'a> {
         match col_val {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
-                    Err(DataFusionError::Execution(format!(
+                    exec_err!(
                         "Could not evaluate the expression, found a result of length {}",
                         a.len()
-                    )))
+                    )
                 } else {
                     Ok(ScalarValue::try_from_array(&a, 0)?)
                 }

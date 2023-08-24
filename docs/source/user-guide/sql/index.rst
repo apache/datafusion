@@ -25,8 +25,10 @@ SQL Reference
    select
    subqueries
    ddl
+   dml
    explain
    information_schema
+   operators
    aggregate_functions
    window_functions
    scalar_functions

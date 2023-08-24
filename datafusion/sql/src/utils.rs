@@ -21,7 +21,7 @@ use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use sqlparser::ast::Ident;
 
-use datafusion_common::plan_err;
+use datafusion_common::{exec_err, internal_err, plan_err};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{Alias, GroupingSet, WindowFunction};
 use datafusion_expr::expr_vec_fmt;
@@ -82,9 +82,7 @@ pub(crate) fn check_columns_satisfy_exprs(
 ) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
-        _ => Err(DataFusionError::Internal(
-            "Expr::Column are required".to_string(),
-        )),
+        _ => internal_err!("Expr::Column are required"),
     })?;
     let column_exprs = find_column_exprs(exprs);
     for e in &column_exprs {
@@ -193,13 +191,9 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
                 Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
                     Ok(partition_by)
                 }
-                expr => Err(DataFusionError::Execution(format!(
-                    "Impossibly got non-window expr {expr:?}"
-                ))),
+                expr => exec_err!("Impossibly got non-window expr {expr:?}"),
             },
-            expr => Err(DataFusionError::Execution(format!(
-                "Impossibly got non-window expr {expr:?}"
-            ))),
+            expr => exec_err!("Impossibly got non-window expr {expr:?}"),
         })
         .collect::<Result<Vec<_>>>()?;
     let result = all_partition_keys

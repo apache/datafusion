@@ -23,7 +23,7 @@ use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PREC
 use arrow_array::cast::AsArray;
 use arrow_array::types::Decimal128Type;
 use arrow_schema::{DataType, Field};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -85,9 +85,7 @@ impl Decimal128Averager {
             })
         } else {
             // can't convert the lit decimal to the returned data type
-            Err(DataFusionError::Execution(
-                "Arithmetic Overflow in AvgAccumulator".to_string(),
-            ))
+            exec_err!("Arithmetic Overflow in AvgAccumulator")
         }
     }
 
@@ -104,46 +102,12 @@ impl Decimal128Averager {
             if new_value >= self.target_min && new_value <= self.target_max {
                 Ok(new_value)
             } else {
-                Err(DataFusionError::Execution(
-                    "Arithmetic Overflow in AvgAccumulator".to_string(),
-                ))
+                exec_err!("Arithmetic Overflow in AvgAccumulator")
             }
         } else {
             // can't convert the lit decimal to the returned data type
-            Err(DataFusionError::Execution(
-                "Arithmetic Overflow in AvgAccumulator".to_string(),
-            ))
+            exec_err!("Arithmetic Overflow in AvgAccumulator")
         }
-    }
-}
-
-/// Returns `sum`/`count` for decimal values, detecting and reporting overflow.
-///
-/// * sum:  stored as Decimal128 with `sum_scale` scale
-/// * count: stored as a i128 (*NOT* a Decimal128 value)
-/// * sum_scale: the scale of `sum`
-/// * target_type: the output decimal type
-pub fn calculate_result_decimal_for_avg(
-    sum: i128,
-    count: i128,
-    sum_scale: i8,
-    target_type: &DataType,
-) -> Result<ScalarValue> {
-    match target_type {
-        DataType::Decimal128(target_precision, target_scale) => {
-            let new_value =
-                Decimal128Averager::try_new(sum_scale, *target_precision, *target_scale)?
-                    .avg(sum, count)?;
-
-            Ok(ScalarValue::Decimal128(
-                Some(new_value),
-                *target_precision,
-                *target_scale,
-            ))
-        }
-        other => Err(DataFusionError::Internal(format!(
-            "Invalid target type in AvgAccumulator {other:?}"
-        ))),
     }
 }
 

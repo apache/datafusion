@@ -29,7 +29,7 @@ use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::{DFSchemaRef, DataFusionError};
+use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError};
 use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
@@ -257,9 +257,7 @@ impl ExecutionPlan for UnionExec {
 
         warn!("Error in Union: Partition {} not found", partition);
 
-        Err(DataFusionError::Execution(format!(
-            "Partition {partition} not found in Union"
-        )))
+        exec_err!("Partition {partition} not found in Union")
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -274,8 +272,8 @@ impl ExecutionPlan for UnionExec {
             .unwrap_or_default()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false; self.children().len()]
     }
 }
 
@@ -327,9 +325,9 @@ impl InterleaveExec {
         let schema = union_schema(&inputs);
 
         if !can_interleave(&inputs) {
-            return Err(DataFusionError::Internal(String::from(
-                "Not all InterleaveExec children have a consistent hash partitioning",
-            )));
+            return internal_err!(
+                "Not all InterleaveExec children have a consistent hash partitioning"
+            );
         }
 
         Ok(InterleaveExec {
@@ -433,9 +431,7 @@ impl ExecutionPlan for InterleaveExec {
 
         warn!("Error in InterleaveExec: Partition {} not found", partition);
 
-        Err(DataFusionError::Execution(format!(
-            "Partition {partition} not found in InterleaveExec"
-        )))
+        exec_err!("Partition {partition} not found in InterleaveExec")
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -450,8 +446,8 @@ impl ExecutionPlan for InterleaveExec {
             .unwrap_or_default()
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        false
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false; self.children().len()]
     }
 }
 
@@ -610,14 +606,17 @@ mod tests {
 
     use crate::{physical_plan::collect, scalar::ScalarValue};
     use arrow::record_batch::RecordBatch;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
+        let tmp_dir = TempDir::new()?;
+
         // Create csv's with different partitioning
-        let csv = test::scan_partitioned_csv(4)?;
-        let csv2 = test::scan_partitioned_csv(5)?;
+        let csv = test::scan_partitioned_csv(4, tmp_dir.path())?;
+        let csv2 = test::scan_partitioned_csv(5, tmp_dir.path())?;
 
         let union_exec = Arc::new(UnionExec::new(vec![csv, csv2]));
 

@@ -18,6 +18,7 @@
 //! Implementation of `InList` expressions: [`InListExpr`]
 
 use ahash::RandomState;
+use datafusion_common::exec_err;
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -35,7 +36,7 @@ use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::{
     cast::{as_boolean_array, as_generic_binary_array, as_string_array},
-    DataFusionError, Result, ScalarValue,
+    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use hashbrown::hash_map::RawEntryMut;
@@ -194,7 +195,7 @@ fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
             Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
-        d => return Err(DataFusionError::NotImplemented(format!("DataType::{d} not supported in InList")))
+        d => return not_impl_err!("DataType::{d} not supported in InList")
     })
 }
 
@@ -207,9 +208,9 @@ fn evaluate_list(
         .iter()
         .map(|expr| {
             expr.evaluate(batch).and_then(|r| match r {
-                ColumnarValue::Array(_) => Err(DataFusionError::Execution(
-                    "InList expression must evaluate to a scalar".to_string(),
-                )),
+                ColumnarValue::Array(_) => {
+                    exec_err!("InList expression must evaluate to a scalar")
+                }
                 // Flatten dictionary values
                 ColumnarValue::Scalar(ScalarValue::Dictionary(_, v)) => Ok(*v),
                 ColumnarValue::Scalar(s) => Ok(s),
@@ -356,9 +357,9 @@ pub fn in_list(
     for list_expr in list.iter() {
         let list_expr_data_type = list_expr.data_type(schema)?;
         if !expr_data_type.eq(&list_expr_data_type) {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-            )));
+            );
         }
     }
     let static_filter = try_cast_static_filter_to_set(&list, schema).ok();

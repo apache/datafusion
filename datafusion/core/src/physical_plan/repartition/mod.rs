@@ -45,7 +45,7 @@ use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalExpr};
@@ -119,11 +119,7 @@ impl BatchPartitioner {
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
-            other => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported repartitioning scheme {other:?}"
-                )))
-            }
+            other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
         };
 
         Ok(Self { state, timer })
@@ -370,6 +366,12 @@ impl RepartitionExec {
         &self.partitioning
     }
 
+    /// Get preserve_order flag of the RepartitionExecutor
+    /// `true` means `SortPreservingRepartitionExec`, `false` means `RepartitionExec`
+    pub fn preserve_order(&self) -> bool {
+        self.preserve_order
+    }
+
     /// Get name of the Executor
     pub fn name(&self) -> &str {
         if self.preserve_order {
@@ -430,6 +432,10 @@ impl ExecutionPlan for RepartitionExec {
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![matches!(self.partitioning, Partitioning::Hash(_, _))]
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -899,6 +905,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::exec_err;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use futures::FutureExt;
     use std::collections::HashSet;
@@ -1108,7 +1115,7 @@ mod tests {
 
         // input stream returns one good batch and then one error. The
         // error should be returned.
-        let err = Err(DataFusionError::Execution("bad data error".to_string()));
+        let err = exec_err!("bad data error");
 
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch), err], schema);

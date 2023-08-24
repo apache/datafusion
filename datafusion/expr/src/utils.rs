@@ -17,6 +17,7 @@
 
 //! Expression utilities
 
+use crate::dml::CopyTo;
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
@@ -24,6 +25,7 @@ use crate::logical_plan::{
     Projection, Repartition, Sort as SortPlan, Subquery, SubqueryAlias, Union, Unnest,
     Values, Window,
 };
+use crate::signature::{Signature, TypeSignature};
 use crate::{
     BinaryExpr, Cast, CreateMemoryTable, CreateView, DdlStatement, DmlStatement, Expr,
     ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator, TableScan,
@@ -34,8 +36,8 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    Result, ScalarValue, TableReference,
+    internal_err, plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -316,15 +318,15 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
 /// Find excluded columns in the schema, if any
 /// SELECT * EXCLUDE(col1, col2), would return `vec![col1, col2]`
 fn get_excluded_columns(
-    opt_exclude: Option<ExcludeSelectItem>,
-    opt_except: Option<ExceptSelectItem>,
+    opt_exclude: Option<&ExcludeSelectItem>,
+    opt_except: Option<&ExceptSelectItem>,
     schema: &DFSchema,
     qualifier: &Option<TableReference>,
 ) -> Result<Vec<Column>> {
     let mut idents = vec![];
     if let Some(excepts) = opt_except {
-        idents.push(excepts.first_element);
-        idents.extend(excepts.additional_elements);
+        idents.push(&excepts.first_element);
+        idents.extend(&excepts.additional_elements);
     }
     if let Some(exclude) = opt_exclude {
         match exclude {
@@ -385,7 +387,7 @@ fn get_exprs_except_skipped(
 pub fn expand_wildcard(
     schema: &DFSchema,
     plan: &LogicalPlan,
-    wildcard_options: Option<WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let using_columns = plan.using_columns()?;
     let mut columns_to_skip = using_columns
@@ -415,7 +417,7 @@ pub fn expand_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude, opt_except, schema, &None)?
+        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, &None)?
     } else {
         vec![]
     };
@@ -428,7 +430,7 @@ pub fn expand_wildcard(
 pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
-    wildcard_options: Option<WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
@@ -449,7 +451,12 @@ pub fn expand_qualified_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude, opt_except, schema, &Some(qualifier))?
+        get_excluded_columns(
+            opt_exclude.as_ref(),
+            opt_except.as_ref(),
+            schema,
+            &Some(qualifier),
+        )?
     } else {
         vec![]
     };
@@ -591,9 +598,9 @@ pub fn group_window_expr_by_sort_keys(
             }
             Ok(())
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Impossibly got non-window expr {other:?}",
-        ))),
+        other => internal_err!(
+            "Impossibly got non-window expr {other:?}"
+        ),
     })?;
     Ok(result)
 }
@@ -744,6 +751,19 @@ pub fn from_plan(
             op: op.clone(),
             input: Arc::new(inputs[0].clone()),
         })),
+        LogicalPlan::Copy(CopyTo {
+            input: _,
+            output_url,
+            file_format,
+            per_thread_output,
+            options,
+        }) => Ok(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(inputs[0].clone()),
+            output_url: output_url.clone(),
+            file_format: file_format.clone(),
+            per_thread_output: *per_thread_output,
+            options: options.clone(),
+        })),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
@@ -860,9 +880,9 @@ pub fn from_plan(
                     if let Expr::BinaryExpr(BinaryExpr { left, op:Operator::Eq, right }) = unalias_expr {
                         Ok((*left, *right))
                     } else {
-                        Err(DataFusionError::Internal(format!(
+                        internal_err!(
                             "The front part expressions should be an binary equiality expression, actual:{equi_expr}"
-                        )))
+                        )
                     }
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
 
@@ -988,7 +1008,12 @@ pub fn from_plan(
             Ok(plan.clone())
         }
         LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
-        LogicalPlan::Unnest(Unnest { column, schema, .. }) => {
+        LogicalPlan::Unnest(Unnest {
+            column,
+            schema,
+            options,
+            ..
+        }) => {
             // Update schema with unnested column type.
             let input = Arc::new(inputs[0].clone());
             let nested_field = input.schema().field_from_column(column)?;
@@ -1018,6 +1043,7 @@ pub fn from_plan(
                 input,
                 column: column.clone(),
                 schema,
+                options: options.clone(),
             }))
         }
     }
@@ -1284,6 +1310,36 @@ pub fn find_valid_equijoin_key_pair(
     };
 
     Ok(join_key_pair)
+}
+
+/// Creates a detailed error message for a function with wrong signature.
+///
+/// For example, a query like `select round(3.14, 1.1);` would yield:
+/// ```text
+/// Error during planning: No function matches 'round(Float64, Float64)'. You might need to add explicit type casts.
+///     Candidate functions:
+///     round(Float64, Int64)
+///     round(Float32, Int64)
+///     round(Float64)
+///     round(Float32)
+/// ```
+pub fn generate_signature_error_msg(
+    func_name: &str,
+    func_signature: Signature,
+    input_expr_types: &[DataType],
+) -> String {
+    let candidate_signatures = func_signature
+        .type_signature
+        .to_string_repr()
+        .iter()
+        .map(|args_str| format!("\t{func_name}({args_str})"))
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    format!(
+            "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
+            func_name, TypeSignature::join_types(input_expr_types, ", "), candidate_signatures
+        )
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::expressions::Column;
+use crate::utils::collect_columns;
 use crate::{
     normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
     PhysicalSortExpr,
@@ -24,7 +25,6 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
 
-use crate::utils::collect_columns;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -132,6 +132,24 @@ impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
 pub type OrderingEquivalenceProperties = EquivalenceProperties<LexOrdering>;
+
+impl OrderingEquivalenceProperties {
+    /// Checks whether `leading_ordering` is contained in any of the ordering
+    /// equivalence classes.
+    pub fn satisfies_leading_ordering(
+        &self,
+        leading_ordering: &PhysicalSortExpr,
+    ) -> bool {
+        for cls in &self.classes {
+            for ordering in cls.others.iter().chain(std::iter::once(&cls.head)) {
+                if ordering[0].eq(leading_ordering) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
 
 /// EquivalentClass is a set of [`Column`]s or [`PhysicalSortExpr`]s that are known
 /// to have the same value in all tuples in a relation. `EquivalentClass<Column>`
@@ -417,7 +435,9 @@ pub fn project_equivalence_properties(
 
     eq_classes.retain(|props| {
         props.len() > 1
-            && !(props.len() == 2 && props.head.eq(props.others().iter().next().unwrap()))
+            &&
+            // A column should not give an equivalence with itself.
+             !(props.len() == 2 && props.head.eq(props.others().iter().next().unwrap()))
     });
 
     output_eq.extend(eq_classes);
@@ -450,7 +470,7 @@ pub fn project_ordering_equivalence_properties(
         class.update_with_aliases(&oeq_alias_map, fields);
     }
 
-    // Prune columns that no longer is in the schema from the OrderingEquivalenceProperties.
+    // Prune columns that are no longer in the schema from the OrderingEquivalenceProperties.
     for class in eq_classes.iter_mut() {
         let sort_exprs_to_remove = class
             .iter()

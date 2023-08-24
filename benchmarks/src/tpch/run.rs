@@ -19,10 +19,8 @@ use super::get_query_sql;
 use crate::{BenchmarkRun, CommonOpt};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
-use datafusion::datasource::file_format::csv::{CsvFormat, DEFAULT_CSV_EXTENSION};
-use datafusion::datasource::file_format::parquet::{
-    ParquetFormat, DEFAULT_PARQUET_EXTENSION,
-};
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -30,6 +28,7 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
+use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 use log::info;
 
 use std::path::PathBuf;
@@ -57,10 +56,6 @@ pub struct RunOpt {
     /// Query number. If not specified, runs all queries
     #[structopt(short, long)]
     query: Option<usize>,
-
-    /// Activate debug mode to see query results
-    #[structopt(short, long)]
-    debug: bool,
 
     /// Common options
     #[structopt(flatten)]
@@ -190,7 +185,7 @@ impl RunOpt {
         ctx: &SessionContext,
         sql: &str,
     ) -> Result<Vec<RecordBatch>> {
-        let debug = self.debug;
+        let debug = self.common.debug;
         let plan = ctx.sql(sql).await?;
         let (state, plan) = plan.into_parts();
 
@@ -286,11 +281,11 @@ impl RunOpt {
     }
 
     fn iterations(&self) -> usize {
-        self.common.iterations()
+        self.common.iterations
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions()
+        self.common.partitions
     }
 }
 
@@ -304,6 +299,7 @@ struct QueryResult {
 #[cfg(feature = "ci")]
 mod tests {
     use super::*;
+    use datafusion::common::exec_err;
     use datafusion::error::{DataFusionError, Result};
     use std::path::Path;
 
@@ -316,10 +312,10 @@ mod tests {
         let path =
             std::env::var("TPCH_DATA").unwrap_or_else(|_| "benchmarks/data".to_string());
         if !Path::new(&path).exists() {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "Benchmark data not found (set TPCH_DATA env var to override): {}",
                 path
-            )));
+            );
         }
         Ok(path)
     }
@@ -331,10 +327,10 @@ mod tests {
             iterations: 1,
             partitions: 2,
             batch_size: 8192,
+            debug: false,
         };
         let opt = RunOpt {
             query: Some(query),
-            debug: false,
             common,
             path: PathBuf::from(path.to_string()),
             file_format: "tbl".to_string(),
@@ -363,10 +359,10 @@ mod tests {
             iterations: 1,
             partitions: 2,
             batch_size: 8192,
+            debug: false,
         };
         let opt = RunOpt {
             query: Some(query),
-            debug: false,
             common,
             path: PathBuf::from(path.to_string()),
             file_format: "tbl".to_string(),

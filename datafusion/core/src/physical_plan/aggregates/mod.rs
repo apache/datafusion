@@ -30,12 +30,12 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
-    expressions::{Avg, CastExpr, Column, Sum},
+    expressions::Column,
     normalize_out_expr_with_columns_map, reverse_order_bys,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
@@ -448,9 +448,9 @@ fn get_finest_requirement<
             // If neither of the requirements satisfy the other, this means
             // requirements are conflicting. Currently, we do not support
             // conflicting requirements.
-            return Err(DataFusionError::NotImplemented(
-                "Conflicting ordering requirements in aggregate functions is not supported".to_string(),
-            ));
+            return not_impl_err!(
+                "Conflicting ordering requirements in aggregate functions is not supported"
+            );
         } else {
             finest_req = Some(fn_req.clone());
         }
@@ -1010,40 +1010,7 @@ fn aggregate_expressions(
         | AggregateMode::SinglePartitioned => Ok(aggr_expr
             .iter()
             .map(|agg| {
-                let pre_cast_type = if let Some(Sum {
-                    data_type,
-                    pre_cast_to_sum_type,
-                    ..
-                }) = agg.as_any().downcast_ref::<Sum>()
-                {
-                    if *pre_cast_to_sum_type {
-                        Some(data_type.clone())
-                    } else {
-                        None
-                    }
-                } else if let Some(Avg {
-                    sum_data_type,
-                    pre_cast_to_sum_type,
-                    ..
-                }) = agg.as_any().downcast_ref::<Avg>()
-                {
-                    if *pre_cast_to_sum_type {
-                        Some(sum_data_type.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let mut result = agg
-                    .expressions()
-                    .into_iter()
-                    .map(|expr| {
-                        pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
-                            Arc::new(CastExpr::new(expr, cast_type, None))
-                        })
-                    })
-                    .collect::<Vec<_>>();
+                let mut result = agg.expressions().clone();
                 // In partial mode, append ordering requirements to expressions' results.
                 // Ordering requirements are used by subsequent executors to satisfy the required
                 // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.
@@ -1238,7 +1205,7 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{DataFusionError, Result, ScalarValue};
+    use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Column, Count, FirstValue, LastValue, Median,
@@ -1670,9 +1637,7 @@ mod tests {
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Err(DataFusionError::Internal(format!(
-                "Children cannot be replaced in {self:?}"
-            )))
+            internal_err!("Children cannot be replaced in {self:?}")
         }
 
         fn execute(

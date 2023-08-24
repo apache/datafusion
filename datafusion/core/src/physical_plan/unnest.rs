@@ -18,8 +18,8 @@
 //! Defines the unnest column plan for unnesting values in a column that contains a list
 //! type, conceptually is like joining each row with all the values in the list column.
 use arrow::array::{
-    new_null_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
-    FixedSizeListArray, Int32Array, LargeListArray, ListArray, PrimitiveArray,
+    new_empty_array, new_null_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType,
+    FixedSizeListArray, LargeListArray, ListArray, PrimitiveArray,
 };
 use arrow::compute::kernels;
 use arrow::datatypes::{
@@ -27,7 +27,10 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion_common::{cast::as_primitive_array, DataFusionError, Result};
+use datafusion_common::UnnestOptions;
+use datafusion_common::{
+    cast::as_primitive_array, exec_err, not_impl_err, DataFusionError, Result,
+};
 use datafusion_execution::TaskContext;
 use futures::Stream;
 use futures::StreamExt;
@@ -43,7 +46,10 @@ use crate::physical_plan::{
 
 use super::DisplayAs;
 
-/// Unnest the given column by joining the row with each value in the nested type.
+/// Unnest the given column by joining the row with each value in the
+/// nested type.
+///
+/// See [`UnnestOptions`] for more details and an example.
 #[derive(Debug)]
 pub struct UnnestExec {
     /// Input execution plan
@@ -52,15 +58,23 @@ pub struct UnnestExec {
     schema: SchemaRef,
     /// The unnest column
     column: Column,
+    /// Options
+    options: UnnestOptions,
 }
 
 impl UnnestExec {
     /// Create a new [UnnestExec].
-    pub fn new(input: Arc<dyn ExecutionPlan>, column: Column, schema: SchemaRef) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        column: Column,
+        schema: SchemaRef,
+        options: UnnestOptions,
+    ) -> Self {
         UnnestExec {
             input,
             schema,
             column,
+            options,
         }
     }
 }
@@ -107,6 +121,7 @@ impl ExecutionPlan for UnnestExec {
             children[0].clone(),
             self.column.clone(),
             self.schema.clone(),
+            self.options.clone(),
         )))
     }
 
@@ -132,6 +147,10 @@ impl ExecutionPlan for UnnestExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
+
+        if !self.options.preserve_nulls {
+            return not_impl_err!("Unnest with preserve_nulls=false");
+        }
 
         Ok(Box::pin(UnnestStream {
             input,
@@ -252,9 +271,7 @@ fn build_batch(
                 .unwrap();
             unnest_batch(batch, schema, column, list_array)
         }
-        _ => Err(DataFusionError::Execution(format!(
-            "Invalid unnest column {column}"
-        ))),
+        _ => exec_err!("Invalid unnest column {column}"),
     }
 }
 
@@ -288,7 +305,7 @@ where
     //   1, null, 3, null, 2
     //
     // Depending on the list type the result may be Int32Array or Int64Array.
-    let list_lengths = list_lengths(list_array)?;
+    let list_lengths = kernels::length::length(list_array)?;
 
     // Create the indices for the take kernel and then use those indices to create
     // the unnested record batch.
@@ -303,9 +320,7 @@ where
             let indices = create_take_indices(list_lengths, unnested_array.len());
             batch_from_indices(batch, schema, column.index(), &unnested_array, &indices)
         }
-        dt => Err(DataFusionError::Execution(format!(
-            "Unnest: unsupported indices type {dt}"
-        ))),
+        dt => exec_err!("Unnest: unsupported indices type {dt}"),
     }
 }
 
@@ -433,12 +448,12 @@ where
         DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
             f.data_type()
         }
-        dt => {
-            return Err(DataFusionError::Execution(format!(
-                "Cannot unnest array of type {dt}"
-            )))
-        }
+        dt => return exec_err!("Cannot unnest array of type {dt}"),
     };
+
+    if list_array.is_empty() {
+        return Ok(new_empty_array(elem_type));
+    }
 
     let null_row = new_null_array(elem_type, 1);
 
@@ -458,34 +473,4 @@ where
     let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
 
     Ok(kernels::concat::concat(&arrays)?)
-}
-
-/// Returns an array with the lengths of each list in `list_array`. Returns null
-/// for a null value.
-fn list_lengths<T>(list_array: &T) -> Result<Arc<dyn Array + 'static>>
-where
-    T: ArrayAccessor<Item = ArrayRef>,
-{
-    match list_array.data_type() {
-        DataType::List(_) | DataType::LargeList(_) => {
-            Ok(kernels::length::length(list_array)?)
-        }
-        DataType::FixedSizeList(_, size) => {
-            // Handle FixedSizeList as it is not handled by the `length` kernel.
-            // https://github.com/apache/arrow-rs/issues/4517
-            let mut lengths = Vec::with_capacity(list_array.len());
-            for row in 0..list_array.len() {
-                if list_array.is_null(row) {
-                    lengths.push(None)
-                } else {
-                    lengths.push(Some(*size));
-                }
-            }
-
-            Ok(Arc::new(Int32Array::from(lengths)))
-        }
-        dt => Err(DataFusionError::Execution(format!(
-            "Invalid type {dt} for list_lengths"
-        ))),
-    }
 }

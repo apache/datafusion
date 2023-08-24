@@ -21,15 +21,17 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
+use crate::PhysicalExpr;
+
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 
-use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
-use crate::PhysicalExpr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric},
     ColumnarValue,
@@ -104,7 +106,7 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
-    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         -children[0]
     }
 }
@@ -131,9 +133,9 @@ pub fn negative(
     if is_null(&data_type) {
         Ok(arg)
     } else if !is_signed_numeric(&data_type) && !is_interval(&data_type) {
-        Err(DataFusionError::Internal(
-            format!("Can't create negative physical expr for (- '{arg:?}'), the type of child expr is {data_type}, not signed numeric"),
-        ))
+        internal_err!(
+            "Can't create negative physical expr for (- '{arg:?}'), the type of child expr is {data_type}, not signed numeric"
+        )
     } else {
         Ok(Arc::new(NegativeExpr::new(arg)))
     }

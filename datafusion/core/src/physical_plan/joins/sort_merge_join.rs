@@ -49,7 +49,9 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{plan_err, DataFusionError, JoinType, Result};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_err, DataFusionError, JoinType, Result,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
@@ -101,9 +103,9 @@ impl SortMergeJoinExec {
         let right_schema = right.schema();
 
         if join_type == JoinType::RightSemi {
-            return Err(DataFusionError::NotImplemented(
-                "SortMergeJoinExec does not support JoinType::RightSemi".to_string(),
-            ));
+            return not_impl_err!(
+                "SortMergeJoinExec does not support JoinType::RightSemi"
+            );
         }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
@@ -311,9 +313,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 self.sort_options.clone(),
                 self.null_equals_null,
             )?)),
-            _ => Err(DataFusionError::Internal(
-                "SortMergeJoin wrong number of children".to_string(),
-            )),
+            _ => internal_err!("SortMergeJoin wrong number of children"),
         }
     }
 
@@ -325,10 +325,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
         if left_partitions != right_partitions {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
-                 consider using RepartitionExec",
-            )));
+                 consider using RepartitionExec"
+            );
         }
         let (on_left, on_right) = self.on.iter().cloned().unzip();
         let (streamed, buffered, on_streamed, on_buffered) =
@@ -1303,9 +1303,9 @@ fn compare_join_arrays(
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
             _ => {
-                return Err(DataFusionError::NotImplemented(
-                    "Unsupported data type in sort merge join comparator".to_owned(),
-                ));
+                return not_impl_err!(
+                    "Unsupported data type in sort merge join comparator"
+                );
             }
         }
         if !res.is_eq() {
@@ -1369,9 +1369,9 @@ fn is_join_arrays_equal(
             DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
             _ => {
-                return Err(DataFusionError::NotImplemented(
-                    "Unsupported data type in sort merge join comparator".to_owned(),
-                ));
+                return not_impl_err!(
+                    "Unsupported data type in sort merge join comparator"
+                );
             }
         }
         if !is_equal {

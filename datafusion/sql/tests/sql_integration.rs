@@ -238,6 +238,49 @@ CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
     "#
     .trim();
     quick_test(sql, plan);
+
+    let sql = "create table person (id int primary key, name string)";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+
+    let sql =
+        "create table person (id int, name string unique not null, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), Unique([1])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+
+    let sql = "create table person (id int, name varchar,  primary key(name,  id));";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([1, 0])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_create_table_with_multi_pk() {
+    let sql = "create table person (id int, name string primary key, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), PrimaryKey([1])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_create_table_with_unique() {
+    let sql = "create table person (id int unique, name string)";
+    let plan = "CreateMemoryTable: Bare { table: \"person\" } constraints=[Unique([0])]\n  EmptyRelation";
+    quick_test(sql, plan);
 }
 
 #[test]
@@ -326,6 +369,42 @@ fn plan_rollback_transaction_chained() {
 }
 
 #[test]
+fn plan_copy_to() {
+    let sql = "COPY test_decimal to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+  TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_explain_copy_to() {
+    let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
+    let plan = r#"
+Explain
+  CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+    TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_copy_to_query() {
+    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv per_thread_output=false options: ()
+  Limit: skip=0, fetch=10
+    Projection: test_decimal.id, test_decimal.price
+      TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
@@ -391,7 +470,7 @@ fn plan_update() {
     let plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = Int64(1)
+    Filter: person.id = Int64(1)
       TableScan: person
       "#
     .trim();
@@ -1796,11 +1875,15 @@ fn create_external_table_with_compression_type() {
 #[test]
 fn create_external_table_parquet() {
     let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS PARQUET LOCATION 'foo.parquet'";
-    let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Plan(\"Column definitions can not be specified for PARQUET files.\")",
-        format!("{err:?}")
-    );
+    let expected = "CreateExternalTable: Bare { table: \"t\" }";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn create_external_table_parquet_sort_order() {
+    let sql = "create external table foo(a varchar, b varchar, c timestamp) stored as parquet location '/tmp/foo' with order (c)";
+    let expected = "CreateExternalTable: Bare { table: \"foo\" }";
+    quick_test(sql, expected);
 }
 
 #[test]
@@ -3846,7 +3929,7 @@ fn test_prepare_statement_update_infer() {
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = $2
+    Filter: person.id = $2
       TableScan: person
         "#
         .trim();
@@ -3866,7 +3949,7 @@ Dml: op=[Update] table=[person]
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = UInt32(1)
+    Filter: person.id = UInt32(1)
       TableScan: person
         "#
         .trim();

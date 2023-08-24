@@ -23,6 +23,7 @@ pub mod delta;
 mod dfschema;
 pub mod display;
 mod error;
+pub mod file_type;
 pub mod format;
 mod functional_dependencies;
 mod join_type;
@@ -35,6 +36,7 @@ pub mod stats;
 mod table_reference;
 pub mod test_util;
 pub mod tree_node;
+mod unnest;
 pub mod utils;
 
 pub use column::Column;
@@ -42,6 +44,11 @@ pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSc
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
+};
+pub use file_type::{
+    FileCompressionType, FileType, GetExt, DEFAULT_ARROW_EXTENSION,
+    DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION,
+    DEFAULT_PARQUET_EXTENSION,
 };
 pub use functional_dependencies::{
     aggregate_functional_dependencies, get_target_functional_dependencies, Constraints,
@@ -52,6 +59,7 @@ pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::{OwnedSchemaReference, SchemaReference};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
+pub use unnest::UnnestOptions;
 pub use utils::project_schema;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is

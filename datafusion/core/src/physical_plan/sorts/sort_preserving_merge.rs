@@ -33,7 +33,7 @@ use crate::physical_plan::{
 use datafusion_execution::memory_pool::MemoryConsumer;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortRequirement,
@@ -202,9 +202,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
             partition
         );
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "SortPreservingMergeExec invalid partition {partition}"
-            )));
+            );
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();
@@ -219,10 +219,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 .register(&context.runtime_env().memory_pool);
 
         match input_partitions {
-            0 => Err(DataFusionError::Internal(
+            0 => internal_err!(
                 "SortPreservingMergeExec requires at least one input partition"
-                    .to_owned(),
-            )),
+            ),
             1 => {
                 // bypass if there is only one partition to merge (no metrics in this case either)
                 let result = self.input.execute(0, context);
@@ -275,6 +274,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, StreamExt};
+    use tempfile::TempDir;
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
@@ -556,10 +556,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_partition_sort() {
+    async fn test_partition_sort() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions).unwrap();
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path()).unwrap();
         let schema = csv.schema();
 
         let sort = vec![
@@ -598,6 +599,8 @@ mod tests {
             basic, partition,
             "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
         );
+
+        Ok(())
     }
 
     // Split the provided record batch into multiple batch_size record batches
@@ -627,18 +630,21 @@ mod tests {
         sort: Vec<PhysicalSortExpr>,
         sizes: &[usize],
         context: Arc<TaskContext>,
-    ) -> Arc<dyn ExecutionPlan> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions).unwrap();
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path()).unwrap();
 
         let sorted = basic_sort(csv, sort, context).await;
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();
 
-        Arc::new(MemoryExec::try_new(&split, sorted.schema(), None).unwrap())
+        Ok(Arc::new(
+            MemoryExec::try_new(&split, sorted.schema(), None).unwrap(),
+        ))
     }
 
     #[tokio::test]
-    async fn test_partition_sort_streaming_input() {
+    async fn test_partition_sort_streaming_input() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let sort = vec![
@@ -665,7 +671,8 @@ mod tests {
         ];
 
         let input =
-            sorted_partitioned_input(sort.clone(), &[10, 3, 11], task_ctx.clone()).await;
+            sorted_partitioned_input(sort.clone(), &[10, 3, 11], task_ctx.clone())
+                .await?;
         let basic = basic_sort(input.clone(), sort.clone(), task_ctx.clone()).await;
         let partition = sorted_merge(input, sort, task_ctx.clone()).await;
 
@@ -680,10 +687,12 @@ mod tests {
             .to_string();
 
         assert_eq!(basic, partition);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_partition_sort_streaming_input_output() {
+    async fn test_partition_sort_streaming_input_output() -> Result<()> {
         let schema = test_util::aggr_test_schema();
 
         let sort = vec![
@@ -702,7 +711,8 @@ mod tests {
         // Test streaming with default batch size
         let task_ctx = Arc::new(TaskContext::default());
         let input =
-            sorted_partitioned_input(sort.clone(), &[10, 5, 13], task_ctx.clone()).await;
+            sorted_partitioned_input(sort.clone(), &[10, 5, 13], task_ctx.clone())
+                .await?;
         let basic = basic_sort(input.clone(), sort.clone(), task_ctx).await;
 
         // batch size of 23
@@ -726,6 +736,8 @@ mod tests {
             .to_string();
 
         assert_eq!(basic, partition);
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -810,7 +822,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_async() {
+    async fn test_async() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let sort = vec![PhysicalSortExpr {
@@ -819,7 +831,7 @@ mod tests {
         }];
 
         let batches =
-            sorted_partitioned_input(sort.clone(), &[5, 7, 3], task_ctx.clone()).await;
+            sorted_partitioned_input(sort.clone(), &[5, 7, 3], task_ctx.clone()).await?;
 
         let partition_count = batches.output_partitioning().partition_count();
         let mut streams = Vec::with_capacity(partition_count);
@@ -874,6 +886,8 @@ mod tests {
             basic, partition,
             "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
         );
+
+        Ok(())
     }
 
     #[tokio::test]

@@ -41,16 +41,15 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
+    exec_err, plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::{
+    normalize_ordering_equivalence_classes, normalize_sort_exprs,
+};
 use datafusion_physical_expr::{
     EquivalentClass, LexOrdering, LexOrderingRef, OrderingEquivalenceProperties,
     OrderingEquivalentClass, PhysicalExpr, PhysicalSortExpr,
-};
-
-use datafusion_physical_expr::utils::{
-    normalize_ordering_equivalence_classes, normalize_sort_exprs,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -198,9 +197,7 @@ pub fn calculate_join_output_ordering(
     };
     let output_ordering = match (left_maintains, right_maintains) {
         (true, true) => {
-            return Err(DataFusionError::Execution(
-                "Cannot maintain ordering of both sides".to_string(),
-            ))
+            return exec_err!("Cannot maintain ordering of both sides");
         }
         (true, false) => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
@@ -313,16 +310,20 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
-/// Update right table ordering equivalences so that they point to valid indices
-/// at the output of the join schema, and also they are normalized with equivalence
-/// columns. To do so, we increment column indices by left table size
-/// when join schema consist of combination of left and right schema (Inner, Left, Full, Right joins).
-/// Then, we normalize the sort expressions of ordering equivalences one by one.
-/// We make sure that, each expression in the ordering equivalence is either
-/// - head of the one of the equivalent classes
-/// - or doesn't have an equivalent column
-/// by this way, once we normalize an expression according to equivalence properties
-/// then it can be safely used for ordering equivalence normalization.
+/// Update right table ordering equivalences so that:
+/// - They point to valid indices at the output of the join schema, and
+/// - They are normalized with respect to equivalence columns.
+///
+/// To do so, we increment column indices by the size of the left table when
+/// join schema consists of a combination of left and right schema (Inner,
+/// Left, Full, Right joins). Then, we normalize the sort expressions of
+/// ordering equivalences one by one. We make sure that each expression in the
+/// ordering equivalence is either:
+/// - The head of the one of the equivalent classes, or
+/// - Doesn't have an equivalent column.
+///
+/// This way; once we normalize an expression according to equivalence properties,
+/// it can thereafter safely be used for ordering equivalence normalization.
 fn get_updated_right_ordering_equivalence_properties(
     join_type: &JoinType,
     right_oeq_classes: &[OrderingEquivalentClass],
@@ -1382,6 +1383,7 @@ mod tests {
     use arrow::datatypes::Fields;
     use arrow::error::Result as ArrowResult;
     use arrow::{datatypes::DataType, error::ArrowError};
+    use arrow_schema::SortOptions;
     use datafusion_common::ScalarValue;
     use std::pin::Pin;
 
@@ -1907,6 +1909,184 @@ mod tests {
             assert_eq!(
                 partial_join_stats.column_statistics,
                 [left_col_stats.clone(), right_col_stats.clone()].concat()
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_updated_right_ordering_equivalence_properties() -> Result<()> {
+        let join_type = JoinType::Inner;
+
+        let options = SortOptions::default();
+        let right_oeq_classes = OrderingEquivalentClass::new(
+            vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("x", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 1)),
+                    options,
+                },
+            ],
+            vec![vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 2)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("w", 3)),
+                    options,
+                },
+            ]],
+        );
+
+        let left_columns_len = 4;
+
+        let fields: Fields = ["a", "b", "c", "d", "x", "y", "z", "w"]
+            .into_iter()
+            .map(|name| Field::new(name, DataType::Int32, true))
+            .collect();
+
+        let mut join_eq_properties =
+            EquivalenceProperties::new(Arc::new(Schema::new(fields)));
+        join_eq_properties
+            .add_equal_conditions((&Column::new("a", 0), &Column::new("x", 4)));
+        join_eq_properties
+            .add_equal_conditions((&Column::new("d", 3), &Column::new("w", 7)));
+
+        let result = get_updated_right_ordering_equivalence_properties(
+            &join_type,
+            &[right_oeq_classes],
+            left_columns_len,
+            &join_eq_properties,
+        )?;
+
+        let expected = OrderingEquivalentClass::new(
+            vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 5)),
+                    options,
+                },
+            ],
+            vec![vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 6)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d", 3)),
+                    options,
+                },
+            ]],
+        );
+
+        assert_eq!(result[0].head(), expected.head());
+        assert_eq!(result[0].others(), expected.others());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_calculate_join_output_ordering() -> Result<()> {
+        let options = SortOptions::default();
+        let left_ordering = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("d", 3)),
+                options,
+            },
+        ];
+        let right_ordering = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("z", 2)),
+                options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("y", 1)),
+                options,
+            },
+        ];
+        let join_type = JoinType::Inner;
+        let on_columns = [(Column::new("b", 1), Column::new("x", 0))];
+        let left_columns_len = 5;
+        let maintains_input_orders = [[true, false], [false, true]];
+        let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
+
+        let expected = [
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("c", 2)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d", 3)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 7)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 6)),
+                    options,
+                },
+            ]),
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("z", 7)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("y", 6)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("c", 2)),
+                    options,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("d", 3)),
+                    options,
+                },
+            ]),
+        ];
+
+        for (i, (maintains_input_order, probe_side)) in
+            maintains_input_orders.iter().zip(probe_sides).enumerate()
+        {
+            assert_eq!(
+                calculate_join_output_ordering(
+                    &left_ordering,
+                    &right_ordering,
+                    join_type,
+                    &on_columns,
+                    left_columns_len,
+                    maintains_input_order,
+                    probe_side
+                )?,
+                expected[i]
             );
         }
 

@@ -28,7 +28,7 @@ mod unix_test {
         prelude::{CsvReadOptions, SessionConfig, SessionContext},
         test_util::{aggr_test_schema, arrow_test_data},
     };
-    use datafusion_common::{DataFusionError, Result};
+    use datafusion_common::{exec_err, DataFusionError, Result};
     use futures::StreamExt;
     use itertools::enumerate;
     use nix::sys::stat;
@@ -58,7 +58,7 @@ mod unix_test {
         let file_path = tmp_dir.path().join(file_name);
         // Simulate an infinite environment via a FIFO file
         if let Err(e) = unistd::mkfifo(&file_path, stat::Mode::S_IRWXU) {
-            Err(DataFusionError::Execution(e.to_string()))
+            exec_err!("{}", e)
         } else {
             Ok(file_path)
         }
@@ -81,7 +81,7 @@ mod unix_test {
                     continue;
                 }
             }
-            return Err(DataFusionError::Execution(e.to_string()));
+            return exec_err!("{}", e);
         }
         Ok(())
     }

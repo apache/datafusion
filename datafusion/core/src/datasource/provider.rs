@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::{Constraints, DataFusionError, Statistics};
+use datafusion_common::{not_impl_err, Constraints, DataFusionError, Statistics};
 use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
@@ -119,18 +119,17 @@ pub trait TableProvider: Sync + Send {
     ///
     /// # See Also
     ///
-    /// See [`InsertExec`] for the common pattern of inserting a
-    /// single stream of `RecordBatch`es.
+    /// See [`FileSinkExec`] for the common pattern of inserting a
+    /// streams of `RecordBatch`es as files to an ObjectStore.
     ///
-    /// [`InsertExec`]: crate::physical_plan::insert::InsertExec
+    /// [`FileSinkExec`]: crate::physical_plan::insert::FileSinkExec
     async fn insert_into(
         &self,
         _state: &SessionState,
         _input: Arc<dyn ExecutionPlan>,
         _overwrite: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let msg = "Insert into not implemented for this table".to_owned();
-        Err(DataFusionError::NotImplemented(msg))
+        not_impl_err!("Insert into not implemented for this table")
     }
 }
 

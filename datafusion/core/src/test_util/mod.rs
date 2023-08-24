@@ -23,8 +23,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{env, error::Error, path::PathBuf, sync::Arc};
 
 use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
@@ -44,6 +44,11 @@ use datafusion_common::{Statistics, TableReference};
 use datafusion_expr::{CreateExternalTable, Expr, TableType};
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::Stream;
+
+// backwards compatibility
+pub use datafusion_common::test_util::{
+    arrow_test_data, get_data_dir, parquet_test_data,
+};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -124,100 +129,6 @@ macro_rules! assert_batches_sorted_eq {
     };
 }
 
-/// Returns the arrow test data directory, which is by default stored
-/// in a git submodule rooted at `testing/data`.
-///
-/// The default can be overridden by the optional environment
-/// variable `ARROW_TEST_DATA`
-///
-/// panics when the directory can not be found.
-///
-/// Example:
-/// ```
-/// let testdata = datafusion::test_util::arrow_test_data();
-/// let csvdata = format!("{}/csv/aggregate_test_100.csv", testdata);
-/// assert!(std::path::PathBuf::from(csvdata).exists());
-/// ```
-pub fn arrow_test_data() -> String {
-    match get_data_dir("ARROW_TEST_DATA", "../../testing/data") {
-        Ok(pb) => pb.display().to_string(),
-        Err(err) => panic!("failed to get arrow data dir: {err}"),
-    }
-}
-
-/// Returns the parquet test data directory, which is by default
-/// stored in a git submodule rooted at
-/// `parquet-testing/data`.
-///
-/// The default can be overridden by the optional environment variable
-/// `PARQUET_TEST_DATA`
-///
-/// panics when the directory can not be found.
-///
-/// Example:
-/// ```
-/// let testdata = datafusion::test_util::parquet_test_data();
-/// let filename = format!("{}/binary.parquet", testdata);
-/// assert!(std::path::PathBuf::from(filename).exists());
-/// ```
-pub fn parquet_test_data() -> String {
-    match get_data_dir("PARQUET_TEST_DATA", "../../parquet-testing/data") {
-        Ok(pb) => pb.display().to_string(),
-        Err(err) => panic!("failed to get parquet data dir: {err}"),
-    }
-}
-
-/// Returns a directory path for finding test data.
-///
-/// udf_env: name of an environment variable
-///
-/// submodule_dir: fallback path (relative to CARGO_MANIFEST_DIR)
-///
-///  Returns either:
-/// The path referred to in `udf_env` if that variable is set and refers to a directory
-/// The submodule_data directory relative to CARGO_MANIFEST_PATH
-pub fn get_data_dir(
-    udf_env: &str,
-    submodule_data: &str,
-) -> Result<PathBuf, Box<dyn Error>> {
-    // Try user defined env.
-    if let Ok(dir) = env::var(udf_env) {
-        let trimmed = dir.trim().to_string();
-        if !trimmed.is_empty() {
-            let pb = PathBuf::from(trimmed);
-            if pb.is_dir() {
-                return Ok(pb);
-            } else {
-                return Err(format!(
-                    "the data dir `{}` defined by env {} not found",
-                    pb.display(),
-                    udf_env
-                )
-                .into());
-            }
-        }
-    }
-
-    // The env is undefined or its value is trimmed to empty, let's try default dir.
-
-    // env "CARGO_MANIFEST_DIR" is "the directory containing the manifest of your package",
-    // set by `cargo run` or `cargo test`, see:
-    // https://doc.rust-lang.org/cargo/reference/environment-variables.html
-    let dir = env!("CARGO_MANIFEST_DIR");
-
-    let pb = PathBuf::from(dir).join(submodule_data);
-    if pb.is_dir() {
-        Ok(pb)
-    } else {
-        Err(format!(
-            "env `{}` is undefined or has empty value, and the pre-defined data dir `{}` not found\n\
-             HINT: try running `git submodule update --init`",
-            udf_env,
-            pb.display(),
-        ).into())
-    }
-}
-
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
     name: Option<&str>,
@@ -263,32 +174,6 @@ pub fn aggr_test_schema() -> SchemaRef {
         Field::new("c11", DataType::Float32, false),
         Field::new("c12", DataType::Float64, false),
         Field::new("c13", DataType::Utf8, false),
-    ]);
-
-    Arc::new(schema)
-}
-
-/// Get the schema for the aggregate_test_* csv files with an additional filed not present in the files.
-pub fn aggr_test_schema_with_missing_col() -> SchemaRef {
-    let mut f1 = Field::new("c1", DataType::Utf8, false);
-    f1.set_metadata(HashMap::from_iter(
-        vec![("testing".into(), "test".into())].into_iter(),
-    ));
-    let schema = Schema::new(vec![
-        f1,
-        Field::new("c2", DataType::UInt32, false),
-        Field::new("c3", DataType::Int8, false),
-        Field::new("c4", DataType::Int16, false),
-        Field::new("c5", DataType::Int32, false),
-        Field::new("c6", DataType::Int64, false),
-        Field::new("c7", DataType::UInt8, false),
-        Field::new("c8", DataType::UInt16, false),
-        Field::new("c9", DataType::UInt32, false),
-        Field::new("c10", DataType::UInt64, false),
-        Field::new("c11", DataType::Float32, false),
-        Field::new("c12", DataType::Float64, false),
-        Field::new("c13", DataType::Utf8, false),
-        Field::new("missing_col", DataType::Int64, true),
     ]);
 
     Arc::new(schema)
@@ -463,61 +348,6 @@ impl Stream for UnboundedStream {
 impl RecordBatchStream for UnboundedStream {
     fn schema(&self) -> SchemaRef {
         self.batch.schema()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::env;
-
-    #[test]
-    fn test_data_dir() {
-        let udf_env = "get_data_dir";
-        let cwd = env::current_dir().unwrap();
-
-        let existing_pb = cwd.join("..");
-        let existing = existing_pb.display().to_string();
-        let existing_str = existing.as_str();
-
-        let non_existing = cwd.join("non-existing-dir").display().to_string();
-        let non_existing_str = non_existing.as_str();
-
-        env::set_var(udf_env, non_existing_str);
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_err());
-
-        env::set_var(udf_env, "");
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
-
-        env::set_var(udf_env, " ");
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
-
-        env::set_var(udf_env, existing_str);
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
-
-        env::remove_var(udf_env);
-        let res = get_data_dir(udf_env, non_existing_str);
-        assert!(res.is_err());
-
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
-    }
-
-    #[test]
-    fn test_happy() {
-        let res = arrow_test_data();
-        assert!(PathBuf::from(res).is_dir());
-
-        let res = parquet_test_data();
-        assert!(PathBuf::from(res).is_dir());
     }
 }
 

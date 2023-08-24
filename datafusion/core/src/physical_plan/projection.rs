@@ -26,30 +26,29 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::expressions::{Column, PhysicalSortExpr};
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
+
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::utils::get_indices_of_matching_sort_exprs_with_order_eq;
-use futures::stream::{Stream, StreamExt};
-use log::trace;
-
-use super::expressions::{Column, PhysicalSortExpr};
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
-
-use datafusion_physical_expr::expressions::UnKnownColumn;
+use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
 use datafusion_physical_expr::{
-    normalize_out_expr_with_columns_map, project_equivalence_properties,
-    project_ordering_equivalence_properties, ExtendedSortOptions,
+    find_orderings_of_exprs, normalize_out_expr_with_columns_map,
+    project_equivalence_properties, project_ordering_equivalence_properties,
     OrderingEquivalenceProperties,
 };
+
+use futures::stream::{Stream, StreamExt};
+use log::trace;
 
 /// Execution plan for a projection
 #[derive(Debug)]
@@ -67,8 +66,9 @@ pub struct ProjectionExec {
     columns_map: HashMap<Column, Vec<Column>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Expressions' orderings calculated by output ordering and equivalence classes of input plan.
-    /// The projected expressions are mapped by their indices to this vector.
+    /// Expressions' normalized orderings (as given by the output ordering API
+    /// and normalized with respect to equivalence classes of input plan). The
+    /// projected expressions are mapped by their indices to this vector.
     orderings: Vec<Option<PhysicalSortExpr>>,
 }
 
@@ -143,6 +143,13 @@ impl ProjectionExec {
             }
             None => None,
         };
+
+        let orderings = find_orderings_of_exprs(
+            &expr,
+            input.output_ordering(),
+            input.equivalence_properties(),
+            input.ordering_equivalence_properties(),
+        )?;
 
         let output_ordering =
             validate_output_ordering(output_ordering, &orderings, &expr);
@@ -271,24 +278,17 @@ impl ExecutionPlan for ProjectionExec {
             &mut new_properties,
         );
 
-        if let Some(output_ordering) =
-            self.output_ordering.as_ref().and_then(|o| o.get(0))
+        if let Some(leading_ordering) = self
+            .output_ordering
+            .as_ref()
+            .map(|output_ordering| &output_ordering[0])
         {
             for order in self.orderings.iter().flatten() {
-                if order.eq(output_ordering) {
-                    continue;
-                }
-
-                let add_new_oeq =
-                    if let Some(first_class) = new_properties.classes().get(0) {
-                        !first_class.others().iter().any(|v| &v[0] == order)
-                    } else {
-                        true
-                    };
-
-                if add_new_oeq {
+                if !order.eq(leading_ordering)
+                    && !new_properties.satisfies_leading_ordering(order)
+                {
                     new_properties.add_equal_conditions((
-                        &vec![output_ordering.clone()],
+                        &vec![leading_ordering.clone()],
                         &vec![order.clone()],
                     ));
                 }
@@ -308,14 +308,14 @@ impl ExecutionPlan for ProjectionExec {
         )?))
     }
 
-    fn benefits_from_input_partitioning(&self) -> bool {
-        let all_column_expr = self
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        let all_simple_exprs = self
             .expr
             .iter()
-            .all(|(e, _)| e.as_any().downcast_ref::<Column>().is_some());
-        // If expressions are all column_expr, then all computations in this projection are reorder or rename,
+            .all(|(e, _)| e.as_any().is::<Column>() || e.as_any().is::<Literal>());
+        // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
-        !all_column_expr
+        vec![!all_simple_exprs]
     }
 
     fn execute(
@@ -344,196 +344,38 @@ impl ExecutionPlan for ProjectionExec {
     }
 }
 
-fn find_orderings_of_exprs(
-    expr: &[(Arc<dyn PhysicalExpr>, String)],
-    input: &Arc<dyn ExecutionPlan>,
-) -> Result<Vec<Option<PhysicalSortExpr>>> {
-    let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
-    if let Some(input_output_ordering) = input.output_ordering().unwrap_or(&[]).get(0) {
-        for (index, (expression, name)) in expr.iter().enumerate() {
-            let initial_expr = ExprOrdering::new(expression.clone());
-            let transformed = initial_expr.transform_up(&|expr| {
-                update_ordering(
-                    expr,
-                    input_output_ordering,
-                    || input.equivalence_properties().clone(),
-                    || input.ordering_equivalence_properties().clone(),
-                )
-            })?;
-            if let Some(ExtendedSortOptions::Ordered(sort_options)) = transformed.state {
-                orderings.push(Some(PhysicalSortExpr {
-                    expr: Arc::new(Column::new(name, index)),
-                    options: sort_options,
-                }));
-            } else {
-                orderings.push(None);
-            }
-        }
-    }
-    Ok(orderings)
-}
-
-// If the output ordering corresponds to an UnKnownColumn, it means that the column
-// having the input output ordering is not found in any of the projected expressions.
-// In that case, we set the new output ordering to be the column constructed by
-// the expression residing at the leftmost side of the expressions that have an ordering.
+/// This function takes the current `output_ordering`, the `orderings` based on projected expressions,
+/// and the `expr` representing the projected expressions themselves. It aims to ensure that the output
+/// ordering is valid and correctly corresponds to the projected columns.
+///
+/// If the leading expression in the `output_ordering` is an [`UnKnownColumn`], it indicates that the column
+/// referenced in the ordering is not found among the projected expressions. In such cases, this function
+/// attempts to create a new output ordering by referring to valid columns from the leftmost side of the
+/// expressions that have an ordering specified.
 fn validate_output_ordering(
     output_ordering: Option<Vec<PhysicalSortExpr>>,
     orderings: &[Option<PhysicalSortExpr>],
     expr: &[(Arc<dyn PhysicalExpr>, String)],
 ) -> Option<Vec<PhysicalSortExpr>> {
     output_ordering.and_then(|ordering| {
-        if ordering
-            .get(0)?
-            .expr
-            .clone()
-            .as_any()
-            .downcast_ref::<UnKnownColumn>()
-            .is_some()
-        {
-            orderings
-                .iter()
-                .position(|o| o.is_some())
-                .map(|index| {
-                    [PhysicalSortExpr {
-                        expr: Arc::new(Column::new(&expr[index].1, index)),
-                        options: orderings[index].clone().unwrap().options,
-                    }]
-                    .to_vec()
-                })
-                .or(None)
+        // If the leading expression is invalid column, change output
+        // ordering of the projection so that it refers to valid columns if
+        // possible.
+        if ordering[0].expr.as_any().is::<UnKnownColumn>() {
+            for (idx, order) in orderings.iter().enumerate() {
+                if let Some(sort_expr) = order {
+                    let (_, col_name) = &expr[idx];
+                    return Some(vec![PhysicalSortExpr {
+                        expr: Arc::new(Column::new(col_name, idx)),
+                        options: sort_expr.options,
+                    }]);
+                }
+            }
+            None
         } else {
             Some(ordering)
         }
     })
-}
-
-/// Each expression in a PhysicalExpr is stated with [`ExprOrdering`] struct.
-/// Parent expression's [`ExprOrdering`] is set according to [`ExprOrdering`] of its children.
-#[derive(Debug)]
-struct ExprOrdering {
-    expr: Arc<dyn PhysicalExpr>,
-    state: Option<ExtendedSortOptions>,
-    children_states: Option<Vec<ExtendedSortOptions>>,
-}
-
-impl ExprOrdering {
-    fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
-        Self {
-            expr,
-            state: None,
-            children_states: None,
-        }
-    }
-
-    fn children(&self) -> Vec<ExprOrdering> {
-        self.expr
-            .children()
-            .into_iter()
-            .map(|e| ExprOrdering::new(e))
-            .collect()
-    }
-
-    pub fn new_with_children(
-        children_states: Vec<ExtendedSortOptions>,
-        parent_expr: Arc<dyn PhysicalExpr>,
-    ) -> Self {
-        Self {
-            expr: parent_expr,
-            state: None,
-            children_states: Some(children_states),
-        }
-    }
-}
-
-/// Calculates the a [`PhysicalExpr`] node's [`ExprOrdering`] from its children.
-fn update_ordering<
-    F: Fn() -> EquivalenceProperties,
-    F2: Fn() -> OrderingEquivalenceProperties,
->(
-    mut node: ExprOrdering,
-    sort_expr: &PhysicalSortExpr,
-    equal_properties: F,
-    ordering_equal_properties: F2,
-) -> Result<Transformed<ExprOrdering>> {
-    // if we can directly match a sort expr with the current node, we can set its state and return early.
-    // TODO: If there is a PhysicalExpr other than Column at the node (let's say a+b), and there is an
-    // ordering equivalence of it (let's say c+d), we actually can find it at this step.
-    if sort_expr.expr.eq(&node.expr) {
-        node.state = Some(ExtendedSortOptions::Ordered(sort_expr.options));
-        return Ok(Transformed::Yes(node));
-    }
-
-    // intermediate node calculation:
-    if let Some(children_sort_options) = &node.children_states {
-        let parent_sort_options = node.expr.get_ordering(children_sort_options);
-
-        node.state = Some(parent_sort_options);
-
-        Ok(Transformed::Yes(node))
-    }
-    // leaf node: (only Column and Literal do not have a child)
-    else {
-        // column leaf:
-        if let Some(column) = node.expr.as_any().downcast_ref::<Column>() {
-            node.state = get_indices_of_matching_sort_exprs_with_order_eq(
-                &[sort_expr.clone()],
-                &[column.clone()],
-                equal_properties,
-                ordering_equal_properties,
-            )
-            .map(|(sort_options, _)| {
-                ExtendedSortOptions::Ordered(SortOptions {
-                    descending: sort_options[0].descending,
-                    nulls_first: sort_options[0].nulls_first,
-                })
-            });
-            return Ok(Transformed::Yes(node));
-        }
-        // last option, literal leaf:
-        node.state = Some(node.expr.get_ordering(&[]));
-        Ok(Transformed::Yes(node))
-    }
-}
-
-impl TreeNode for ExprOrdering {
-    fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
-    where
-        F: FnMut(&Self) -> Result<VisitRecursion>,
-    {
-        let children = self.children();
-        for child in children {
-            match op(&child)? {
-                VisitRecursion::Continue => {}
-                VisitRecursion::Skip => return Ok(VisitRecursion::Continue),
-                VisitRecursion::Stop => return Ok(VisitRecursion::Stop),
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
-    }
-
-    fn map_children<F>(self, transform: F) -> Result<Self>
-    where
-        F: FnMut(Self) -> Result<Self>,
-    {
-        let children = self.children();
-        if children.is_empty() {
-            Ok(self)
-        } else {
-            let children_nodes = children
-                .into_iter()
-                .map(transform)
-                .collect::<Result<Vec<_>>>()?;
-            Ok(ExprOrdering::new_with_children(
-                children_nodes
-                    .iter()
-                    .map(|c| c.state.unwrap_or(ExtendedSortOptions::Unordered))
-                    .collect(),
-                self.expr,
-            ))
-        }
-    }
 }
 
 /// If e is a direct column reference, returns the field level
@@ -651,6 +493,7 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::binary;
     use futures::future;
+    use tempfile::TempDir;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -669,7 +512,8 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         // pick column c1 and name it column c1 in the output schema
         let projection =
@@ -706,12 +550,13 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         // pick column c1 and name it column c1 in the output schema
         let projection =
             ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
-        assert!(!projection.benefits_from_input_partitioning());
+        assert!(!projection.benefits_from_input_partitioning()[0]);
         Ok(())
     }
 
@@ -720,7 +565,8 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let csv = test::scan_partitioned_csv(partitions)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         let c1 = col("c2", &schema).unwrap();
         let c2 = col("c9", &schema).unwrap();
@@ -729,7 +575,7 @@ mod tests {
         let projection =
             ProjectionExec::try_new(vec![(c1_plus_c2, "c2 + c9".to_string())], csv)?;
 
-        assert!(projection.benefits_from_input_partitioning());
+        assert!(projection.benefits_from_input_partitioning()[0]);
         Ok(())
     }
 
@@ -737,7 +583,8 @@ mod tests {
     async fn project_no_column() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
-        let csv = test::scan_partitioned_csv(1)?;
+        let tmp_dir = TempDir::new()?;
+        let csv = test::scan_partitioned_csv(1, tmp_dir.path())?;
         let expected = collect(csv.execute(0, task_ctx.clone())?).await.unwrap();
 
         let projection = ProjectionExec::try_new(vec![], csv)?;

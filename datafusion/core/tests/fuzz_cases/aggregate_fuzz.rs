@@ -94,7 +94,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let running_source = Arc::new(
         MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
-            .with_sort_information(sort_keys),
+            .with_sort_information(vec![sort_keys]),
     );
 
     let aggregate_expr = vec![Arc::new(Sum::new(

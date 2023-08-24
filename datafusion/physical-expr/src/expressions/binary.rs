@@ -22,6 +22,16 @@ mod kernels_arrow;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
+use crate::array_expressions::{
+    array_append, array_concat, array_has_all, array_prepend,
+};
+use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use crate::intervals::{apply_operator, Interval};
+use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
+use crate::PhysicalExpr;
+
+use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::array::*;
 use arrow::compute::cast;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
@@ -43,14 +53,14 @@ use arrow::compute::kernels::comparison::{
     eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
+use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
-
-use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
-
-use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use arrow_schema::SortOptions;
-
+use arrow_array::{Datum, Scalar};
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::get_result_type;
+use datafusion_expr::{ColumnarValue, Operator};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -64,21 +74,6 @@ use kernels_arrow::{
     is_not_distinct_from_f32, is_not_distinct_from_f64, is_not_distinct_from_null,
     is_not_distinct_from_utf8,
 };
-
-use crate::array_expressions::{
-    array_append, array_concat, array_has_all, array_prepend,
-};
-use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::intervals::{apply_operator, Interval};
-use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
-use crate::PhysicalExpr;
-use arrow_array::{Datum, Scalar};
-
-use datafusion_common::cast::as_boolean_array;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::binary::get_result_type;
-use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
 #[derive(Debug, Hash, Clone)]
@@ -255,11 +250,11 @@ macro_rules! compute_utf8_op_scalar {
         } else if $RIGHT.is_null() {
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
         } else {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "compute_utf8_op_scalar for '{}' failed to cast literal value {}",
                 stringify!($OP),
                 $RIGHT
-            )))
+            )
         }
     }};
 }
@@ -383,10 +378,10 @@ macro_rules! binary_string_array_op {
         match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
             DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for binary operation '{}' on string arrays",
                 other, stringify!($OP)
-            ))),
+            ),
         }
     }};
 }
@@ -454,10 +449,10 @@ macro_rules! binary_array_op {
                 compute_op!($LEFT, $RIGHT, $OP, IntervalMonthDayNanoArray)
             }
             DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for binary operation '{}' on dyn arrays",
                 other, stringify!($OP)
-            ))),
+            ),
         }
     }};
 }
@@ -480,10 +475,10 @@ macro_rules! binary_string_array_flag_op {
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             }
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op operation '{}' on string array",
                 other, stringify!($OP)
-            ))),
+            ),
         }
     }};
 }
@@ -522,10 +517,10 @@ macro_rules! binary_string_array_flag_op_scalar {
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
             }
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
                 other, stringify!($OP)
-            ))),
+            ),
         };
         Some(result)
     }};
@@ -548,10 +543,10 @@ macro_rules! compute_utf8_flag_op_scalar {
             }
             Ok(Arc::new(array))
         } else {
-            Err(DataFusionError::Internal(format!(
+            internal_err!(
                 "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
                 $RIGHT, stringify!($OP)
-            )))
+            )
         }
     }};
 }
@@ -696,9 +691,9 @@ impl PhysicalExpr for BinaryExpr {
         self.hash(&mut s);
     }
 
-    /// [`BinaryExpr`] has its own rules for each operator.
-    /// TODO: There may me rules specific to some data types (such as division and multiplication on unsigned integers)
-    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+    /// For each operator, [`BinaryExpr`] has distinct ordering rules.
+    /// TODO: There may be rules specific to some data types (such as division and multiplication on unsigned integers)
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         let (left_child, right_child) = (&children[0], &children[1]);
         match self.op() {
             Operator::Plus => left_child.add(right_child),
@@ -706,86 +701,7 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Gt | Operator::GtEq => left_child.gt_or_gteq(right_child),
             Operator::Lt | Operator::LtEq => right_child.gt_or_gteq(left_child),
             Operator::And => left_child.and(right_child),
-            _ => ExtendedSortOptions::Unordered,
-        }
-    }
-}
-
-impl ExtendedSortOptions {
-    fn add(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Self::Singleton, _) => *rhs,
-            (_, Self::Singleton) => *self,
-            (
-                Self::Ordered(SortOptions {
-                    descending: left_descending,
-                    nulls_first: left_nulls_first,
-                }),
-                Self::Ordered(SortOptions {
-                    descending: right_descending,
-                    nulls_first: right_nulls_first,
-                }),
-            ) if left_descending == right_descending => Self::Ordered(SortOptions {
-                descending: *left_descending,
-                nulls_first: *left_nulls_first || *right_nulls_first,
-            }),
-            _ => Self::Unordered,
-        }
-    }
-
-    fn sub(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Self::Singleton, Self::Singleton) => Self::Singleton,
-            (Self::Singleton, Self::Ordered(rhs_opts)) => Self::Ordered(SortOptions {
-                descending: !rhs_opts.descending,
-                nulls_first: rhs_opts.nulls_first,
-            }),
-            (_, Self::Singleton) => *self,
-            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
-                if lhs_opts.descending != rhs_opts.descending =>
-            {
-                Self::Ordered(SortOptions {
-                    descending: lhs_opts.descending,
-                    nulls_first: lhs_opts.nulls_first || rhs_opts.nulls_first,
-                })
-            }
-            _ => Self::Unordered,
-        }
-    }
-
-    fn gt_or_gteq(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Self::Singleton, Self::Ordered(rhs_opts)) => Self::Ordered(SortOptions {
-                descending: !rhs_opts.descending,
-                nulls_first: rhs_opts.nulls_first,
-            }),
-            (_, Self::Singleton) => *self,
-            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
-                if lhs_opts.descending != rhs_opts.descending =>
-            {
-                *self
-            }
-            _ => Self::Unordered,
-        }
-    }
-
-    fn and(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Self::Ordered(lhs_opts), Self::Ordered(rhs_opts))
-                if lhs_opts.descending == rhs_opts.descending =>
-            {
-                Self::Ordered(SortOptions {
-                    descending: lhs_opts.descending,
-                    nulls_first: lhs_opts.nulls_first || rhs_opts.nulls_first,
-                })
-            }
-            (Self::Ordered(opt), Self::Singleton)
-            | (Self::Singleton, Self::Ordered(opt)) => Self::Ordered(SortOptions {
-                descending: opt.descending,
-                nulls_first: opt.nulls_first,
-            }),
-            (Self::Singleton, Self::Singleton) => Self::Singleton,
-            _ => Self::Unordered,
+            _ => SortProperties::Unordered,
         }
     }
 }
@@ -847,9 +763,9 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::IntervalYearMonth(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::IntervalDayTime(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::IntervalMonthDayNano(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            other => Err(DataFusionError::Internal(format!(
+            other => internal_err!(
                 "Data type {:?} not supported for scalar operation '{}' on dyn array",
-                other, stringify!($OP)))
+                other, stringify!($OP)
             )
         };
         Some(result)
@@ -888,9 +804,9 @@ fn to_result_type_array(
                 if value_type.as_ref() == result_type {
                     Ok(cast(&array, result_type)?)
                 } else {
-                    Err(DataFusionError::Internal(format!(
+                    internal_err!(
                             "Incompatible Dictionary value type {value_type:?} with result type {result_type:?} of Binary operator {op:?}"
-                        )))
+                        )
                 }
             }
             _ => Ok(array),
@@ -1036,22 +952,24 @@ impl BinaryExpr {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)
                 } else {
-                    Err(DataFusionError::Internal(format!(
+                    internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
                         self.op,
                         left.data_type(),
                         right.data_type()
-                    )))
+                    )
                 }
             }
             Or => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, or_kleene)
                 } else {
-                    Err(DataFusionError::Internal(format!(
+                    internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                        self.op, left_data_type, right_data_type
-                    )))
+                        self.op,
+                        left_data_type,
+                        right_data_type
+                    )
                 }
             }
             RegexMatch => {

@@ -21,16 +21,17 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::intervals::Interval;
-use crate::physical_expr::{down_cast_any_ref, ExtendedSortOptions};
+use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
+
 use arrow::compute;
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
@@ -140,8 +141,8 @@ impl PhysicalExpr for CastExpr {
         // https://github.com/apache/arrow-rs/pull/4395
     }
 
-    /// [`CastExpr`]'s are preserving the ordering of its child.
-    fn get_ordering(&self, children: &[ExtendedSortOptions]) -> ExtendedSortOptions {
+    /// A [`CastExpr`] preserves the ordering of its child.
+    fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         children[0]
     }
 }
@@ -200,9 +201,7 @@ pub fn cast_with_options(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
-        Err(DataFusionError::NotImplemented(format!(
-            "Unsupported CAST from {expr_type:?} to {cast_type:?}"
-        )))
+        not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")
     }
 }
 
