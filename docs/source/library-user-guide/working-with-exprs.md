@@ -40,9 +40,9 @@ Let's start by creating our own `Expr` in the form of a Scalar UDF. This UDF wil
 
 ```rust
 pub fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let i32s = as_int64_array(&args[0])?;
+    let i64s = as_int64_array(&args[0])?;
 
-    let array = i32s
+    let array = i64s
         .iter()
         .map(|item| match item {
             Some(value) => Some(value + 1),
