@@ -44,7 +44,7 @@ use datafusion::common::Result;
 use datafusion::common::cast::as_int32_array;
 
 pub fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let i64s = as_int32_array(&args[0])?;
+    let i64s = as_int64_array(&args[0])?;
 
     let array = i64s
         .iter()
@@ -104,7 +104,7 @@ let mut ctx = SessionContext::new();
 ctx.register_udf(udf);
 ```
 
-At this point, the following could is expected to work:
+At this point, you can use the `add_one` function in your query:
 
 ```rust
 let sql = "SELECT add_one(1)";

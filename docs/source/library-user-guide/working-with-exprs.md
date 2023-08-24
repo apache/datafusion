@@ -21,7 +21,7 @@
 
 <!-- https://github.com/apache/arrow-datafusion/issues/7304 -->
 
-`Expr` is short for "expression". It is a core abstraction in DataFusion for representing a computation.
+`Expr` is short for "expression". It is a core abstraction in DataFusion for representing a computation, and follows the standard "expression tree" abstraction found in most compilers and databases.  
 
 For example, the SQL expression `a + b` would be represented as an `Expr` with a `BinaryExpr` variant. A `BinaryExpr` has a left and right `Expr` and an operator.
 
@@ -73,6 +73,7 @@ In addition to SQL strings, you can create `Expr`s programatically. This is comm
 ```rust
 use datafusion::prelude::*;
 
+// Represent `5 + 5`
 let expr = lit(5) + lit(5);
 ```
 
@@ -109,13 +110,7 @@ fn rewrite_add_one(expr: Expr) -> Result<Expr> {
                 if scalar_fun.fun.name == "add_one" {
                     let input_arg = scalar_fun.args[0].clone();
 
-                    let new_expression = BinaryExpr::new(
-                        Box::new(input_arg),
-                        datafusion::logical_expr::Operator::Plus,
-                        Box::new(Expr::Literal(datafusion::scalar::ScalarValue::Int64(Some(
-                            1,
-                        )))),
-                    );
+                    let new_expression = input_arg + lit(1i64);
 
                     Transformed::Yes(Expr::BinaryExpr(new_expression))
                 } else {
@@ -131,7 +126,7 @@ fn rewrite_add_one(expr: Expr) -> Result<Expr> {
 
 ### Creating an `OptimizerRule`
 
-In DataFusion, an `OptimizerRule` is a trait that supports rewriting `Expr`s. It follows DataFusion's general mantra of trait implementations to drive behavior.
+In DataFusion, an `OptimizerRule` is a trait that supports rewriting`Expr`s that appear in various parts of the `LogicalPlan`.  It follows DataFusion's general mantra of trait implementations to drive behavior.
 
 We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The `OptimizerRule` trait has two methods:
 
