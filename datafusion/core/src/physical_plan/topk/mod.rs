@@ -716,8 +716,6 @@ fn interleave_and_repack_dictionary(
                 else {
                     new_keys.push(None);
                 }
-
-
             }
         _ => unreachable!("Non dictionary type")
 
@@ -736,7 +734,6 @@ fn interleave_and_repack_dictionary(
             if new_values.len() >= i32::MAX as usize {
                 panic!("todo make a real error message");
             }
-
             let new_keys: Int32Array = new_keys.iter().map(|v| v.map(|v| v as i32)).collect();
 
             Ok(Arc::new(DictionaryArray::try_new(new_keys, new_values)?))
