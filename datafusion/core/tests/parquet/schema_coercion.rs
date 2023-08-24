@@ -78,7 +78,7 @@ async fn multi_parquet_coercion() {
     let task_ctx = session_ctx.task_ctx();
     let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-------+----+------+",
         "| c1    | c2 | c3   |",
         "+-------+----+------+",
@@ -142,7 +142,7 @@ async fn multi_parquet_coercion_projection() {
     let task_ctx = session_ctx.task_ctx();
     let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+----+-------+------+",
         "| c2 | c1    | c3   |",
         "+----+-------+------+",

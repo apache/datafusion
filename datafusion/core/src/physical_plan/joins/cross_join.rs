@@ -632,7 +632,7 @@ mod tests {
         let (columns, batches) = join_collect(left, right, task_ctx).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        let expected = vec![
+        let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
             "+----+----+----+----+----+----+",

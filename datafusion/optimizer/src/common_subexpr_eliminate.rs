@@ -1225,7 +1225,7 @@ mod test {
             .map(|field| (field.name(), field.data_type()))
             .collect();
         let formatted_fields_with_datatype = format!("{fields_with_datatypes:#?}");
-        let expected = r###"[
+        let expected = r#"[
     (
         "a",
         UInt64,
@@ -1238,7 +1238,7 @@ mod test {
         "c",
         UInt64,
     ),
-]"###;
+]"#;
         assert_eq!(expected, formatted_fields_with_datatype);
     }
 

@@ -667,7 +667,7 @@ mod tests {
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
-        let expected = vec![
+        let expected = [
             "+---+----+----+------+-----+",
             "| a | b  | c  | year | day |",
             "+---+----+----+------+-----+",
@@ -701,7 +701,7 @@ mod tests {
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
-        let expected = vec![
+        let expected = [
             "+---+-----+----+------+-----+",
             "| a | b   | c  | year | day |",
             "+---+-----+----+------+-----+",
@@ -737,7 +737,7 @@ mod tests {
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
-        let expected = vec![
+        let expected = [
             "+---+---+---+------+-----+",
             "| a | b | c | year | day |",
             "+---+---+---+------+-----+",
@@ -765,7 +765,7 @@ mod tests {
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
-        let expected = vec![
+        let expected = [
             "+---+----+----+------+-----+",
             "| a | b  | c  | year | day |",
             "+---+----+----+------+-----+",
