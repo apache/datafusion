@@ -19,7 +19,7 @@
 
 # DML
 
-DML stands for "Data Manipulation Lanaguage" and relates to inserting
+DML stands for "Data Manipulation Language" and relates to inserting
 and modifying data in tables.
 
 ## COPY
@@ -31,7 +31,7 @@ filename if writing to a single file.
 The `PER_THREAD_OUTPUT` option treats `file_name` as a directory and writes a file per thread within it.
 
 <pre>
-COPY [<i><b>table_name</i></b> | <i><b>query</i></b>] TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
+COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
 
 where <i><b>option</i></b> can be one of:
     FORMAT <i><b>format_name</i></b>
