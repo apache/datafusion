@@ -225,6 +225,7 @@ fn check_inner_plan(
                 Ok(())
             }
         },
+        LogicalPlan::Extension(_) => Ok(()),
         _ => plan_err!("Unsupported operator in the subquery plan."),
     }
 }
