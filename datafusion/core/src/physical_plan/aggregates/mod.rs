@@ -593,7 +593,7 @@ impl AggregateExec {
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
         order_by_expr = aggr_expr
             .iter()
-            .zip(order_by_expr.into_iter())
+            .zip(order_by_expr)
             .map(|(aggr_expr, fn_reqs)| {
                 // If the aggregation function is order-sensitive and we are
                 // performing a "first stage" calculation, keep the ordering
@@ -1568,7 +1568,7 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---------------+-------------+",
             "| a | AVG(b)[count] | AVG(b)[sum] |",
             "+---+---------------+-------------+",
@@ -2069,7 +2069,7 @@ mod tests {
 
         let result = crate::physical_plan::collect(aggregate_final, task_ctx).await?;
         if is_first_acc {
-            let expected = vec![
+            let expected = [
                 "+---+----------------+",
                 "| a | FIRST_VALUE(b) |",
                 "+---+----------------+",
@@ -2080,7 +2080,7 @@ mod tests {
             ];
             assert_batches_eq!(expected, &result);
         } else {
-            let expected = vec![
+            let expected = [
                 "+---+---------------+",
                 "| a | LAST_VALUE(b) |",
                 "+---+---------------+",

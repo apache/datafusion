@@ -1650,7 +1650,10 @@ mod test {
         println!("Checking round trip of {scalar:?}");
 
         let substrait = to_substrait_literal(&scalar)?;
-        let Expression { rex_type: Some(RexType::Literal(substrait_literal)) } = substrait else {
+        let Expression {
+            rex_type: Some(RexType::Literal(substrait_literal)),
+        } = substrait
+        else {
             panic!("Expected Literal expression, got {substrait:?}");
         };
 

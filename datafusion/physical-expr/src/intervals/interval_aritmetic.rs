@@ -1445,7 +1445,7 @@ mod tests {
             ScalarValue::new_one(&DataType::Int8)?,
         ];
 
-        zeros.into_iter().zip(ones.into_iter()).for_each(|(z, o)| {
+        zeros.into_iter().zip(ones).for_each(|(z, o)| {
             assert_eq!(next_value::<true>(z.clone()), o);
             assert_eq!(next_value::<false>(o), z);
         });
@@ -1461,7 +1461,7 @@ mod tests {
             ScalarValue::Float64(Some(1e-6)),
         ];
 
-        values.into_iter().zip(eps.into_iter()).for_each(|(v, e)| {
+        values.into_iter().zip(eps).for_each(|(v, e)| {
             assert!(next_value::<true>(v.clone()).sub(v.clone()).unwrap().lt(&e));
             assert!(v.clone().sub(next_value::<false>(v)).unwrap().lt(&e));
         });
@@ -1476,7 +1476,7 @@ mod tests {
             ScalarValue::Int8(Some(i8::MAX)),
         ];
 
-        min.into_iter().zip(max.into_iter()).for_each(|(min, max)| {
+        min.into_iter().zip(max).for_each(|(min, max)| {
             assert_eq!(next_value::<true>(max.clone()), max);
             assert_eq!(next_value::<false>(min.clone()), min);
         });

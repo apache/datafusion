@@ -25,7 +25,7 @@ use super::*;
 async fn nestedjoin_with_alias() -> Result<()> {
     // repro case for https://github.com/apache/arrow-datafusion/issues/2867
     let sql = "select * from ((select 1 as a, 2 as b) c INNER JOIN (select 1 as a, 3 as d) e on c.a = e.a) f;";
-    let expected = vec![
+    let expected = [
         "+---+---+---+---+",
         "| a | b | a | d |",
         "+---+---+---+---+",
@@ -71,7 +71,7 @@ async fn null_aware_left_anti_join() -> Result<()> {
 
         let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id NOT IN (SELECT t2_id FROM t2) ORDER BY t1_id";
         let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec!["++", "++"];
+        let expected = ["++", "++"];
         assert_batches_eq!(expected, &actual);
     }
 

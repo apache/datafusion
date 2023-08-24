@@ -1008,11 +1008,10 @@ mod tests {
         };
         thens_type
             .iter()
-            .fold(Some(else_type), |left, right_type| match left {
-                None => None,
+            .try_fold(else_type, |left_type, right_type| {
                 // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
                 // refactor again.
-                Some(left_type) => comparison_coercion(&left_type, right_type),
+                comparison_coercion(&left_type, right_type)
             })
     }
 }

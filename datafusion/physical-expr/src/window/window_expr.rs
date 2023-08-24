@@ -251,7 +251,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             let out_type = field.data_type();
             Ok(new_empty_array(out_type))
         } else {
-            ScalarValue::iter_to_array(row_wise_results.into_iter())
+            ScalarValue::iter_to_array(row_wise_results)
         }
     }
 }

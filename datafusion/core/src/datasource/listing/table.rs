@@ -1948,7 +1948,7 @@ mod tests {
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -1963,7 +1963,7 @@ mod tests {
         let batches = session_ctx.sql("select * from t").await?.collect().await?;
 
         // Define the expected result as a vector of strings.
-        let expected = vec![
+        let expected = [
             "+---------+",
             "| column1 |",
             "+---------+",
@@ -1992,7 +1992,7 @@ mod tests {
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2152,7 +2152,7 @@ mod tests {
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2169,7 +2169,7 @@ mod tests {
             .await?
             .collect()
             .await?;
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2193,7 +2193,7 @@ mod tests {
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2212,7 +2212,7 @@ mod tests {
             .await?;
 
         // Define the expected result after the second append.
-        let expected = vec![
+        let expected = [
             "+-------+",
             "| count |",
             "+-------+",
@@ -2277,7 +2277,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+-----+-----+---+",
             "| a   | b   | c |",
             "+-----+-----+---+",
