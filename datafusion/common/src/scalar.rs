@@ -1193,9 +1193,7 @@ impl ScalarValue {
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn add<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let s = self.to_array_of_size(1);
-        let o = other.borrow().to_array_of_size(1);
-        let r = add_wrapping(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
+        let r = add_wrapping(&self.to_scalar(), &other.borrow().to_scalar())?;
         Self::try_from_array(r.as_ref(), 0)
     }
     /// Checked addition of `ScalarValue`
@@ -1203,9 +1201,7 @@ impl ScalarValue {
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn add_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let s = self.to_array_of_size(1);
-        let o = other.borrow().to_array_of_size(1);
-        let r = add(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
+        let r = add(&self.to_scalar(), &other.borrow().to_scalar())?;
         Self::try_from_array(r.as_ref(), 0)
     }
 
@@ -1214,9 +1210,7 @@ impl ScalarValue {
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn sub<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let s = self.to_array_of_size(1);
-        let o = other.borrow().to_array_of_size(1);
-        let r = sub_wrapping(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
+        let r = sub_wrapping(&self.to_scalar(), &other.borrow().to_scalar())?;
         Self::try_from_array(r.as_ref(), 0)
     }
 
@@ -1225,9 +1219,7 @@ impl ScalarValue {
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
     /// should operate on Arrays directly, using vectorized array kernels
     pub fn sub_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
-        let s = self.to_array_of_size(1);
-        let o = other.borrow().to_array_of_size(1);
-        let r = sub(&Scalar::new(s.as_ref()), &Scalar::new(o.as_ref()))?;
+        let r = sub(&self.to_scalar(), &other.borrow().to_scalar())?;
         Self::try_from_array(r.as_ref(), 0)
     }
 

@@ -577,7 +577,6 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::file_type::FileType;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};

@@ -49,10 +49,3 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.17"
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "90449ffb2ea6ceef43ce8fc97084b3373975f357" }

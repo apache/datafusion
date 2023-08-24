@@ -57,9 +57,8 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
     UInt32BufferBuilder, UInt64Array, UInt64BufferBuilder,
 };
-use arrow::buffer::BooleanBuffer;
 use arrow::compute::{and, take, FilterBuilder};
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
