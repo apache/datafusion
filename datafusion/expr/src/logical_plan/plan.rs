@@ -575,13 +575,13 @@ impl LogicalPlan {
     /// Such as `Projection/Aggregate/Window`
     pub fn with_new_exprs(
         &self,
-        expr: Vec<Expr>,
+        mut expr: Vec<Expr>,
         inputs: &[LogicalPlan],
     ) -> Result<LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { schema, .. }) => {
                 Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    expr.to_vec(),
+                    expr,
                     Arc::new(inputs[0].clone()),
                     schema.clone(),
                 )?))
@@ -621,7 +621,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Filter { .. } => {
                 assert_eq!(1, expr.len());
-                let predicate = expr[0].clone();
+                let predicate = expr.pop().unwrap();
 
                 // filter predicates should not contain aliased expressions so we remove any aliases
                 // before this logic was added we would have aliases within filters such as for
@@ -677,12 +677,12 @@ impl LogicalPlan {
                     }))
                 }
                 Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
-                    partitioning_scheme: Partitioning::Hash(expr.to_owned(), *n),
+                    partitioning_scheme: Partitioning::Hash(expr, *n),
                     input: Arc::new(inputs[0].clone()),
                 })),
                 Partitioning::DistributeBy(_) => {
                     Ok(LogicalPlan::Repartition(Repartition {
-                        partitioning_scheme: Partitioning::DistributeBy(expr.to_owned()),
+                        partitioning_scheme: Partitioning::DistributeBy(expr),
                         input: Arc::new(inputs[0].clone()),
                     }))
                 }
@@ -691,21 +691,29 @@ impl LogicalPlan {
                 window_expr,
                 schema,
                 ..
-            }) => Ok(LogicalPlan::Window(Window {
-                input: Arc::new(inputs[0].clone()),
-                window_expr: expr[0..window_expr.len()].to_vec(),
-                schema: schema.clone(),
-            })),
+            }) => {
+                assert_eq!(window_expr.len(), expr.len());
+                Ok(LogicalPlan::Window(Window {
+                    input: Arc::new(inputs[0].clone()),
+                    window_expr: expr,
+                    schema: schema.clone(),
+                }))
+            }
             LogicalPlan::Aggregate(Aggregate {
                 group_expr, schema, ..
-            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                Arc::new(inputs[0].clone()),
-                expr[0..group_expr.len()].to_vec(),
-                expr[group_expr.len()..].to_vec(),
-                schema.clone(),
-            )?)),
+            }) => {
+                // group exprs are the first expressions
+                let agg_expr = expr.split_off(group_expr.len());
+
+                Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                    Arc::new(inputs[0].clone()),
+                    expr,
+                    agg_expr,
+                    schema.clone(),
+                )?))
+            }
             LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
-                expr: expr.to_vec(),
+                expr,
                 input: Arc::new(inputs[0].clone()),
                 fetch: *fetch,
             })),
@@ -722,24 +730,28 @@ impl LogicalPlan {
                 let equi_expr_count = on.len();
                 assert!(expr.len() >= equi_expr_count);
 
-                // The preceding part of expr is equi-exprs,
+                // Assume that the last expr, if any,
+                // is the filter_expr (non equality predicate from ON clause)
+                let filter_expr = if expr.len() > equi_expr_count {
+                    expr.pop()
+                } else {
+                    None
+                };
+
+                // The first part of expr is equi-exprs,
                 // and the struct of each equi-expr is like `left-expr = right-expr`.
-                let new_on:Vec<(Expr,Expr)> = expr.iter().take(equi_expr_count).map(|equi_expr| {
+                assert_eq!(expr.len(), equi_expr_count);
+                let new_on:Vec<(Expr,Expr)> = expr.into_iter().map(|equi_expr| {
                     // SimplifyExpression rule may add alias to the equi_expr.
                     let unalias_expr = equi_expr.clone().unalias();
                     if let Expr::BinaryExpr(BinaryExpr { left, op: Operator::Eq, right }) = unalias_expr {
                         Ok((*left, *right))
                     } else {
                         internal_err!(
-                            "The front part expressions should be an binary equiality expression, actual:{equi_expr}"
+                            "The front part expressions should be an binary equality expression, actual:{equi_expr}"
                         )
                     }
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
-
-                // Assume that the last expr, if any,
-                // is the filter_expr (non equality predicate from ON clause)
-                let filter_expr =
-                    (expr.len() > equi_expr_count).then(|| expr[expr.len() - 1].clone());
 
                 Ok(LogicalPlan::Join(Join {
                     left: Arc::new(inputs[0].clone()),
@@ -849,7 +861,7 @@ impl LogicalPlan {
             LogicalPlan::TableScan(ts) => {
                 assert!(inputs.is_empty(), "{self:?}  should have no inputs");
                 Ok(LogicalPlan::TableScan(TableScan {
-                    filters: expr.to_vec(),
+                    filters: expr,
                     ..ts.clone()
                 }))
             }
