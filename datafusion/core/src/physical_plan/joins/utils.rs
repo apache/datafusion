@@ -881,7 +881,7 @@ fn estimate_join_cardinality(
                 // filter selectivity analysis first.
                 column_statistics: all_left_col_stats
                     .into_iter()
-                    .chain(all_right_col_stats.into_iter())
+                    .chain(all_right_col_stats)
                     .collect(),
             })
         }

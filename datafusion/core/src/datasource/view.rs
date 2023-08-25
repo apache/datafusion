@@ -175,7 +175,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec!["+---+", "| b |", "+---+", "| 2 |", "+---+"];
+        let expected = ["+---+", "| b |", "+---+", "| 2 |", "+---+"];
 
         assert_batches_eq!(expected, &results);
 
@@ -221,7 +221,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+---------+---------+",
             "| column1 | column2 | column3 |",
             "+---------+---------+---------+",
@@ -254,7 +254,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------------+",
             "| column1_alias |",
             "+---------------+",
@@ -287,7 +287,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------------+---------------+",
             "| column2_alias | column1_alias |",
             "+---------------+---------------+",
@@ -325,7 +325,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+",
             "| column1 |",
             "+---------+",
@@ -363,7 +363,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+",
             "| column1 |",
             "+---------+",
@@ -403,7 +403,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+---------+---------+",
             "| column2 | column1 | column3 |",
             "+---------+---------+---------+",
@@ -558,7 +558,7 @@ mod tests {
             .collect()
             .await?;
 
-        let expected = vec![
+        let expected = [
             "+---------+",
             "| column1 |",
             "+---------+",
