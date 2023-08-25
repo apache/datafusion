@@ -286,7 +286,7 @@ SELECT * FROM test_float WHERE column1 IN (0.0, 1.2, 'NaN'::double, '-NaN'::doub
 ----
 1.2
 NaN
-NaN
+-NaN
 
 ###
 # Test logical plan simplifies large OR chains
