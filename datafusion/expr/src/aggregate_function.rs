@@ -338,6 +338,7 @@ impl AggregateFunction {
                     .chain(TIMESTAMPS.iter())
                     .chain(DATES.iter())
                     .chain(TIMES.iter())
+                    .chain(BINARYS.iter())
                     .cloned()
                     .collect::<Vec<_>>();
                 Signature::uniform(1, valid, Volatility::Immutable)
