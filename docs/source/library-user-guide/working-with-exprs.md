@@ -25,7 +25,28 @@
 
 For example, the SQL expression `a + b` would be represented as an `Expr` with a `BinaryExpr` variant. A `BinaryExpr` has a left and right `Expr` and an operator.
 
-As another example, the SQL expression `a + b * c` would be represented as an `Expr` with a `BinaryExpr` variant. The left `Expr` would be `a` and the right `Expr` would be another `BinaryExpr` with a left `Expr` of `b` and a right `Expr` of `c`.
+As another example, the SQL expression `a + b * c` would be represented as an `Expr` with a `BinaryExpr` variant. The left `Expr` would be `a` and the right `Expr` would be another `BinaryExpr` with a left `Expr` of `b` and a right `Expr` of `c`. As a classic expression tree, this would look like:
+
+```text
+            ┌────────────────────┐
+            │     BinaryExpr     │
+            │       op: +        │
+            └────────────────────┘
+                   ▲     ▲
+           ┌───────┘     └────────────────┐
+           │                              │
+┌────────────────────┐         ┌────────────────────┐
+│     Expr::Col      │         │     BinaryExpr     │
+│       col: a       │         │       op: *        │
+└────────────────────┘         └────────────────────┘
+                                        ▲    ▲
+                               ┌────────┘    └─────────┐
+                               │                       │
+                    ┌────────────────────┐  ┌────────────────────┐
+                    │     Expr::Col      │  │     Expr::Col      │
+                    │       col: b       │  │       col: c       │
+                    └────────────────────┘  └────────────────────┘
+```
 
 As the writer of a library, you may want to use or create `Expr`s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an `Expr` and how to rewrite `Expr`s to inline the simple UDF.
 
@@ -46,7 +67,7 @@ let add_one_udf = create_udf(
     vec![DataType::Int64],
     Arc::new(DataType::Int64),
     Volatility::Immutable,
-    make_scalar_function(add_one),
+    make_scalar_function(add_one),  // <-- the function we wrote
 );
 
 // make the expr `add_one(5)`

@@ -41,20 +41,19 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array};
 use datafusion::common::Result;
 
-use datafusion::common::cast::as_int32_array;
+use datafusion::common::cast::as_int64_array;
 
 pub fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
+    // Error handling omitted for brevity
+
     let i64s = as_int64_array(&args[0])?;
 
-    let array = i64s
-        .iter()
-        .map(|sequence| match sequence {
-            Some(value) => Some(value + 1),
-            None => None,
-        })
-        .collect::<Int64Array>();
+    let new_array = i64s
+      .iter()
+      .map(|array_elem| array_elem.map(|value| value + 1))
+      .collect::<Int64Array>();
 
-    Ok(Arc::new(array))
+    Ok(Arc::new(new_array))
 }
 ```
 
@@ -93,7 +92,7 @@ A few things to note:
 - The first argument is the name of the function. This is the name that will be used in SQL queries.
 - The second argument is a vector of `DataType`s. This is the list of argument types that the function accepts. I.e. in this case, the function accepts a single `Int64` argument.
 - The third argument is the return type of the function. I.e. in this case, the function returns an `Int64`.
-- The fourth argument is the volatility of the function. This is an enum with three options: `Immutable`, `Stable`, and `Volatile`. This is used to determine if the function can be cached in some situations. In this case, the function is `Immutable` because it always returns the same value for the same input. A random number generator would be `Volatile` because it returns a different value for the same input.
+- The fourth argument is the volatility of the function. In short, this is used to determine if the function's performance can be optimized in some situations. In this case, the function is `Immutable` because it always returns the same value for the same input. A random number generator would be `Volatile` because it returns a different value for the same input.
 - The fifth argument is the function implementation. This is the function that we defined above.
 
 That gives us a `ScalarUDF` that we can register with the `SessionContext`:
