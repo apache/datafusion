@@ -917,8 +917,7 @@ pub fn out_ordering(
     )
 }
 
-/// Provided that how the [`BuiltinScalarFunction`] is effected by the argument and the argument's `SortProperties`,
-/// the function decides how the [`BuiltinScalarFunction`] behaves for that argument.
+/// This function decides the monotonicity property of a [`ScalarFunctionExpr`] for a single argument (i.e. across a single dimension), given that argument's sort properties.
 fn func_order_in_one_dimension(
     func_monotonicity: &Option<bool>,
     arg: &SortProperties,
