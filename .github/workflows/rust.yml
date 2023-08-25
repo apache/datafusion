@@ -349,7 +349,7 @@ jobs:
     needs: [ linux-build-lib ]
     runs-on: ubuntu-20.04
     container:
-      image: amd64/rust
+      image: amd64/rust:bullseye # Workaround https://github.com/actions/setup-python/issues/721
     steps:
       - uses: actions/checkout@v3
         with:
