@@ -553,11 +553,12 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
-// TODO: Add this function to arrow-rs
-fn get_list_base_type(data_type: &DataType) -> Result<DataType> {
+// TODO: Move this function to arrow-rs or common array utils module
+// base type is the non-list type
+fn base_type(data_type: &DataType) -> Result<DataType> {
     match data_type {
         DataType::List(field) => match field.data_type() {
-            DataType::List(_) => get_list_base_type(field.data_type()),
+            DataType::List(_) => base_type(field.data_type()),
             base_type => Ok(base_type.clone()),
         },
 
@@ -565,15 +566,18 @@ fn get_list_base_type(data_type: &DataType) -> Result<DataType> {
     }
 }
 
-fn get_list_from_base_type(
+// TODO: Move this function to arrow-rs or common array utils module
+// Build a list from the given base type
+// e.g. Int64 -> List[Int64]
+fn coerced_type_from_base_type(
     data_type: &DataType,
     base_type: &DataType,
 ) -> Result<DataType> {
     match data_type {
         DataType::List(field) => match field.data_type() {
-            DataType::List(inner_field) => Ok(DataType::List(Arc::new(Field::new(
+            DataType::List(_) => Ok(DataType::List(Arc::new(Field::new(
                 field.name(),
-                get_list_from_base_type(inner_field.data_type(), base_type)?,
+                coerced_type_from_base_type(field.data_type(), base_type)?,
                 field.is_nullable(),
             )))),
             _ => Ok(DataType::List(Arc::new(Field::new(
@@ -587,41 +591,131 @@ fn get_list_from_base_type(
     }
 }
 
-fn coerce_nulls_for_array_append(
+// Replace inner nulls with coerced types
+// i.e. list[i64], list[null] -> list[i64], list[i64]
+fn replace_inner_nulls_with_coerced_types_(
+    coerced_types: Vec<DataType>,
+) -> Result<Vec<DataType>> {
+    let first_non_null_type = coerced_types
+        .iter()
+        .map(base_type)
+        .find(|t| t.is_ok() && t.as_ref().unwrap() != &DataType::Null)
+        .map(|t| t.unwrap());
+
+    if let Some(data_type) = first_non_null_type {
+        coerced_types
+            .iter()
+            .map(|t| {
+                if base_type(t)? == DataType::Null {
+                    coerced_type_from_base_type(t, &data_type)
+                } else {
+                    Ok(t.clone())
+                }
+            })
+            .collect::<Result<Vec<_>>>()
+    } else {
+        Ok(coerced_types)
+    }
+}
+
+// Makearray
+// Directly replace null with coerced type
+// list[utf8], null -> list[utf8], list[utf8]
+fn replace_nulls_with_coerced_types(
+    coerced_types: Vec<DataType>,
+) -> Result<Vec<DataType>> {
+    let first_non_null_type = coerced_types.iter().find(|&t| {
+        let base_t = base_type(t);
+        base_t.is_ok() && base_t.as_ref().unwrap() != &DataType::Null
+    });
+
+    if let Some(data_type) = first_non_null_type {
+        coerced_types
+            .iter()
+            .map(|t| {
+                if base_type(t)? == DataType::Null {
+                    Ok(data_type.clone())
+                } else {
+                    Ok(t.clone())
+                }
+            })
+            .collect::<Result<Vec<_>>>()
+    } else {
+        Ok(coerced_types)
+    }
+}
+
+fn coerce_array_args(
+    fun: &BuiltinScalarFunction,
     expressions: Vec<Expr>,
     schema: &DFSchema,
 ) -> Result<Vec<Expr>> {
-    assert_eq!(expressions.len(), 2);
-
-    let data_types: Result<Vec<_>> =
-        expressions.iter().map(|e| e.get_type(schema)).collect();
-    let data_types = data_types?;
-
-    if get_list_base_type(&data_types[1])? == DataType::Null {
-        let base_type = get_list_base_type(&data_types[0])?;
-        let to_type = get_list_from_base_type(&data_types[1], &base_type)?;
-
-        let arg1 = cast_expr(&expressions[1], &to_type, schema)?;
-
-        return Ok(vec![expressions[0].clone(), arg1]);
+    // Array function with indices don't need coercion for the indices
+    if *fun == BuiltinScalarFunction::ArrayElement
+        || *fun == BuiltinScalarFunction::ArraySlice
+        || *fun == BuiltinScalarFunction::ArrayRepeat
+        || *fun == BuiltinScalarFunction::ArrayPosition
+        || *fun == BuiltinScalarFunction::ArrayRemoveN
+    {
+        return Ok(expressions);
     }
 
-    if let DataType::List(ref field) = data_types[0] {
-        if field.data_type() == &DataType::Null {
-            let arg0 = cast_expr(
-                &expressions[0],
-                &DataType::List(Arc::new(Field::new(
-                    field.name(),
-                    data_types[1].clone(),
-                    field.is_nullable(),
-                ))),
-                schema,
-            )?;
-            return Ok(vec![arg0, expressions[1].clone()]);
+    let input_types = expressions
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Get base type for each input type
+    // e.g List[Int64] -> Int64
+    //     List[List[Int64]] -> Int64
+    //     Int64 -> Int64
+    let base_types = input_types
+        .iter()
+        .map(base_type)
+        .collect::<Result<Vec<_>>>()?;
+
+    // Get the coerced type with comparison coercion
+    let coerced_base_type = base_types
+        .iter()
+        .skip(1)
+        .fold(base_types.first().unwrap().clone(), |acc, x| {
+            comparison_coercion(&acc, x).unwrap_or(acc)
+        });
+
+    // Re-build the coerced type from base type, ignore null since it is difficult to determine the type for it at first scan
+    let coerced_types = input_types
+        .iter()
+        .map(|data_type|
+            // Special cases for null (Null) or empty array (List[Null]), type is determined based on array function
+            if base_type(data_type)? == DataType::Null {
+                Ok(data_type.clone())
+            } else {
+                coerced_type_from_base_type(data_type, &coerced_base_type)
+            })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Convert Null to coerced expression
+    let coerced_types = match fun {
+        // MakeArray(elements...): each element has the same type, convert null to the non-null type.
+        BuiltinScalarFunction::MakeArray => {
+            replace_nulls_with_coerced_types(coerced_types)?
         }
-    }
+        // ArrayAppend(list, element): null is only possible with the element, convert it to the list inner type
+        // ArrayPrepend(element, list): null is only possible with the element, convert it to the list inner type
+        // ArrayConcat: convert null to non-null at this step, dimension of list is not changed
+        BuiltinScalarFunction::ArrayAppend
+        | BuiltinScalarFunction::ArrayPrepend
+        | BuiltinScalarFunction::ArrayConcat => {
+            replace_inner_nulls_with_coerced_types_(coerced_types)?
+        }
+        _ => coerced_types,
+    };
 
-    Ok(expressions)
+    expressions
+        .iter()
+        .zip(coerced_types.iter())
+        .map(|(expr, coerced_type)| cast_expr(expr, coerced_type, schema))
+        .collect::<Result<Vec<_>>>()
 }
 
 fn coerce_arguments_for_fun(
@@ -652,40 +746,7 @@ fn coerce_arguments_for_fun(
             .collect::<Result<Vec<_>>>()?;
     }
 
-    if *fun == BuiltinScalarFunction::MakeArray {
-        // Find the final data type for the function arguments
-        let current_types = expressions
-            .iter()
-            .map(|e| e.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-
-        let new_type = current_types
-            .iter()
-            .skip(1)
-            .fold(current_types.first().unwrap().clone(), |acc, x| {
-                comparison_coercion(&acc, x).unwrap_or(acc)
-            });
-
-        return expressions
-            .iter()
-            .map(|expr| cast_expr(expr, &new_type, schema))
-            .collect::<Result<Vec<_>>>();
-    }
-
-    // Convert Null to ScalarValue
-    // If data_type is Int64, we will convert it to ScalarValue::Int64(None)
-    match fun {
-        BuiltinScalarFunction::ArrayAppend => {
-            coerce_nulls_for_array_append(expressions, schema)
-        }
-        BuiltinScalarFunction::ArrayPrepend => {
-            let expressions = vec![expressions[1].clone(), expressions[0].clone()];
-            let expressions = coerce_nulls_for_array_append(expressions, schema)?;
-            Ok(vec![expressions[1].clone(), expressions[0].clone()])
-        }
-
-        _ => Ok(expressions),
-    }
+    coerce_array_args(fun, expressions, schema)
 }
 
 /// Cast `expr` to the specified type, if possible

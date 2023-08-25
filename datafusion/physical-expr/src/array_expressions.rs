@@ -327,7 +327,9 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
                 } else if arg.as_any().downcast_ref::<NullArray>().is_some() {
                     arrays.push(ListOrNull::Null);
                 } else {
-                    return internal_err!("Unsupported argument type for array");
+                    return internal_err!(
+                        "(array_array) Unsupported argument type for array"
+                    );
                 }
             }
 
@@ -869,8 +871,9 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
     for arg in args {
         let (ndim, lower_data_type) =
             compute_array_ndims_with_datatype(Some(arg.clone()))?;
-        if ndim.is_none() || ndim == Some(1) {
+        if ndim.is_none() {
             return not_impl_err!("Array is not type '{lower_data_type:?}'.");
+        } else if ndim == Some(1) {
         } else if !lower_data_type.equals_datatype(&DataType::Null) {
             new_args.push(arg.clone());
         }
