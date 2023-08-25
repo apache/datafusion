@@ -705,14 +705,6 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // 0 / 0 -> null
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Divide,
-                right,
-            }) if is_zero(&left) && is_zero(&right) => {
-                Expr::Literal(ScalarValue::Int32(None))
-            }
             // A / 0 -> DivideByZero Error
             Expr::BinaryExpr(BinaryExpr {
                 left,
