@@ -32,7 +32,7 @@ rust-version = "1.70"
 version = "30.0.0"
 
 [workspace.dependencies]
-arrow = { version = "45.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow = { version = "46.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 arrow-array = { version = "45.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "45.0.0", default-features = false }
 arrow-flight = { version = "45.0.0", features = ["flight-sql-experimental"] }
