@@ -237,7 +237,6 @@ async fn sort_preserving_merge() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix this
 async fn sort_spill_reservation() {
     let partition_size = batches_byte_size(&dict_batches());
 
@@ -255,7 +254,7 @@ async fn sort_spill_reservation() {
         // substantial memory
         .with_query("select * from t ORDER BY a , b DESC")
         // enough memory to sort if we don't try to merge it all at once
-        .with_memory_limit((partition_size * 5) / 2)
+        .with_memory_limit(partition_size)
         // use a single partiton so only a sort is needed
         .with_scenario(Scenario::DictionaryStrings(1))
         .with_disk_manager_config(DiskManagerConfig::NewOs)
@@ -295,7 +294,7 @@ async fn sort_spill_reservation() {
         // reserve sufficient space up front for merge and this time,
         // which will force the spills to happen with less buffered
         // input and thus with enough to merge.
-        .with_sort_spill_reservation_bytes(2 * partition_size);
+        .with_sort_spill_reservation_bytes(partition_size / 2);
 
     test.with_config(config).with_expected_success().run().await;
 }
@@ -582,7 +581,9 @@ fn make_dict_batches() -> Vec<RecordBatch> {
         // ...
         // 0000000002
 
-        let values: Vec<_> = (i..i + batch_size).map(|x| format!("{x:010}")).collect();
+        let values: Vec<_> = (i..i + batch_size)
+            .map(|x| format!("{:010}", x / 16))
+            .collect();
         //println!("values: \n{values:?}");
         let array: DictionaryArray<Int32Type> =
             values.iter().map(|s| s.as_str()).collect();
