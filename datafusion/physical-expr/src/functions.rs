@@ -945,9 +945,9 @@ fn func_order_in_one_dimension(
     }
 }
 
-/// This function determines the preservation of order for a scalar function according to its arguments.
-/// The list can be extended, math_expressions and datetime_expressions are considered only for
-/// the initial implementation of this feature.
+/// This function specifies monotonicity behaviors for built-in scalar functions.
+/// The list can be extended, only mathematical and datetime functions are
+/// considered for the initial implementation of this feature.
 pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
     if matches!(
         fun,
