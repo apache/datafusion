@@ -892,8 +892,8 @@ pub fn create_physical_fun(
 /// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
 pub type FuncMonotonicity = Vec<Option<bool>>;
 
-/// Determines the [`BuiltinScalarFunction`]'s monotonicity for the given arguments
-/// and function's behaviour depending on its arguments.
+/// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
+/// and the function's behavior depending on its arguments.
 pub fn out_ordering(
     func: &FuncMonotonicity,
     arg_orderings: &[SortProperties],
