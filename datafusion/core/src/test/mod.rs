@@ -173,7 +173,10 @@ pub fn partitioned_file_groups(
             writers[partition].write_all(b"\n").unwrap();
         }
     }
-    for w in writers.iter_mut() {
+
+    // Must drop the stream before creating ObjectMeta below as drop
+    // triggers finish for ZstdEncoder which writes additional data
+    for mut w in writers.into_iter() {
         w.flush().unwrap();
     }
 

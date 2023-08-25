@@ -117,7 +117,9 @@ pub(crate) mod test_util {
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{GetOptions, GetResult, ListResult, MultipartId};
+    use object_store::{
+        GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
+    };
     use tokio::io::AsyncWrite;
 
     pub async fn scan_format(
@@ -201,18 +203,28 @@ pub(crate) mod test_util {
             unimplemented!()
         }
 
-        async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
+        async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
+            let range = 0..bytes.len() * self.max_iterations;
             let arc = self.iterations_detected.clone();
-            Ok(GetResult::Stream(
-                futures::stream::repeat_with(move || {
-                    let arc_inner = arc.clone();
-                    *arc_inner.lock().unwrap() += 1;
-                    Ok(bytes.clone())
-                })
-                .take(self.max_iterations)
-                .boxed(),
-            ))
+            let stream = futures::stream::repeat_with(move || {
+                let arc_inner = arc.clone();
+                *arc_inner.lock().unwrap() += 1;
+                Ok(bytes.clone())
+            })
+            .take(self.max_iterations)
+            .boxed();
+
+            Ok(GetResult {
+                payload: GetResultPayload::Stream(stream),
+                meta: ObjectMeta {
+                    location: location.clone(),
+                    last_modified: Default::default(),
+                    size: range.end,
+                    e_tag: None,
+                },
+                range: Default::default(),
+            })
         }
 
         async fn get_opts(
