@@ -26,7 +26,7 @@ use crate::array_expressions::{
     array_append, array_concat, array_has_all, array_prepend,
 };
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::intervals::{apply_operator, Interval};
+use crate::intervals::{apply_operator, Interval, IntervalBound};
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
@@ -58,6 +58,7 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Datum, Scalar};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::scalar::{MILLISECS_IN_ONE_DAY, NANOSECS_IN_ONE_DAY};
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
@@ -74,6 +75,10 @@ use kernels_arrow::{
     is_not_distinct_from_f32, is_not_distinct_from_f64, is_not_distinct_from_null,
     is_not_distinct_from_utf8,
 };
+
+const MDN_DAY_MASK: u128 = 0xFFFFFFFF0000000000000000;
+const MDN_NS_MASK: u128 = 0xFFFFFFFFFFFFFFFF;
+const DT_MS_MASK: u64 = 0x00000000FFFFFFFF;
 
 /// Binary expression
 #[derive(Debug, Hash, Clone)]
@@ -660,9 +665,29 @@ impl PhysicalExpr for BinaryExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Vec<Option<Interval>>> {
-        // Get children intervals. Graph brings
-        let left_interval = children[0];
-        let right_interval = children[1];
+        // Get children intervals.
+        let left_interval = if let DataType::Interval(_) = children[0].get_datatype()? {
+            // If there is an interval-type bound, we need a special handling
+            // in case of interval-type op duration-type.
+            match convert_interval_type_to_propagate(children[0]) {
+                Ok(new_interval) => new_interval,
+                Err(_) => {
+                    return Ok(vec![Some(children[0].clone()), Some(children[1].clone())])
+                }
+            }
+        } else {
+            children[0].clone()
+        };
+        let right_interval = if let DataType::Interval(_) = children[1].get_datatype()? {
+            match convert_interval_type_to_propagate(children[1]) {
+                Ok(new_interval) => new_interval,
+                Err(_) => {
+                    return Ok(vec![Some(children[0].clone()), Some(children[1].clone())])
+                }
+            }
+        } else {
+            children[1].clone()
+        };
         let (left, right) = if self.op.is_logic_operator() {
             // TODO: Currently, this implementation only supports the AND operator
             //       and does not require any further propagation. In the future,
@@ -678,10 +703,10 @@ impl PhysicalExpr for BinaryExpr {
                 return Ok(vec![]);
             }
             // Propagate the comparison operator.
-            propagate_comparison(&self.op, left_interval, right_interval)?
+            propagate_comparison(&self.op, &left_interval, &right_interval)?
         } else {
             // Propagate the arithmetic operator.
-            propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
+            propagate_arithmetic(&self.op, interval, &left_interval, &right_interval)?
         };
         Ok(vec![left, right])
     }
@@ -1001,6 +1026,58 @@ impl BinaryExpr {
     }
 }
 
+fn convert_interval_type_to_propagate(interval: &Interval) -> Result<Interval> {
+    if interval.cardinality()? == 1 {
+        Err(DataFusionError::Execution(
+            "No need to propagate singleton nodes".to_string(),
+        ))
+    } else {
+        Ok(Interval::new(
+            convert_interval_bound_to_propagate(&interval.lower)?,
+            convert_interval_bound_to_propagate(&interval.upper)?,
+        ))
+    }
+}
+
+fn convert_interval_bound_to_propagate(
+    interval_bound: &IntervalBound,
+) -> Result<IntervalBound> {
+    match interval_bound.value {
+        ScalarValue::IntervalYearMonth(_) => Err(DataFusionError::Execution(
+            "IntervalYearMonth cannot be converted to Duration type".to_string(),
+        )),
+        ScalarValue::IntervalMonthDayNano(Some(mdn)) => {
+            if let Ok(duration) = interval_mdn_to_duration_ns(&mdn) {
+                Ok(IntervalBound {
+                    value: ScalarValue::DurationNanosecond(Some(duration)),
+                    open: interval_bound.open,
+                })
+            } else {
+                Err(DataFusionError::Execution(
+                        "IntervalMonthDayNano with a non-zero month field cannot be converted to Duration type"
+                            .to_string(),
+                    ))
+            }
+        }
+        ScalarValue::IntervalDayTime(Some(dt)) => {
+            if let Ok(duration) = interval_dt_to_duration_ms(&dt) {
+                Ok(IntervalBound {
+                    value: ScalarValue::DurationMillisecond(Some(duration)),
+                    open: interval_bound.open,
+                })
+            } else {
+                Err(DataFusionError::Execution(
+                    "IntervalDayTime cannot be converted to Duration type".to_string(),
+                ))
+            }
+        }
+        _ => Err(DataFusionError::Execution(
+            "The IntervalBound type must be an interval to be converted to duration"
+                .to_string(),
+        )),
+    }
+}
+
 /// Create a binary expression whose arguments are correctly coerced.
 /// This function errors if it is not possible to coerce the arguments
 /// to computational types supported by the operator.
@@ -1011,6 +1088,31 @@ pub fn binary(
     _input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
+}
+
+fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
+    let months = mdn >> 96;
+    let days = (mdn & MDN_DAY_MASK as i128) >> 64;
+    let nanoseconds = mdn & MDN_NS_MASK as i128;
+    if months != 0 {
+        return Err(DataFusionError::Internal(
+            "The interval value must have a zero month field to convert it to duration"
+                .to_string(),
+        ));
+    }
+    let duration_ns = days * NANOSECS_IN_ONE_DAY as i128 + nanoseconds;
+    if duration_ns > i64::MAX as i128 {
+        return Err(DataFusionError::Internal(
+            "Resulting duration exceeds i64::MAX".to_string(),
+        ));
+    }
+    Ok(duration_ns as i64)
+}
+fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
+    let days = dt >> 32;
+    let milliseconds = dt & DT_MS_MASK as i64;
+    let duration_ms = days * MILLISECS_IN_ONE_DAY + milliseconds;
+    Ok(duration_ms)
 }
 
 #[cfg(test)]
