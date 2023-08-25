@@ -41,7 +41,11 @@ pub(crate) fn varchar_to_str(value: &str) -> String {
 
 pub(crate) fn f16_to_str(value: f16) -> String {
     if value.is_nan() {
-        "NaN".to_string()
+        if value.is_sign_positive() {
+            "NaN".to_string()
+        } else {
+            "-NaN".to_string()
+        }
     } else if value == f16::INFINITY {
         "Infinity".to_string()
     } else if value == f16::NEG_INFINITY {
@@ -53,7 +57,11 @@ pub(crate) fn f16_to_str(value: f16) -> String {
 
 pub(crate) fn f32_to_str(value: f32) -> String {
     if value.is_nan() {
-        "NaN".to_string()
+        if value.is_sign_positive() {
+            "NaN".to_string()
+        } else {
+            "-NaN".to_string()
+        }
     } else if value == f32::INFINITY {
         "Infinity".to_string()
     } else if value == f32::NEG_INFINITY {
@@ -65,7 +73,11 @@ pub(crate) fn f32_to_str(value: f32) -> String {
 
 pub(crate) fn f64_to_str(value: f64) -> String {
     if value.is_nan() {
-        "NaN".to_string()
+        if value.is_sign_positive() {
+            "NaN".to_string()
+        } else {
+            "-NaN".to_string()
+        }
     } else if value == f64::INFINITY {
         "Infinity".to_string()
     } else if value == f64::NEG_INFINITY {

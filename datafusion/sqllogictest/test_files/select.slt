@@ -224,6 +224,12 @@ select
 ----
 false true false true true false false true false true true false true true false false true
 
+# select NaNs
+query RRRR
+select 'NaN'::double a, '-NaN'::double b, 'NaN'::float c, '-NaN'::float d
+----
+NaN -NaN NaN -NaN
+
 # select limit clause
 query I
 select * from (select 1 a union all select 2) b order by a limit 1;
