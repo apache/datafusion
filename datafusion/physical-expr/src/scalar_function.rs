@@ -29,6 +29,7 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
+use crate::functions::out_ordering;
 use crate::functions::FuncMonotonicity;
 use crate::physical_expr::down_cast_any_ref;
 use crate::sort_properties::SortProperties;
@@ -53,7 +54,10 @@ pub struct ScalarFunctionExpr {
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
-    // Keeps monotonicity information of the function
+    // Keeps monotonicity information of the function.
+    // FuncMonotonicity vector is one to one mapped to `args`,
+    // and it specifies the effect of an increase or decrease in
+    // the corresponding `arg` to the function value.
     monotonicity: Option<FuncMonotonicity>,
 }
 
@@ -178,7 +182,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
     fn get_ordering(&self, children: &[SortProperties]) -> SortProperties {
         self.monotonicity
             .as_ref()
-            .map(|monotonicity| monotonicity.out_ordering(children))
+            .map(|monotonicity| out_ordering(monotonicity, children))
             .unwrap_or(SortProperties::Unordered)
     }
 }

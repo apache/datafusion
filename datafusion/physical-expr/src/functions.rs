@@ -48,6 +48,7 @@ use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
+use std::ops::Neg;
 use std::sync::Arc;
 
 /// Create a physical (function) expression.
@@ -883,32 +884,72 @@ pub fn create_physical_fun(
     })
 }
 
-/// Stores monotonicity of the ScalarFunction
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FuncMonotonicity {
-    // `true` => monotonically increasing
-    // `false` => monotonically decreasing function (e.g reverses the ordering of its argument)
-    is_ascending: bool,
-    // Index of the variable argument
-    idx: usize,
+/// Monotonicity of the ScalarFunction with respect to its arguments.
+/// Each element of this vector corresponds to an argument and indicates whether
+/// the function's behavior is monotonic, non-monotonic or unknown for that argument.
+/// - None signifies unknown monotonicity or non-monotonicity.
+/// - Some(true) indicates a consistent monotonic increase or decrease in tandem.
+/// - Some(false) indicates that while one argument increases, the other decreases (and vice versa).
+pub type FuncMonotonicity = Vec<Option<bool>>;
+
+/// Determines the [`BuiltinScalarFunction`]'s monotonicity for the given arguments
+/// and function's behaviour depending on its arguments.
+pub fn out_ordering(
+    func: &FuncMonotonicity,
+    arg_orderings: &[SortProperties],
+) -> SortProperties {
+    func.iter().zip(arg_orderings).fold(
+        SortProperties::Singleton,
+        |prev_sort_prop, (item, arg)| {
+            let current_sort = func_order_in_one_dimension(item, arg);
+
+            match (prev_sort_prop, current_sort) {
+                (_, SortProperties::Unordered) => SortProperties::Unordered,
+                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
+                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
+                    if prev.descending != current.descending =>
+                {
+                    SortProperties::Unordered
+                }
+                _ => prev_sort_prop,
+            }
+        },
+    )
 }
 
-impl FuncMonotonicity {
-    pub fn out_ordering(&self, arg_orderings: &[SortProperties]) -> SortProperties {
-        if self.is_ascending {
-            arg_orderings[self.idx]
-        } else {
-            -arg_orderings[self.idx]
+/// Provided that how the [`BuiltinScalarFunction`] is effected by the argument and the argument's `SortProperties`,
+/// the function decides how the [`BuiltinScalarFunction`] behaves for that argument.
+fn func_order_in_one_dimension(
+    func_monotonicity: &Option<bool>,
+    arg: &SortProperties,
+) -> SortProperties {
+    if *arg == SortProperties::Singleton {
+        SortProperties::Singleton
+    } else {
+        match func_monotonicity {
+            None => SortProperties::Unordered,
+            Some(false) => {
+                if let SortProperties::Ordered(_) = arg {
+                    arg.neg()
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+            Some(true) => {
+                if let SortProperties::Ordered(_) = arg {
+                    *arg
+                } else {
+                    SortProperties::Unordered
+                }
+            }
         }
     }
 }
 
-/// This function determines the preservation of order for a scalar function
-/// according to its arguments. It returns an Option<(usize, bool)> where
-/// the tuple contains information about the index of the function's arguments
-/// which is order-preserved and whether the order is maintained or reversed.
+/// This function determines the preservation of order for a scalar function according to its arguments.
+/// The list can be extended, math_expressions and datetime_expressions are considered only for
+/// the initial implementation of this feature.
 pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
-    // math_expressions and datetime_expressions are considered only for the initial implementation of this feature.
     if matches!(
         fun,
         BuiltinScalarFunction::Atan
@@ -932,22 +973,15 @@ pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotoni
             | BuiltinScalarFunction::Tanh
             | BuiltinScalarFunction::Trunc
             | BuiltinScalarFunction::Pi
-            | BuiltinScalarFunction::Log
     ) {
-        Some(FuncMonotonicity {
-            is_ascending: true,
-            idx: 0,
-        })
+        Some(vec![Some(true)])
     } else if matches!(
         fun,
-        BuiltinScalarFunction::Log
-            | BuiltinScalarFunction::DateTrunc
-            | BuiltinScalarFunction::DateBin
+        BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
     ) {
-        Some(FuncMonotonicity {
-            is_ascending: true,
-            idx: 1,
-        })
+        Some(vec![None, Some(true)])
+    } else if *fun == BuiltinScalarFunction::Log {
+        Some(vec![Some(true), Some(false)])
     } else {
         None
     }

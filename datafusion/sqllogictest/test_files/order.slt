@@ -513,6 +513,7 @@ CREATE EXTERNAL TABLE aggregate_test_100 (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER(c11)
+WITH ORDER(c12 DESC)
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 query TT
@@ -544,6 +545,36 @@ SortPreservingMergeExec: [ceil_c11@0 ASC NULLS LAST]
 --ProjectionExec: expr=[ceil(c11@0) as ceil_c11]
 ----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 ------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+
+query TT
+  EXPLAIN SELECT LOG(c11, c12) as log_c11_base_c12
+  FROM aggregate_test_100
+  ORDER BY log_c11_base_c12;
+----
+logical_plan
+Sort: log_c11_base_c12 ASC NULLS LAST
+--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c11_base_c12
+----TableScan: aggregate_test_100 projection=[c11, c12]
+physical_plan
+SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
+--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c11_base_c12]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+
+query TT
+EXPLAIN SELECT LOG(c12, c11) as log_c12_base_c11
+FROM aggregate_test_100
+ORDER BY log_c12_base_c11 DESC;
+----
+logical_plan
+Sort: log_c12_base_c11 DESC NULLS FIRST
+--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c12_base_c11
+----TableScan: aggregate_test_100 projection=[c11, c12]
+physical_plan
+SortPreservingMergeExec: [log_c12_base_c11@0 DESC]
+--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c12_base_c11]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
 
 statement ok
 drop table aggregate_test_100;
