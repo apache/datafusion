@@ -21,7 +21,7 @@
 
 <!-- https://github.com/apache/arrow-datafusion/issues/7304 -->
 
-`Expr` is short for "expression". It is a core abstraction in DataFusion for representing a computation, and follows the standard "expression tree" abstraction found in most compilers and databases.  
+`Expr` is short for "expression". It is a core abstraction in DataFusion for representing a computation, and follows the standard "expression tree" abstraction found in most compilers and databases.
 
 For example, the SQL expression `a + b` would be represented as an `Expr` with a `BinaryExpr` variant. A `BinaryExpr` has a left and right `Expr` and an operator.
 
@@ -36,25 +36,9 @@ There are also executable examples for working with `Expr`s:
 
 ## A Scalar UDF Example
 
-Let's start by creating our own `Expr` in the form of a Scalar UDF. This UDF will simply add 1 to the input value.
+We'll use a `ScalarUDF` expression as our example. This necessitates implementing an actual UDF, and for ease we'll use the same example from the [adding UDFs](./adding-udfs.md) guide.
 
-```rust
-pub fn add_one(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let i64s = as_int64_array(&args[0])?;
-
-    let array = i64s
-        .iter()
-        .map(|item| match item {
-            Some(value) => Some(value + 1),
-            None => None,
-        })
-        .collect::<Int64Array>();
-
-    Ok(Arc::new(array))
-}
-```
-
-And our `ScalarUDF` would look like this. Please see the section on [adding UDFs](./adding-udfs.md) for more information on how to create a `ScalarUDF`.
+So assuming you've written that function, you can use it to create an `Expr`:
 
 ```rust
 let add_one_udf = create_udf(
@@ -64,28 +48,15 @@ let add_one_udf = create_udf(
     Volatility::Immutable,
     make_scalar_function(add_one),
 );
+
+// make the expr `add_one(5)`
+let expr = add_one_udf.call(vec![lit(5)]);
+
+// make the expr `add_one(my_column)`
+let expr = add_one_udf.call(vec![col("my_column")]);
 ```
 
-## Creating Exprs Programmatically
-
-In addition to SQL strings, you can create `Expr`s programatically. This is common if you're working with a DataFrame vs. a SQL string. A simple example is:
-
-```rust
-use datafusion::prelude::*;
-
-// Represent `5 + 5`
-let expr = lit(5) + lit(5);
-```
-
-This is obviously a very simple example, but it shows how you can create an `Expr` from a literal value and sets us up later for how to simplify `Expr`s. You can also create `Expr`s from column references and operators:
-
-```rust
-use datafusion::prelude::*;
-
-let expr = col("a") + col("b");
-```
-
-In fact, the `add_one_udf` we created earlier is also an `Expr`. And because it's so simple, we'll use it as fodder for how to rewrite `Expr`s.
+If you'd like to learn more about `Expr`s, before we get into the details of creating and rewriting them, you can read the [expression user-guide](./../user-guide/expressions.md).
 
 ## Rewriting Exprs
 
@@ -105,20 +76,13 @@ To implement the inlining, we'll need to write a function that takes an `Expr` a
 fn rewrite_add_one(expr: Expr) -> Result<Expr> {
     expr.transform(&|expr| {
         Ok(match expr {
-            Expr::ScalarUDF(scalar_fun) => {
-                // rewrite the expression if the function is "add_one", otherwise return the original expression
-                if scalar_fun.fun.name == "add_one" {
-                    let input_arg = scalar_fun.args[0].clone();
+            Expr::ScalarUDF(scalar_fun) if scalar_fun.fun.name == "add_one" => {
+                let input_arg = scalar_fun.args[0].clone();
+                let new_expression = input_arg + lit(1i64);
 
-                    let new_expression = input_arg + lit(1i64);
-
-                    Transformed::Yes(Expr::BinaryExpr(new_expression))
-                } else {
-                    // a scalar function that is not "add_one" is not rewritten
-                    Transformed::No(Expr::ScalarUDF(scalar_fun))
-                }
+                Transformed::Yes(new_expression)
             }
-            _ => Transformed::No(expr),  // not a scalar function, so not rewritten
+            _ => Transformed::No(expr),
         })
     })
 }
@@ -126,7 +90,7 @@ fn rewrite_add_one(expr: Expr) -> Result<Expr> {
 
 ### Creating an `OptimizerRule`
 
-In DataFusion, an `OptimizerRule` is a trait that supports rewriting`Expr`s that appear in various parts of the `LogicalPlan`.  It follows DataFusion's general mantra of trait implementations to drive behavior.
+In DataFusion, an `OptimizerRule` is a trait that supports rewriting`Expr`s that appear in various parts of the `LogicalPlan`. It follows DataFusion's general mantra of trait implementations to drive behavior.
 
 We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The `OptimizerRule` trait has two methods:
 
@@ -146,42 +110,23 @@ impl OptimizerRule for AddOneInliner {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        // recurse down and optimize children first
-        let optimized_plan = utils::optimize_children(self, plan, config)?;
+        // Map over the expressions and rewrite them
+        let new_expressions = plan
+            .expressions()
+            .into_iter()
+            .map(|expr| rewrite_add_one(expr))
+            .collect::<Result<Vec<_>>>()?;
 
-        match optimized_plan {
-            Some(LogicalPlan::Projection(projection)) => {
-                let proj_expression = projection
-                    .expr
-                    .iter()
-                    .map(|expr| rewrite_add_one(expr.clone()))
-                    .collect::<Result<Vec<_>>>()?;
+        let inputs = plan.inputs().into_iter().cloned().collect::<Vec<_>>();
 
-                let proj = Projection::try_new(proj_expression, projection.input)?;
+        let plan = plan.with_new_exprs(&new_expressions, &inputs);
 
-                Ok(Some(LogicalPlan::Projection(proj)))
-            }
-            Some(optimized_plan) => Ok(Some(optimized_plan)),
-            None => match plan {
-                LogicalPlan::Projection(projection) => {
-                    let proj_expression = projection
-                        .expr
-                        .iter()
-                        .map(|expr| rewrite_add_one(expr.clone()))
-                        .collect::<Result<Vec<_>>>()?;
-
-                    let proj = Projection::try_new(proj_expression, projection.input.clone())?;
-
-                    Ok(Some(LogicalPlan::Projection(proj)))
-                }
-                _ => Ok(None),
-            },
-        }
+        plan.map(Some)
     }
 }
 ```
 
-Note the use of `rewrite_add_one` which is mapped over the `expr` of the `Projection`. This is the function we wrote earlier that takes an `Expr` and returns a `Result<Expr>`.
+Note the use of `rewrite_add_one` which is mapped over `plan.expressions()` to rewrite the expressions, then `plan.with_new_exprs` is used to create a new `LogicalPlan` with the rewritten expressions.
 
 We're almost there. Let's just test our rule works properly.
 
