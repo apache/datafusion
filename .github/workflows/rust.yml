@@ -365,7 +365,7 @@ jobs:
           python-version: "3.8"
       - name: Install PyArrow
         run: |
-          echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
           python -m ssl
           python -m pip install pyarrow
       - name: Setup Rust toolchain
