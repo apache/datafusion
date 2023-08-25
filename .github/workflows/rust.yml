@@ -371,15 +371,13 @@ jobs:
           ./config
           make
           make install
-          find / -name libssl.so.1.1
           ln -s /usr/local/lib64/libssl.so.1.1  /usr/lib64/libssl.so.1.1
           ln -s /usr/local/lib64/libssl.so.1.1  /usr/lib/libssl.so.1.1
-          find / -name libcrypto.so.1.1
           ln -s /home/ubuntu/openssl-1.1.1o/libcrypto.so.1.1    /usr/lib64/libcrypto.so.1.1
           ln -s /home/ubuntu/openssl-1.1.1o/libcrypto.so.1.1     /usr/lib/libcrypto.so.1.1
       - name: Install PyArrow
         run: |
-          echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib" >> $GITHUB_ENV
           find libssl.so / | grep libssl.so
           python -m ssl
           python -m pip install pyarrow
