@@ -75,7 +75,6 @@ half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = "2.0.0"
 itertools = "0.11"
-lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
