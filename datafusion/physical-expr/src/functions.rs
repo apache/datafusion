@@ -884,16 +884,16 @@ pub fn create_physical_fun(
     })
 }
 
-/// Monotonicity of the ScalarFunction with respect to its arguments.
+/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
 /// Each element of this vector corresponds to an argument and indicates whether
-/// the function's behavior is monotonic, non-monotonic or unknown for that argument.
-/// - None signifies unknown monotonicity or non-monotonicity.
-/// - Some(true) indicates a consistent monotonic increase or decrease in tandem.
-/// - Some(false) indicates that while one argument increases, the other decreases (and vice versa).
+/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
+/// - `None` signifies unknown monotonicity or non-monotonicity.
+/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
+/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
 pub type FuncMonotonicity = Vec<Option<bool>>;
 
-/// Determines the [`BuiltinScalarFunction`]'s monotonicity for the given arguments
-/// and function's behaviour depending on its arguments.
+/// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
+/// and the function's behavior depending on its arguments.
 pub fn out_ordering(
     func: &FuncMonotonicity,
     arg_orderings: &[SortProperties],
@@ -917,8 +917,7 @@ pub fn out_ordering(
     )
 }
 
-/// Provided that how the [`BuiltinScalarFunction`] is effected by the argument and the argument's `SortProperties`,
-/// the function decides how the [`BuiltinScalarFunction`] behaves for that argument.
+/// This function decides the monotonicity property of a [`ScalarFunctionExpr`] for a single argument (i.e. across a single dimension), given that argument's sort properties.
 fn func_order_in_one_dimension(
     func_monotonicity: &Option<bool>,
     arg: &SortProperties,
@@ -946,9 +945,9 @@ fn func_order_in_one_dimension(
     }
 }
 
-/// This function determines the preservation of order for a scalar function according to its arguments.
-/// The list can be extended, math_expressions and datetime_expressions are considered only for
-/// the initial implementation of this feature.
+/// This function specifies monotonicity behaviors for built-in scalar functions.
+/// The list can be extended, only mathematical and datetime functions are
+/// considered for the initial implementation of this feature.
 pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
     if matches!(
         fun,
