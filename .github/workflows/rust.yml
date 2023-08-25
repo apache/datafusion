@@ -366,6 +366,7 @@ jobs:
       - name: Install PyArrow
         run: |
           echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          python -m pip install ssl
           python -m pip install pyarrow
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
