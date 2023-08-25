@@ -1656,7 +1656,7 @@ mod tests {
 
     #[test]
     fn test_simplify_divide_zero_by_zero() {
-        // 0 / 0 -> null
+        // 0 / 0 -> DivideByZero
         let expr = lit(0) / lit(0);
         let err = try_simplify(expr).unwrap_err();
 
