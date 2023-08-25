@@ -334,9 +334,56 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#a-scalar-udf-example">
+   A Scalar UDF Example
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#rewriting-exprs">
+   Rewriting Exprs
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rewriting-with-transform">
+     Rewriting with
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       transform
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#creating-an-optimizerrule">
+     Creating an
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       OptimizerRule
+      </span>
+     </code>
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#testing-the-rule">
+   Testing the Rule
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#conclusion">
+   Conclusion
+  </a>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -383,7 +430,153 @@
 -->
 <section id="working-with-exprs">
 <h1>Working with Exprs<a class="headerlink" href="#working-with-exprs" title="Link to this heading">¶</a></h1>
-<p>Coming Soon</p>
+<!-- https://github.com/apache/arrow-datafusion/issues/7304 -->
+<p><code class="docutils literal notranslate"><span class="pre">Expr</span></code> is short for “expression”. It is a core abstraction in DataFusion for representing a computation, and follows the standard “expression tree” abstraction found in most compilers and databases.</p>
+<p>For example, the SQL expression <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">+</span> <span class="pre">b</span></code> would be represented as an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> with a <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> variant. A <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> has a left and right <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and an operator.</p>
+<p>As another example, the SQL expression <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">+</span> <span class="pre">b</span> <span class="pre">*</span> <span class="pre">c</span></code> would be represented as an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> with a <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> variant. The left <code class="docutils literal notranslate"><span class="pre">Expr</span></code> would be <code class="docutils literal notranslate"><span class="pre">a</span></code> and the right <code class="docutils literal notranslate"><span class="pre">Expr</span></code> would be another <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> with a left <code class="docutils literal notranslate"><span class="pre">Expr</span></code> of <code class="docutils literal notranslate"><span class="pre">b</span></code> and a right <code class="docutils literal notranslate"><span class="pre">Expr</span></code> of <code class="docutils literal notranslate"><span class="pre">c</span></code>. As a classic expression tree, this would look like:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>            ┌────────────────────┐
+            │     BinaryExpr     │
+            │       op: +        │
+            └────────────────────┘
+                   ▲     ▲
+           ┌───────┘     └────────────────┐
+           │                              │
+┌────────────────────┐         ┌────────────────────┐
+│     Expr::Col      │         │     BinaryExpr     │
+│       col: a       │         │       op: *        │
+└────────────────────┘         └────────────────────┘
+                                        ▲    ▲
+                               ┌────────┘    └─────────┐
+                               │                       │
+                    ┌────────────────────┐  ┌────────────────────┐
+                    │     Expr::Col      │  │     Expr::Col      │
+                    │       col: b       │  │       col: c       │
+                    └────────────────────┘  └────────────────────┘
+</pre></div>
+</div>
+<p>As the writer of a library, you may want to use or create <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to represent computations that you want to perform. This guide will walk you through how to make your own scalar UDF as an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and how to rewrite <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to inline the simple UDF.</p>
+<p>There are also executable examples for working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s:</p>
+<ul class="simple">
+<li><p><a class="reference download internal" download="" href="../_downloads/9dc934d68aef6b44bd3235a7dbc9a8be/catalog.rs"><span class="xref download myst">rewrite_expr.rs</span></a></p></li>
+<li><p><a class="reference download internal" download="" href="../_downloads/1a0b5c48023f0bdbcb8dff8324195c3c/expr_api.rs"><span class="xref download myst">expr_api.rs</span></a></p></li>
+</ul>
+<section id="a-scalar-udf-example">
+<h2>A Scalar UDF Example<a class="headerlink" href="#a-scalar-udf-example" title="Link to this heading">¶</a></h2>
+<p>We’ll use a <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code> expression as our example. This necessitates implementing an actual UDF, and for ease we’ll use the same example from the <a class="reference internal" href="adding-udfs.html"><span class="std std-doc">adding UDFs</span></a> guide.</p>
+<p>So assuming you’ve written that function, you can use it to create an <code class="docutils literal notranslate"><span class="pre">Expr</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">add_one_udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_udf</span><span class="p">(</span>
+<span class="w">    </span><span class="s">&quot;add_one&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span>::<span class="n">Int64</span><span class="p">],</span>
+<span class="w">    </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">DataType</span>::<span class="n">Int64</span><span class="p">),</span>
+<span class="w">    </span><span class="n">Volatility</span>::<span class="n">Immutable</span><span class="p">,</span>
+<span class="w">    </span><span class="n">make_scalar_function</span><span class="p">(</span><span class="n">add_one</span><span class="p">),</span><span class="w">  </span><span class="c1">// &lt;-- the function we wrote</span>
+<span class="p">);</span>
+
+<span class="c1">// make the expr `add_one(5)`</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">add_one_udf</span><span class="p">.</span><span class="n">call</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">lit</span><span class="p">(</span><span class="mi">5</span><span class="p">)]);</span>
+
+<span class="c1">// make the expr `add_one(my_column)`</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">add_one_udf</span><span class="p">.</span><span class="n">call</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;my_column&quot;</span><span class="p">)]);</span>
+</pre></div>
+</div>
+<p>If you’d like to learn more about <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s, before we get into the details of creating and rewriting them, you can read the <a class="reference internal" href="../user-guide/expressions.html"><span class="std std-doc">expression user-guide</span></a>.</p>
+</section>
+<section id="rewriting-exprs">
+<h2>Rewriting Exprs<a class="headerlink" href="#rewriting-exprs" title="Link to this heading">¶</a></h2>
+<p>Rewriting Expressions is the process of taking an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and transforming it into another <code class="docutils literal notranslate"><span class="pre">Expr</span></code>. This is useful for a number of reasons, including:</p>
+<ul class="simple">
+<li><p>Simplifying <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to make them easier to evaluate</p></li>
+<li><p>Optimizing <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to make them faster to evaluate</p></li>
+<li><p>Converting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s to other forms, e.g. converting a <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> to a <code class="docutils literal notranslate"><span class="pre">CastExpr</span></code></p></li>
+</ul>
+<p>In our example, we’ll use rewriting to update our <code class="docutils literal notranslate"><span class="pre">add_one</span></code> UDF, to be rewritten as a <code class="docutils literal notranslate"><span class="pre">BinaryExpr</span></code> with a <code class="docutils literal notranslate"><span class="pre">Literal</span></code> of 1. We’re effectively inlining the UDF.</p>
+<section id="rewriting-with-transform">
+<h3>Rewriting with <code class="docutils literal notranslate"><span class="pre">transform</span></code><a class="headerlink" href="#rewriting-with-transform" title="Link to this heading">¶</a></h3>
+<p>To implement the inlining, we’ll need to write a function that takes an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;Expr&gt;</span></code>. If the expression is <em>not</em> to be rewritten <code class="docutils literal notranslate"><span class="pre">Transformed::No</span></code> is used to wrap the original <code class="docutils literal notranslate"><span class="pre">Expr</span></code>. If the expression <em>is</em> to be rewritten, <code class="docutils literal notranslate"><span class="pre">Transformed::Yes</span></code> is used to wrap the new <code class="docutils literal notranslate"><span class="pre">Expr</span></code>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span> <span class="nf">rewrite_add_one</span><span class="p">(</span><span class="n">expr</span>: <span class="nc">Expr</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">.</span><span class="n">transform</span><span class="p">(</span><span class="o">&amp;|</span><span class="n">expr</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="k">match</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">Expr</span>::<span class="n">ScalarUDF</span><span class="p">(</span><span class="n">scalar_fun</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">scalar_fun</span><span class="p">.</span><span class="n">fun</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;add_one&quot;</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">input_arg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">scalar_fun</span><span class="p">.</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">clone</span><span class="p">();</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">new_expression</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_arg</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="k">i64</span><span class="p">);</span>
+
+<span class="w">                </span><span class="n">Transformed</span>::<span class="n">Yes</span><span class="p">(</span><span class="n">new_expression</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">Transformed</span>::<span class="n">No</span><span class="p">(</span><span class="n">expr</span><span class="p">),</span>
+<span class="w">        </span><span class="p">})</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="creating-an-optimizerrule">
+<h3>Creating an <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code><a class="headerlink" href="#creating-an-optimizerrule" title="Link to this heading">¶</a></h3>
+<p>In DataFusion, an <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> is a trait that supports rewriting<code class="docutils literal notranslate"><span class="pre">Expr</span></code>s that appear in various parts of the <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code>. It follows DataFusion’s general mantra of trait implementations to drive behavior.</p>
+<p>We’ll call our rule <code class="docutils literal notranslate"><span class="pre">AddOneInliner</span></code> and implement the <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> trait. The <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> trait has two methods:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">name</span></code> - returns the name of the rule</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">try_optimize</span></code> - takes a <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> and returns an <code class="docutils literal notranslate"><span class="pre">Option&lt;LogicalPlan&gt;</span></code>. If the rule is able to optimize the plan, it returns <code class="docutils literal notranslate"><span class="pre">Some(LogicalPlan)</span></code> with the optimized plan. If the rule is not able to optimize the plan, it returns <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+</ul>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span> <span class="nc">AddOneInliner</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AddOneInliner</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span> <span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="kp">&amp;</span><span class="kt">str</span> <span class="p">{</span>
+<span class="w">        </span><span class="s">&quot;add_one_inliner&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span> <span class="nf">try_optimize</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">plan</span>: <span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">        </span><span class="n">config</span>: <span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Map over the expressions and rewrite them</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">new_expressions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span>
+<span class="w">            </span><span class="p">.</span><span class="n">expressions</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">into_iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">expr</span><span class="o">|</span><span class="w"> </span><span class="n">rewrite_add_one</span><span class="p">(</span><span class="n">expr</span><span class="p">))</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span>::<span class="o">&lt;</span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">_</span><span class="o">&gt;&gt;&gt;</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">inputs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">inputs</span><span class="p">().</span><span class="n">into_iter</span><span class="p">().</span><span class="n">cloned</span><span class="p">().</span><span class="n">collect</span>::<span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">_</span><span class="o">&gt;&gt;</span><span class="p">();</span>
+
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">with_new_exprs</span><span class="p">(</span><span class="o">&amp;</span><span class="n">new_expressions</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">inputs</span><span class="p">);</span>
+
+<span class="w">        </span><span class="n">plan</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="nb">Some</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Note the use of <code class="docutils literal notranslate"><span class="pre">rewrite_add_one</span></code> which is mapped over <code class="docutils literal notranslate"><span class="pre">plan.expressions()</span></code> to rewrite the expressions, then <code class="docutils literal notranslate"><span class="pre">plan.with_new_exprs</span></code> is used to create a new <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> with the rewritten expressions.</p>
+<p>We’re almost there. Let’s just test our rule works properly.</p>
+</section>
+</section>
+<section id="testing-the-rule">
+<h2>Testing the Rule<a class="headerlink" href="#testing-the-rule" title="Link to this heading">¶</a></h2>
+<p>Testing the rule is fairly simple, we can create a SessionState with our rule and then create a DataFrame and run a query. The logical plan will be optimized by our rule.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">prelude</span>::<span class="o">*</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">rules</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span>::<span class="n">new</span><span class="p">(</span><span class="n">AddOneInliner</span><span class="w"> </span><span class="p">{});</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">state</span><span class="p">().</span><span class="n">with_optimizer_rules</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">rules</span><span class="p">]);</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span>::<span class="n">with_state</span><span class="p">(</span><span class="n">state</span><span class="p">);</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">register_udf</span><span class="p">(</span><span class="n">add_one</span><span class="p">);</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">sql</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;SELECT add_one(1) AS added_one&quot;</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">.</span><span class="n">logical_plan</span><span class="p">();</span>
+
+<span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{:?}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>This results in the following output:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Projection: Int64(1) + Int64(1) AS added_one
+  EmptyRelation
+</pre></div>
+</div>
+<p>I.e. the <code class="docutils literal notranslate"><span class="pre">add_one</span></code> UDF has been inlined into the projection.</p>
+</section>
+<section id="conclusion">
+<h2>Conclusion<a class="headerlink" href="#conclusion" title="Link to this heading">¶</a></h2>
+<p>In this guide, we’ve seen how to create <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s programmatically and how to rewrite them. This is useful for simplifying and optimizing <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s. We’ve also seen how to test our rule to ensure it works properly.</p>
+</section>
 </section>
 
 
