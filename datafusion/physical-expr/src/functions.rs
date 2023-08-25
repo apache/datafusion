@@ -900,10 +900,10 @@ pub fn out_ordering(
 ) -> SortProperties {
     func.iter().zip(arg_orderings).fold(
         SortProperties::Singleton,
-        |prev_sort_prop, (item, arg)| {
+        |prev_sort, (item, arg)| {
             let current_sort = func_order_in_one_dimension(item, arg);
 
-            match (prev_sort_prop, current_sort) {
+            match (prev_sort, current_sort) {
                 (_, SortProperties::Unordered) => SortProperties::Unordered,
                 (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
                 (SortProperties::Ordered(prev), SortProperties::Ordered(current))
@@ -911,7 +911,7 @@ pub fn out_ordering(
                 {
                     SortProperties::Unordered
                 }
-                _ => prev_sort_prop,
+                _ => prev_sort,
             }
         },
     )
