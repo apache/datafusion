@@ -36,7 +36,7 @@ arrow = { version = "45.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 arrow-array = { version = "45.0.0", default-features = false, features = ["chrono-tz"] }
 arrow-buffer = { version = "45.0.0", default-features = false }
 arrow-flight = { version = "45.0.0", features = ["flight-sql-experimental"] }
-arrow-schema = { version = "45.0.0", default-features = false }
+arrow-schema = { version = "46.0.0", default-features = false }
 parquet = { version = "45.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.37.0", features = ["visitor"] }
 
