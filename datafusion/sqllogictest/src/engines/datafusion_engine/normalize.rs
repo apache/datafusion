@@ -217,6 +217,10 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
                 let value = get_row_value!(array::Decimal128Array, col, row);
                 Ok(i128_to_str(value, precision, scale))
             }
+            DataType::Decimal256(precision, scale) => {
+                let value = get_row_value!(array::Decimal256Array, col, row);
+                Ok(i256_to_str(value, precision, scale))
+            }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
                 array::LargeStringArray,
                 col,
