@@ -377,7 +377,7 @@ jobs:
           ln -s /home/ubuntu/openssl-1.1.1o/libcrypto.so.1.1     /usr/lib/libcrypto.so.1.1
       - name: Install PyArrow
         run: |
-          export LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
+          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
           echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
           find libssl.so / | grep libssl.so
           python -m ssl
