@@ -20,7 +20,7 @@
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::compute;
-use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
+use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use sqlparser::ast::Ident;
@@ -220,7 +220,7 @@ where
 /// Given a list of 0 or more already sorted columns, finds the
 /// partition ranges that would partition equally across columns.
 ///
-/// See [`lexicographical_partition_ranges`] for more details.
+/// See [`partition`] for more details.
 pub fn evaluate_partition_ranges(
     num_rows: usize,
     partition_columns: &[SortColumn],
@@ -231,7 +231,8 @@ pub fn evaluate_partition_ranges(
             end: num_rows,
         }]
     } else {
-        lexicographical_partition_ranges(partition_columns)?.collect()
+        let cols: Vec<_> = partition_columns.iter().map(|x| x.values.clone()).collect();
+        partition(&cols)?.ranges()
     })
 }
 

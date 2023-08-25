@@ -201,6 +201,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
         Ok(NULL_STR.to_string())
     } else {
         match col.data_type() {
+            DataType::Null => Ok(NULL_STR.to_string()),
             DataType::Boolean => {
                 Ok(bool_to_str(get_row_value!(array::BooleanArray, col, row)))
             }
