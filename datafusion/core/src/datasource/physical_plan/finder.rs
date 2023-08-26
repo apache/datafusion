@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`FileScanFilder`] to scan [`ExecutionPlan`]` for input
+//! [`PartitionedFileFinder`] to scan [`ExecutionPlan`]` for input
 //! partitioned file sources.
 
 use std::sync::Arc;
