@@ -119,7 +119,9 @@ pub async fn main() -> Result<()> {
 
     let rn_config = RuntimeConfig::new();
     let rn_config = if let Some(memory_limit) = args.memory_limit {
-        let memory_limit = memory_limit.parse::<usize>().unwrap();
+        let memory_limit = memory_limit[..memory_limit.len() - 1]
+            .parse::<usize>()
+            .unwrap();
         rn_config.with_memory_limit(memory_limit, 1.0)
     } else {
         rn_config.with_memory_limit(0, 1.0)
