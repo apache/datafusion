@@ -645,17 +645,17 @@ fn replace_nulls_with_coerced_types(
     }
 }
 
+// Coerce array arguments types for array functions
+// Convert type or return error for incompatible types in this step
 fn coerce_array_args(
     fun: &BuiltinScalarFunction,
     expressions: Vec<Expr>,
     schema: &DFSchema,
 ) -> Result<Vec<Expr>> {
-    // Array function with indices don't need coercion for the indices
-    if *fun == BuiltinScalarFunction::ArrayElement
-        || *fun == BuiltinScalarFunction::ArraySlice
-        || *fun == BuiltinScalarFunction::ArrayRepeat
-        || *fun == BuiltinScalarFunction::ArrayPosition
-        || *fun == BuiltinScalarFunction::ArrayRemoveN
+    if *fun != BuiltinScalarFunction::MakeArray
+        && *fun != BuiltinScalarFunction::ArrayAppend
+        && *fun != BuiltinScalarFunction::ArrayPrepend
+        && *fun != BuiltinScalarFunction::ArrayConcat
     {
         return Ok(expressions);
     }
@@ -664,6 +664,20 @@ fn coerce_array_args(
         .iter()
         .map(|e| e.get_type(schema))
         .collect::<Result<Vec<_>>>()?;
+
+    // Check dimensions and align dimensions
+    // TODO: Move align array dimensions here. Function used in concat, append, prepend.
+    if *fun == BuiltinScalarFunction::ArrayConcat {
+        for expr_type in input_types.iter() {
+            if let DataType::List(_) = expr_type {
+                continue;
+            } else {
+                return plan_err!(
+                    "The array_concat function can only accept list as the args"
+                );
+            }
+        }
+    }
 
     // Get base type for each input type
     // e.g List[Int64] -> Int64

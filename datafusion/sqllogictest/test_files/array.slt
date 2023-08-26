@@ -1241,7 +1241,9 @@ select array_repeat([1], column3), array_repeat(column1, 3) from arrays_values_w
 ## array_concat (aliases: `array_cat`, `list_concat`, `list_cat`)
 
 # array_concat error
-query error DataFusion error: Error during planning: The array_concat function can only accept list as the args\.
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: The array_concat function can only accept list as the args\.
 select array_concat(1, 2);
 
 # array_concat scalar function #1
@@ -1293,21 +1295,16 @@ select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(n
 ----
 [[1, 2], [3, 4], []]
 
-query ?
+query error DataFusion error: type_coercion\ncaused by\nError during planning: The array_concat function can only accept list as the args
 select array_concat(make_array(make_array(1, 2), make_array(3, 4)), null);
-----
-[[1, 2], [3, 4]]
 
 query ?
 select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(5));
 ----
 [[1, 2], [3, 4], [5]]
 
-# TODO: Get error for this query
-query ?
+query error DataFusion error: type_coercion\ncaused by\nError during planning: The array_concat function can only accept list as the args
 select array_concat(make_array(make_array(1, 2), make_array(3, 4)), 5);
-----
-[[1, 2], [3, 4]]
 
 # array_concat scalar function #8 (with empty arrays)
 query ?
@@ -1815,7 +1812,7 @@ select array_replace_all(make_array([1, 2, 3], [4, 5, 6], [4, 5, 6], [10, 11, 12
 query TTT
 select array_to_string(['h', 'e', 'l', 'l', 'o'], ','), array_to_string([1, 2, 3, 4, 5], '-'), array_to_string([1.0, 2.0, 3.0], '|');
 ----
-h,e,l,l,o 1-2-3-4-5 1.0|2.0|3.0
+h,e,l,l,o 1-2-3-4-5 1|2|3
 
 # array_to_string scalar function #2
 query TTT
@@ -1833,31 +1830,31 @@ select array_to_string(make_array(), ',')
 query TTT
 select list_to_string(['h', 'e', 'l', 'l', 'o'], ','), list_to_string([1, 2, 3, 4, 5], '-'), list_to_string([1.0, 2.0, 3.0], '|');
 ----
-h,e,l,l,o 1-2-3-4-5 1.0|2.0|3.0
+h,e,l,l,o 1-2-3-4-5 1|2|3
 
 # array_join scalar function #5 (function alias `array_to_string`)
 query TTT
 select array_join(['h', 'e', 'l', 'l', 'o'], ','), array_join([1, 2, 3, 4, 5], '-'), array_join([1.0, 2.0, 3.0], '|');
 ----
-h,e,l,l,o 1-2-3-4-5 1.0|2.0|3.0
+h,e,l,l,o 1-2-3-4-5 1|2|3
 
 # list_join scalar function #6 (function alias `list_join`)
 query TTT
 select list_join(['h', 'e', 'l', 'l', 'o'], ','), list_join([1, 2, 3, 4, 5], '-'), list_join([1.0, 2.0, 3.0], '|');
 ----
-h,e,l,l,o 1-2-3-4-5 1.0|2.0|3.0
+h,e,l,l,o 1-2-3-4-5 1|2|3
 
 # array_to_string scalar function with nulls #1
 query TTT
 select array_to_string(make_array('h', NULL, 'l', NULL, 'o'), ','), array_to_string(make_array(1, NULL, 3, NULL, 5), '-'), array_to_string(make_array(NULL, 2.0, 3.0), '|');
 ----
-h,l,o 1-3-5 2.0|3.0
+h,l,o 1-3-5 2|3
 
 # array_to_string scalar function with nulls #2
 query TTT
 select array_to_string(make_array('h', NULL, NULL, NULL, 'o'), ',', '-'), array_to_string(make_array(NULL, 2, NULL, 4, 5), '-', 'nil'), array_to_string(make_array(1.0, NULL, 3.0), '|', '0');
 ----
-h,-,-,-,o nil-2-nil-4-5 1.0|0|3.0
+h,-,-,-,o nil-2-nil-4-5 1|0|3
 
 # array_to_string with columns #1
 

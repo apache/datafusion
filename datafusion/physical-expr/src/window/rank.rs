@@ -227,7 +227,6 @@ mod tests {
         test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
     }
 
-    #[allow(clippy::single_range_in_vec_init)]
     fn test_without_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..8], expected)
     }
@@ -276,7 +275,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::single_range_in_vec_init)]
     fn test_percent_rank() -> Result<()> {
         let r = percent_rank("arr".into());
 

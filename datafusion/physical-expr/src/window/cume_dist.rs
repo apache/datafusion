@@ -117,7 +117,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::single_range_in_vec_init)]
     fn test_cume_dist() -> Result<()> {
         let r = cume_dist("arr".into());
 

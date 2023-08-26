@@ -166,12 +166,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let data_types = values.iter().map(|e| e.get_datatype()).collect::<Vec<_>>();
         let seen_types: HashSet<DataType> =
             values.iter().map(|e| e.get_datatype()).collect();
-        let coerced_type = data_types
-            .iter()
-            .skip(1)
-            .fold(data_types[0].clone(), |acc, d| {
-                comparison_coercion(&acc, d).unwrap_or(acc)
-            });
 
         match seen_types.len() {
             0 => Ok(lit(ScalarValue::new_list(None, DataType::Utf8))),
@@ -180,6 +174,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(lit(ScalarValue::new_list(Some(values), data_type)))
             }
             _ => {
+                let coerced_type = data_types
+                    .iter()
+                    .skip(1)
+                    .fold(data_types[0].clone(), |acc, d| {
+                        comparison_coercion(&acc, d).unwrap_or(acc)
+                    });
                 let values = values
                         .iter()
                         .map(|e| {
