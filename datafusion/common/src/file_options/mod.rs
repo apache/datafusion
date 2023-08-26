@@ -75,7 +75,7 @@ impl StatementOptions {
 
     /// Scans for option and if it exists removes it and attempts to parse as a boolean
     /// Returns none if it does not exist.
-    pub fn get_bool_option(&mut self, find: &str) -> Result<Option<bool>> {
+    pub fn take_bool_option(&mut self, find: &str) -> Result<Option<bool>> {
         let maybe_option = self.scan_and_remove_option(find);
         maybe_option
             .map(|(_, v)| parse_boolean_string(find, v))
@@ -214,7 +214,7 @@ impl FileTypeWriterOptions {
         match self {
             FileTypeWriterOptions::Parquet(opt) => Ok(opt),
             _ => Err(DataFusionError::Internal(
-                "Expected parquet options but found options for a different FileType!"
+                "Expected parquet options but found options for: {}", self.name()
                     .into(),
             )),
         }

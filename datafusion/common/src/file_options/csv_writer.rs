@@ -37,12 +37,13 @@ pub struct CsvWriterOptions {
     /// Compression to apply after ArrowWriter serializes RecordBatches.
     /// This compression is applied by DataFusion not the ArrowWriter itself.
     pub compression: CompressionTypeVariant,
-    /// Indicates weather WriterBuilder.has_header() is set to true.
+    /// Indicates whether WriterBuilder.has_header() is set to true.
     /// This is duplicative as WriterBuilder also stores this information.
     /// However, WriterBuilder does not allow public read access to the
     /// has_header parameter.
     pub has_header: bool,
     // TODO: expose a way to read has_header in arrow create
+    // https://github.com/apache/arrow-rs/issues/4735
 }
 
 impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {

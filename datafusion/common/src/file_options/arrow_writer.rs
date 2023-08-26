@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Options related to how json files should be written
+//! Options related to how Arrow files should be written
 
 use crate::{
     config::ConfigOptions,
