@@ -43,9 +43,10 @@ pub use json::{JsonOpener, NdJsonExec};
 mod file_scan_config;
 pub(crate) use file_scan_config::PartitionColumnProjector;
 pub use file_scan_config::{
-    get_scan_files, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
-    FileScanConfig,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
+mod finder;
+pub use finder::{get_scan_files, PartitionedFileFinder};
 
 use crate::error::{DataFusionError, Result};
 use crate::{

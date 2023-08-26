@@ -237,6 +237,11 @@ impl<'a> Default for ParquetReadOptions<'a> {
 }
 
 impl<'a> ParquetReadOptions<'a> {
+    /// Create default options
+    pub fn new() -> Self {
+        Default::default()
+    }
+
     /// Specify parquet_pruning
     pub fn parquet_pruning(mut self, parquet_pruning: bool) -> Self {
         self.parquet_pruning = Some(parquet_pruning);
@@ -309,6 +314,11 @@ impl<'a> Default for ArrowReadOptions<'a> {
 }
 
 impl<'a> ArrowReadOptions<'a> {
+    /// Create default options
+    pub fn new() -> Self {
+        Default::default()
+    }
+
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(
         mut self,
@@ -357,6 +367,11 @@ impl<'a> Default for AvroReadOptions<'a> {
 }
 
 impl<'a> AvroReadOptions<'a> {
+    /// Create default options
+    pub fn new() -> Self {
+        Default::default()
+    }
+
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(
         mut self,
@@ -422,6 +437,11 @@ impl<'a> Default for NdJsonReadOptions<'a> {
 }
 
 impl<'a> NdJsonReadOptions<'a> {
+    /// Create default options
+    pub fn new() -> Self {
+        Default::default()
+    }
+
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(
         mut self,

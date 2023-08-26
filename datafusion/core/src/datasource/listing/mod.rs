@@ -75,10 +75,10 @@ pub struct PartitionedFile {
 
 impl PartitionedFile {
     /// Create a simple file without metadata or partition
-    pub fn new(path: String, size: u64) -> Self {
+    pub fn new(path: impl Into<String>, size: u64) -> Self {
         Self {
             object_meta: ObjectMeta {
-                location: Path::from(path),
+                location: Path::from(path.into()),
                 last_modified: chrono::Utc.timestamp_nanos(0),
                 size: size as usize,
                 e_tag: None,

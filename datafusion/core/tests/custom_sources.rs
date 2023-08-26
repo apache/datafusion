@@ -19,6 +19,8 @@ use arrow::array::{Int32Array, Int64Array};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::{get_scan_files, PartitionedFileFinder};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
@@ -29,6 +31,7 @@ use datafusion::physical_plan::{
     ColumnStatistics, DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion::prelude::ParquetReadOptions;
 use datafusion::scalar::ScalarValue;
 use datafusion::{
     datasource::{TableProvider, TableType},
@@ -38,6 +41,7 @@ use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
+use datafusion_common::test_util::parquet_test_data;
 use futures::stream::Stream;
 use std::any::Any;
 use std::pin::Pin;
@@ -295,4 +299,78 @@ fn contains_empty_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
     } else {
         contains_empty_exec(Arc::clone(&plan.children()[0]))
     }
+}
+
+#[tokio::test]
+async fn test_get_scan_files() -> Result<()> {
+    let session_ctx = SessionContext::new();
+    let testdata = parquet_test_data();
+    let path = format!("{testdata}/alltypes_plain.parquet");
+    let options = ParquetReadOptions::new();
+    session_ctx
+        .register_parquet("t", &path, options)
+        .await
+        .unwrap();
+
+    let exec = session_ctx
+        .sql("select * from t")
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+
+    // test PartitionedFileFinder API
+    let scan_files = PartitionedFileFinder::new().find(exec.clone());
+    validate_name(scan_files, "alltypes_plain.parquet");
+
+    // test get_scan_files API
+    validate_name(get_scan_files(exec).unwrap(), "alltypes_plain.parquet");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_scan_files_custom() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let exec = ctx
+        .read_table(Arc::new(CustomTableProvider))
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+
+    let scan_files = PartitionedFileFinder::new().find(exec.clone());
+    assert!(scan_files.is_empty());
+
+    // with custom finder
+    let scan_files = PartitionedFileFinder::new()
+        .with_finder(|exec| {
+            if exec
+                .as_any()
+                .downcast_ref::<CustomExecutionPlan>()
+                .is_some()
+            {
+                let file = PartitionedFile::new("foo", 102);
+                Some(vec![vec![file]])
+            } else {
+                None
+            }
+        })
+        .find(exec.clone());
+
+    validate_name(scan_files, "foo");
+    Ok(())
+}
+
+fn validate_name(scan_files: Vec<Vec<Vec<PartitionedFile>>>, expected_name: &str) {
+    assert_eq!(scan_files.len(), 1);
+    assert_eq!(scan_files[0].len(), 1);
+    assert_eq!(scan_files[0][0].len(), 1);
+    let location = scan_files[0][0][0].object_meta.location.to_string();
+    assert!(
+        location.contains(expected_name),
+        "could not find {expected_name} in {location}"
+    );
 }
