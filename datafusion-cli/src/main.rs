@@ -147,7 +147,6 @@ pub async fn main() -> Result<()> {
             }
         } else {
             rn_config
-                .with_memory_limit(0, 1.0)
         };
 
     let runtime_env = create_runtime_env(rn_config.clone())?;
