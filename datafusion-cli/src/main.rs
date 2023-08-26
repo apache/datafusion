@@ -63,7 +63,7 @@ struct Args {
     #[clap(
         short = 'm',
         long,
-        help = "The memory pool limitation, default to zero",
+        help = "The memory pool limitation (e.g. '10g'), default to 0",
         validator(is_valid_memory_pool_size)
     )]
     memory_limit: Option<String>,
