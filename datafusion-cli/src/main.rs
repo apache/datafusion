@@ -18,6 +18,7 @@
 use clap::Parser;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
+use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicFileCatalog;
@@ -95,6 +96,13 @@ struct Args {
         help = "Reduce printing other than the results and work quietly"
     )]
     quiet: bool,
+
+    #[clap(
+        long,
+        help = "Specify the memory pool type 'greedy' or 'fair', default to 'greedy'",
+        validator(is_valid_memory_pool_type)
+    )]
+    mem_pool_type: Option<String>,
 }
 
 #[tokio::main]
@@ -118,14 +126,29 @@ pub async fn main() -> Result<()> {
     };
 
     let rn_config = RuntimeConfig::new();
-    let rn_config = if let Some(memory_limit) = args.memory_limit {
-        let memory_limit = memory_limit[..memory_limit.len() - 1]
-            .parse::<usize>()
-            .unwrap();
-        rn_config.with_memory_limit(memory_limit, 1.0)
-    } else {
-        rn_config.with_memory_limit(0, 1.0)
-    };
+    let rn_config =
+        // set memory pool size
+        if let Some(memory_limit) = args.memory_limit {
+            let memory_limit = memory_limit[..memory_limit.len() - 1]
+                .parse::<usize>()
+                .unwrap();
+            // set memory pool type
+            if let Some(mem_pool_type) = args.mem_pool_type {
+                match mem_pool_type.as_str() {
+                    "greedy" => rn_config
+                        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit))),
+                    "fair" => rn_config
+                        .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
+                    _ => unreachable!(),
+                }
+            } else {
+                rn_config
+                .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
+            }
+        } else {
+            rn_config
+                .with_memory_limit(0, 1.0)
+        };
 
     let runtime_env = create_runtime_env(rn_config.clone())?;
 
@@ -219,5 +242,15 @@ fn is_valid_memory_pool_size(size: &str) -> Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
         _ => Err(format!("Invalid memory pool size '{}'", size)),
+    }
+}
+
+fn is_valid_memory_pool_type(pool_type: &str) -> Result<(), String> {
+    match pool_type {
+        "greedy" | "fair" => Ok(()),
+        _ => Err(format!(
+            "Invalid memory pool type '{}', it should be 'fair' or 'greedy'",
+            pool_type
+        )),
     }
 }
