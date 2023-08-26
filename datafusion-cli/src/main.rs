@@ -60,6 +60,14 @@ struct Args {
     command: Vec<String>,
 
     #[clap(
+        short = 'm',
+        long,
+        help = "The memory pool limitation, default to zero",
+        validator(is_valid_memory_pool_size)
+    )]
+    memory_limit: Option<String>,
+
+    #[clap(
         short,
         long,
         multiple_values = true,
@@ -109,7 +117,16 @@ pub async fn main() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let runtime_env = create_runtime_env()?;
+    let rn_config = RuntimeConfig::new();
+    let rn_config = if let Some(memory_limit) = args.memory_limit {
+        let memory_limit = memory_limit.parse::<usize>().unwrap();
+        rn_config.with_memory_limit(memory_limit, 1.0)
+    } else {
+        rn_config.with_memory_limit(0, 1.0)
+    };
+
+    let runtime_env = create_runtime_env(rn_config.clone())?;
+
     let mut ctx =
         SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
     ctx.refresh_catalogs().await?;
@@ -162,8 +179,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-fn create_runtime_env() -> Result<RuntimeEnv> {
-    let rn_config = RuntimeConfig::new();
+fn create_runtime_env(rn_config: RuntimeConfig) -> Result<RuntimeEnv> {
     RuntimeEnv::new(rn_config)
 }
 
@@ -187,5 +203,19 @@ fn is_valid_batch_size(size: &str) -> Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
         _ => Err(format!("Invalid batch size '{}'", size)),
+    }
+}
+
+fn is_valid_memory_pool_size(size: &str) -> Result<(), String> {
+    if let Some(last_char) = size.chars().last() {
+        if last_char != 'g' && last_char != 'G' {
+            return Err(format!("Invalid memory pool size format '{}'", size));
+        }
+    }
+
+    let size = &size[..size.len() - 1];
+    match size.parse::<usize>() {
+        Ok(size) if size > 0 => Ok(()),
+        _ => Err(format!("Invalid memory pool size '{}'", size)),
     }
 }
