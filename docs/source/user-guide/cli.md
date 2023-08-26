@@ -123,7 +123,7 @@ OPTIONS:
         --format <FORMAT>                   [default: table] [possible values: csv, tsv, table, json,
                                             nd-json]
     -h, --help                              Print help information
-    -m, --memory-limit <MEMORY_LIMIT>       The memory pool limitation, default to zero
+    -m, --memory-limit <MEMORY_LIMIT>       The memory pool limitation (e.g. '10g'), default to None (no limit)
         --mem-pool-type <MEM_POOL_TYPE>     Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
     -p, --data-path <DATA_PATH>             Path to your data, default to current directory
     -q, --quiet                             Reduce printing other than the results and work quietly
