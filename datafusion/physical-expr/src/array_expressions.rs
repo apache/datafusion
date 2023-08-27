@@ -867,19 +867,8 @@ fn concat_internal(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let mut new_args = vec![];
-    for arg in args {
-        let (ndim, lower_data_type) =
-            compute_array_ndims_with_datatype(Some(arg.clone()))?;
-        if ndim.is_none() {
-            return not_impl_err!("Array is not type '{lower_data_type:?}'.");
-        } else if ndim == Some(1) {
-        } else if !lower_data_type.equals_datatype(&DataType::Null) {
-            new_args.push(arg.clone());
-        }
-    }
-
-    concat_internal(new_args.as_slice())
+    // Dimension check and null conversion is done in `type coercion` step.
+    concat_internal(args)
 }
 
 macro_rules! general_repeat {
