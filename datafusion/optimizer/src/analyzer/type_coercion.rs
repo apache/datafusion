@@ -596,13 +596,13 @@ fn coerced_type_from_base_type(
 fn replace_inner_nulls_with_coerced_types_(
     coerced_types: Vec<DataType>,
 ) -> Result<Vec<DataType>> {
-    let first_non_null_type = coerced_types
+    let first_non_null_base_type = coerced_types
         .iter()
         .map(base_type)
         .find(|t| t.is_ok() && t.as_ref().unwrap() != &DataType::Null)
         .map(|t| t.unwrap());
 
-    if let Some(data_type) = first_non_null_type {
+    if let Some(data_type) = first_non_null_base_type {
         coerced_types
             .iter()
             .map(|t| {
@@ -705,10 +705,10 @@ fn coerced_array_nulls(
     coerced_types: Vec<DataType>,
 ) -> Result<Vec<DataType>> {
     // Convert Null to coerced expression
-    let coerced_types = match fun {
+    match fun {
         // MakeArray(elements...): each element has the same type, convert null to the non-null type.
         BuiltinScalarFunction::MakeArray => {
-            replace_nulls_with_coerced_types(coerced_types)?
+            replace_nulls_with_coerced_types(coerced_types)
         }
         // ArrayAppend(list, element): null is only possible with the element, convert it to the list inner type
         // ArrayPrepend(element, list): null is only possible with the element, convert it to the list inner type
@@ -716,28 +716,13 @@ fn coerced_array_nulls(
         BuiltinScalarFunction::ArrayAppend
         | BuiltinScalarFunction::ArrayPrepend
         | BuiltinScalarFunction::ArrayConcat => {
-            replace_inner_nulls_with_coerced_types_(coerced_types)?
+            replace_inner_nulls_with_coerced_types_(coerced_types)
         }
-        _ => coerced_types,
-    };
-
-    Ok(coerced_types)
+        _ => Ok(coerced_types),
+    }
 }
 
-fn cast_expressions_with_coerced_types(
-    expressions: &[Expr],
-    coerced_types: &[DataType],
-    schema: &DFSchema,
-) -> Result<Vec<Expr>> {
-    expressions
-        .iter()
-        .zip(coerced_types.iter())
-        .map(|(expr, coerced_type)| cast_expr(expr, coerced_type, schema))
-        .collect::<Result<Vec<_>>>()
-}
-
-// Coerce array arguments types for array functions
-// Convert type or return error for incompatible types in this step
+// Coerce array arguments types for array functions, convert type or return error for incompatible types at this step
 fn coerce_array_args(
     fun: &BuiltinScalarFunction,
     expressions: &[Expr],
@@ -750,9 +735,14 @@ fn coerce_array_args(
     // TODO: We may move this check outside of type coercion
     // Array concat is moved here since handle this before null coercion is easier and make senses to block the invalid arguments before type coercion.
     validate_array_function_arguments(fun, input_types.as_slice())?;
+    // coercion is break down into two steps, since not all array functions have the same coercion rules for nulls
     let coerced_types = coerced_array_types_without_nulls(input_types.as_slice())?;
     let coerced_types = coerced_array_nulls(fun, coerced_types)?;
-    cast_expressions_with_coerced_types(expressions, coerced_types.as_slice(), schema)
+    expressions
+        .iter()
+        .zip(coerced_types.iter())
+        .map(|(expr, coerced_type)| cast_expr(expr, coerced_type, schema))
+        .collect::<Result<Vec<_>>>()
 }
 
 fn coerce_arguments_for_fun(
