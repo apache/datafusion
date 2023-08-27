@@ -1381,13 +1381,19 @@ select array_concat(make_array([1,2], [3,4]), make_array(5));
 ----
 [[1, 2], [3, 4], [5]]
 
-# array_concat with different dimensions of null #8 (2D + 1D)
-# Duckdb Result: [[1,2],[3,4],null]
+# array_concat with different dimensions and size of null #8 (2D2L + 1D1L)
+# Duckdb Result: [[1, 2], [3, 4], null]
 # The behavior is not the same to Duckdb, but since we try to convert null to compatible type for each array function, 1d empty array is perfered to null.
 query ?
 select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(null));
 ----
 [[1, 2], [3, 4], []]
+
+# array_concat with different dimensions of null #9 (2D + 1D)
+query ?
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(null, null));
+----
+[[1, 2], [3, 4], [, ]]
 
 # array_concat column-wise #1
 query ?
