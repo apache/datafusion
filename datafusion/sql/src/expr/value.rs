@@ -196,7 +196,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 }
                                 data_type => {
                                     // Convert to coerced type
-                                    // Values has only three types: Int64, Float64, UInt64
                                     // comparison_coercion: Float64 > Int64 > UInt64
                                     match (data_type, &coerced_type) {
                                         (&DataType::Int64, &DataType::Float64) => {

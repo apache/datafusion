@@ -667,9 +667,7 @@ fn validate_array_function_arguments(
     }
 }
 
-fn coerced_array_types_without_nulls(
-    input_types: &[DataType],
-) -> Result<Vec<DataType>> {
+fn coerced_array_types_without_nulls(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // Get base type for each input type
     // e.g List[Int64] -> Int64
     //     List[List[Int64]] -> Int64
@@ -752,8 +750,7 @@ fn coerce_array_args(
     // TODO: We may move this check outside of type coercion
     // Array concat is moved here since handle this before null coercion is easier and make senses to block the invalid arguments before type coercion.
     validate_array_function_arguments(fun, input_types.as_slice())?;
-    let coerced_types =
-        coerced_array_types_without_nulls(input_types.as_slice())?;
+    let coerced_types = coerced_array_types_without_nulls(input_types.as_slice())?;
     let coerced_types = coerced_array_nulls(fun, coerced_types)?;
     cast_expressions_with_coerced_types(expressions, coerced_types.as_slice(), schema)
 }

@@ -304,10 +304,7 @@ select column1, column2, column3, column4 from nested_arrays_with_repeating_elem
 [[19, 20, 21], [19, 20, 21], [19, 20, 21], [22, 23, 24], [19, 20, 21], [25, 26, 27], [19, 20, 21], [22, 23, 24], [19, 20, 21], [19, 20, 21]] [19, 20, 21] [28, 29, 30] 5
 [[28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30], [31, 32, 33], [34, 35, 36], [28, 29, 30]] [28, 29, 30] [37, 38, 39] 10
 
-
 ### Array index
-
-
 ## array[i]
 
 # single index with scalars #1 (positive index)
@@ -478,6 +475,14 @@ select column1[0:5], column2[0:3], column3[0:9] from arrays;
 
 ### Array function tests
 
+## select array
+query ?
+select [1, null];
+----
+[1, ]
+
+query error DataFusion error: This feature is not implemented: Unsupported array literal type coercion from Boolean to Int64
+select [1, true, null];
 
 ## make_array (aliases: `make_list`)
 
