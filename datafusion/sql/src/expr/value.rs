@@ -29,6 +29,8 @@ use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::HashSet;
 
+// Coerce scalar value type
+// i.e. ScalarValue::I64(1) -> ScalarValue::F64(1.0)
 macro_rules! coerce_scalar_value {
     ($data_type:ty, $coerced_type:ty, $e:expr) => {{
         let val: $data_type = $e.clone().try_into().unwrap();
