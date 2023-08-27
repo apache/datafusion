@@ -24,8 +24,7 @@ use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
 use datafusion_common::plan_err;
 use datafusion_common::{
-    assert_contains, config::ConfigOptions, DataFusionError, Result, ScalarValue,
-    TableReference,
+    config::ConfigOptions, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
@@ -4209,7 +4208,7 @@ fn test_multi_grouping_sets() {
 }
 
 #[test]
-fn test_array_with_binaryExpr() {
+fn test_array_with_binary_expr() {
     let sql = "select [1>0,2>1]";
 
     let expected = "Projection: make_array(Int64(1) > Int64(0), Int64(2) > Int64(1))\
