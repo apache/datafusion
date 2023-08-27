@@ -972,7 +972,7 @@ select array_append([[1,2,3]], [null]);
 ----
 [[1, 2, 3], []]
 
-# TODO: array_append with NULLs
+# TODO: array_append with pure nulls
 # array_append scalar function #2
 # query ??
 # select array_append(make_array(), make_array()), array_append(make_array(), make_array(4));
@@ -1096,7 +1096,7 @@ select array_prepend(make_array(null), make_array([4, 5, 6]));
 ----
 [[], [4, 5, 6]]
 
-# TODO: array_prepend with NULLs
+# TODO: array_prepend with pure nulls
 # array_prepend scalar function #2
 # query ??
 # select array_prepend(make_array(), make_array()), array_prepend(make_array(4), make_array());
@@ -1137,6 +1137,16 @@ query ?
 select array_prepend(null, make_array(1, 2, 3));
 ----
 [, 1, 2, 3]
+
+query ?
+select array_prepend(null, make_array(1, 2.2, 3));
+----
+[, 1.0, 2.2, 3.0]
+
+query ?
+select array_prepend(1.2, make_array(1, 2, 3));
+----
+[1.2, 1.0, 2.0, 3.0]
 
 # array_prepend with columns #1
 query ?
@@ -1248,8 +1258,14 @@ select array_repeat([1], column3), array_repeat(column1, 3) from arrays_values_w
 # array_concat error
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
 caused by
-Error during planning: The array_concat function can only accept list as the args\.
+Error during planning: The array_concat function can only accept list as the args
 select array_concat(1, 2);
+
+query error DataFusion error: type_coercion\ncaused by\nError during planning: The array_concat function can only accept list as the args
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), null);
+
+query error DataFusion error: type_coercion\ncaused by\nError during planning: The array_concat function can only accept list as the args
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), 5);
 
 # array_concat scalar function #1
 query ??
@@ -1292,24 +1308,6 @@ query ?
 select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(make_array()));
 ----
 [[1, 2], [3, 4], []]
-
-# Duckdb: [[1,2],[3,4],null]
-# The behavior is not the same to Duckdb, but since we try to convert null to compatible type for each array function, 1d empty array is perfered to null.
-query ?
-select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(null));
-----
-[[1, 2], [3, 4], []]
-
-query error DataFusion error: type_coercion\ncaused by\nError during planning: The array_concat function can only accept list as the args
-select array_concat(make_array(make_array(1, 2), make_array(3, 4)), null);
-
-query ?
-select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(5));
-----
-[[1, 2], [3, 4], [5]]
-
-query error DataFusion error: type_coercion\ncaused by\nError during planning: The array_concat function can only accept list as the args
-select array_concat(make_array(make_array(1, 2), make_array(3, 4)), 5);
 
 # array_concat scalar function #8 (with empty arrays)
 query ?
@@ -1376,6 +1374,20 @@ query ?
 select array_concat(make_array([30, 40]), make_array(10, 20), make_array([[50, 60]]),  make_array([[[70, 80]]]), make_array([[80, 40]]));
 ----
 [[[[30, 40]]], [[[10, 20]]], [[[50, 60]]], [[[70, 80]]], [[[80, 40]]]]
+
+# array_concat with different dimensions and size #7 (2DL2 + 1DL1)
+query ?
+select array_concat(make_array([1,2], [3,4]), make_array(5));
+----
+[[1, 2], [3, 4], [5]]
+
+# array_concat with different dimensions of null #8 (2D + 1D)
+# Duckdb Result: [[1,2],[3,4],null]
+# The behavior is not the same to Duckdb, but since we try to convert null to compatible type for each array function, 1d empty array is perfered to null.
+query ?
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(null));
+----
+[[1, 2], [3, 4], []]
 
 # array_concat column-wise #1
 query ?
