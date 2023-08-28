@@ -162,9 +162,9 @@ pub fn unescape_input(input: &str) -> datafusion::error::Result<String> {
                     't' => '\t',
                     '\\' => '\\',
                     _ => {
-                        return Err(DataFusionError::SQL(ParserError::TokenizerError(
+                        return sql_err!(ParserError::TokenizerError(
                             format!("unsupported escape char: '\\{}'", next_char),
-                        )))
+                        ))
                     }
                 });
             }

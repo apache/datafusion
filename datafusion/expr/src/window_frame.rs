@@ -23,7 +23,7 @@
 //! - An ending frame boundary,
 //! - An EXCLUDE clause.
 
-use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_err, DataFusionError, Result, ScalarValue, sql_err};
 use sqlparser::ast;
 use sqlparser::parser::ParserError::ParserError;
 use std::convert::{From, TryFrom};
@@ -241,9 +241,9 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
             let result = match *value {
                 ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
                 e => {
-                    return Err(DataFusionError::SQL(ParserError(format!(
-                        "INTERVAL expression cannot be {e:?}"
-                    ))));
+                    return sql_err!(
+                        ParserError(format!("INTERVAL expression cannot be {e:?}"))
+                    );
                 }
             };
             if let Some(leading_field) = leading_field {

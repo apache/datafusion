@@ -17,6 +17,7 @@
 
 //! DataFusion error types
 
+use std::backtrace::{Backtrace, BacktraceStatus};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
@@ -242,6 +243,7 @@ impl From<ParquetError> for DataFusionError {
     }
 }
 
+
 #[cfg(feature = "avro")]
 impl From<AvroError> for DataFusionError {
     fn from(e: AvroError) -> Self {
@@ -269,6 +271,7 @@ impl From<ParserError> for DataFusionError {
     }
 }
 
+
 impl From<GenericError> for DataFusionError {
     fn from(err: GenericError) -> Self {
         DataFusionError::External(err)
@@ -277,54 +280,61 @@ impl From<GenericError> for DataFusionError {
 
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+
+        let back_trace = Backtrace::capture();
+        let mut back_trace_desc: String = "".to_string();
+        if back_trace.status() == BacktraceStatus::Captured {
+            back_trace_desc = format!("\nback trace: {}", back_trace);
+        }
+
         match *self {
-            DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {desc}"),
+            DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {desc}{back_trace_desc}"),
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => {
-                write!(f, "Parquet error: {desc}")
+                write!(f, "Parquet error: {desc}{back_trace_desc}")
             }
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => {
-                write!(f, "Avro error: {desc}")
+                write!(f, "Avro error: {desc}{back_trace_desc}")
             }
-            DataFusionError::IoError(ref desc) => write!(f, "IO error: {desc}"),
+            DataFusionError::IoError(ref desc) => write!(f, "IO error: {desc}{back_trace_desc}"),
             DataFusionError::SQL(ref desc) => {
-                write!(f, "SQL error: {desc:?}")
+                write!(f, "SQL error: {desc:?}{back_trace_desc}")
             }
             DataFusionError::Configuration(ref desc) => {
                 write!(f, "Invalid or Unsupported Configuration: {desc}")
             }
             DataFusionError::NotImplemented(ref desc) => {
-                write!(f, "This feature is not implemented: {desc}")
+                write!(f, "This feature is not implemented: {desc}{back_trace_desc}")
             }
             DataFusionError::Internal(ref desc) => {
                 write!(f, "Internal error: {desc}. This was likely caused by a bug in DataFusion's \
-                    code and we would welcome that you file an bug report in our issue tracker")
+                    code and we would welcome that you file an bug report in our issue tracker{back_trace_desc}")
             }
             DataFusionError::Plan(ref desc) => {
-                write!(f, "Error during planning: {desc}")
+                write!(f, "Error during planning: {desc}{back_trace_desc}")
             }
             DataFusionError::SchemaError(ref desc) => {
-                write!(f, "Schema error: {desc}")
+                write!(f, "Schema error: {desc}{back_trace_desc}")
             }
             DataFusionError::Execution(ref desc) => {
-                write!(f, "Execution error: {desc}")
+                write!(f, "Execution error: {desc}{back_trace_desc}")
             }
             DataFusionError::ResourcesExhausted(ref desc) => {
-                write!(f, "Resources exhausted: {desc}")
+                write!(f, "Resources exhausted: {desc}{back_trace_desc}")
             }
             DataFusionError::External(ref desc) => {
-                write!(f, "External error: {desc}")
+                write!(f, "External error: {desc}{back_trace_desc}")
             }
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(ref desc) => {
-                write!(f, "Object Store error: {desc}")
+                write!(f, "Object Store error: {desc}{back_trace_desc}")
             }
             DataFusionError::Context(ref desc, ref err) => {
                 write!(f, "{}\ncaused by\n{}", desc, *err)
             }
             DataFusionError::Substrait(ref desc) => {
-                write!(f, "Substrait error: {desc}")
+                write!(f, "Substrait error: {desc}{back_trace_desc}")
             }
         }
     }
@@ -422,6 +432,7 @@ macro_rules! unwrap_or_internal_err {
     };
 }
 
+
 macro_rules! with_dollar_sign {
     ($($body:tt)*) => {
         macro_rules! __with_dollar_sign { $($body)* }
@@ -464,6 +475,14 @@ make_error!(not_impl_err, NotImplemented);
 // Exposes a macro to create `DataFusionError::Execution`
 make_error!(exec_err, Execution);
 
+// Exposes a macro to create `DataFusionError::SQL`
+#[macro_export]
+macro_rules! sql_err {
+    ($ERR:expr) => {
+        Err(DataFusionError::SQL($ERR))
+    };
+}
+
 // To avoid compiler error when using macro in the same crate:
 // macros from the current crate cannot be referred to by absolute paths
 pub use exec_err as _exec_err;
@@ -476,7 +495,7 @@ mod test {
 
     use crate::error::DataFusionError;
     use arrow::error::ArrowError;
-
+    
     #[test]
     fn arrow_error_to_datafusion() {
         let res = return_arrow_error().unwrap_err();
