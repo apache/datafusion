@@ -1,0 +1,69 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion-physical-plan"
+description = "Physical (ExecutionPlan) implementations for DataFusion query engine"
+keywords = ["arrow", "query", "sql"]
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
+
+[lib]
+name = "datafusion_physical_plan"
+path = "src/lib.rs"
+
+[features]
+
+[dependencies]
+#ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-schema = { workspace = true }
+#base64 = { version = "0.21", optional = true }
+#blake2 = { version = "^0.10.2", optional = true }
+#blake3 = { version = "1.0", optional = true }
+#chrono = { version = "0.4.23", default-features = false }
+datafusion-common = { path = "../common", version = "30.0.0" }
+datafusion-expr = { path = "../expr", version = "30.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "30.0.0" }
+#half = { version = "2.1", default-features = false }
+#hashbrown = { version = "0.14", features = ["raw"] }
+#hex = { version = "0.4", optional = true }
+#indexmap = "2.0.0"
+#itertools = { version = "0.11", features = ["use_std"] }
+#libc = "0.2.140"
+#log = "^0.4"
+#md-5 = { version = "^0.10.0", optional = true }
+#paste = "^1.0"
+#petgraph = "0.6.2"
+#rand = "0.8"
+#regex = { version = "1.8", optional = true }
+#sha2 = { version = "^0.10.1", optional = true }
+#unicode-segmentation = { version = "^1.7.1", optional = true }
+#uuid = { version = "^1.2", features = ["v4"] }
+
+#[dev-dependencies]
+#criterion = "0.5"
+#rand = "0.8"
+#rstest = "0.18.0"
