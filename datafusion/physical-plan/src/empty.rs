@@ -20,9 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::physical_plan::{
-    memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning,
-};
+use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -174,7 +172,7 @@ impl ExecutionPlan for EmptyExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::with_new_children_if_necessary;
+    use crate::with_new_children_if_necessary;
     use crate::{physical_plan::common, test_util};
 
     #[tokio::test]

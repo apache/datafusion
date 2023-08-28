@@ -17,15 +17,13 @@
 
 //! Stream and channel implementations for window function expressions.
 
-use crate::physical_plan::common::transpose;
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
-};
-use crate::physical_plan::windows::{
+use crate::common::transpose;
+use crate::expressions::PhysicalSortExpr;
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
-use crate::physical_plan::{
+use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,

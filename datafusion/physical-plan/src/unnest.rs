@@ -37,7 +37,7 @@ use log::trace;
 use std::time::Instant;
 use std::{any::Any, sync::Arc};
 
-use crate::physical_plan::{
+use crate::{
     expressions::Column, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, PhysicalSortExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -309,7 +309,7 @@ fn build_batch_generic_list<T: OffsetSizeTrait, P: ArrowPrimitiveType<Native = T
 }
 
 /// Given this `GenericList` list_array:
-///   
+///
 /// ```ignore
 /// [1], null, [2, 3, 4], null, [5, 6]
 /// ```
@@ -383,7 +383,7 @@ fn build_batch_fixedsize_list(
 }
 
 /// Given this `FixedSizeListArray` list_array:
-///   
+///
 /// ```ignore
 /// [1, 2], null, [3, 4], null, [5, 6]
 /// ```
@@ -453,7 +453,7 @@ fn unnest_fixed_list(
 /// Every column value needs to be repeated as many times as many elements there is in each corresponding array value.
 ///
 /// If the column being unnested looks like this:
-///    
+///
 /// ```ignore
 /// [1], null, [2, 3, 4], null, [5, 6]
 /// ```

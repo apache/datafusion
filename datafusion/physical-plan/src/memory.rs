@@ -30,7 +30,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::ordering_equivalence_properties_helper;
+use crate::ordering_equivalence_properties_helper;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
@@ -260,8 +260,8 @@ impl RecordBatchStream for MemoryStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::ExecutionPlan;
+    use crate::memory::MemoryExec;
+    use crate::ExecutionPlan;
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;

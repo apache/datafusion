@@ -24,8 +24,8 @@ use std::ops::IndexMut;
 use std::sync::Arc;
 use std::{fmt, usize};
 
-use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
-use crate::physical_plan::ExecutionPlan;
+use crate::joins::utils::{JoinFilter, JoinSide};
+use crate::ExecutionPlan;
 
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, SchemaRef};
@@ -830,7 +830,7 @@ pub fn record_visited_indices<T: ArrowPrimitiveType>(
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::physical_plan::{
+    use crate::{
         expressions::Column,
         expressions::PhysicalSortExpr,
         joins::utils::{ColumnIndex, JoinFilter, JoinSide},

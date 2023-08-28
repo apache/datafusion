@@ -26,9 +26,7 @@ use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::{DisplayAs, SendableRecordBatchStream, Statistics};
 
-use crate::physical_plan::{
-    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
-};
+use crate::{DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
@@ -174,11 +172,11 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::physical_plan::{collect, common};
     use crate::test::exec::{
         assert_strong_count_converges_to_zero, BlockingExec, PanicExec,
     };
     use crate::test::{self, assert_is_pending};
+    use crate::{collect, common};
 
     #[tokio::test]
     async fn merge() -> Result<()> {

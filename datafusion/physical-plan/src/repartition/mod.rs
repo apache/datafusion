@@ -24,14 +24,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
-use crate::physical_plan::common::transpose;
-use crate::physical_plan::hash_utils::create_hashes;
-use crate::physical_plan::metrics::BaselineMetrics;
-use crate::physical_plan::repartition::distributor_channels::{
-    channels, partition_aware_channels,
-};
-use crate::physical_plan::sorts::streaming_merge;
-use crate::physical_plan::{
+use crate::common::transpose;
+use crate::hash_utils::create_hashes;
+use crate::metrics::BaselineMetrics;
+use crate::repartition::distributor_channels::{channels, partition_aware_channels};
+use crate::sorts::streaming_merge;
+use crate::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
 
@@ -1075,7 +1073,7 @@ mod tests {
         let output_stream = exec.execute(0, task_ctx).unwrap();
 
         // Expect that an error is returned
-        let result_string = crate::physical_plan::common::collect(output_stream)
+        let result_string = crate::common::collect(output_stream)
             .await
             .unwrap_err()
             .to_string();
@@ -1101,7 +1099,7 @@ mod tests {
         let output_stream = exec.execute(0, task_ctx).unwrap();
 
         // Expect that an error is returned
-        let result_string = crate::physical_plan::common::collect(output_stream)
+        let result_string = crate::common::collect(output_stream)
             .await
             .unwrap_err()
             .to_string();
@@ -1134,7 +1132,7 @@ mod tests {
         let output_stream = exec.execute(0, task_ctx).unwrap();
 
         // Expect that an error is returned
-        let result_string = crate::physical_plan::common::collect(output_stream)
+        let result_string = crate::common::collect(output_stream)
             .await
             .unwrap_err()
             .to_string();
@@ -1182,9 +1180,7 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &expected_batches);
 
         let output_stream = exec.execute(0, task_ctx).unwrap();
-        let batches = crate::physical_plan::common::collect(output_stream)
-            .await
-            .unwrap();
+        let batches = crate::common::collect(output_stream).await.unwrap();
 
         assert_batches_sorted_eq!(&expected, &batches);
     }
@@ -1211,9 +1207,7 @@ mod tests {
         input.wait().await;
 
         // output stream 1 should *not* error and have one of the input batches
-        let batches = crate::physical_plan::common::collect(output_stream1)
-            .await
-            .unwrap();
+        let batches = crate::common::collect(output_stream1).await.unwrap();
 
         let expected = vec![
             "+------------------+",
@@ -1236,7 +1230,7 @@ mod tests {
     async fn hash_repartition_with_dropping_output_stream() {
         let task_ctx = Arc::new(TaskContext::default());
         let partitioning = Partitioning::Hash(
-            vec![Arc::new(crate::physical_plan::expressions::Column::new(
+            vec![Arc::new(crate::expressions::Column::new(
                 "my_awesome_field",
                 0,
             ))],
@@ -1248,9 +1242,7 @@ mod tests {
         let exec = RepartitionExec::try_new(input.clone(), partitioning.clone()).unwrap();
         let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
         input.wait().await;
-        let batches_without_drop = crate::physical_plan::common::collect(output_stream1)
-            .await
-            .unwrap();
+        let batches_without_drop = crate::common::collect(output_stream1).await.unwrap();
 
         // run some checks on the result
         let items_vec = str_batches_to_vec(&batches_without_drop);
@@ -1272,9 +1264,7 @@ mod tests {
         // *before* any outputs are produced
         std::mem::drop(output_stream0);
         input.wait().await;
-        let batches_with_drop = crate::physical_plan::common::collect(output_stream1)
-            .await
-            .unwrap();
+        let batches_with_drop = crate::common::collect(output_stream1).await.unwrap();
 
         assert_eq!(batches_without_drop, batches_with_drop);
     }
@@ -1359,22 +1349,16 @@ mod tests {
         )])
         .unwrap();
         let partitioning = Partitioning::Hash(
-            vec![Arc::new(crate::physical_plan::expressions::Column::new(
-                "a", 0,
-            ))],
+            vec![Arc::new(crate::expressions::Column::new("a", 0))],
             2,
         );
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch)], schema);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
         let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
-        let batch0 = crate::physical_plan::common::collect(output_stream0)
-            .await
-            .unwrap();
+        let batch0 = crate::common::collect(output_stream0).await.unwrap();
         let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
-        let batch1 = crate::physical_plan::common::collect(output_stream1)
-            .await
-            .unwrap();
+        let batch1 = crate::common::collect(output_stream1).await.unwrap();
         assert!(batch0.is_empty() || batch1.is_empty());
         Ok(())
     }

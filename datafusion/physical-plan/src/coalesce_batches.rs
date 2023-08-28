@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::{
+use crate::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream,
 };
@@ -309,8 +309,8 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
     use crate::test::create_vec_batches;
+    use crate::{memory::MemoryExec, repartition::RepartitionExec};
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[tokio::test(flavor = "multi_thread")]

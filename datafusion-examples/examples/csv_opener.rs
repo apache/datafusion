@@ -17,6 +17,7 @@
 
 use std::{sync::Arc, vec};
 
+use crate::metrics::ExecutionPlanMetricsSet;
 use datafusion::{
     assert_batches_eq,
     datasource::{
@@ -25,7 +26,6 @@ use datafusion::{
         physical_plan::{CsvConfig, CsvOpener, FileScanConfig, FileStream},
     },
     error::Result,
-    physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
 use datafusion_common::FileCompressionType;

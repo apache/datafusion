@@ -18,8 +18,8 @@
 //! Defines common code used in execution plans
 
 use super::SendableRecordBatchStream;
-use crate::physical_plan::stream::RecordBatchReceiverStream;
-use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
+use crate::stream::RecordBatchReceiverStream;
+use crate::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
@@ -375,9 +375,9 @@ mod tests {
     use std::ops::Not;
 
     use super::*;
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::sorts::sort::SortExec;
-    use crate::physical_plan::union::UnionExec;
+    use crate::memory::MemoryExec;
+    use crate::sorts::sort::SortExec;
+    use crate::union::UnionExec;
     use arrow::compute::SortOptions;
     use arrow::{
         array::{Float32Array, Float64Array},

@@ -28,14 +28,14 @@ use std::vec;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use crate::physical_plan::aggregates::group_values::{new_group_values, GroupValues};
-use crate::physical_plan::aggregates::{
+use crate::aggregates::group_values::{new_group_values, GroupValues};
+use crate::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     PhysicalGroupBy,
 };
-use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
-use crate::physical_plan::{aggregates, PhysicalExpr};
-use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use crate::metrics::{BaselineMetrics, RecordOutput};
+use crate::{aggregates, PhysicalExpr};
+use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::Result;

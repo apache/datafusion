@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_plan::sorts::sort::SortOptions;
+use crate::sorts::sort::SortOptions;
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::{Row, Rows};

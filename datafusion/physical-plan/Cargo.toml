@@ -35,31 +35,38 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-#ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
+async-trait = "0.1.41"
 #base64 = { version = "0.21", optional = true }
 #blake2 = { version = "^0.10.2", optional = true }
 #blake3 = { version = "1.0", optional = true }
-#chrono = { version = "0.4.23", default-features = false }
+chrono = { version = "0.4.23", default-features = false }
 datafusion-common = { path = "../common", version = "30.0.0" }
 datafusion-expr = { path = "../expr", version = "30.0.0" }
+datafusion-execution = { path = "../execution", version = "30.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "30.0.0" }
-#half = { version = "2.1", default-features = false }
-#hashbrown = { version = "0.14", features = ["raw"] }
+futures = "0.3"
+half = { version = "2.1", default-features = false }
+hashbrown = { version = "0.14", features = ["raw"] }
 #hex = { version = "0.4", optional = true }
-#indexmap = "2.0.0"
-#itertools = { version = "0.11", features = ["use_std"] }
+indexmap = "2.0.0"
+itertools = { version = "0.11", features = ["use_std"] }
 #libc = "0.2.140"
-#log = "^0.4"
+log = "^0.4"
 #md-5 = { version = "^0.10.0", optional = true }
+parking_lot = "0.12"
+pin-project-lite = "^0.2.7"
 #paste = "^1.0"
 #petgraph = "0.6.2"
 #rand = "0.8"
 #regex = { version = "1.8", optional = true }
 #sha2 = { version = "^0.10.1", optional = true }
+tempfile = "3"
+tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 #unicode-segmentation = { version = "^1.7.1", optional = true }
 #uuid = { version = "^1.2", features = ["v4"] }
 

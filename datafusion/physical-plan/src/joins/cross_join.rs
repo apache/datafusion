@@ -25,9 +25,9 @@ use std::{any::Any, sync::Arc, task::Poll};
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::physical_plan::DisplayAs;
-use crate::physical_plan::{
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::DisplayAs;
+use crate::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
     ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
@@ -458,8 +458,8 @@ impl CrossJoinStream {
 mod tests {
     use super::*;
     use crate::assert_batches_sorted_eq;
+    use crate::common;
     use crate::common::assert_contains;
-    use crate::physical_plan::common;
     use crate::test::{build_table_scan_i32, columns};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 

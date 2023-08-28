@@ -24,13 +24,13 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, usize, vec};
 
-use crate::physical_plan::joins::utils::{
+use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     calculate_join_output_ordering, combine_join_ordering_equivalence_properties,
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
 };
-use crate::physical_plan::DisplayAs;
-use crate::physical_plan::{
+use crate::DisplayAs;
+use crate::{
     coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
     expressions::Column,
@@ -2765,7 +2765,7 @@ mod tests {
             let stream = join.execute(0, task_ctx).unwrap();
 
             // Expect that an error is returned
-            let result_string = crate::physical_plan::common::collect(stream)
+            let result_string = crate::common::collect(stream)
                 .await
                 .unwrap_err()
                 .to_string();

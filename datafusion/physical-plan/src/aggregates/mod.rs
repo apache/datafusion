@@ -17,11 +17,11 @@
 
 //! Aggregates functionalities
 
-use crate::physical_plan::aggregates::{
+use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
 };
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::physical_plan::{
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };

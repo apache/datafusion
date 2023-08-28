@@ -19,14 +19,14 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use crate::physical_plan::common::{spawn_buffered, IPCWriter};
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::metrics::{
+use crate::common::{spawn_buffered, IPCWriter};
+use crate::expressions::PhysicalSortExpr;
+use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::physical_plan::sorts::merge::streaming_merge;
-use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
-use crate::physical_plan::{
+use crate::sorts::merge::streaming_merge;
+use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
+use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -890,10 +890,10 @@ impl ExecutionPlan for SortExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::collect;
-    use crate::physical_plan::expressions::col;
-    use crate::physical_plan::memory::MemoryExec;
+    use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::collect;
+    use crate::expressions::col;
+    use crate::memory::MemoryExec;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};

@@ -22,7 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::{
+use crate::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 
@@ -525,8 +525,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::common;
+    use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::common;
     use crate::test;
 
     #[tokio::test]

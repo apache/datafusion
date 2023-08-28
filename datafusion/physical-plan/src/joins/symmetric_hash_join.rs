@@ -32,19 +32,17 @@ use std::task::Poll;
 use std::vec;
 use std::{any::Any, usize};
 
-use crate::physical_plan::common::SharedMemoryReservation;
-use crate::physical_plan::joins::hash_join::{
-    build_equal_condition_join_indices, update_hash,
-};
-use crate::physical_plan::joins::hash_join_utils::{
+use crate::common::SharedMemoryReservation;
+use crate::joins::hash_join::{build_equal_condition_join_indices, update_hash};
+use crate::joins::hash_join_utils::{
     build_filter_expression_graph, calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, record_visited_indices, IntervalCalculatorInnerState,
     PruningJoinHashMap,
 };
-use crate::physical_plan::joins::StreamJoinPartitionMode;
-use crate::physical_plan::DisplayAs;
-use crate::physical_plan::{
+use crate::joins::StreamJoinPartitionMode;
+use crate::DisplayAs;
+use crate::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     joins::{
@@ -1220,9 +1218,9 @@ mod tests {
     use datafusion_physical_expr::expressions::{binary, col, Column};
     use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numerical_expr;
 
-    use crate::physical_plan::joins::hash_join_utils::tests::complicated_filter;
+    use crate::joins::hash_join_utils::tests::complicated_filter;
 
-    use crate::physical_plan::joins::test_utils::{
+    use crate::joins::test_utils::{
         build_sides_record_batches, compare_batches, create_memory_table,
         join_expr_tests_fixture_f64, join_expr_tests_fixture_i32,
         join_expr_tests_fixture_temporal, partitioned_hash_join_with_filter,

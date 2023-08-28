@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_expr::EmitTo;
 use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 use arrow_array::ArrayRef;
 use arrow_schema::Schema;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_physical_expr::EmitTo;
 use datafusion_physical_expr::PhysicalSortExpr;
 
 /// Tracks grouping state when the data is ordered by some subset of

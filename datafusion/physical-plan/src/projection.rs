@@ -29,7 +29,7 @@ use std::task::{Context, Poll};
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::physical_plan::{
+use crate::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
@@ -508,8 +508,8 @@ impl RecordBatchStream for ProjectionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::common::collect;
-    use crate::physical_plan::expressions::{self, col};
+    use crate::common::collect;
+    use crate::expressions::{self, col};
     use crate::test::{self};
     use crate::test_util;
     use arrow_schema::DataType;

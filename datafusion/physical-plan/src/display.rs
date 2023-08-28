@@ -26,7 +26,7 @@ use datafusion_common::display::StringifiedPlan;
 use datafusion_physical_expr::PhysicalSortExpr;
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
-use datafusion_common::display::GraphvizBuilder;
+use datafusion_common::display::{GraphvizBuilder, PlanType};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy)]
@@ -204,11 +204,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     }
 
     /// format as a `StringifiedPlan`
-    pub fn to_stringified(
-        &self,
-        verbose: bool,
-        plan_type: crate::logical_expr::PlanType,
-    ) -> StringifiedPlan {
+    pub fn to_stringified(&self, verbose: bool, plan_type: PlanType) -> StringifiedPlan {
         StringifiedPlan::new(plan_type, self.indent(verbose).to_string())
     }
 }

@@ -18,15 +18,11 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
-use crate::physical_plan::metrics::BaselineMetrics;
-use crate::physical_plan::sorts::builder::BatchBuilder;
-use crate::physical_plan::sorts::cursor::Cursor;
-use crate::physical_plan::sorts::stream::{
-    FieldCursorStream, PartitionedStream, RowCursorStream,
-};
-use crate::physical_plan::{
-    PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
-};
+use crate::metrics::BaselineMetrics;
+use crate::sorts::builder::BatchBuilder;
+use crate::sorts::cursor::Cursor;
+use crate::sorts::stream::{FieldCursorStream, PartitionedStream, RowCursorStream};
+use crate::{PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::*;

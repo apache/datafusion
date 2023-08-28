@@ -20,14 +20,12 @@
 //! the input data seen so far), which makes it appropriate when processing
 //! infinite inputs.
 
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
-};
-use crate::physical_plan::windows::{
+use crate::expressions::PhysicalSortExpr;
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
-use crate::physical_plan::{
+use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };

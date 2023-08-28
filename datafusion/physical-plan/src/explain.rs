@@ -24,13 +24,13 @@ use datafusion_common::display::StringifiedPlan;
 
 use datafusion_common::{internal_err, DataFusionError, Result};
 
-use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use log::trace;
 
 use super::DisplayAs;
 use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
-use crate::physical_plan::stream::RecordBatchStreamAdapter;
+use crate::stream::RecordBatchStreamAdapter;
 use datafusion_execution::TaskContext;
 
 /// Explain execution plan operator. This operator contains the string

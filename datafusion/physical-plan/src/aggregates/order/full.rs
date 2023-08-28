@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_expr::EmitTo;
+use datafusion_physical_expr::EmitTo;
 
 /// Tracks grouping state when the data is ordered entirely by its
 /// group keys

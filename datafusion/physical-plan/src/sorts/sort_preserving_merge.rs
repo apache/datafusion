@@ -20,13 +20,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::physical_plan::common::spawn_buffered;
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
-};
-use crate::physical_plan::sorts::streaming_merge;
-use crate::physical_plan::{
+use crate::common::spawn_buffered;
+use crate::expressions::PhysicalSortExpr;
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::sorts::streaming_merge;
+use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
@@ -280,16 +278,16 @@ mod tests {
     use futures::{FutureExt, StreamExt};
     use tempfile::TempDir;
 
-    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::expressions::col;
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::metrics::MetricValue;
-    use crate::physical_plan::sorts::sort::SortExec;
-    use crate::physical_plan::stream::RecordBatchReceiverStream;
-    use crate::physical_plan::{collect, common};
+    use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::expressions::col;
+    use crate::memory::MemoryExec;
+    use crate::metrics::MetricValue;
+    use crate::sorts::sort::SortExec;
+    use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::{assert_batches_eq, test_util};
+    use crate::{collect, common};
     use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
 
     use super::*;

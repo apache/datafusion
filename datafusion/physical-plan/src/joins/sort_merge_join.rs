@@ -30,15 +30,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::expressions::Column;
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::joins::utils::{
+use crate::expressions::Column;
+use crate::expressions::PhysicalSortExpr;
+use crate::joins::utils::{
     build_join_schema, calculate_join_output_ordering, check_join_is_valid,
     combine_join_equivalence_properties, combine_join_ordering_equivalence_properties,
     estimate_join_statistics, partitioned_join_output_partitioning, JoinOn, JoinSide,
 };
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use crate::physical_plan::{
+use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::{
     metrics, DisplayAs, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -1393,13 +1393,13 @@ mod tests {
     use datafusion_execution::TaskContext;
 
     use crate::common::assert_contains;
-    use crate::physical_plan::expressions::Column;
-    use crate::physical_plan::joins::utils::JoinOn;
-    use crate::physical_plan::joins::SortMergeJoinExec;
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::{common, ExecutionPlan};
+    use crate::expressions::Column;
+    use crate::joins::utils::JoinOn;
+    use crate::joins::SortMergeJoinExec;
+    use crate::memory::MemoryExec;
     use crate::test::{build_table_i32, columns};
     use crate::{assert_batches_eq, assert_batches_sorted_eq};
+    use crate::{common, ExecutionPlan};
     use datafusion_common::JoinType;
     use datafusion_common::Result;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};

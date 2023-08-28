@@ -17,12 +17,12 @@
 
 //! Aggregate without grouping columns
 
-use crate::physical_plan::aggregates::{
+use crate::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
     AggregateMode,
 };
-use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
-use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use crate::metrics::{BaselineMetrics, RecordOutput};
+use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::filter::batch_filter;
+use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 

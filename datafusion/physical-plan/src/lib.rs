@@ -23,9 +23,9 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use datafusion_common::Result;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+use datafusion_physical_expr::PhysicalSortExpr;
 pub use visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 use arrow::datatypes::SchemaRef;
@@ -397,8 +397,8 @@ pub mod unnest;
 pub mod values;
 pub mod windows;
 
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::repartition::RepartitionExec;
+use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_common::utils::project_schema;
 use datafusion_execution::TaskContext;
 pub use datafusion_physical_expr::{

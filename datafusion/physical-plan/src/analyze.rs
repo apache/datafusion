@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::{any::Any, time::Instant};
 
-use crate::physical_plan::{
+use crate::{
     display::DisplayableExecutionPlan, DisplayFormatType, ExecutionPlan, Partitioning,
     Statistics,
 };

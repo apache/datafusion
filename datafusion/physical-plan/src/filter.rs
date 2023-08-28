@@ -28,7 +28,7 @@ use super::{
     ColumnStatistics, DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::physical_plan::{
+use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
@@ -378,12 +378,12 @@ pub type EqualAndNonEqual<'a> =
 mod tests {
 
     use super::*;
-    use crate::physical_plan::expressions::*;
-    use crate::physical_plan::ExecutionPlan;
-    use crate::physical_plan::{collect, with_new_children_if_necessary};
+    use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use crate::test_util;
+    use crate::ExecutionPlan;
+    use crate::{collect, with_new_children_if_necessary};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::utils::DataPtr;
     use datafusion_common::ColumnStatistics;

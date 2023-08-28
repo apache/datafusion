@@ -17,7 +17,7 @@
 
 //! Physical expressions for window functions
 
-use crate::physical_plan::{
+use crate::{
     aggregates,
     expressions::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
@@ -358,12 +358,12 @@ pub(crate) fn window_ordering_equivalence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aggregates::AggregateFunction;
     use crate::datasource::physical_plan::CsvExec;
-    use crate::physical_plan::aggregates::AggregateFunction;
-    use crate::physical_plan::expressions::col;
-    use crate::physical_plan::{collect, ExecutionPlan};
+    use crate::expressions::col;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, csv_exec_sorted};
+    use crate::{collect, ExecutionPlan};
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, SchemaRef};

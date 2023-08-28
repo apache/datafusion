@@ -19,7 +19,7 @@
 
 use super::expressions::PhysicalSortExpr;
 use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
-use crate::physical_plan::{
+use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
 };

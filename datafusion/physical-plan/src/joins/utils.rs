@@ -25,9 +25,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
 
-use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::physical_plan::SchemaRef;
-use crate::physical_plan::{
+use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::SchemaRef;
+use crate::{
     ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
 

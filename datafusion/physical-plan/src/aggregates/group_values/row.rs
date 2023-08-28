@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_plan::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::ArrayRef;
