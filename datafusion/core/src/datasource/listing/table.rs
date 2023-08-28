@@ -1862,7 +1862,7 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
-        assert_eq!("Invalid Option: zstd compression requires specifying a level such as zstd(4)", format!("{e}"));
+        assert_eq!("Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)", format!("{e}"));
         Ok(())
     }
 

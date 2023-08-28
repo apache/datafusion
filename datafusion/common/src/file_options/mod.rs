@@ -25,7 +25,12 @@ pub mod json_writer;
 pub mod parquet_writer;
 pub(crate) mod parse_utils;
 
-use std::{collections::HashMap, path::Path, str::FromStr};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+    path::Path,
+    str::FromStr,
+};
 
 use crate::{
     config::ConfigOptions, file_options::parse_utils::parse_boolean_string,
@@ -84,7 +89,7 @@ impl StatementOptions {
 
     /// Scans for option and if it exists removes it and returns it
     /// Returns none if it does not exist
-    pub fn get_str_option(&mut self, find: &str) -> Option<String> {
+    pub fn take_str_option(&mut self, find: &str) -> Option<String> {
         let maybe_option = self.scan_and_remove_option(find);
         maybe_option.map(|(_, v)| v)
     }
@@ -102,12 +107,12 @@ impl StatementOptions {
                 // try to infer file format from file extension
                 let extension: &str = &Path::new(target)
                     .extension()
-                    .ok_or(DataFusionError::InvalidOption(
+                    .ok_or(DataFusionError::Configuration(
                         "Format not explicitly set and unable to get file extension!"
                             .to_string(),
                     ))?
                     .to_str()
-                    .ok_or(DataFusionError::InvalidOption(
+                    .ok_or(DataFusionError::Configuration(
                         "Format not explicitly set and failed to parse file extension!"
                             .to_string(),
                     ))?
@@ -213,10 +218,10 @@ impl FileTypeWriterOptions {
     pub fn try_into_parquet(&self) -> Result<&ParquetWriterOptions> {
         match self {
             FileTypeWriterOptions::Parquet(opt) => Ok(opt),
-            _ => Err(DataFusionError::Internal(
-                "Expected parquet options but found options for: {}", self.name()
-                    .into(),
-            )),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected parquet options but found options for: {}",
+                self
+            ))),
         }
     }
 
@@ -225,9 +230,10 @@ impl FileTypeWriterOptions {
     pub fn try_into_csv(&self) -> Result<&CsvWriterOptions> {
         match self {
             FileTypeWriterOptions::CSV(opt) => Ok(opt),
-            _ => Err(DataFusionError::Internal(
-                "Expected csv options but found options for a different FileType!".into(),
-            )),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected csv options but found options for {}",
+                self
+            ))),
         }
     }
 
@@ -236,10 +242,10 @@ impl FileTypeWriterOptions {
     pub fn try_into_json(&self) -> Result<&JsonWriterOptions> {
         match self {
             FileTypeWriterOptions::JSON(opt) => Ok(opt),
-            _ => Err(DataFusionError::Internal(
-                "Expected json options but found options for a different FileType!"
-                    .into(),
-            )),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected json options but found options for {}",
+                self,
+            ))),
         }
     }
 
@@ -248,10 +254,10 @@ impl FileTypeWriterOptions {
     pub fn try_into_avro(&self) -> Result<&AvroWriterOptions> {
         match self {
             FileTypeWriterOptions::Avro(opt) => Ok(opt),
-            _ => Err(DataFusionError::Internal(
-                "Expected avro options but found options for a different FileType!"
-                    .into(),
-            )),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected avro options but found options for {}!",
+                self
+            ))),
         }
     }
 
@@ -260,10 +266,23 @@ impl FileTypeWriterOptions {
     pub fn try_into_arrow(&self) -> Result<&ArrowWriterOptions> {
         match self {
             FileTypeWriterOptions::Arrow(opt) => Ok(opt),
-            _ => Err(DataFusionError::Internal(
-                "Expected arrow options but found options for a different FileType!"
-                    .into(),
-            )),
+            _ => Err(DataFusionError::Internal(format!(
+                "Expected arrow options but found options for {}",
+                self
+            ))),
         }
+    }
+}
+
+impl Display for FileTypeWriterOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            FileTypeWriterOptions::Arrow(_) => "Arrow",
+            FileTypeWriterOptions::Avro(_) => "Avro",
+            FileTypeWriterOptions::CSV(_) => "CSV",
+            FileTypeWriterOptions::JSON(_) => "JSON",
+            FileTypeWriterOptions::Parquet(_) => "Parquet",
+        };
+        write!(f, "{}", name)
     }
 }

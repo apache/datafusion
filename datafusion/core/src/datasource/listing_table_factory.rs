@@ -138,15 +138,15 @@ impl TableProviderFactory for ListingTableFactory {
 
         // Extract ListingTable specific options if present or set default
         // Discard unbounded option if present
-        statement_options.get_str_option("unbounded");
+        statement_options.take_str_option("unbounded");
         let create_local_path = statement_options
-            .get_bool_option("create_local_path")?
+            .take_bool_option("create_local_path")?
             .unwrap_or(false);
         let single_file = statement_options
-            .get_bool_option("single_file")?
+            .take_bool_option("single_file")?
             .unwrap_or(false);
 
-        let explicit_insert_mode = statement_options.get_str_option("insert_mode");
+        let explicit_insert_mode = statement_options.take_str_option("insert_mode");
         let insert_mode = match explicit_insert_mode {
             Some(mode) => ListingTableInsertMode::from_str(mode.as_str()),
             None => match file_type {

@@ -45,7 +45,7 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for JsonWriterOptions {
                 "compression" => {
                     compression = CompressionTypeVariant::from_str(value.replace('\'', "").as_str())?;
                 },
-                _ => return Err(DataFusionError::InvalidOption(format!("Found unsupported option {option} with value {value} for JSON format!")))
+                _ => return Err(DataFusionError::Configuration(format!("Found unsupported option {option} with value {value} for JSON format!")))
             }
         }
         Ok(JsonWriterOptions { compression })

@@ -59,7 +59,7 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
             builder = match option.to_lowercase().as_str(){
                 "header" => {
                     has_header = value.parse()
-                        .map_err(|_| DataFusionError::InvalidOption(format!("Unable to parse {value} as bool as required for {option}!")))?;
+                        .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?;
                     builder.has_headers(has_header)
                 },
                 "date_format" => builder.with_date_format(value.to_owned()),
@@ -68,7 +68,7 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
                 "time_format" => builder.with_time_format(value.to_owned()),
                 "rfc3339" => {
                     let value_bool = value.parse()
-                        .map_err(|_| DataFusionError::InvalidOption(format!("Unable to parse {value} as bool as required for {option}!")))?;
+                        .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?;
                     if value_bool{
                         builder.with_rfc3339()
                     } else{
@@ -80,7 +80,22 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
                     compression = CompressionTypeVariant::from_str(value.replace('\'', "").as_str())?;
                     builder
                 },
-                _ => return Err(DataFusionError::InvalidOption(format!("Found unsupported option {option} with value {value} for CSV format!")))
+                "delimeter" => {
+                    // Ignore string literal single quotes passed from sql parsing
+                    let value = value.replace('\'', "");
+                    let chars: Vec<char> = value.chars().collect();
+                    if chars.len()>1{
+                        return Err(DataFusionError::Configuration(format!(
+                            "CSV Delimeter Option must be a single char, got: {}", value
+                        )))
+                    }
+                    builder.with_delimiter(chars[0].try_into().map_err(|_| {
+                        DataFusionError::Internal(
+                            "Unable to convert CSV delimiter into u8".into(),
+                        )
+                    })?)
+            },
+                _ => return Err(DataFusionError::Configuration(format!("Found unsupported option {option} with value {value} for CSV format!")))
             }
         }
         Ok(CsvWriterOptions {
