@@ -85,15 +85,15 @@ type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
-    pub(crate) left: Arc<dyn ExecutionPlan>,
+    pub left: Arc<dyn ExecutionPlan>,
     /// right (probe) side which are filtered by the hash table
-    pub(crate) right: Arc<dyn ExecutionPlan>,
+    pub right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    pub(crate) on: Vec<(Column, Column)>,
+    pub on: Vec<(Column, Column)>,
     /// Filters which are applied while finding matching rows
-    pub(crate) filter: Option<JoinFilter>,
+    pub filter: Option<JoinFilter>,
     /// How the join is performed
-    pub(crate) join_type: JoinType,
+    pub join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
@@ -103,13 +103,13 @@ pub struct HashJoinExec {
     /// Output order
     output_order: Option<Vec<PhysicalSortExpr>>,
     /// Partitioning mode to use
-    pub(crate) mode: PartitionMode,
+    pub mode: PartitionMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
-    pub(crate) null_equals_null: bool,
+    pub null_equals_null: bool,
 }
 
 impl HashJoinExec {
@@ -1067,23 +1067,19 @@ mod tests {
     use datafusion_physical_expr::expressions::Literal;
     use hashbrown::raw::RawTable;
 
-    use crate::execution::context::SessionConfig;
-    use crate::physical_expr::expressions::BinaryExpr;
     use crate::{
-        assert_batches_sorted_eq,
-        common::assert_contains,
-        physical_plan::{
-            common,
-            expressions::Column,
-            hash_utils::create_hashes,
-            joins::{hash_join::build_equal_condition_join_indices, utils::JoinSide},
-            memory::MemoryExec,
-            repartition::RepartitionExec,
-        },
+        assert_batches_sorted_eq, assert_contains, common,
+        expressions::Column,
+        hash_utils::create_hashes,
+        joins::{hash_join::build_equal_condition_join_indices, utils::JoinSide},
+        memory::MemoryExec,
+        repartition::RepartitionExec,
+        test::build_table_i32,
         test::exec::MockExec,
-        test::{build_table_i32, columns},
     };
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_physical_expr::expressions::BinaryExpr;
 
     use super::*;
 
@@ -2905,5 +2901,10 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// Returns the column names on the schema
+    fn columns(schema: &Schema) -> Vec<String> {
+        schema.fields().iter().map(|f| f.name().clone()).collect()
     }
 }

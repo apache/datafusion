@@ -276,8 +276,8 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, StreamExt};
-    use tempfile::TempDir;
 
+    use crate::assert_batches_eq;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
@@ -285,8 +285,7 @@ mod tests {
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::{self, assert_is_pending};
-    use crate::{assert_batches_eq, test_util};
+    use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
     use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
 
@@ -561,31 +560,16 @@ mod tests {
     async fn test_partition_sort() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path()).unwrap();
+        let csv = test::scan_partitioned(partitions);
         let schema = csv.schema();
 
-        let sort = vec![
-            PhysicalSortExpr {
-                expr: col("c1", &schema).unwrap(),
-                options: SortOptions {
-                    descending: true,
-                    nulls_first: true,
-                },
+        let sort = vec![PhysicalSortExpr {
+            expr: col("i", &schema).unwrap(),
+            options: SortOptions {
+                descending: true,
+                nulls_first: true,
             },
-            PhysicalSortExpr {
-                expr: col("c2", &schema).unwrap(),
-                options: Default::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("c7", &schema).unwrap(),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: col("c12", &schema).unwrap(),
-                options: SortOptions::default(),
-            },
-        ];
+        }];
 
         let basic = basic_sort(csv.clone(), sort.clone(), task_ctx.clone()).await;
         let partition = partition_sort(csv, sort, task_ctx.clone()).await;
@@ -634,8 +618,7 @@ mod tests {
         context: Arc<TaskContext>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path()).unwrap();
+        let csv = test::scan_partitioned(partitions);
 
         let sorted = basic_sort(csv, sort, context).await;
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();
@@ -648,29 +631,11 @@ mod tests {
     #[tokio::test]
     async fn test_partition_sort_streaming_input() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let schema = test_util::aggr_test_schema();
-        let sort = vec![
-            // uint8
-            PhysicalSortExpr {
-                expr: col("c7", &schema).unwrap(),
-                options: Default::default(),
-            },
-            // int16
-            PhysicalSortExpr {
-                expr: col("c4", &schema).unwrap(),
-                options: Default::default(),
-            },
-            // utf-8
-            PhysicalSortExpr {
-                expr: col("c1", &schema).unwrap(),
-                options: SortOptions::default(),
-            },
-            // utf-8
-            PhysicalSortExpr {
-                expr: col("c13", &schema).unwrap(),
-                options: SortOptions::default(),
-            },
-        ];
+        let schema = make_partition(11).schema();
+        let sort = vec![PhysicalSortExpr {
+            expr: col("i", &schema).unwrap(),
+            options: Default::default(),
+        }];
 
         let input =
             sorted_partitioned_input(sort.clone(), &[10, 3, 11], task_ctx.clone())
@@ -678,8 +643,8 @@ mod tests {
         let basic = basic_sort(input.clone(), sort.clone(), task_ctx.clone()).await;
         let partition = sorted_merge(input, sort, task_ctx.clone()).await;
 
-        assert_eq!(basic.num_rows(), 300);
-        assert_eq!(partition.num_rows(), 300);
+        assert_eq!(basic.num_rows(), 1200);
+        assert_eq!(partition.num_rows(), 1200);
 
         let basic = arrow::util::pretty::pretty_format_batches(&[basic])
             .unwrap()
@@ -695,20 +660,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input_output() -> Result<()> {
-        let schema = test_util::aggr_test_schema();
-
-        let sort = vec![
-            // float64
-            PhysicalSortExpr {
-                expr: col("c12", &schema).unwrap(),
-                options: Default::default(),
-            },
-            // utf-8
-            PhysicalSortExpr {
-                expr: col("c13", &schema).unwrap(),
-                options: Default::default(),
-            },
-        ];
+        let schema = make_partition(11).schema();
+        let sort = vec![PhysicalSortExpr {
+            expr: col("i", &schema).unwrap(),
+            options: Default::default(),
+        }];
 
         // Test streaming with default batch size
         let task_ctx = Arc::new(TaskContext::default());
@@ -725,10 +681,10 @@ mod tests {
         let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
         let merged = collect(merge, task_ctx).await.unwrap();
 
-        assert_eq!(merged.len(), 14);
+        assert_eq!(merged.len(), 53);
 
-        assert_eq!(basic.num_rows(), 300);
-        assert_eq!(merged.iter().map(|x| x.num_rows()).sum::<usize>(), 300);
+        assert_eq!(basic.num_rows(), 1200);
+        assert_eq!(merged.iter().map(|x| x.num_rows()).sum::<usize>(), 1200);
 
         let basic = arrow::util::pretty::pretty_format_batches(&[basic])
             .unwrap()
@@ -826,9 +782,9 @@ mod tests {
     #[tokio::test]
     async fn test_async() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let schema = test_util::aggr_test_schema();
+        let schema = make_partition(11).schema();
         let sort = vec![PhysicalSortExpr {
-            expr: col("c12", &schema).unwrap(),
+            expr: col("i", &schema).unwrap(),
             options: SortOptions::default(),
         }];
 

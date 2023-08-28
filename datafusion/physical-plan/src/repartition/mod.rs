@@ -894,10 +894,8 @@ impl RecordBatchStream for PerPartitionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::create_vec_batches;
     use crate::{
         assert_batches_sorted_eq,
-        physical_plan::{collect, expressions::col, memory::MemoryExec},
         test::{
             assert_is_pending,
             exec::{
@@ -905,10 +903,12 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
+        {collect, expressions::col, memory::MemoryExec},
     };
     use arrow::array::{ArrayRef, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::UInt32Array;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::exec_err;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -1397,5 +1397,24 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// Create vector batches
+    fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
+        let batch = create_batch(schema);
+        let mut vec = Vec::with_capacity(n);
+        for _ in 0..n {
+            vec.push(batch.clone());
+        }
+        vec
+    }
+
+    /// Create batch
+    fn create_batch(schema: &Schema) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
+        )
+        .unwrap()
     }
 }

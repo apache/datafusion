@@ -381,74 +381,17 @@ mod tests {
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
-    use crate::test_util;
     use crate::ExecutionPlan;
-    use crate::{collect, with_new_children_if_necessary};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::utils::DataPtr;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use std::iter::Iterator;
     use std::sync::Arc;
-    use tempfile::TempDir;
-
-    #[tokio::test]
-    async fn simple_predicate() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
-        let schema = test_util::aggr_test_schema();
-
-        let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
-
-        let predicate: Arc<dyn PhysicalExpr> = binary(
-            binary(col("c2", &schema)?, Operator::Gt, lit(1u32), &schema)?,
-            Operator::And,
-            binary(col("c2", &schema)?, Operator::Lt, lit(4u32), &schema)?,
-            &schema,
-        )?;
-
-        let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, csv)?);
-
-        let results = collect(filter, task_ctx).await?;
-
-        results
-            .iter()
-            .for_each(|batch| assert_eq!(13, batch.num_columns()));
-        let row_count: usize = results.iter().map(|batch| batch.num_rows()).sum();
-        assert_eq!(41, row_count);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn with_new_children() -> Result<()> {
-        let schema = test_util::aggr_test_schema();
-        let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let input = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
-
-        let predicate: Arc<dyn PhysicalExpr> =
-            binary(col("c2", &schema)?, Operator::Gt, lit(1u32), &schema)?;
-
-        let filter: Arc<dyn ExecutionPlan> =
-            Arc::new(FilterExec::try_new(predicate, input.clone())?);
-
-        let new_filter = filter.clone().with_new_children(vec![input.clone()])?;
-        assert!(!Arc::data_ptr_eq(&filter, &new_filter));
-
-        let new_filter2 =
-            with_new_children_if_necessary(filter.clone(), vec![input])?.into();
-        assert!(Arc::data_ptr_eq(&filter, &new_filter2));
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {
-        let schema = test_util::aggr_test_schema();
+        let schema = test::aggr_test_schema();
         let predicate: Arc<dyn PhysicalExpr> = binary(
             binary(
                 binary(col("c2", &schema)?, Operator::GtEq, lit(1u32), &schema)?,

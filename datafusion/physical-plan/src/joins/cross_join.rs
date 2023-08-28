@@ -52,9 +52,9 @@ type JoinLeftData = (RecordBatch, MemoryReservation);
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
-    pub(crate) left: Arc<dyn ExecutionPlan>,
+    pub left: Arc<dyn ExecutionPlan>,
     /// right (probe) side which are combined with left side
-    pub(crate) right: Arc<dyn ExecutionPlan>,
+    pub right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
@@ -458,9 +458,9 @@ impl CrossJoinStream {
 mod tests {
     use super::*;
     use crate::assert_batches_sorted_eq;
+    use crate::assert_contains;
     use crate::common;
-    use crate::common::assert_contains;
-    use crate::test::{build_table_scan_i32, columns};
+    use crate::test::build_table_scan_i32;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     async fn join_collect(
@@ -677,5 +677,10 @@ mod tests {
         assert_contains!(err.to_string(), "CrossJoinExec");
 
         Ok(())
+    }
+
+    /// Returns the column names on the schema
+    fn columns(schema: &Schema) -> Vec<String> {
+        schema.fields().iter().map(|f| f.name().clone()).collect()
     }
 }

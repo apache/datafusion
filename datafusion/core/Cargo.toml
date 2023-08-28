@@ -67,6 +67,7 @@ datafusion-execution = { path = "../execution", version = "31.0.0" }
 datafusion-expr = { path = "../expr", version = "31.0.0" }
 datafusion-optimizer = { path = "../optimizer", version = "31.0.0", default-features = false }
 datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0", default-features = false }
+datafusion-physical-plan = { path = "../physical-plan", version = "31.0.0", default-features = false }
 datafusion-sql = { path = "../sql", version = "31.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"

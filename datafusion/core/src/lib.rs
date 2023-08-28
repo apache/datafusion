@@ -428,7 +428,6 @@ pub mod datasource;
 pub mod error;
 pub mod execution;
 pub mod physical_optimizer;
-pub mod physical_plan;
 pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
@@ -465,6 +464,11 @@ pub mod optimizer {
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr {
     pub use datafusion_physical_expr::*;
+}
+
+/// re-export of [`datafusion_physical_plan`] crate
+pub mod physical_plan {
+    pub use datafusion_physical_plan::*;
 }
 
 /// re-export of [`datafusion_sql`] crate

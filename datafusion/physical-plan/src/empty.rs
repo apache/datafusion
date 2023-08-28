@@ -173,12 +173,12 @@ impl ExecutionPlan for EmptyExec {
 mod tests {
     use super::*;
     use crate::with_new_children_if_necessary;
-    use crate::{physical_plan::common, test_util};
+    use crate::{common, test};
 
     #[tokio::test]
     async fn empty() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let schema = test_util::aggr_test_schema();
+        let schema = test::aggr_test_schema();
 
         let empty = EmptyExec::new(false, schema.clone());
         assert_eq!(empty.schema(), schema);
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn with_new_children() -> Result<()> {
-        let schema = test_util::aggr_test_schema();
+        let schema = test::aggr_test_schema();
         let empty = Arc::new(EmptyExec::new(false, schema.clone()));
         let empty_with_row = Arc::new(EmptyExec::new(true, schema));
 
@@ -215,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_execute() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let schema = test_util::aggr_test_schema();
+        let schema = test::aggr_test_schema();
         let empty = EmptyExec::new(false, schema);
 
         // ask for the wrong partition
@@ -227,7 +227,7 @@ mod tests {
     #[tokio::test]
     async fn produce_one_row() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let schema = test_util::aggr_test_schema();
+        let schema = test::aggr_test_schema();
         let empty = EmptyExec::new(true, schema);
 
         let iter = empty.execute(0, task_ctx)?;
@@ -242,7 +242,7 @@ mod tests {
     #[tokio::test]
     async fn produce_one_row_multiple_partition() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let schema = test_util::aggr_test_schema();
+        let schema = test::aggr_test_schema();
         let partitions = 3;
         let empty = EmptyExec::new(true, schema).with_partitions(partitions);
 

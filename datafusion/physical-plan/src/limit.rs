@@ -521,8 +521,8 @@ impl RecordBatchStream for LimitStream {
 #[cfg(test)]
 mod tests {
 
+    use arrow_schema::Schema;
     use common::collect;
-    use tempfile::TempDir;
 
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -534,8 +534,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
+        let csv = test::scan_partitioned(num_partitions);
 
         // input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
@@ -619,9 +618,9 @@ mod tests {
     #[tokio::test]
     async fn limit_no_column() -> Result<()> {
         let batches = vec![
-            test::make_batch_no_column(6),
-            test::make_batch_no_column(6),
-            test::make_batch_no_column(6),
+            make_batch_no_column(6),
+            make_batch_no_column(6),
+            make_batch_no_column(6),
         ];
         let input = test::exec::TestStream::new(batches);
 
@@ -650,9 +649,9 @@ mod tests {
     async fn skip_and_fetch(skip: usize, fetch: Option<usize>) -> Result<usize> {
         let task_ctx = Arc::new(TaskContext::default());
 
+        // 4 partitions @ 100 rows apiece
         let num_partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
+        let csv = test::scan_partitioned(num_partitions);
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
@@ -668,7 +667,7 @@ mod tests {
     #[tokio::test]
     async fn skip_none_fetch_none() -> Result<()> {
         let row_count = skip_and_fetch(0, None).await?;
-        assert_eq!(row_count, 100);
+        assert_eq!(row_count, 400);
         Ok(())
     }
 
@@ -681,9 +680,9 @@ mod tests {
 
     #[tokio::test]
     async fn skip_3_fetch_none() -> Result<()> {
-        // there are total of 100 rows, we skipped 3 rows (offset = 3)
+        // there are total of 400 rows, we skipped 3 rows (offset = 3)
         let row_count = skip_and_fetch(3, None).await?;
-        assert_eq!(row_count, 97);
+        assert_eq!(row_count, 397);
         Ok(())
     }
 
@@ -696,23 +695,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skip_100_fetch_none() -> Result<()> {
-        let row_count = skip_and_fetch(100, None).await?;
+    async fn skip_400_fetch_none() -> Result<()> {
+        let row_count = skip_and_fetch(400, None).await?;
         assert_eq!(row_count, 0);
         Ok(())
     }
 
     #[tokio::test]
-    async fn skip_100_fetch_1() -> Result<()> {
-        let row_count = skip_and_fetch(100, Some(1)).await?;
+    async fn skip_400_fetch_1() -> Result<()> {
+        // there are a total of 400 rows
+        let row_count = skip_and_fetch(400, Some(1)).await?;
         assert_eq!(row_count, 0);
         Ok(())
     }
 
     #[tokio::test]
-    async fn skip_101_fetch_none() -> Result<()> {
-        // there are total of 100 rows, we skipped 101 rows (offset = 3)
-        let row_count = skip_and_fetch(101, None).await?;
+    async fn skip_401_fetch_none() -> Result<()> {
+        // there are total of 400 rows, we skipped 401 rows (offset = 3)
+        let row_count = skip_and_fetch(401, None).await?;
         assert_eq!(row_count, 0);
         Ok(())
     }
@@ -731,7 +731,7 @@ mod tests {
     #[tokio::test]
     async fn test_row_number_statistics_for_local_limit() -> Result<()> {
         let row_count = row_number_statistics_for_local_limit(4, 10).await?;
-        assert_eq!(row_count, Some(40));
+        assert_eq!(row_count, Some(10));
 
         Ok(())
     }
@@ -741,8 +741,7 @@ mod tests {
         fetch: Option<usize>,
     ) -> Result<Option<usize>> {
         let num_partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
+        let csv = test::scan_partitioned(num_partitions);
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
@@ -756,13 +755,20 @@ mod tests {
         num_partitions: usize,
         fetch: usize,
     ) -> Result<Option<usize>> {
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
+        let csv = test::scan_partitioned(num_partitions);
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
         let offset = LocalLimitExec::new(csv, fetch);
 
         Ok(offset.statistics().num_rows)
+    }
+
+    /// Return a RecordBatch with a single array with row_count sz
+    fn make_batch_no_column(sz: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::empty());
+
+        let options = RecordBatchOptions::new().with_row_count(Option::from(sz));
+        RecordBatch::try_new_with_options(schema, vec![], &options).unwrap()
     }
 }

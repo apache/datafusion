@@ -16,8 +16,7 @@
 // under the License.
 
 //! Implementation of physical plan display. See
-//! [`crate::physical_plan::displayable`] for examples of how to
-//! format
+//! [`crate::displayable`] for examples of how to format
 
 use std::fmt;
 

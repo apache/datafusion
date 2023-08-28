@@ -740,18 +740,14 @@ impl RecordBatchStream for NestedLoopJoinStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_expr::expressions::BinaryExpr;
     use crate::{
-        assert_batches_sorted_eq,
-        common::assert_contains,
-        execution::runtime_env::{RuntimeConfig, RuntimeEnv},
-        physical_plan::{
-            common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
-        },
-        test::{build_table_i32, columns},
+        assert_batches_sorted_eq, assert_contains, common, expressions::Column,
+        memory::MemoryExec, repartition::RepartitionExec, test::build_table_i32,
     };
     use arrow::datatypes::{DataType, Field};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::BinaryExpr;
 
     use crate::joins::utils::JoinSide;
     use datafusion_common::ScalarValue;
@@ -1168,5 +1164,10 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// Returns the column names on the schema
+    fn columns(schema: &Schema) -> Vec<String> {
+        schema.fields().iter().map(|f| f.name().clone()).collect()
     }
 }

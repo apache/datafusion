@@ -31,20 +31,15 @@ use arrow::{
 };
 use futures::Stream;
 
-use crate::physical_plan::{
-    common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+use crate::{
+    common, stream::RecordBatchReceiverStream, stream::RecordBatchStreamAdapter,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::physical_plan::{expressions::PhysicalSortExpr, DisplayAs};
-use crate::{
-    error::{DataFusionError, Result},
-    physical_plan::stream::RecordBatchReceiverStream,
-};
-use crate::{
-    execution::context::TaskContext, physical_plan::stream::RecordBatchStreamAdapter,
-};
+use datafusion_physical_expr::PhysicalSortExpr;
 
-use datafusion_common::internal_err;
+use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_execution::TaskContext;
 
 /// Index into the data that has been returned so far
 #[derive(Debug, Default, Clone)]

@@ -242,7 +242,7 @@ mod tests {
     use futures::FutureExt;
 
     use crate::{
-        physical_plan::collect,
+        collect,
         test::{
             assert_is_pending,
             exec::{assert_strong_count_converges_to_zero, BlockingExec},

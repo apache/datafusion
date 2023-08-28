@@ -29,7 +29,7 @@ use datafusion_common::Result;
 ///
 /// Example:
 /// ```
-/// use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+/// use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 /// let metrics = ExecutionPlanMetricsSet::new();
 ///
 /// let partition = 2;

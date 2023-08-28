@@ -63,13 +63,13 @@ use futures::{Stream, StreamExt};
 #[derive(Debug)]
 pub struct SortMergeJoinExec {
     /// Left sorted joining execution plan
-    pub(crate) left: Arc<dyn ExecutionPlan>,
+    pub left: Arc<dyn ExecutionPlan>,
     /// Right sorting joining execution plan
-    pub(crate) right: Arc<dyn ExecutionPlan>,
+    pub right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    pub(crate) on: JoinOn,
+    pub on: JoinOn,
     /// How the join is performed
-    pub(crate) join_type: JoinType,
+    pub join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Execution metrics
@@ -81,9 +81,9 @@ pub struct SortMergeJoinExec {
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Sort options of join columns used in sorting left and right execution plans
-    pub(crate) sort_options: Vec<SortOptions>,
+    pub sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
-    pub(crate) null_equals_null: bool,
+    pub null_equals_null: bool,
 }
 
 impl SortMergeJoinExec {
@@ -193,6 +193,18 @@ impl SortMergeJoinExec {
     /// Set of common columns used to join on
     pub fn on(&self) -> &[(Column, Column)] {
         &self.on
+    }
+
+    pub fn right(&self) -> &dyn ExecutionPlan {
+        self.right.as_ref()
+    }
+
+    pub fn join_type(&self) -> JoinType {
+        self.join_type
+    }
+
+    pub fn left(&self) -> &dyn ExecutionPlan {
+        self.left.as_ref()
     }
 }
 
@@ -1392,12 +1404,12 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
 
-    use crate::common::assert_contains;
+    use crate::assert_contains;
     use crate::expressions::Column;
     use crate::joins::utils::JoinOn;
     use crate::joins::SortMergeJoinExec;
     use crate::memory::MemoryExec;
-    use crate::test::{build_table_i32, columns};
+    use crate::test::build_table_i32;
     use crate::{assert_batches_eq, assert_batches_sorted_eq};
     use crate::{common, ExecutionPlan};
     use datafusion_common::JoinType;
@@ -2421,5 +2433,9 @@ mod tests {
         }
 
         Ok(())
+    }
+    /// Returns the column names on the schema
+    fn columns(schema: &Schema) -> Vec<String> {
+        schema.fields().iter().map(|f| f.name().clone()).collect()
     }
 }

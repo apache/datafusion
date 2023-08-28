@@ -509,109 +509,19 @@ impl RecordBatchStream for ProjectionStream {
 mod tests {
     use super::*;
     use crate::common::collect;
-    use crate::expressions::{self, col};
-    use crate::test::{self};
-    use crate::test_util;
+    use crate::expressions;
+    use crate::test;
     use arrow_schema::DataType;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::binary;
-    use futures::future;
-    use tempfile::TempDir;
-
-    // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
-    // to valid types. Usage can result in an execution (after plan) error.
-    fn binary_simple(
-        l: Arc<dyn PhysicalExpr>,
-        op: Operator,
-        r: Arc<dyn PhysicalExpr>,
-        input_schema: &Schema,
-    ) -> Arc<dyn PhysicalExpr> {
-        binary(l, op, r, input_schema).unwrap()
-    }
-
-    #[tokio::test]
-    async fn project_first_column() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
-        let schema = test_util::aggr_test_schema();
-
-        let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
-
-        // pick column c1 and name it column c1 in the output schema
-        let projection =
-            ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
-
-        let col_field = projection.schema.field(0);
-        let col_metadata = col_field.metadata();
-        let data: &str = &col_metadata["testing"];
-        assert_eq!(data, "test");
-
-        let mut partition_count = 0;
-        let mut row_count = 0;
-        for partition in 0..projection.output_partitioning().partition_count() {
-            partition_count += 1;
-            let stream = projection.execute(partition, task_ctx.clone())?;
-
-            row_count += stream
-                .map(|batch| {
-                    let batch = batch.unwrap();
-                    assert_eq!(1, batch.num_columns());
-                    batch.num_rows()
-                })
-                .fold(0, |acc, x| future::ready(acc + x))
-                .await;
-        }
-        assert_eq!(partitions, partition_count);
-        assert_eq!(100, row_count);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn project_input_not_partitioning() -> Result<()> {
-        let schema = test_util::aggr_test_schema();
-
-        let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
-
-        // pick column c1 and name it column c1 in the output schema
-        let projection =
-            ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
-        assert!(!projection.benefits_from_input_partitioning()[0]);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn project_input_partitioning() -> Result<()> {
-        let schema = test_util::aggr_test_schema();
-
-        let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
-
-        let c1 = col("c2", &schema).unwrap();
-        let c2 = col("c9", &schema).unwrap();
-        let c1_plus_c2 = binary_simple(c1, Operator::Plus, c2, &schema);
-
-        let projection =
-            ProjectionExec::try_new(vec![(c1_plus_c2, "c2 + c9".to_string())], csv)?;
-
-        assert!(projection.benefits_from_input_partitioning()[0]);
-        Ok(())
-    }
 
     #[tokio::test]
     async fn project_no_column() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(1, tmp_dir.path())?;
-        let expected = collect(csv.execute(0, task_ctx.clone())?).await.unwrap();
+        let exec = test::scan_partitioned(1);
+        let expected = collect(exec.execute(0, task_ctx.clone())?).await.unwrap();
 
-        let projection = ProjectionExec::try_new(vec![], csv)?;
+        let projection = ProjectionExec::try_new(vec![], exec)?;
         let stream = projection.execute(0, task_ctx.clone())?;
         let output = collect(stream).await.unwrap();
         assert_eq!(output.len(), expected.len());

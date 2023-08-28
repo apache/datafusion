@@ -29,7 +29,7 @@ use super::{
 /// case of constant strings
 ///
 /// ```rust
-///  use datafusion::physical_plan::metrics::*;
+///  use datafusion_physical_plan::metrics::*;
 ///
 ///  let metrics = ExecutionPlanMetricsSet::new();
 ///  let partition = 1;

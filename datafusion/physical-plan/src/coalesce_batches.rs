@@ -309,9 +309,9 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::create_vec_batches;
     use crate::{memory::MemoryExec, repartition::RepartitionExec};
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_array::UInt32Array;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concat_batches() -> Result<()> {
@@ -364,5 +364,24 @@ mod tests {
             output_partitions.push(batches);
         }
         Ok(output_partitions)
+    }
+
+    /// Create vector batches
+    fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
+        let batch = create_batch(schema);
+        let mut vec = Vec::with_capacity(n);
+        for _ in 0..n {
+            vec.push(batch.clone());
+        }
+        vec
+    }
+
+    /// Create batch
+    fn create_batch(schema: &Schema) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
+        )
+        .unwrap()
     }
 }

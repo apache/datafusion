@@ -359,30 +359,14 @@ pub(crate) fn window_ordering_equivalence(
 mod tests {
     use super::*;
     use crate::aggregates::AggregateFunction;
-    use crate::datasource::physical_plan::CsvExec;
+    use crate::collect;
     use crate::expressions::col;
+    use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::{self, assert_is_pending, csv_exec_sorted};
-    use crate::{collect, ExecutionPlan};
-    use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, SchemaRef};
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::cast::as_primitive_array;
     use datafusion_execution::TaskContext;
-    use datafusion_expr::{create_udaf, Accumulator, Volatility};
     use futures::FutureExt;
-    use std::path::Path;
-    use tempfile::TempDir;
-
-    fn create_test_schema(
-        partitions: usize,
-        work_dir: &Path,
-    ) -> Result<(Arc<CsvExec>, SchemaRef)> {
-        let csv = test::scan_partitioned_csv(partitions, work_dir)?;
-        let schema = csv.schema();
-        Ok((csv, schema))
-    }
 
     fn create_test_schema2() -> Result<SchemaRef> {
         let a = Field::new("a", DataType::Int32, true);
@@ -392,57 +376,6 @@ mod tests {
         let e = Field::new("e", DataType::Int32, true);
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
         Ok(schema)
-    }
-
-    /// make PhysicalSortExpr with default options
-    fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
-        sort_expr_options(name, schema, SortOptions::default())
-    }
-
-    /// PhysicalSortExpr with specified options
-    fn sort_expr_options(
-        name: &str,
-        schema: &Schema,
-        options: SortOptions,
-    ) -> PhysicalSortExpr {
-        PhysicalSortExpr {
-            expr: col(name, schema).unwrap(),
-            options,
-        }
-    }
-
-    #[tokio::test]
-    async fn test_get_partition_by_ordering() -> Result<()> {
-        let test_schema = create_test_schema2()?;
-        // Columns a,c are nullable whereas b,d are not nullable.
-        // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
-        // Column e is not ordered.
-        let sort_exprs = vec![
-            sort_expr("a", &test_schema),
-            sort_expr("b", &test_schema),
-            sort_expr("c", &test_schema),
-            sort_expr("d", &test_schema),
-        ];
-        // Input is ordered by a,b,c,d
-        let input = csv_exec_sorted(&test_schema, sort_exprs, true);
-        let test_data = vec![
-            (vec!["a", "b"], vec![0, 1]),
-            (vec!["b", "a"], vec![1, 0]),
-            (vec!["b", "a", "c"], vec![1, 0, 2]),
-            (vec!["d", "b", "a"], vec![2, 1]),
-            (vec!["d", "e", "a"], vec![2]),
-        ];
-        for (pb_names, expected) in test_data {
-            let pb_exprs = pb_names
-                .iter()
-                .map(|name| col(name, &test_schema))
-                .collect::<Result<Vec<_>>>()?;
-            assert_eq!(
-                get_ordered_partition_by_indices(&pb_exprs, &input),
-                expected
-            );
-        }
-        Ok(())
     }
 
     #[tokio::test]
@@ -506,143 +439,6 @@ mod tests {
             }
             assert_eq!(calc_requirements(partitionbys, orderbys), expected);
         }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn window_function_with_udaf() -> Result<()> {
-        #[derive(Debug)]
-        struct MyCount(i64);
-
-        impl Accumulator for MyCount {
-            fn state(&self) -> Result<Vec<ScalarValue>> {
-                Ok(vec![ScalarValue::Int64(Some(self.0))])
-            }
-
-            fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-                let array = &values[0];
-                self.0 += (array.len() - array.null_count()) as i64;
-                Ok(())
-            }
-
-            fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-                let counts: &Int64Array = arrow::array::as_primitive_array(&states[0]);
-                if let Some(c) = &arrow::compute::sum(counts) {
-                    self.0 += *c;
-                }
-                Ok(())
-            }
-
-            fn evaluate(&self) -> Result<ScalarValue> {
-                Ok(ScalarValue::Int64(Some(self.0)))
-            }
-
-            fn size(&self) -> usize {
-                std::mem::size_of_val(self)
-            }
-        }
-
-        let my_count = create_udaf(
-            "my_count",
-            vec![DataType::Int64],
-            Arc::new(DataType::Int64),
-            Volatility::Immutable,
-            Arc::new(|_| Ok(Box::new(MyCount(0)))),
-            Arc::new(vec![DataType::Int64]),
-        );
-
-        let task_ctx = Arc::new(TaskContext::default());
-        let tmp_dir = TempDir::new()?;
-        let (input, schema) = create_test_schema(1, tmp_dir.path())?;
-
-        let window_exec = Arc::new(WindowAggExec::try_new(
-            vec![create_window_expr(
-                &WindowFunction::AggregateUDF(Arc::new(my_count)),
-                "my_count".to_owned(),
-                &[col("c3", &schema)?],
-                &[],
-                &[],
-                Arc::new(WindowFrame::new(false)),
-                schema.as_ref(),
-            )?],
-            input,
-            schema.clone(),
-            vec![],
-        )?);
-
-        let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
-        assert_eq!(result.len(), 1);
-
-        let n_schema_fields = schema.fields().len();
-        let columns = result[0].columns();
-
-        let count: &Int64Array = as_primitive_array(&columns[n_schema_fields])?;
-        assert_eq!(count.value(0), 100);
-        assert_eq!(count.value(99), 100);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn window_function() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
-        let tmp_dir = TempDir::new()?;
-        let (input, schema) = create_test_schema(1, tmp_dir.path())?;
-
-        let window_exec = Arc::new(WindowAggExec::try_new(
-            vec![
-                create_window_expr(
-                    &WindowFunction::AggregateFunction(AggregateFunction::Count),
-                    "count".to_owned(),
-                    &[col("c3", &schema)?],
-                    &[],
-                    &[],
-                    Arc::new(WindowFrame::new(false)),
-                    schema.as_ref(),
-                )?,
-                create_window_expr(
-                    &WindowFunction::AggregateFunction(AggregateFunction::Max),
-                    "max".to_owned(),
-                    &[col("c3", &schema)?],
-                    &[],
-                    &[],
-                    Arc::new(WindowFrame::new(false)),
-                    schema.as_ref(),
-                )?,
-                create_window_expr(
-                    &WindowFunction::AggregateFunction(AggregateFunction::Min),
-                    "min".to_owned(),
-                    &[col("c3", &schema)?],
-                    &[],
-                    &[],
-                    Arc::new(WindowFrame::new(false)),
-                    schema.as_ref(),
-                )?,
-            ],
-            input,
-            schema.clone(),
-            vec![],
-        )?);
-
-        let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
-        assert_eq!(result.len(), 1);
-
-        let n_schema_fields = schema.fields().len();
-        let columns = result[0].columns();
-
-        // c3 is small int
-
-        let count: &Int64Array = as_primitive_array(&columns[n_schema_fields])?;
-        assert_eq!(count.value(0), 100);
-        assert_eq!(count.value(99), 100);
-
-        let max: &Int8Array = as_primitive_array(&columns[n_schema_fields + 1])?;
-        assert_eq!(max.value(0), 125);
-        assert_eq!(max.value(99), 125);
-
-        let min: &Int8Array = as_primitive_array(&columns[n_schema_fields + 2])?;
-        assert_eq!(min.value(0), -117);
-        assert_eq!(min.value(99), -117);
-
         Ok(())
     }
 

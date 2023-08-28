@@ -256,23 +256,23 @@ pub(crate) struct AggregationOrdering {
 #[derive(Debug)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
-    pub(crate) mode: AggregateMode,
+    pub mode: AggregateMode,
     /// Group by expressions
-    pub(crate) group_by: PhysicalGroupBy,
+    pub group_by: PhysicalGroupBy,
     /// Aggregate expressions
-    pub(crate) aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    pub aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
-    pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    pub filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// (ORDER BY clause) expression for each aggregate expression
-    pub(crate) order_by_expr: Vec<Option<LexOrdering>>,
+    pub order_by_expr: Vec<Option<LexOrdering>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
-    pub(crate) input: Arc<dyn ExecutionPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate
-    pub(crate) input_schema: SchemaRef,
+    pub input_schema: SchemaRef,
     /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
     columns_map: HashMap<Column, Vec<Column>>,
@@ -726,6 +726,10 @@ impl AggregateExec {
                 GroupedHashAggregateStream::new(self, context, partition)?,
             ))
         }
+    }
+
+    pub fn group_by(&self) -> &PhysicalGroupBy {
+        &self.group_by
     }
 }
 
@@ -1182,24 +1186,22 @@ fn evaluate_group_by(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::aggregates::GroupByOrderMode::{
-        FullyOrdered, PartiallyOrdered,
-    };
-    use crate::physical_plan::aggregates::{
+    use crate::aggregates::GroupByOrderMode::{FullyOrdered, PartiallyOrdered};
+    use crate::aggregates::{
         get_finest_requirement, get_working_mode, AggregateExec, AggregateMode,
         PhysicalGroupBy,
     };
-    use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
-    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::expressions::{col, Avg};
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::{
+    use crate::coalesce_batches::CoalesceBatchesExec;
+    use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::expressions::{col, Avg};
+    use crate::memory::MemoryExec;
+    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::{assert_is_pending, mem_exec};
+    use crate::{assert_batches_eq, assert_batches_sorted_eq, common};
+    use crate::{
         DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
         SendableRecordBatchStream, Statistics,
     };
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::{assert_is_pending, csv_exec_sorted};
-    use crate::{assert_batches_eq, assert_batches_sorted_eq, physical_plan::common};
 
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::compute::{concat_batches, SortOptions};
@@ -1260,7 +1262,8 @@ mod tests {
             sort_expr("b", &test_schema),
             sort_expr("c", &test_schema),
         ];
-        let input = csv_exec_sorted(&test_schema, sort_exprs, true);
+        let input = mem_exec(1).with_sort_information(vec![sort_exprs]);
+        let input = Arc::new(input) as _;
 
         // test cases consists of vector of tuples. Where each tuple represents a single test case.
         // First field in the tuple is Vec<str> where each element in the vector represents GROUP BY columns
@@ -1846,7 +1849,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(aggregate_exec, task_ctx);
+        let fut = crate::collect(aggregate_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -1885,7 +1888,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(aggregate_exec, task_ctx);
+        let fut = crate::collect(aggregate_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -1995,7 +1998,7 @@ mod tests {
             schema,
         )?) as Arc<dyn ExecutionPlan>;
 
-        let result = crate::physical_plan::collect(aggregate_final, task_ctx).await?;
+        let result = crate::collect(aggregate_final, task_ctx).await?;
         if is_first_acc {
             let expected = [
                 "+---+----------------+",

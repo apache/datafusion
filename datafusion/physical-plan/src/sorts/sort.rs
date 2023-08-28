@@ -900,59 +900,31 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
-    use datafusion_common::cast::{as_primitive_array, as_string_array};
+    use datafusion_common::cast::as_primitive_array;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeConfig;
     use futures::FutureExt;
     use std::collections::HashMap;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
+        let csv = test::scan_partitioned(partitions);
         let schema = csv.schema();
 
         let sort_exec = Arc::new(SortExec::new(
-            vec![
-                // c1 string column
-                PhysicalSortExpr {
-                    expr: col("c1", &schema)?,
-                    options: SortOptions::default(),
-                },
-                // c2 uin32 column
-                PhysicalSortExpr {
-                    expr: col("c2", &schema)?,
-                    options: SortOptions::default(),
-                },
-                // c7 uin8 column
-                PhysicalSortExpr {
-                    expr: col("c7", &schema)?,
-                    options: SortOptions::default(),
-                },
-            ],
+            vec![PhysicalSortExpr {
+                expr: col("i", &schema)?,
+                options: SortOptions::default(),
+            }],
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
 
         let result = collect(sort_exec, task_ctx.clone()).await?;
 
         assert_eq!(result.len(), 1);
-
-        let columns = result[0].columns();
-
-        let c1 = as_string_array(&columns[0])?;
-        assert_eq!(c1.value(0), "a");
-        assert_eq!(c1.value(c1.len() - 1), "e");
-
-        let c2 = as_primitive_array::<UInt32Type>(&columns[1])?;
-        assert_eq!(c2.value(0), 1);
-        assert_eq!(c2.value(c2.len() - 1), 5,);
-
-        let c7 = as_primitive_array::<UInt8Type>(&columns[6])?;
-        assert_eq!(c7.value(0), 15);
-        assert_eq!(c7.value(c7.len() - 1), 254,);
+        assert_eq!(result[0].num_rows(), 400);
 
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
@@ -965,7 +937,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort_spill() -> Result<()> {
-        // trigger spill there will be 4 batches with 5.5KB for each
+        // trigger spill w/ 100 batches
         let session_config = SessionConfig::new();
         let sort_spill_reservation_bytes = session_config
             .options()
@@ -980,57 +952,35 @@ mod tests {
                 .with_runtime(runtime),
         );
 
-        let partitions = 4;
-        let tmp_dir = TempDir::new()?;
-        let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
-        let schema = csv.schema();
+        let partitions = 100;
+        let input = test::scan_partitioned(partitions);
+        let schema = input.schema();
 
         let sort_exec = Arc::new(SortExec::new(
-            vec![
-                // c1 string column
-                PhysicalSortExpr {
-                    expr: col("c1", &schema)?,
-                    options: SortOptions::default(),
-                },
-                // c2 uin32 column
-                PhysicalSortExpr {
-                    expr: col("c2", &schema)?,
-                    options: SortOptions::default(),
-                },
-                // c7 uin8 column
-                PhysicalSortExpr {
-                    expr: col("c7", &schema)?,
-                    options: SortOptions::default(),
-                },
-            ],
-            Arc::new(CoalescePartitionsExec::new(csv)),
+            vec![PhysicalSortExpr {
+                expr: col("i", &schema)?,
+                options: SortOptions::default(),
+            }],
+            Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
         let result = collect(sort_exec.clone(), task_ctx.clone()).await?;
 
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.len(), 2);
 
         // Now, validate metrics
         let metrics = sort_exec.metrics().unwrap();
 
-        assert_eq!(metrics.output_rows().unwrap(), 100);
+        assert_eq!(metrics.output_rows().unwrap(), 10000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert!(metrics.spill_count().unwrap() > 0);
         assert!(metrics.spilled_bytes().unwrap() > 0);
 
         let columns = result[0].columns();
 
-        let c1 = as_string_array(&columns[0])?;
-        assert_eq!(c1.value(0), "a");
-        assert_eq!(c1.value(c1.len() - 1), "e");
-
-        let c2 = as_primitive_array::<UInt32Type>(&columns[1])?;
-        assert_eq!(c2.value(0), 1);
-        assert_eq!(c2.value(c2.len() - 1), 5,);
-
-        let c7 = as_primitive_array::<UInt8Type>(&columns[6])?;
-        assert_eq!(c7.value(0), 15);
-        assert_eq!(c7.value(c7.len() - 1), 254,);
+        let i = as_primitive_array::<Int32Type>(&columns[0])?;
+        assert_eq!(i.value(0), 0);
+        assert_eq!(i.value(i.len() - 1), 81);
 
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
@@ -1044,7 +994,7 @@ mod tests {
     #[tokio::test]
     async fn test_sort_fetch_memory_calculation() -> Result<()> {
         // This test mirrors down the size from the example above.
-        let avg_batch_size = 4000;
+        let avg_batch_size = 400;
         let partitions = 4;
 
         // A tuple of (fetch, expect_spillage)
@@ -1075,29 +1025,15 @@ mod tests {
                     .with_session_config(session_config),
             );
 
-            let tmp_dir = TempDir::new()?;
-            let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
+            let csv = test::scan_partitioned(partitions);
             let schema = csv.schema();
 
             let sort_exec = Arc::new(
                 SortExec::new(
-                    vec![
-                        // c1 string column
-                        PhysicalSortExpr {
-                            expr: col("c1", &schema)?,
-                            options: SortOptions::default(),
-                        },
-                        // c2 uin32 column
-                        PhysicalSortExpr {
-                            expr: col("c2", &schema)?,
-                            options: SortOptions::default(),
-                        },
-                        // c7 uin8 column
-                        PhysicalSortExpr {
-                            expr: col("c7", &schema)?,
-                            options: SortOptions::default(),
-                        },
-                    ],
+                    vec![PhysicalSortExpr {
+                        expr: col("i", &schema)?,
+                        options: SortOptions::default(),
+                    }],
                     Arc::new(CoalescePartitionsExec::new(csv)),
                 )
                 .with_fetch(fetch),

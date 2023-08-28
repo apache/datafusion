@@ -814,8 +814,8 @@ impl DefaultPhysicalPlanner {
                     // into a LAST_VALUE with the reverse ordering requirement.
                     // To reflect such changes to subsequent stages, use the updated
                     // `AggregateExpr`/`PhysicalSortExpr` objects.
-                    let updated_aggregates = initial_aggr.aggr_expr.clone();
-                    let updated_order_bys = initial_aggr.order_by_expr.clone();
+                    let updated_aggregates = initial_aggr.aggr_expr().to_vec();
+                    let updated_order_bys = initial_aggr.order_by_expr().to_vec();
 
                     let (initial_aggr, next_partition_mode): (
                         Arc<dyn ExecutionPlan>,

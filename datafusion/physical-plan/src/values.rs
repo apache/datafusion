@@ -195,14 +195,12 @@ impl ExecutionPlan for ValuesExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::test::create_vec_batches;
-    use crate::test_util;
+    use crate::test::{self, make_partition};
     use arrow_schema::{DataType, Field, Schema};
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
-        let schema = test_util::aggr_test_schema();
+        let schema = test::aggr_test_schema();
         let empty = ValuesExec::try_new(schema, vec![]);
         assert!(empty.is_err());
         Ok(())
@@ -210,33 +208,24 @@ mod tests {
 
     #[test]
     fn new_exec_with_batches() {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col0",
-            DataType::UInt32,
-            false,
-        )]));
-        let batches = create_vec_batches(&schema, 10);
+        let batch = make_partition(7);
+        let schema = batch.schema();
+        let batches = vec![batch.clone(), batch];
+
         let _exec = ValuesExec::try_new_from_batches(schema, batches).unwrap();
     }
 
     #[test]
     fn new_exec_with_batches_empty() {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col0",
-            DataType::UInt32,
-            false,
-        )]));
+        let batch = make_partition(7);
+        let schema = batch.schema();
         let _ = ValuesExec::try_new_from_batches(schema, Vec::new()).unwrap_err();
     }
 
     #[test]
     fn new_exec_with_batches_invalid_schema() {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col0",
-            DataType::UInt32,
-            false,
-        )]));
-        let batches = create_vec_batches(&schema, 10);
+        let batch = make_partition(7);
+        let batches = vec![batch.clone(), batch];
 
         let invalid_schema = Arc::new(Schema::new(vec![
             Field::new("col0", DataType::UInt32, false),

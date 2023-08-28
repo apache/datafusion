@@ -17,13 +17,13 @@
 
 //! This file has test utils for hash joins
 
-use crate::physical_plan::joins::utils::{JoinFilter, JoinOn};
-use crate::physical_plan::joins::{
+use crate::joins::utils::{JoinFilter, JoinOn};
+use crate::joins::{
     HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
-use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::{common, ExecutionPlan, Partitioning};
+use crate::memory::MemoryExec;
+use crate::repartition::RepartitionExec;
+use crate::{common, ExecutionPlan, Partitioning};
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::{
     ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
