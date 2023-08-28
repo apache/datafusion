@@ -286,3 +286,135 @@ impl Display for FileTypeWriterOptions {
         write!(f, "{}", name)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use parquet::{
+        basic::{Compression, Encoding, ZstdLevel},
+        file::properties::{EnabledStatistics, WriterVersion},
+        schema::types::ColumnPath,
+    };
+
+    use crate::{
+        config::ConfigOptions,
+        file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
+        parsers::CompressionTypeVariant,
+    };
+
+    use crate::Result;
+
+    use super::{parquet_writer::ParquetWriterOptions, StatementOptions};
+
+    #[test]
+    fn test_writeroptions_parquet_from_statement_options() -> Result<()> {
+        let mut option_map: HashMap<String, String> = HashMap::new();
+        option_map.insert("max_row_group_size".to_owned(), "123".to_owned());
+        option_map.insert("data_pagesize_limit".to_owned(), "123".to_owned());
+        option_map.insert("write_batch_size".to_owned(), "123".to_owned());
+        option_map.insert("writer_version".to_owned(), "2.0".to_owned());
+        option_map.insert("dictionary_page_size_limit".to_owned(), "123".to_owned());
+        option_map.insert("created_by".to_owned(), "df write unit test".to_owned());
+        option_map.insert("column_index_truncate_length".to_owned(), "123".to_owned());
+        option_map.insert("data_page_row_count_limit".to_owned(), "123".to_owned());
+        option_map.insert("bloom_filter_enabled".to_owned(), "true".to_owned());
+        option_map.insert("encoding".to_owned(), "plain".to_owned());
+        option_map.insert("dictionary_enabled".to_owned(), "true".to_owned());
+        option_map.insert("compression".to_owned(), "zstd(4)".to_owned());
+        option_map.insert("statistics_enabled".to_owned(), "page".to_owned());
+        option_map.insert("bloom_filter_fpp".to_owned(), "0.123".to_owned());
+        option_map.insert("bloom_filter_ndv".to_owned(), "123".to_owned());
+
+        let options = StatementOptions::from(&option_map);
+        let config = ConfigOptions::new();
+
+        let parquet_options = ParquetWriterOptions::try_from((&config, &options))?;
+        let properties = parquet_options.writer_options();
+
+        // Verify the expected options propagated down to parquet crate WriterProperties struct
+        assert_eq!(properties.max_row_group_size(), 123);
+        assert_eq!(properties.data_page_size_limit(), 123);
+        assert_eq!(properties.write_batch_size(), 123);
+        assert_eq!(properties.writer_version(), WriterVersion::PARQUET_2_0);
+        assert_eq!(properties.dictionary_page_size_limit(), 123);
+        assert_eq!(properties.created_by(), "df write unit test");
+        assert_eq!(properties.column_index_truncate_length(), Some(123));
+        assert_eq!(properties.data_page_row_count_limit(), 123);
+        properties
+            .bloom_filter_properties(&ColumnPath::from(""))
+            .expect("expected bloom filter enabled");
+        assert_eq!(
+            properties
+                .encoding(&ColumnPath::from(""))
+                .expect("expected default encoding"),
+            Encoding::PLAIN
+        );
+        assert!(properties.dictionary_enabled(&ColumnPath::from("")));
+        assert_eq!(
+            properties.compression(&ColumnPath::from("")),
+            Compression::ZSTD(ZstdLevel::try_new(4_i32)?)
+        );
+        assert_eq!(
+            properties.statistics_enabled(&ColumnPath::from("")),
+            EnabledStatistics::Page
+        );
+        assert_eq!(
+            properties
+                .bloom_filter_properties(&ColumnPath::from(""))
+                .expect("expected bloom properties!")
+                .fpp,
+            0.123
+        );
+        assert_eq!(
+            properties
+                .bloom_filter_properties(&ColumnPath::from(""))
+                .expect("expected bloom properties!")
+                .ndv,
+            123
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_writeroptions_csv_from_statement_options() -> Result<()> {
+        let mut option_map: HashMap<String, String> = HashMap::new();
+        option_map.insert("header".to_owned(), "true".to_owned());
+        option_map.insert("date_format".to_owned(), "123".to_owned());
+        option_map.insert("datetime_format".to_owned(), "123".to_owned());
+        option_map.insert("timestamp_format".to_owned(), "2.0".to_owned());
+        option_map.insert("time_format".to_owned(), "123".to_owned());
+        option_map.insert("rfc3339".to_owned(), "true".to_owned());
+        option_map.insert("null_value".to_owned(), "123".to_owned());
+        option_map.insert("compression".to_owned(), "gzip".to_owned());
+        option_map.insert("delimeter".to_owned(), ";".to_owned());
+
+        let options = StatementOptions::from(&option_map);
+        let config = ConfigOptions::new();
+
+        let csv_options = CsvWriterOptions::try_from((&config, &options))?;
+        let builder = csv_options.writer_options;
+        let buff = Vec::new();
+        let _properties = builder.build(buff);
+        assert!(csv_options.has_header);
+        assert_eq!(csv_options.compression, CompressionTypeVariant::GZIP);
+        // TODO expand unit test if csv::WriterBuilder allows public read access to properties
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_writeroptions_json_from_statement_options() -> Result<()> {
+        let mut option_map: HashMap<String, String> = HashMap::new();
+        option_map.insert("compression".to_owned(), "gzip".to_owned());
+
+        let options = StatementOptions::from(&option_map);
+        let config = ConfigOptions::new();
+
+        let json_options = JsonWriterOptions::try_from((&config, &options))?;
+        assert_eq!(json_options.compression, CompressionTypeVariant::GZIP);
+
+        Ok(())
+    }
+}
