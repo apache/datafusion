@@ -3,7 +3,8 @@ use crate::physical_plan::sorts::builder::SortOrder;
 use crate::physical_plan::sorts::cursor::Cursor;
 use crate::physical_plan::sorts::merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::stream::{
-    CursorStream, MergeStream, OffsetCursorStream, YieldedCursorStream,
+    BatchCursorStream, BatchTrackingStream, MergeStream, OffsetCursorStream,
+    YieldedCursorStream,
 };
 use crate::physical_plan::RecordBatchStream;
 
@@ -13,7 +14,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashMap};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -30,11 +31,15 @@ pub(crate) struct SortPreservingCascadeStream<C: Cursor> {
 
     /// The schema of the RecordBatches yielded by this stream
     schema: SchemaRef,
+
+    /// Batches are collected on first yield from the RowCursorStream
+    /// Subsequent merges in cascade all refer to the [`BatchIdentifier`](super::stream::BatchIdentifier)
+    record_batch_collector: Arc<parking_lot::Mutex<BatchTrackingStream<C>>>,
 }
 
 impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
     pub(crate) fn new(
-        streams: CursorStream<C>,
+        streams: BatchCursorStream<C>,
         schema: SchemaRef,
         metrics: BaselineMetrics,
         batch_size: usize,
@@ -43,16 +48,14 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
     ) -> Self {
         let stream_count = streams.partitions();
 
-        // TODO: since we already use a mutex here,
-        // we can have (for the same relative cost) a mutex for a single holder of record_batches
-        // which yields a batch_idx tracker.
-        // In this way, we can do slicing followed by concating of Cursors yielded from each merge,
-        // without needing to also yield sliced-then-concated batches (which are expensive to concat).
-        //
+        // TODO: We can do slicing followed by concating of Cursors yielded from each merge.
         // Refer to YieldedCursorStream for where the concat would happen (TODO).
-        let streams = Arc::new(parking_lot::Mutex::new(streams));
+        let streams = Arc::new(parking_lot::Mutex::new(BatchTrackingStream::new(
+            streams,
+            reservation.new_empty(),
+        )));
 
-        let max_streams_per_merge = 2; // TODO: change this to 10, once we have tested with 2 (to force more cascade levels)
+        let max_streams_per_merge = 10;
         let mut divided_streams: VecDeque<MergeStream<C>> =
             VecDeque::with_capacity(stream_count / max_streams_per_merge + 1);
 
@@ -70,7 +73,6 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
                 metrics.clone(),
                 batch_size,
                 None, // fetch, the LIMIT, is applied to the final merge
-                reservation.new_empty(),
             )));
         }
 
@@ -91,7 +93,6 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
                 } else {
                     None
                 }, // fetch, the LIMIT, is applied to the final merge
-                reservation.new_empty(),
             )));
             // in order to maintain sort-preserving streams, don't mix the merge tree levels.
             if divided_streams.is_empty() {
@@ -106,23 +107,61 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
                 .expect("must have a root merge stream"),
             schema,
             metrics,
+            record_batch_collector: streams,
         }
     }
 
     fn build_record_batch(
         &mut self,
-        batches: Vec<RecordBatch>,
         sort_order: Vec<SortOrder>,
     ) -> Result<RecordBatch> {
+        let mut batches_needed = Vec::with_capacity(sort_order.len());
+        let mut batches_seen: HashMap<uuid::Uuid, (usize, usize)> = HashMap::with_capacity(sort_order.len()); // (batch_idx, rows_sorted)
+        let mut sort_order_offset_adjusted = Vec::with_capacity(sort_order.len());
+        let mut batch_idx: usize = 0;
+
+        for (batch_id, row_idx, offset) in sort_order.iter() {
+            let batch_idx = match batches_seen.get(batch_id) {
+                Some((batch_idx, _)) => *batch_idx,
+                None => {
+                    batches_needed.push(*batch_id);
+                    let batch_now = batch_idx;
+                    batch_idx += 1;
+                    batch_now
+                },
+            };
+            sort_order_offset_adjusted.push((batch_idx, *row_idx + offset.0));
+            batches_seen.insert(*batch_id, (batch_idx, *row_idx + offset.0 + 1));
+        }
+
+        let batch_collecter = self.record_batch_collector.lock();
+        let batches = batch_collecter.get_batches(batches_needed.as_slice());
+        drop(batch_collecter);
+
+        let batches_to_remove = batches
+            .iter()
+            .zip(batches_needed.into_iter())
+            .filter_map(|(batch, batch_id)| {
+                if batch.num_rows() == batches_seen[&batch_id].1 {
+                    Some(batch_id)
+                } else {
+                    None
+                }
+            }).collect::<Vec<_>>();
+
         let columns = (0..self.schema.fields.len())
             .map(|column_idx| {
                 let arrays: Vec<_> = batches
                     .iter()
                     .map(|batch| batch.column(column_idx).as_ref())
                     .collect();
-                Ok(interleave(&arrays, sort_order.as_slice())?)
+                Ok(interleave(&arrays, sort_order_offset_adjusted.as_slice())?)
             })
             .collect::<Result<Vec<_>>>()?;
+
+        let mut batch_collecter = self.record_batch_collector.lock();
+        batch_collecter.remove_batches(batches_to_remove.as_slice());
+        drop(batch_collecter);
 
         Ok(RecordBatch::try_new(self.schema.clone(), columns)?)
     }
@@ -141,8 +180,8 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
                 self.aborted = true;
                 Poll::Ready(Some(Err(e)))
             }
-            Some(Ok((batches, _, sort_order))) => {
-                match self.build_record_batch(batches, sort_order) {
+            Some(Ok((_, sort_order))) => {
+                match self.build_record_batch(sort_order) {
                     Ok(batch) => Poll::Ready(Some(Ok(batch))),
                     Err(e) => {
                         self.aborted = true;

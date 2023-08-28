@@ -27,20 +27,30 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::stream::{Fuse, StreamExt};
 use parking_lot::Mutex;
-use std::collections::VecDeque;
+use uuid::Uuid;
+use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
-pub(crate) type CursorStream<C> =
+pub(crate) type BatchCursorStream<C> =
     Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
-/// A stream of yielded [`SortOrder`]s, with the corresponding [`Cursor`]s and [`RecordBatch`]es
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct BatchOffset(pub usize); // offset into a batch, used when a cursor is sliced
+
+/// A fallible [`PartitionedStream`] of [`Cursor`] and a batch identifier (Uuid)
+pub(crate) type CursorStream<C> =
+    Box<dyn PartitionedStream<Output = Result<(C, Uuid, BatchOffset)>>>;
+
+/// A stream of yielded [`SortOrder`]s, with the corresponding [`Cursor`]s and [`Uuid`]s
 pub(crate) type MergeStream<C> = std::pin::Pin<
     Box<
         dyn Send
-            + futures::Stream<Item = Result<(Vec<RecordBatch>, Vec<C>, Vec<SortOrder>)>>,
+            + futures::Stream<
+                Item = Result<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>,
+            >,
     >,
 >;
 
@@ -223,17 +233,17 @@ impl<T: FieldArray> PartitionedStream for FieldCursorStream<T> {
     }
 }
 
-/// A wrapper around [`CursorStream<C>`]
-/// that provides polling of a subset of the streams.
+/// A wrapper around [`CursorStream<C>`] that implements [`PartitionedStream`]
+/// and provides polling of a subset of the streams.
 pub struct OffsetCursorStream<C: Cursor> {
-    streams: Arc<Mutex<CursorStream<C>>>,
+    streams: Arc<Mutex<BatchTrackingStream<C>>>,
     offset: usize,
     limit: usize,
 }
 
 impl<C: Cursor> OffsetCursorStream<C> {
     pub fn new(
-        streams: Arc<Mutex<CursorStream<C>>>,
+        streams: Arc<Mutex<BatchTrackingStream<C>>>,
         offset: usize,
         limit: usize,
     ) -> Self {
@@ -246,7 +256,7 @@ impl<C: Cursor> OffsetCursorStream<C> {
 }
 
 impl<C: Cursor> PartitionedStream for OffsetCursorStream<C> {
-    type Output = Result<(C, RecordBatch)>;
+    type Output = Result<(C, Uuid, BatchOffset)>;
 
     fn partitions(&self) -> usize {
         self.limit - self.offset
@@ -274,6 +284,50 @@ impl<C: Cursor> std::fmt::Debug for OffsetCursorStream<C> {
     }
 }
 
+pub struct BatchTrackingStream<C: Cursor> {
+    /// Write once, read many [`RecordBatch`]s
+    batches: HashMap<Uuid, Arc<RecordBatch>>,
+    /// Input streams yielding [`Cursor`]s and [`RecordBatch`]es
+    streams: BatchCursorStream<C>,
+    /// Accounts for memory used by buffered batches
+    reservation: MemoryReservation,
+}
+
+impl<C: Cursor> BatchTrackingStream<C> {
+    pub fn new(streams: BatchCursorStream<C>, reservation: MemoryReservation) -> Self {
+        Self {
+            batches: HashMap::new(),
+            streams,
+            reservation,
+        }
+    }
+
+    pub fn get_batches(&self, batch_ids: &[Uuid]) -> Vec<Arc<RecordBatch>> {
+        batch_ids.iter().map(|id| self.batches[id].clone()).collect()
+    }
+
+    pub fn remove_batches(&mut self, batch_ids: &[Uuid]) {
+        for id in batch_ids {
+            self.batches.remove(id);
+        }
+    }
+
+    fn poll_next(
+        &mut self,
+        cx: &mut Context<'_>,
+        stream_idx: usize,
+    ) -> Poll<Option<Result<(C, Uuid, BatchOffset)>>> {
+        Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
+            r.and_then(|(cursor, batch)| {
+                self.reservation.try_grow(batch.get_array_memory_size())?;
+                let batch_id = Uuid::new_v4();
+                self.batches.insert(batch_id, Arc::new(batch));
+                Ok((cursor, batch_id, BatchOffset(0_usize)))
+            })
+        }))
+    }
+}
+
 /// A newtype wrapper around a set of fused [`MergeStream`]
 /// that implements debug, and skips over empty inner poll results
 struct FusedMergeStreams<C>(Vec<Fuse<MergeStream<C>>>);
@@ -283,10 +337,11 @@ impl<C: Cursor> FusedMergeStreams<C> {
         &mut self,
         cx: &mut Context<'_>,
         stream_idx: usize,
-    ) -> Poll<Option<Result<(Vec<RecordBatch>, Vec<C>, Vec<SortOrder>)>>> {
+    ) -> Poll<Option<Result<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>>>
+    {
         loop {
             match ready!(self.0[stream_idx].poll_next_unpin(cx)) {
-                Some(Ok((_, _, sort_order))) if sort_order.len() == 0 => continue,
+                Some(Ok((_, sort_order))) if sort_order.len() == 0 => continue,
                 r => return Poll::Ready(r),
             }
         }
@@ -294,10 +349,8 @@ impl<C: Cursor> FusedMergeStreams<C> {
 }
 
 pub struct YieldedCursorStream<C: Cursor> {
-    // inner polled batches, per stream_idx, which are partially yielded
-    batches: Vec<Option<VecDeque<RecordBatch>>>,
     // inner polled batch cursors, per stream_idx, which are partially yielded
-    cursors: Vec<Option<VecDeque<C>>>,
+    cursors: Vec<Option<VecDeque<(C, Uuid, BatchOffset)>>>,
     /// Streams being polled
     streams: FusedMergeStreams<C>,
 }
@@ -306,62 +359,82 @@ impl<C: Cursor + std::marker::Send> YieldedCursorStream<C> {
     pub fn new(streams: Vec<MergeStream<C>>) -> Self {
         let stream_cnt = streams.len();
         Self {
-            batches: (0..stream_cnt).map(|_| None).collect(),
             cursors: (0..stream_cnt).map(|_| None).collect(),
             streams: FusedMergeStreams(streams.into_iter().map(|s| s.fuse()).collect()),
         }
     }
 
-    fn incr_next_batch(&mut self, stream_idx: usize) -> Option<(C, RecordBatch)> {
-        if let (Some(cursors), Some(batches)) =
-            (&mut self.cursors[stream_idx], &mut self.batches[stream_idx])
-        {
-            cursors.pop_front().zip(batches.pop_front())
-        } else {
-            None
-        }
+    fn incr_next_batch(
+        &mut self,
+        stream_idx: usize,
+    ) -> Option<(C, Uuid, BatchOffset)> {
+        self.cursors[stream_idx]
+            .as_mut()
+            .map(|queue| queue.pop_front())
+            .flatten()
     }
 
     // TODO: in order to handle sort_order, we need to either:
     // parse further
-    // or concat the batches and cursors
+    // or concat the cursors
     fn try_parse_batches(
         &mut self,
         stream_idx: usize,
-        batches: Vec<RecordBatch>,
-        cursors: Vec<C>,
+        cursors: Vec<(C, Uuid, BatchOffset)>,
         sort_order: Vec<SortOrder>,
     ) -> Result<()> {
-        let mut parsed_batches = Vec::new();
-        let mut parsed_cursors = Vec::new();
-        let mut prev_batch_idx = sort_order[0].0;
-        let mut start_row_idx = sort_order[0].1;
+        let mut cursors_per_batch: HashMap<(Uuid, BatchOffset), C> =
+            HashMap::with_capacity(cursors.len());
+        for (cursor, batch_id, batch_offset) in cursors {
+            cursors_per_batch.insert((batch_id, batch_offset), cursor);
+        }
+
+        let mut parsed_cursors: Vec<(C, Uuid, BatchOffset)> =
+            Vec::with_capacity(sort_order.len());
+        let (mut prev_batch_id, mut prev_row_idx, mut prev_batch_offset) = sort_order[0];
         let mut len = 0;
-        for (batch_idx, row_idx) in sort_order.iter() {
-            if prev_batch_idx == *batch_idx {
+
+        for (batch_id, row_idx, batch_offset) in sort_order.iter() {
+            if prev_batch_id == *batch_id && batch_offset.0 == prev_batch_offset.0 {
                 len += 1;
                 continue;
             } else {
-                // parse batch
-                parsed_batches.push(batches[prev_batch_idx].slice(start_row_idx, len));
-                parsed_cursors.push(cursors[prev_batch_idx].slice(start_row_idx, len)?);
+                // parse cursor
+                if let Some(cursor) =
+                    cursors_per_batch.get(&(prev_batch_id, prev_batch_offset))
+                {
+                    let parsed_cursor = cursor.slice(prev_row_idx, len)?;
+                    parsed_cursors.push((
+                        parsed_cursor,
+                        prev_batch_id,
+                        BatchOffset(prev_row_idx + prev_batch_offset.0),
+                    ));
+                } else {
+                    unreachable!("cursor not found");
+                }
 
-                prev_batch_idx = *batch_idx;
-                start_row_idx = *row_idx;
+                prev_batch_id = *batch_id;
+                prev_row_idx = *row_idx;
+                prev_batch_offset = *batch_offset;
                 len = 1;
             }
         }
-        parsed_batches.push(batches[prev_batch_idx].slice(start_row_idx, len));
-        parsed_cursors.push(cursors[prev_batch_idx].slice(start_row_idx, len)?);
+        if let Some(cursor) = cursors_per_batch.get(&(prev_batch_id, prev_batch_offset)) {
+            let parsed_cursor = cursor.slice(prev_row_idx, len)?;
+            parsed_cursors.push((
+                parsed_cursor,
+                prev_batch_id,
+                BatchOffset(prev_row_idx + prev_batch_offset.0),
+            ));
+        }
 
-        self.batches[stream_idx] = Some(VecDeque::from(parsed_batches));
         self.cursors[stream_idx] = Some(VecDeque::from(parsed_cursors));
         return Ok(());
     }
 }
 
 impl<C: Cursor + std::marker::Send> PartitionedStream for YieldedCursorStream<C> {
-    type Output = Result<(C, RecordBatch)>;
+    type Output = Result<(C, Uuid, BatchOffset)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()
@@ -376,8 +449,8 @@ impl<C: Cursor + std::marker::Send> PartitionedStream for YieldedCursorStream<C>
             None => match ready!(self.streams.poll_next(cx, stream_idx)) {
                 None => Poll::Ready(None),
                 Some(Err(e)) => Poll::Ready(Some(Err(e))),
-                Some(Ok((batches, cursors, sort_order))) => {
-                    self.try_parse_batches(stream_idx, batches, cursors, sort_order)?;
+                Some(Ok((cursors, sort_order))) => {
+                    self.try_parse_batches(stream_idx, cursors, sort_order)?;
                     Poll::Ready((Ok(self.incr_next_batch(stream_idx))).transpose())
                 }
             },

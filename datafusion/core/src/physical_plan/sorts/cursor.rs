@@ -110,6 +110,9 @@ pub trait Cursor: Ord {
     fn slice(&self, offset: usize, length: usize) -> Result<Self>
     where
         Self: Sized;
+
+    /// Returns the number of rows in this cursor
+    fn num_rows(&self) -> usize;
 }
 
 impl Cursor for RowCursor {
@@ -138,6 +141,11 @@ impl Cursor for RowCursor {
         let mut reservation = self.reservation.new_empty();
         reservation.try_grow(rows.size())?;
         Ok(Self::new(rows, reservation))
+    }
+
+    #[inline]
+    fn num_rows(&self) -> usize {
+        self.num_rows
     }
 }
 
@@ -342,6 +350,10 @@ impl<T: FieldValues> Cursor for FieldCursor<T> {
             null_threshold: *null_threshold,
             options: options.clone(),
         })
+    }
+
+    fn num_rows(&self) -> usize {
+        self.values.len()
     }
 }
 

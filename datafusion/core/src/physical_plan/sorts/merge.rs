@@ -18,11 +18,10 @@
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::{SortOrder, SortOrderBuilder};
 use crate::physical_plan::sorts::cursor::Cursor;
-use crate::physical_plan::sorts::stream::CursorStream;
-use arrow::record_batch::RecordBatch;
+use crate::physical_plan::sorts::stream::{BatchOffset, CursorStream};
 use datafusion_common::Result;
-use datafusion_execution::memory_pool::MemoryReservation;
 use futures::Stream;
+use uuid::Uuid;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
@@ -93,12 +92,11 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         metrics: BaselineMetrics,
         batch_size: usize,
         fetch: Option<usize>,
-        reservation: MemoryReservation,
     ) -> Self {
         let stream_count = streams.partitions();
 
         Self {
-            in_progress: SortOrderBuilder::new(stream_count, batch_size, reservation),
+            in_progress: SortOrderBuilder::new(stream_count, batch_size),
             streams,
             metrics,
             aborted: false,
@@ -126,16 +124,18 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         match futures::ready!(self.streams.poll_next(cx, idx)) {
             None => Poll::Ready(Ok(())),
             Some(Err(e)) => Poll::Ready(Err(e)),
-            Some(Ok((cursor, batch))) => {
-                Poll::Ready(self.in_progress.push_batch(idx, batch, cursor))
-            }
+            Some(Ok((cursor, batch_id, batch_offset))) => Poll::Ready(
+                self.in_progress
+                    .push_batch(idx, cursor, batch_id, batch_offset),
+            ),
         }
     }
 
     fn poll_next_inner(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<(Vec<RecordBatch>, Vec<C>, Vec<SortOrder>)>>> {
+    ) -> Poll<Option<Result<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>>>
+    {
         if self.aborted {
             return Poll::Ready(None);
         }
@@ -278,7 +278,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
 }
 
 impl<C: Cursor + Unpin> Stream for SortPreservingMergeStream<C> {
-    type Item = Result<(Vec<RecordBatch>, Vec<C>, Vec<SortOrder>)>;
+    type Item = Result<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
