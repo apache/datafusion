@@ -277,11 +277,11 @@ impl FileTypeWriterOptions {
 impl Display for FileTypeWriterOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
-            FileTypeWriterOptions::Arrow(_) => "Arrow",
-            FileTypeWriterOptions::Avro(_) => "Avro",
-            FileTypeWriterOptions::CSV(_) => "CSV",
-            FileTypeWriterOptions::JSON(_) => "JSON",
-            FileTypeWriterOptions::Parquet(_) => "Parquet",
+            FileTypeWriterOptions::Arrow(_) => "ArrowWriterOptions",
+            FileTypeWriterOptions::Avro(_) => "AvroWriterOptions",
+            FileTypeWriterOptions::CSV(_) => "CsvWriterOptions",
+            FileTypeWriterOptions::JSON(_) => "JsonWriterOptions",
+            FileTypeWriterOptions::Parquet(_) => "ParquetWriterOptions",
         };
         write!(f, "{}", name)
     }
