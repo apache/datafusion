@@ -751,6 +751,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .to_string(),
                 ))
             }
+            Expr::Unnest(..) => todo!("Unnest not supported"),
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args

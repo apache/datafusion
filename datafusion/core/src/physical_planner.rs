@@ -83,7 +83,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
-    WindowFunction,
+    Unnest as UnnestExpr, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -215,6 +215,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             };
 
             Ok(name)
+        }
+        Expr::Unnest(UnnestExpr { array_exprs, .. }) => {
+            create_function_physical_name("unnest", false, array_exprs)
         }
         Expr::ScalarFunction(func) => {
             create_function_physical_name(&func.fun.to_string(), false, &func.args)

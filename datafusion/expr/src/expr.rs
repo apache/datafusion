@@ -28,6 +28,7 @@ use crate::window_function;
 use crate::Operator;
 use arrow::datatypes::DataType;
 use datafusion_common::internal_err;
+use datafusion_common::UnnestOptions;
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
@@ -147,6 +148,8 @@ pub enum Expr {
     TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
     Sort(Sort),
+    /// Unnest expression
+    Unnest(Unnest),
     /// Represents the call of a built-in scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Represents the call of a user-defined scalar function with arguments.
@@ -324,6 +327,24 @@ impl Between {
             negated,
             low,
             high,
+        }
+    }
+}
+
+/// Unnest expression
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Unnest {
+    /// Arrays to unnest
+    pub array_exprs: Vec<Expr>,
+    pub options: UnnestOptions,
+}
+
+impl Unnest {
+    /// Create a new Unnest expression
+    pub fn new(array_exprs: Vec<Expr>, options: UnnestOptions) -> Self {
+        Self {
+            array_exprs,
+            options,
         }
     }
 }
@@ -728,6 +749,7 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard => "Wildcard",
+            Expr::Unnest(..) => "Unnest",
         }
     }
 
@@ -1030,6 +1052,43 @@ impl Expr {
     pub fn contains_outer(&self) -> bool {
         !find_out_reference_exprs(self).is_empty()
     }
+
+    /// Flatten the nested array expressions until the base array is reached.
+    /// For example:
+    ///  unnest([[1, 2, 3], [4, 5, 6]]) => unnest([1, 2, 3, 4, 5, 6])
+    pub fn flatten(&self) -> Self {
+        self.try_flatten().unwrap_or_else(|_| self.clone())
+    }
+
+    pub fn try_flatten(&self) -> Result<Self> {
+        match self {
+            Self::ScalarFunction(ScalarFunction {
+                fun: built_in_function::BuiltinScalarFunction::MakeArray,
+                args,
+            }) => {
+                let flatten_args: Vec<Expr> =
+                    args.iter().flat_map(Self::flatten_internal).collect();
+                Ok(Self::ScalarFunction(ScalarFunction {
+                    fun: built_in_function::BuiltinScalarFunction::MakeArray,
+                    args: flatten_args,
+                }))
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Cannot flatten expression {:?}",
+                self
+            ))),
+        }
+    }
+
+    fn flatten_internal(&self) -> Vec<Self> {
+        match self {
+            Self::ScalarFunction(ScalarFunction {
+                fun: built_in_function::BuiltinScalarFunction::MakeArray,
+                args,
+            }) => args.iter().flat_map(Self::flatten_internal).collect(),
+            _ => vec![self.clone()],
+        }
+    }
 }
 
 #[macro_export]
@@ -1118,6 +1177,10 @@ impl fmt::Display for Expr {
                     write!(f, " NULLS LAST")
                 }
             }
+            Expr::Unnest(Unnest {
+                array_exprs,
+                options,
+            }) => fmt_function(f, "unnest", false, array_exprs, false),
             Expr::ScalarFunction(func) => {
                 fmt_function(f, &func.fun.to_string(), false, &func.args, true)
             }
@@ -1286,7 +1349,6 @@ fn fmt_function(
         false => args.iter().map(|arg| format!("{arg:?}")).collect(),
     };
 
-    // let args: Vec<String> = args.iter().map(|arg| format!("{:?}", arg)).collect();
     let distinct_str = match distinct {
         true => "DISTINCT ",
         false => "",
@@ -1452,6 +1514,10 @@ fn create_name(e: &Expr) -> Result<String> {
                 }
             }
         }
+        Expr::Unnest(Unnest {
+            array_exprs,
+            options,
+        }) => create_function_name("unnest", false, array_exprs),
         Expr::ScalarFunction(func) => {
             create_function_name(&func.fun.to_string(), false, &func.args)
         }

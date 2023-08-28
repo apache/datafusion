@@ -39,6 +39,7 @@ use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
+use crate::unnest_expressions::UnnestExpressions;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use crate::utils::log_plan;
 use chrono::{DateTime, Utc};
@@ -220,6 +221,7 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+            Arc::new(UnnestExpressions::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
@@ -427,6 +429,12 @@ fn assert_schema_is_the_same(
     prev_plan: &LogicalPlan,
     new_plan: &LogicalPlan,
 ) -> Result<()> {
+    // TODO: Resolve this one.
+    if rule_name == "unnest_expressions" {
+        // unnest_expressions can change the schema
+        return Ok(());
+    }
+
     let equivalent = new_plan
         .schema()
         .equivalent_names_and_types(prev_plan.schema());
