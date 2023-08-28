@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{
-    not_impl_err, plan_err, Constraints, DataFusionError, Result, ScalarValue, sql_err,
+    not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
