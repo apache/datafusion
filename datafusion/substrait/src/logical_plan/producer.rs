@@ -489,7 +489,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
 }
 
 pub fn parse_flat_grouping_exprs(
-    exprs: &Vec<Expr>,
+    exprs: &[Expr],
     schema: &DFSchemaRef,
     extension_info: &mut (
         Vec<extensions::SimpleExtensionDeclaration>,
