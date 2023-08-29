@@ -17,7 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::dml::CopyTo;
+use crate::dml::{CopyOptions, CopyTo};
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -41,7 +41,6 @@ use crate::{
     Expr, ExprSchemable, TableSource,
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::file_options::StatementOptions;
 use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
 use datafusion_common::{
@@ -240,14 +239,14 @@ impl LogicalPlanBuilder {
         output_url: String,
         file_format: FileType,
         single_file_output: bool,
-        statement_options: StatementOptions,
+        copy_options: CopyOptions,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
             file_format,
             single_file_output,
-            statement_options,
+            copy_options,
         })))
     }
 

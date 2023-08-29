@@ -33,6 +33,12 @@ pub struct JsonWriterOptions {
     pub compression: CompressionTypeVariant,
 }
 
+impl JsonWriterOptions {
+    pub fn new(compression: CompressionTypeVariant) -> Self {
+        Self { compression }
+    }
+}
+
 impl TryFrom<(&ConfigOptions, &StatementOptions)> for JsonWriterOptions {
     type Error = DataFusionError;
 

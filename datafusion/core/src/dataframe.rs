@@ -22,10 +22,19 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use datafusion_common::file_options::StatementOptions;
-use datafusion_common::{DataFusionError, FileType, SchemaError, UnnestOptions};
+use datafusion_common::file_options::csv_writer::CsvWriterOptions;
+use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::file_options::parquet_writer::{
+    default_builder, ParquetWriterOptions,
+};
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{
+    DataFusionError, FileType, FileTypeWriterOptions, SchemaError, UnnestOptions,
+};
+use datafusion_expr::dml::CopyOptions;
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -57,19 +66,40 @@ use crate::prelude::SessionContext;
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
     /// Controls if existing data should be overwritten
-    overwrite: bool, // TODO, enable DataFrame COPY TO write without TableProvider
-                     // settings such as LOCATION and FILETYPE can be set here
-                     // e.g. add location: Option<Path>
+    overwrite: bool,
+    /// Controls if all partitions should be coalesced into a single output file
+    /// Generally will have slower performance when set to true.
+    single_file_output: bool,
+    /// Sets compression by DataFusion applied after file serialization.
+    /// Allows compression of CSV and JSON.
+    /// Not supported for parquet.
+    compression: CompressionTypeVariant,
 }
 
 impl DataFrameWriteOptions {
     /// Create a new DataFrameWriteOptions with default values
     pub fn new() -> Self {
-        DataFrameWriteOptions { overwrite: false }
+        DataFrameWriteOptions {
+            overwrite: false,
+            single_file_output: false,
+            compression: CompressionTypeVariant::UNCOMPRESSED,
+        }
     }
     /// Set the overwrite option to true or false
     pub fn with_overwrite(mut self, overwrite: bool) -> Self {
         self.overwrite = overwrite;
+        self
+    }
+
+    /// Set the single_file_output value to true or false
+    pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
+        self.single_file_output = single_file_output;
+        self
+    }
+
+    /// Sets the compression type applied to the output file(s)
+    pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
+        self.compression = compression;
         self
     }
 }
@@ -995,14 +1025,29 @@ impl DataFrame {
     pub async fn write_csv(
         self,
         path: &str,
+        options: DataFrameWriteOptions,
+        writer_properties: Option<WriterBuilder>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        if options.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
+            ));
+        }
+        let props = match writer_properties {
+            Some(props) => props,
+            None => WriterBuilder::new(),
+        };
+
+        let file_type_writer_options =
+            FileTypeWriterOptions::CSV(CsvWriterOptions::new(props, options.compression));
+        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
+
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
             FileType::CSV,
-            false,
-            // TODO implement options
-            StatementOptions::new(vec![]),
+            options.single_file_output,
+            copy_options,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1012,15 +1057,31 @@ impl DataFrame {
     pub async fn write_parquet(
         self,
         path: &str,
-        _writer_properties: Option<WriterProperties>,
+        options: DataFrameWriteOptions,
+        writer_properties: Option<WriterProperties>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        if options.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented for DataFrame::write_parquet.".to_owned(),
+            ));
+        }
+        match options.compression{
+            CompressionTypeVariant::UNCOMPRESSED => (),
+            _ => return Err(DataFusionError::Configuration("DataFrame::write_parquet method does not support compression set via DataFrameWriteOptions. Set parquet compression via writer_properties instead.".to_owned()))
+        }
+        let props = match writer_properties {
+            Some(props) => props,
+            None => default_builder(self.session_state.config_options())?.build(),
+        };
+        let file_type_writer_options =
+            FileTypeWriterOptions::Parquet(ParquetWriterOptions::new(props));
+        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
             FileType::PARQUET,
-            false,
-            // TODO implement options
-            StatementOptions::new(vec![]),
+            options.single_file_output,
+            copy_options,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1030,14 +1091,22 @@ impl DataFrame {
     pub async fn write_json(
         self,
         path: &str,
+        options: DataFrameWriteOptions,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        if options.overwrite {
+            return Err(DataFusionError::NotImplemented(
+                "Overwrites are not implemented for DataFrame::write_json.".to_owned(),
+            ));
+        }
+        let file_type_writer_options =
+            FileTypeWriterOptions::JSON(JsonWriterOptions::new(options.compression));
+        let copy_options = CopyOptions::WriterOptions(Box::new(file_type_writer_options));
         let plan = LogicalPlanBuilder::copy_to(
             self.plan,
             path.into(),
             FileType::JSON,
-            false,
-            // TODO implement options
-            StatementOptions::new(vec![]),
+            options.single_file_output,
+            copy_options,
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await

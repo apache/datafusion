@@ -736,6 +736,7 @@ mod tests {
     // See also `parquet_exec` integration test
 
     use super::*;
+    use crate::dataframe::DataFrameWriteOptions;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
@@ -932,7 +933,7 @@ mod tests {
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let out_dir_url = "file://local/out";
         let e = df
-            .write_parquet(out_dir_url, None)
+            .write_parquet(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -1951,7 +1952,8 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_parquet(out_dir_url, None).await?;
+        df.write_parquet(out_dir_url, DataFrameWriteOptions::new(), None)
+            .await?;
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned parquet file
