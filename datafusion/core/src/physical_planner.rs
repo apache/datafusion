@@ -37,6 +37,10 @@ use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
     Repartition, Union, UserDefinedLogicalNode,
 };
+use crate::physical_plan::memory::MemoryExec;
+use arrow_array::builder::StringBuilder;
+use arrow_array::RecordBatch;
+use arrow_schema::{DataType, Field};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::FileType;
@@ -84,7 +88,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{DescribeTable, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -1255,10 +1259,8 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Statement({name})"
                     )
                 }
-                LogicalPlan::DescribeTable(_) => {
-                    internal_err!(
-                        "Unsupported logical plan: DescribeTable must be root of the plan"
-                    )
+                LogicalPlan::DescribeTable(DescribeTable { schema, ..}) => {
+                    self.plan_describe(schema.clone())
                 }
                 LogicalPlan::Explain(_) => internal_err!(
                     "Unsupported logical plan: Explain must be root of the plan"
@@ -1987,6 +1989,45 @@ impl DefaultPhysicalPlanner {
         );
         trace!("Detailed optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
+    }
+
+    // return an record_batch which describes table
+    fn plan_describe(&self, schema: Arc<Schema>) -> Result<Arc<dyn ExecutionPlan>> {
+        let record_batch_schema = Arc::new(Schema::new(vec![
+            Field::new("column_name", DataType::Utf8, false),
+            Field::new("data_type", DataType::Utf8, false),
+            Field::new("is_nullable", DataType::Utf8, false),
+        ]));
+
+        let mut column_names = StringBuilder::new();
+        let mut data_types = StringBuilder::new();
+        let mut is_nullables = StringBuilder::new();
+        for (_, field) in schema.fields().iter().enumerate() {
+            column_names.append_value(field.name());
+
+            // "System supplied type" --> Use debug format of the datatype
+            let data_type = field.data_type();
+            data_types.append_value(format!("{data_type:?}"));
+
+            // "YES if the column is possibly nullable, NO if it is known not nullable. "
+            let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
+            is_nullables.append_value(nullable_str);
+        }
+
+        let record_batch = RecordBatch::try_new(
+            record_batch_schema,
+            vec![
+                Arc::new(column_names.finish()),
+                Arc::new(data_types.finish()),
+                Arc::new(is_nullables.finish()),
+            ],
+        )?;
+
+        let schema = record_batch.schema();
+        let partitions = vec![vec![record_batch]];
+        let projection = None;
+        let mem_exec = MemoryExec::try_new(&partitions, schema, projection)?;
+        Ok(Arc::new(mem_exec))
     }
 }
 
