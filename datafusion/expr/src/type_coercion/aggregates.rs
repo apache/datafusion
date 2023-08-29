@@ -19,7 +19,8 @@ use arrow::datatypes::{
     DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-use datafusion_common::{plan_err, DataFusionError, Result};
+
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use std::ops::Deref;
 
 use crate::{AggregateFunction, Signature, TypeSignature};
@@ -75,6 +76,8 @@ pub static TIMESTAMPS: &[DataType] = &[
 
 pub static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 
+pub static BINARYS: &[DataType] = &[DataType::Binary, DataType::LargeBinary];
+
 pub static TIMES: &[DataType] = &[
     DataType::Time32(TimeUnit::Second),
     DataType::Time32(TimeUnit::Millisecond),
@@ -89,6 +92,7 @@ pub fn coerce_types(
     input_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
+    use DataType::*;
     // Validate input_types matches (at least one of) the func signature.
     check_arg_count(agg_fun, input_types, &signature.type_signature)?;
 
@@ -105,26 +109,44 @@ pub fn coerce_types(
         AggregateFunction::Sum => {
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval.
-            if !is_sum_support_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(input_types.to_vec())
+            let v = match &input_types[0] {
+                Decimal128(p, s) => Decimal128(*p, *s),
+                Decimal256(p, s) => Decimal256(*p, *s),
+                d if d.is_signed_integer() => Int64,
+                d if d.is_unsigned_integer() => UInt64,
+                d if d.is_floating() => Float64,
+                Dictionary(_, v) => {
+                    return coerce_types(agg_fun, &[v.as_ref().clone()], signature)
+                }
+                _ => {
+                    return plan_err!(
+                        "The function {:?} does not support inputs of type {:?}.",
+                        agg_fun,
+                        input_types[0]
+                    )
+                }
+            };
+            Ok(vec![v])
         }
         AggregateFunction::Avg => {
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval
-            if !is_avg_support_arg_type(&input_types[0]) {
-                return plan_err!(
-                    "The function {:?} does not support inputs of type {:?}.",
-                    agg_fun,
-                    input_types[0]
-                );
-            }
-            Ok(input_types.to_vec())
+            let v = match &input_types[0] {
+                Decimal128(p, s) => Decimal128(*p, *s),
+                Decimal256(p, s) => Decimal256(*p, *s),
+                d if d.is_numeric() => Float64,
+                Dictionary(_, v) => {
+                    return coerce_types(agg_fun, &[v.as_ref().clone()], signature)
+                }
+                _ => {
+                    return plan_err!(
+                        "The function {:?} does not support inputs of type {:?}.",
+                        agg_fun,
+                        input_types[0]
+                    )
+                }
+            };
+            Ok(vec![v])
         }
         AggregateFunction::BitAnd
         | AggregateFunction::BitOr
@@ -160,7 +182,7 @@ pub fn coerce_types(
                     input_types[0]
                 );
             }
-            Ok(input_types.to_vec())
+            Ok(vec![Float64, Float64])
         }
         AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
             if !is_covariance_support_arg_type(&input_types[0]) {
@@ -170,7 +192,7 @@ pub fn coerce_types(
                     input_types[0]
                 );
             }
-            Ok(input_types.to_vec())
+            Ok(vec![Float64, Float64])
         }
         AggregateFunction::Stddev | AggregateFunction::StddevPop => {
             if !is_stddev_support_arg_type(&input_types[0]) {
@@ -180,7 +202,7 @@ pub fn coerce_types(
                     input_types[0]
                 );
             }
-            Ok(input_types.to_vec())
+            Ok(vec![Float64])
         }
         AggregateFunction::Correlation => {
             if !is_correlation_support_arg_type(&input_types[0]) {
@@ -190,7 +212,7 @@ pub fn coerce_types(
                     input_types[0]
                 );
             }
-            Ok(input_types.to_vec())
+            Ok(vec![Float64, Float64])
         }
         AggregateFunction::RegrSlope
         | AggregateFunction::RegrIntercept
@@ -211,7 +233,7 @@ pub fn coerce_types(
                     input_types[0]
                 );
             }
-            Ok(input_types.to_vec())
+            Ok(vec![Float64, Float64])
         }
         AggregateFunction::ApproxPercentileCont => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
@@ -330,9 +352,9 @@ fn check_arg_count(
             }
         }
         _ => {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "Aggregate functions do not support this {signature:?}"
-            )));
+            );
         }
     }
     Ok(())
@@ -357,11 +379,9 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
 /// function return type of a sum
 pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
-        arg_type if SIGNED_INTEGERS.contains(arg_type) => Ok(DataType::Int64),
-        arg_type if UNSIGNED_INTEGERS.contains(arg_type) => Ok(DataType::UInt64),
-        // In the https://www.postgresql.org/docs/current/functions-aggregate.html doc,
-        // the result type of floating-point is FLOAT64 with the double precision.
-        DataType::Float64 | DataType::Float32 => Ok(DataType::Float64),
+        DataType::Int64 => Ok(DataType::Int64),
+        DataType::UInt64 => Ok(DataType::UInt64),
+        DataType::Float64 => Ok(DataType::Float64),
         DataType::Decimal128(precision, scale) => {
             // in the spark, the result type is DECIMAL(min(38,precision+10), s)
             // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
@@ -373,9 +393,6 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
             // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
             let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal256(new_precision, *scale))
-        }
-        DataType::Dictionary(_, dict_value_type) => {
-            sum_return_type(dict_value_type.as_ref())
         }
         other => plan_err!("SUM does not support type \"{other:?}\""),
     }
@@ -601,21 +618,29 @@ mod tests {
                 assert_eq!(*input_type, result.unwrap());
             }
         }
-        // test sum, avg
-        let funs = vec![AggregateFunction::Sum, AggregateFunction::Avg];
-        let input_types = vec![
-            vec![DataType::Int32],
-            vec![DataType::Float32],
-            vec![DataType::Decimal128(20, 3)],
-            vec![DataType::Decimal256(20, 3)],
-        ];
-        for fun in funs {
-            for input_type in &input_types {
-                let signature = fun.signature();
-                let result = coerce_types(&fun, input_type, &signature);
-                assert_eq!(*input_type, result.unwrap());
-            }
-        }
+        // test sum
+        let fun = AggregateFunction::Sum;
+        let signature = fun.signature();
+        let r = coerce_types(&fun, &[DataType::Int32], &signature).unwrap();
+        assert_eq!(r[0], DataType::Int64);
+        let r = coerce_types(&fun, &[DataType::Float32], &signature).unwrap();
+        assert_eq!(r[0], DataType::Float64);
+        let r = coerce_types(&fun, &[DataType::Decimal128(20, 3)], &signature).unwrap();
+        assert_eq!(r[0], DataType::Decimal128(20, 3));
+        let r = coerce_types(&fun, &[DataType::Decimal256(20, 3)], &signature).unwrap();
+        assert_eq!(r[0], DataType::Decimal256(20, 3));
+
+        // test avg
+        let fun = AggregateFunction::Avg;
+        let signature = fun.signature();
+        let r = coerce_types(&fun, &[DataType::Int32], &signature).unwrap();
+        assert_eq!(r[0], DataType::Float64);
+        let r = coerce_types(&fun, &[DataType::Float32], &signature).unwrap();
+        assert_eq!(r[0], DataType::Float64);
+        let r = coerce_types(&fun, &[DataType::Decimal128(20, 3)], &signature).unwrap();
+        assert_eq!(r[0], DataType::Decimal128(20, 3));
+        let r = coerce_types(&fun, &[DataType::Decimal256(20, 3)], &signature).unwrap();
+        assert_eq!(r[0], DataType::Decimal256(20, 3));
 
         // ApproxPercentileCont input types
         let input_types = vec![

@@ -31,6 +31,7 @@ use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
 };
 
+use super::dml::CopyTo;
 use super::DdlStatement;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -38,9 +39,9 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, plan_err, Column, DFField, DFSchema, DFSchemaRef,
-    DataFusionError, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
-    UnnestOptions,
+    aggregate_functional_dependencies, internal_err, plan_err, Column, DFField, DFSchema,
+    DFSchemaRef, DataFusionError, FunctionalDependencies, OwnedTableReference, Result,
+    ScalarValue, UnnestOptions,
 };
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -68,61 +69,84 @@ pub enum LogicalPlan {
     /// expression (essentially a WHERE clause with a predicate
     /// expression).
     ///
-    /// Semantically, `<predicate>` is evaluated for each row of the input;
-    /// If the value of `<predicate>` is true, the input row is passed to
-    /// the output. If the value of `<predicate>` is false, the row is
-    /// discarded.
+    /// Semantically, `<predicate>` is evaluated for each row of the
+    /// input; If the value of `<predicate>` is true, the input row is
+    /// passed to the output. If the value of `<predicate>` is false
+    /// (or null), the row is discarded.
     Filter(Filter),
-    /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
+    /// Windows input based on a set of window spec and window
+    /// function (e.g. SUM or RANK).  This is used to implement SQL
+    /// window functions, and the `OVER` clause.
     Window(Window),
     /// Aggregates its input based on a set of grouping and aggregate
-    /// expressions (e.g. SUM).
+    /// expressions (e.g. SUM). This is used to implement SQL aggregates
+    /// and `GROUP BY`.
     Aggregate(Aggregate),
-    /// Sorts its input according to a list of sort expressions.
+    /// Sorts its input according to a list of sort expressions. This
+    /// is used to implement SQL `ORDER BY`
     Sort(Sort),
-    /// Join two logical plans on one or more join columns
+    /// Join two logical plans on one or more join columns.
+    /// This is used to implement SQL `JOIN`
     Join(Join),
-    /// Apply Cross Join to two logical plans
+    /// Apply Cross Join to two logical plans.
+    /// This is used to implement SQL `CROSS JOIN`
     CrossJoin(CrossJoin),
-    /// Repartition the plan based on a partitioning scheme
+    /// Repartitions the input based on a partitioning scheme. This is
+    /// used to add parallelism and is sometimes referred to as an
+    /// "exchange" operator in other systems
     Repartition(Repartition),
-    /// Union multiple inputs
+    /// Union multiple inputs with the same schema into a single
+    /// output stream. This is used to implement SQL `UNION [ALL]` and
+    /// `INTERSECT [ALL]`.
     Union(Union),
-    /// Produces rows from a table provider by reference or from the context
+    /// Produces rows from a [`TableSource`], used to implement SQL
+    /// `FROM` tables or views.
     TableScan(TableScan),
-    /// Produces no rows: An empty relation with an empty schema
+    /// Produces no rows: An empty relation with an empty schema that
+    /// produces 0 or 1 row. This is used to implement SQL `SELECT`
+    /// that has no values in the `FROM` clause.
     EmptyRelation(EmptyRelation),
-    /// Subquery
+    /// Produces the output of running another query.  This is used to
+    /// implement SQL subqueries
     Subquery(Subquery),
     /// Aliased relation provides, or changes, the name of a relation.
     SubqueryAlias(SubqueryAlias),
     /// Skip some number of rows, and then fetch some number of rows.
     Limit(Limit),
-    /// [`Statement`]
+    /// A DataFusion [`Statement`] such as `SET VARIABLE` or `START TRANSACTION`
     Statement(Statement),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
-    /// documentation for more details.
+    /// documentation for more details. This is used to implement SQL such as
+    /// `VALUES (1, 2), (3, 4)`
     Values(Values),
     /// Produces a relation with string representations of
-    /// various parts of the plan
+    /// various parts of the plan. This is used to implement SQL `EXPLAIN`.
     Explain(Explain),
-    /// Runs the actual plan, and then prints the physical plan with
-    /// with execution metrics.
+    /// Runs the input, and prints annotated physical plan as a string
+    /// with execution metric. This is used to implement SQL
+    /// `EXPLAIN ANALYZE`.
     Analyze(Analyze),
-    /// Extension operator defined outside of DataFusion
+    /// Extension operator defined outside of DataFusion. This is used
+    /// to extend DataFusion with custom relational operations that
     Extension(Extension),
-    /// Remove duplicate rows from the input
+    /// Remove duplicate rows from the input. This is used to
+    /// implement SQL `SELECT DISTINCT ...`.
     Distinct(Distinct),
-    /// Prepare a statement
+    /// Prepare a statement and find any bind parameters
+    /// (e.g. `?`). This is used to implement SQL-prepared statements.
     Prepare(Prepare),
-    /// Insert / Update / Delete
+    /// Data Manipulaton Language (DML): Insert / Update / Delete
     Dml(DmlStatement),
-    /// CREATE / DROP TABLES / VIEWS / SCHEMAs
+    /// Data Definition Language (DDL): CREATE / DROP TABLES / VIEWS / SCHEMAs
     Ddl(DdlStatement),
-    /// Describe the schema of table
+    /// `COPY TO` for writing plan results to files
+    Copy(CopyTo),
+    /// Describe the schema of the table. This is used to implement the
+    /// SQL `DESCRIBE` command from MySQL.
     DescribeTable(DescribeTable),
-    /// Unnest a column that contains a nested list type.
+    /// Unnest a column that contains a nested list type such as an
+    /// ARRAY. This is used to implement SQL `UNNEST`
     Unnest(Unnest),
 }
 
@@ -157,6 +181,7 @@ impl LogicalPlan {
                 dummy_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
+            LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
         }
@@ -203,6 +228,7 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Union(_)
@@ -343,6 +369,7 @@ impl LogicalPlan {
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
@@ -371,6 +398,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::Dml(write) => vec![&write.input],
+            LogicalPlan::Copy(copy) => vec![&copy.input],
             LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
             LogicalPlan::Prepare(Prepare { input, .. }) => vec![input],
@@ -477,6 +505,7 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Unnest(_) => Ok(None),
@@ -640,6 +669,7 @@ impl LogicalPlan {
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_)
             | LogicalPlan::Statement(_)
@@ -782,11 +812,11 @@ impl LogicalPlan {
                     })?;
                     // check if the data type of the value matches the data type of the placeholder
                     if Some(value.get_datatype()) != *data_type {
-                        return Err(DataFusionError::Internal(format!(
+                        return internal_err!(
                             "Placeholder value type mismatch: expected {:?}, got {:?}",
                             data_type,
                             value.get_datatype()
-                        )));
+                        );
                     }
                     // Replace the placeholder with the value
                     Ok(Transformed::Yes(Expr::Literal(value.clone())))
@@ -1082,6 +1112,23 @@ impl LogicalPlan {
                     }
                     LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
                         write!(f, "Dml: op=[{op}] table=[{table_name}]")
+                    }
+                    LogicalPlan::Copy(CopyTo {
+                        input: _,
+                        output_url,
+                        file_format,
+                        single_file_output,
+                        statement_options,
+                    }) => {
+                        let op_str = statement_options
+                            .clone()
+                            .into_inner()
+                            .iter()
+                            .map(|(k, v)| format!("{k} {v}"))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+
+                        write!(f, "CopyTo: format={file_format} output_url={output_url} single_file_output={single_file_output} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())
@@ -1788,7 +1835,7 @@ impl Join {
         let on: Vec<(Expr, Expr)> = column_on
             .0
             .into_iter()
-            .zip(column_on.1.into_iter())
+            .zip(column_on.1)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
@@ -1872,7 +1919,7 @@ mod tests {
     use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
-    use datafusion_common::{DFSchema, TableReference};
+    use datafusion_common::{not_impl_err, DFSchema, TableReference};
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
@@ -1947,7 +1994,7 @@ mod tests {
     fn test_display_graphviz() -> Result<()> {
         let plan = display_plan()?;
 
-        let expected_graphviz = r###"
+        let expected_graphviz = r#"
 // Begin DataFusion GraphViz Plan,
 // display it online here: https://dreampuf.github.io/GraphvizOnline
 
@@ -1980,7 +2027,7 @@ digraph {
   }
 }
 // End DataFusion GraphViz Plan
-"###;
+"#;
 
         // just test for a few key lines in the output rather than the
         // whole thing to make test mainteance easier.
@@ -2005,9 +2052,7 @@ digraph {
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
                 LogicalPlan::TableScan { .. } => "pre_visit TableScan",
                 _ => {
-                    return Err(DataFusionError::NotImplemented(
-                        "unknown plan type".to_string(),
-                    ));
+                    return not_impl_err!("unknown plan type");
                 }
             };
 
@@ -2021,9 +2066,7 @@ digraph {
                 LogicalPlan::Filter { .. } => "post_visit Filter",
                 LogicalPlan::TableScan { .. } => "post_visit TableScan",
                 _ => {
-                    return Err(DataFusionError::NotImplemented(
-                        "unknown plan type".to_string(),
-                    ));
+                    return not_impl_err!("unknown plan type");
                 }
             };
 
@@ -2157,9 +2200,7 @@ digraph {
 
         fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_pre_in.dec() {
-                return Err(DataFusionError::NotImplemented(
-                    "Error in pre_visit".to_string(),
-                ));
+                return not_impl_err!("Error in pre_visit");
             }
 
             self.inner.pre_visit(plan)
@@ -2167,9 +2208,7 @@ digraph {
 
         fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_post_in.dec() {
-                return Err(DataFusionError::NotImplemented(
-                    "Error in post_visit".to_string(),
-                ));
+                return not_impl_err!("Error in post_visit");
             }
 
             self.inner.post_visit(plan)

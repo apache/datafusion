@@ -36,7 +36,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_common::DataFusionError;
+use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_execution::TaskContext;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
@@ -64,7 +64,7 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
 /// Execution plan for writing record batches to a [`DataSink`]
 ///
 /// Returns a single row with the number of values written
-pub struct InsertExec {
+pub struct FileSinkExec {
     /// Input plan that produces the record batches to be written.
     input: Arc<dyn ExecutionPlan>,
     /// Sink to which to write
@@ -75,13 +75,13 @@ pub struct InsertExec {
     count_schema: SchemaRef,
 }
 
-impl fmt::Debug for InsertExec {
+impl fmt::Debug for FileSinkExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "InsertExec schema: {:?}", self.count_schema)
+        write!(f, "FileSinkExec schema: {:?}", self.count_schema)
     }
 }
 
-impl InsertExec {
+impl FileSinkExec {
     /// Create a plan to write to `sink`
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
@@ -149,7 +149,7 @@ impl InsertExec {
     }
 }
 
-impl DisplayAs for InsertExec {
+impl DisplayAs for FileSinkExec {
     fn fmt_as(
         &self,
         t: DisplayFormatType,
@@ -164,7 +164,7 @@ impl DisplayAs for InsertExec {
     }
 }
 
-impl ExecutionPlan for InsertExec {
+impl ExecutionPlan for FileSinkExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -232,9 +232,7 @@ impl ExecutionPlan for InsertExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
-            return Err(DataFusionError::Internal(
-                "InsertExec can only be called on partition 0!".into(),
-            ));
+            return internal_err!("FileSinkExec can only be called on partition 0!");
         }
         let data = self.execute_all_input_streams(context.clone())?;
 
@@ -287,18 +285,18 @@ fn check_not_null_contraits(
 ) -> Result<RecordBatch> {
     for &index in column_indices {
         if batch.num_columns() <= index {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "Invalid batch column count {} expected > {}",
                 batch.num_columns(),
                 index
-            )));
+            );
         }
 
         if batch.column(index).null_count() > 0 {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "Invalid batch column at '{}' has null but schema specifies non-nullable",
                 index
-            )));
+            );
         }
     }
 

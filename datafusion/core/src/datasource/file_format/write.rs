@@ -29,7 +29,7 @@ use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
-use datafusion_common::DataFusionError;
+use datafusion_common::{exec_err, internal_err, DataFusionError, FileCompressionType};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -39,8 +39,6 @@ use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-
-use super::file_type::FileCompressionType;
 
 /// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends
@@ -180,9 +178,7 @@ impl<W: AsyncWrite + Unpin + Send> AbortableWrite<W> {
     pub(crate) fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
         match &self.mode {
             AbortMode::Put => Ok(async { Ok(()) }.boxed()),
-            AbortMode::Append => Err(DataFusionError::Execution(
-                "Cannot abort in append mode".to_string(),
-            )),
+            AbortMode::Append => exec_err!("Cannot abort in append mode"),
             AbortMode::MultiPart(MultiPart {
                 store,
                 multipart_id,
@@ -328,16 +324,27 @@ pub(crate) async fn stateless_serialize_and_write_files(
     mut data: Vec<SendableRecordBatchStream>,
     mut serializers: Vec<Box<dyn BatchSerializer>>,
     mut writers: Vec<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>>,
+    single_file_output: bool,
 ) -> Result<u64> {
+    if single_file_output && (serializers.len() != 1 || writers.len() != 1) {
+        return internal_err!("single_file_output is true, but got more than 1 writer!");
+    }
     let num_partitions = data.len();
+    if !single_file_output && (num_partitions != writers.len()) {
+        return internal_err!("single_file_ouput is false, but did not get 1 writer for each output partition!");
+    }
     let mut row_count = 0;
     // Map errors to DatafusionError.
     let err_converter =
         |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
     // TODO parallelize serialization accross partitions and batches within partitions
     // see: https://github.com/apache/arrow-datafusion/issues/7079
-    for idx in 0..num_partitions {
-        while let Some(maybe_batch) = data[idx].next().await {
+    for (part_idx, data_stream) in data.iter_mut().enumerate().take(num_partitions) {
+        let idx = match single_file_output {
+            false => part_idx,
+            true => 0,
+        };
+        while let Some(maybe_batch) = data_stream.next().await {
             // Write data to files in a round robin fashion:
             let serializer = &mut serializers[idx];
             let batch = check_for_errors(maybe_batch, &mut writers).await?;

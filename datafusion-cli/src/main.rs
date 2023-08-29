@@ -18,6 +18,7 @@
 use clap::Parser;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
+use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicFileCatalog;
@@ -27,10 +28,29 @@ use datafusion_cli::{
 use mimalloc::MiMalloc;
 use std::env;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
+#[derive(PartialEq, Debug)]
+enum PoolType {
+    Greedy,
+    Fair,
+}
+
+impl FromStr for PoolType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Greedy" | "greedy" => Ok(PoolType::Greedy),
+            "Fair" | "fair" => Ok(PoolType::Fair),
+            _ => Err(format!("Invalid memory pool type '{}'", s)),
+        }
+    }
+}
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
@@ -60,6 +80,14 @@ struct Args {
     command: Vec<String>,
 
     #[clap(
+        short = 'm',
+        long,
+        help = "The memory pool limitation (e.g. '10g'), default to None (no limit)",
+        validator(is_valid_memory_pool_size)
+    )]
+    memory_limit: Option<String>,
+
+    #[clap(
         short,
         long,
         multiple_values = true,
@@ -87,6 +115,12 @@ struct Args {
         help = "Reduce printing other than the results and work quietly"
     )]
     quiet: bool,
+
+    #[clap(
+        long,
+        help = "Specify the memory pool type 'greedy' or 'fair', default to 'greedy'"
+    )]
+    mem_pool_type: Option<PoolType>,
 }
 
 #[tokio::main]
@@ -109,7 +143,29 @@ pub async fn main() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let runtime_env = create_runtime_env()?;
+    let rn_config = RuntimeConfig::new();
+    let rn_config =
+        // set memory pool size
+        if let Some(memory_limit) = args.memory_limit {
+            let memory_limit = extract_memory_pool_size(&memory_limit).unwrap();
+            // set memory pool type
+            if let Some(mem_pool_type) = args.mem_pool_type {
+                match mem_pool_type {
+                    PoolType::Greedy => rn_config
+                        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit))),
+                    PoolType::Fair => rn_config
+                        .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
+                }
+            } else {
+                rn_config
+                .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
+            }
+        } else {
+            rn_config
+        };
+
+    let runtime_env = create_runtime_env(rn_config.clone())?;
+
     let mut ctx =
         SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
     ctx.refresh_catalogs().await?;
@@ -162,8 +218,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-fn create_runtime_env() -> Result<RuntimeEnv> {
-    let rn_config = RuntimeConfig::new();
+fn create_runtime_env(rn_config: RuntimeConfig) -> Result<RuntimeEnv> {
     RuntimeEnv::new(rn_config)
 }
 
@@ -187,5 +242,36 @@ fn is_valid_batch_size(size: &str) -> Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
         _ => Err(format!("Invalid batch size '{}'", size)),
+    }
+}
+
+fn is_valid_memory_pool_size(size: &str) -> Result<(), String> {
+    match extract_memory_pool_size(size) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
+    let mut size = size;
+    let factor = if let Some(last_char) = size.chars().last() {
+        match last_char {
+            'm' | 'M' => {
+                size = &size[..size.len() - 1];
+                1024 * 1024
+            }
+            'g' | 'G' => {
+                size = &size[..size.len() - 1];
+                1024 * 1024 * 1024
+            }
+            _ => 1,
+        }
+    } else {
+        return Err(format!("Invalid memory pool size '{}'", size));
+    };
+
+    match size.parse::<usize>() {
+        Ok(size) if size > 0 => Ok(factor * size),
+        _ => Err(format!("Invalid memory pool size '{}'", size)),
     }
 }

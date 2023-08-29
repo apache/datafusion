@@ -63,6 +63,8 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("nanvl(NULL, NULL)", "NULL");
     test_expression!("nanvl(1, NULL)", "NULL");
     test_expression!("nanvl(NULL, 1)", "NULL");
+    test_expression!("isnan(NULL)", "NULL");
+    test_expression!("iszero(NULL)", "NULL");
     Ok(())
 }
 
@@ -906,13 +908,11 @@ async fn nested_subquery() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     // the purpose of this test is just to make sure the query produces a valid plan
     #[rustfmt::skip]
-    let expected = vec![
-        "+-----+",
+    let expected = ["+-----+",
         "| cnt |",
         "+-----+",
         "| 0   |",
-        "+-----+"
-    ];
+        "+-----+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }

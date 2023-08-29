@@ -26,27 +26,27 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::expressions::{Column, PhysicalSortExpr};
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
+
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
+use datafusion_physical_expr::{
+    find_orderings_of_exprs, normalize_out_expr_with_columns_map,
+    project_equivalence_properties, project_ordering_equivalence_properties,
+    OrderingEquivalenceProperties,
+};
+
 use futures::stream::{Stream, StreamExt};
 use log::trace;
-
-use super::expressions::{Column, PhysicalSortExpr};
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
-
-use datafusion_physical_expr::equivalence::update_ordering_equivalence_with_cast;
-use datafusion_physical_expr::expressions::{CastExpr, Literal};
-use datafusion_physical_expr::{
-    normalize_out_expr_with_columns_map, project_equivalence_properties,
-    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
-};
 
 /// Execution plan for a projection
 #[derive(Debug)]
@@ -64,6 +64,10 @@ pub struct ProjectionExec {
     columns_map: HashMap<Column, Vec<Column>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Expressions' normalized orderings (as given by the output ordering API
+    /// and normalized with respect to equivalence classes of input plan). The
+    /// projected expressions are mapped by their indices to this vector.
+    orderings: Vec<Option<PhysicalSortExpr>>,
 }
 
 impl ProjectionExec {
@@ -136,13 +140,24 @@ impl ProjectionExec {
             None => None,
         };
 
+        let orderings = find_orderings_of_exprs(
+            &expr,
+            input.output_ordering(),
+            input.equivalence_properties(),
+            input.ordering_equivalence_properties(),
+        )?;
+
+        let output_ordering =
+            validate_output_ordering(output_ordering, &orderings, &expr);
+
         Ok(Self {
             expr,
             schema,
-            input: input.clone(),
+            input,
             output_ordering,
             columns_map,
             metrics: ExecutionPlanMetricsSet::new(),
+            orderings,
         })
     }
 
@@ -251,23 +266,30 @@ impl ExecutionPlan for ProjectionExec {
             return new_properties;
         }
 
-        let mut input_oeq = self.input().ordering_equivalence_properties();
-        // Stores cast expression and its `Column` version in the output:
-        let mut cast_exprs: Vec<(CastExpr, Column)> = vec![];
-        for (idx, (expr, name)) in self.expr.iter().enumerate() {
-            if let Some(cast_expr) = expr.as_any().downcast_ref::<CastExpr>() {
-                let target_col = Column::new(name, idx);
-                cast_exprs.push((cast_expr.clone(), target_col));
-            }
-        }
-
-        update_ordering_equivalence_with_cast(&cast_exprs, &mut input_oeq);
+        let input_oeq = self.input().ordering_equivalence_properties();
 
         project_ordering_equivalence_properties(
             input_oeq,
             &self.columns_map,
             &mut new_properties,
         );
+
+        if let Some(leading_ordering) = self
+            .output_ordering
+            .as_ref()
+            .map(|output_ordering| &output_ordering[0])
+        {
+            for order in self.orderings.iter().flatten() {
+                if !order.eq(leading_ordering)
+                    && !new_properties.satisfies_leading_ordering(order)
+                {
+                    new_properties.add_equal_conditions((
+                        &vec![leading_ordering.clone()],
+                        &vec![order.clone()],
+                    ));
+                }
+            }
+        }
 
         new_properties
     }
@@ -316,6 +338,40 @@ impl ExecutionPlan for ProjectionExec {
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
         )
     }
+}
+
+/// This function takes the current `output_ordering`, the `orderings` based on projected expressions,
+/// and the `expr` representing the projected expressions themselves. It aims to ensure that the output
+/// ordering is valid and correctly corresponds to the projected columns.
+///
+/// If the leading expression in the `output_ordering` is an [`UnKnownColumn`], it indicates that the column
+/// referenced in the ordering is not found among the projected expressions. In such cases, this function
+/// attempts to create a new output ordering by referring to valid columns from the leftmost side of the
+/// expressions that have an ordering specified.
+fn validate_output_ordering(
+    output_ordering: Option<Vec<PhysicalSortExpr>>,
+    orderings: &[Option<PhysicalSortExpr>],
+    expr: &[(Arc<dyn PhysicalExpr>, String)],
+) -> Option<Vec<PhysicalSortExpr>> {
+    output_ordering.and_then(|ordering| {
+        // If the leading expression is invalid column, change output
+        // ordering of the projection so that it refers to valid columns if
+        // possible.
+        if ordering[0].expr.as_any().is::<UnKnownColumn>() {
+            for (idx, order) in orderings.iter().enumerate() {
+                if let Some(sort_expr) = order {
+                    let (_, col_name) = &expr[idx];
+                    return Some(vec![PhysicalSortExpr {
+                        expr: Arc::new(Column::new(col_name, idx)),
+                        options: sort_expr.options,
+                    }]);
+                }
+            }
+            None
+        } else {
+            Some(ordering)
+        }
+    })
 }
 
 /// If e is a direct column reference, returns the field level

@@ -25,7 +25,7 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+    internal_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
@@ -162,9 +162,7 @@ impl CommonSubexprEliminate {
                 Arc::new(new_input),
             )?))
         } else {
-            Err(DataFusionError::Internal(
-                "Failed to pop predicate expr".to_string(),
-            ))
+            internal_err!("Failed to pop predicate expr")
         }
     }
 
@@ -265,9 +263,7 @@ impl CommonSubexprEliminate {
                         agg_exprs.push(expr.clone().alias(&id));
                     }
                     _ => {
-                        return Err(DataFusionError::Internal(
-                            "expr_set invalid state".to_string(),
-                        ));
+                        return internal_err!("expr_set invalid state");
                     }
                 }
             }
@@ -368,6 +364,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
             | LogicalPlan::Unnest(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
@@ -452,9 +449,7 @@ fn build_common_expr_project_plan(
                 project_exprs.push(expr.clone().alias(&id));
             }
             _ => {
-                return Err(DataFusionError::Internal(
-                    "expr_set invalid state".to_string(),
-                ));
+                return internal_err!("expr_set invalid state");
             }
         }
     }
@@ -720,9 +715,7 @@ impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
                     Ok(RewriteRecursion::Skip)
                 }
             }
-            _ => Err(DataFusionError::Internal(
-                "expr_set invalid state".to_string(),
-            )),
+            _ => internal_err!("expr_set invalid state"),
         }
     }
 
@@ -1232,7 +1225,7 @@ mod test {
             .map(|field| (field.name(), field.data_type()))
             .collect();
         let formatted_fields_with_datatype = format!("{fields_with_datatypes:#?}");
-        let expected = r###"[
+        let expected = r#"[
     (
         "a",
         UInt64,
@@ -1245,7 +1238,7 @@ mod test {
         "c",
         UInt64,
     ),
-]"###;
+]"#;
         assert_eq!(expected, formatted_fields_with_datatype);
     }
 

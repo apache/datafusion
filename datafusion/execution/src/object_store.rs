@@ -20,7 +20,7 @@
 //! and query data inside these systems.
 
 use dashmap::DashMap;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -40,9 +40,9 @@ impl ObjectStoreUrl {
 
         let remaining = &parsed[url::Position::BeforePath..];
         if !remaining.is_empty() && remaining != "/" {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "ObjectStoreUrl must only contain scheme and authority, got: {remaining}"
-            )));
+            );
         }
 
         // Always set path for consistency

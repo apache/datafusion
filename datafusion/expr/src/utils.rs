@@ -17,6 +17,7 @@
 
 //! Expression utilities
 
+use crate::dml::CopyTo;
 use crate::expr::{Alias, Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
@@ -35,8 +36,8 @@ use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError,
-    Result, ScalarValue, TableReference,
+    internal_err, plan_err, Column, Constraints, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -317,15 +318,15 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
 /// Find excluded columns in the schema, if any
 /// SELECT * EXCLUDE(col1, col2), would return `vec![col1, col2]`
 fn get_excluded_columns(
-    opt_exclude: Option<ExcludeSelectItem>,
-    opt_except: Option<ExceptSelectItem>,
+    opt_exclude: Option<&ExcludeSelectItem>,
+    opt_except: Option<&ExceptSelectItem>,
     schema: &DFSchema,
     qualifier: &Option<TableReference>,
 ) -> Result<Vec<Column>> {
     let mut idents = vec![];
     if let Some(excepts) = opt_except {
-        idents.push(excepts.first_element);
-        idents.extend(excepts.additional_elements);
+        idents.push(&excepts.first_element);
+        idents.extend(&excepts.additional_elements);
     }
     if let Some(exclude) = opt_exclude {
         match exclude {
@@ -386,7 +387,7 @@ fn get_exprs_except_skipped(
 pub fn expand_wildcard(
     schema: &DFSchema,
     plan: &LogicalPlan,
-    wildcard_options: Option<WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let using_columns = plan.using_columns()?;
     let mut columns_to_skip = using_columns
@@ -416,7 +417,7 @@ pub fn expand_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude, opt_except, schema, &None)?
+        get_excluded_columns(opt_exclude.as_ref(), opt_except.as_ref(), schema, &None)?
     } else {
         vec![]
     };
@@ -429,7 +430,7 @@ pub fn expand_wildcard(
 pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
-    wildcard_options: Option<WildcardAdditionalOptions>,
+    wildcard_options: Option<&WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
@@ -450,7 +451,12 @@ pub fn expand_qualified_wildcard(
         ..
     }) = wildcard_options
     {
-        get_excluded_columns(opt_exclude, opt_except, schema, &Some(qualifier))?
+        get_excluded_columns(
+            opt_exclude.as_ref(),
+            opt_except.as_ref(),
+            schema,
+            &Some(qualifier),
+        )?
     } else {
         vec![]
     };
@@ -592,9 +598,9 @@ pub fn group_window_expr_by_sort_keys(
             }
             Ok(())
         }
-        other => Err(DataFusionError::Internal(format!(
-            "Impossibly got non-window expr {other:?}",
-        ))),
+        other => internal_err!(
+            "Impossibly got non-window expr {other:?}"
+        ),
     })?;
     Ok(result)
 }
@@ -745,6 +751,19 @@ pub fn from_plan(
             op: op.clone(),
             input: Arc::new(inputs[0].clone()),
         })),
+        LogicalPlan::Copy(CopyTo {
+            input: _,
+            output_url,
+            file_format,
+            single_file_output,
+            statement_options,
+        }) => Ok(LogicalPlan::Copy(CopyTo {
+            input: Arc::new(inputs[0].clone()),
+            output_url: output_url.clone(),
+            file_format: file_format.clone(),
+            single_file_output: *single_file_output,
+            statement_options: statement_options.clone(),
+        })),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
@@ -861,9 +880,9 @@ pub fn from_plan(
                     if let Expr::BinaryExpr(BinaryExpr { left, op:Operator::Eq, right }) = unalias_expr {
                         Ok((*left, *right))
                     } else {
-                        Err(DataFusionError::Internal(format!(
+                        internal_err!(
                             "The front part expressions should be an binary equiality expression, actual:{equi_expr}"
-                        )))
+                        )
                     }
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
 

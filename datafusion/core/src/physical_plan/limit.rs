@@ -33,7 +33,7 @@ use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics}
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
@@ -165,16 +165,12 @@ impl ExecutionPlan for GlobalLimitExec {
         );
         // GlobalLimitExec has a single output partition
         if 0 != partition {
-            return Err(DataFusionError::Internal(format!(
-                "GlobalLimitExec invalid partition {partition}"
-            )));
+            return internal_err!("GlobalLimitExec invalid partition {partition}");
         }
 
         // GlobalLimitExec requires a single input partition
         if 1 != self.input.output_partitioning().partition_count() {
-            return Err(DataFusionError::Internal(
-                "GlobalLimitExec requires a single input partition".to_owned(),
-            ));
+            return internal_err!("GlobalLimitExec requires a single input partition");
         }
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -333,9 +329,7 @@ impl ExecutionPlan for LocalLimitExec {
                 children[0].clone(),
                 self.fetch,
             ))),
-            _ => Err(DataFusionError::Internal(
-                "LocalLimitExec wrong number of children".to_string(),
-            )),
+            _ => internal_err!("LocalLimitExec wrong number of children"),
         }
     }
 

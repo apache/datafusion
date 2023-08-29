@@ -16,12 +16,10 @@
 // under the License.
 
 use arrow::array::Array;
-use arrow::compute::eq_dyn;
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::{cast::as_boolean_array, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
-
-use super::binary::array_eq_scalar;
 
 /// Implements NULLIF(expr1, expr2)
 /// Args: 0 - left expr is any array
@@ -29,36 +27,28 @@ use super::binary::array_eq_scalar;
 ///
 pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
-        return Err(DataFusionError::Internal(format!(
+        return internal_err!(
             "{:?} args were supplied but NULLIF takes exactly two args",
-            args.len(),
-        )));
+            args.len()
+        );
     }
 
     let (lhs, rhs) = (&args[0], &args[1]);
 
     match (lhs, rhs) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
-            let cond_array = array_eq_scalar(lhs, rhs)?;
-
-            let array = nullif(lhs, as_boolean_array(&cond_array)?)?;
+            let rhs = rhs.to_scalar();
+            let array = nullif(lhs, &eq(&lhs, &rhs)?)?;
 
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Array(lhs), ColumnarValue::Array(rhs)) => {
-            // Get args0 == args1 evaluated and produce a boolean array
-            let cond_array = eq_dyn(lhs, rhs)?;
-
-            // Now, invoke nullif on the result
-            let array = nullif(lhs, as_boolean_array(&cond_array)?)?;
+            let array = nullif(lhs, &eq(&lhs, &rhs)?)?;
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Array(rhs)) => {
-            // Similar to Array-Array case, except of ScalarValue -> Array cast
             let lhs = lhs.to_array_of_size(rhs.len());
-            let cond_array = eq_dyn(&lhs, rhs)?;
-
-            let array = nullif(&lhs, as_boolean_array(&cond_array)?)?;
+            let array = nullif(&lhs, &eq(&lhs, &rhs)?)?;
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Scalar(rhs)) => {

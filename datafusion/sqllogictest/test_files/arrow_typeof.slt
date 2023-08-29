@@ -202,7 +202,7 @@ SELECT
   col_d256
   FROM foo;
 ----
-100 100.00
+100 100
 
 statement ok
 drop table foo

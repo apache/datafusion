@@ -20,8 +20,8 @@ use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBat
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::DFField;
 use datafusion_common::DataFusionError;
-use lazy_static::lazy_static;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::engines::output::DFColumnType;
 
@@ -107,7 +107,7 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
             })
             .collect();
 
-        Either::Right(once(row).chain(new_lines.into_iter()))
+        Either::Right(once(row).chain(new_lines))
     } else {
         Either::Left(once(row))
     }
@@ -126,7 +126,7 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
 /// ```
 fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
     row.iter_mut().for_each(|s| {
-        let workspace_root: &str = WORKSPACE_ROOT.as_ref();
+        let workspace_root: &str = workspace_root().as_ref();
         if s.contains(workspace_root) {
             *s = s.replace(workspace_root, "WORKSPACE_ROOT");
         }
@@ -135,33 +135,32 @@ fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
 }
 
 /// return the location of the datafusion checkout
-fn workspace_root() -> object_store::path::Path {
-    // e.g. /Software/arrow-datafusion/datafusion/core
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+fn workspace_root() -> &'static object_store::path::Path {
+    static WORKSPACE_ROOT_LOCK: OnceLock<object_store::path::Path> = OnceLock::new();
+    WORKSPACE_ROOT_LOCK.get_or_init(|| {
+        // e.g. /Software/arrow-datafusion/datafusion/core
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    // e.g. /Software/arrow-datafusion/datafusion
-    let workspace_root = dir
-        .parent()
-        .expect("Can not find parent of datafusion/core")
-        // e.g. /Software/arrow-datafusion
-        .parent()
-        .expect("parent of datafusion")
-        .to_string_lossy();
+        // e.g. /Software/arrow-datafusion/datafusion
+        let workspace_root = dir
+            .parent()
+            .expect("Can not find parent of datafusion/core")
+            // e.g. /Software/arrow-datafusion
+            .parent()
+            .expect("parent of datafusion")
+            .to_string_lossy();
 
-    let sanitized_workplace_root = if cfg!(windows) {
-        // Object store paths are delimited with `/`, e.g. `D:/a/arrow-datafusion/arrow-datafusion/testing/data/csv/aggregate_test_100.csv`.
-        // The default windows delimiter is `\`, so the workplace path is `D:\a\arrow-datafusion\arrow-datafusion`.
-        workspace_root.replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
-    } else {
-        workspace_root.to_string()
-    };
+        let sanitized_workplace_root = if cfg!(windows) {
+            // Object store paths are delimited with `/`, e.g. `D:/a/arrow-datafusion/arrow-datafusion/testing/data/csv/aggregate_test_100.csv`.
+            // The default windows delimiter is `\`, so the workplace path is `D:\a\arrow-datafusion\arrow-datafusion`.
+            workspace_root
+                .replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
+        } else {
+            workspace_root.to_string()
+        };
 
-    object_store::path::Path::parse(sanitized_workplace_root).unwrap()
-}
-
-// holds the root directory
-lazy_static! {
-    static ref WORKSPACE_ROOT: object_store::path::Path = workspace_root();
+        object_store::path::Path::parse(sanitized_workplace_root).unwrap()
+    })
 }
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison
@@ -201,6 +200,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
         Ok(NULL_STR.to_string())
     } else {
         match col.data_type() {
+            DataType::Null => Ok(NULL_STR.to_string()),
             DataType::Boolean => {
                 Ok(bool_to_str(get_row_value!(array::BooleanArray, col, row)))
             }
@@ -216,6 +216,10 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Decimal128(precision, scale) => {
                 let value = get_row_value!(array::Decimal128Array, col, row);
                 Ok(i128_to_str(value, precision, scale))
+            }
+            DataType::Decimal256(precision, scale) => {
+                let value = get_row_value!(array::Decimal256Array, col, row);
+                Ok(i256_to_str(value, precision, scale))
             }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
                 array::LargeStringArray,

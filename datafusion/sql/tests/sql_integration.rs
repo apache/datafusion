@@ -197,7 +197,7 @@ fn cast_to_invalid_decimal_type_precision_0() {
         let sql = "SELECT CAST(10 AS DECIMAL(0))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Plan("Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r#"Plan("Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"#,
             format!("{err:?}")
         );
     }
@@ -210,7 +210,7 @@ fn cast_to_invalid_decimal_type_precision_gt_38() {
         let sql = "SELECT CAST(10 AS DECIMAL(39))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Plan("Decimal(precision = 39, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r#"Plan("Decimal(precision = 39, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"#,
             format!("{err:?}")
         );
     }
@@ -223,7 +223,7 @@ fn cast_to_invalid_decimal_type_precision_lt_scale() {
         let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Plan("Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r#"Plan("Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"#,
             format!("{err:?}")
         );
     }
@@ -237,6 +237,49 @@ CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
   EmptyRelation
     "#
     .trim();
+    quick_test(sql, plan);
+
+    let sql = "create table person (id int primary key, name string)";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+
+    let sql =
+        "create table person (id int, name string unique not null, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), Unique([1])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+
+    let sql = "create table person (id int, name varchar,  primary key(name,  id));";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([1, 0])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_create_table_with_multi_pk() {
+    let sql = "create table person (id int, name string primary key, primary key(id))";
+    let plan = r#"
+CreateMemoryTable: Bare { table: "person" } constraints=[PrimaryKey([0]), PrimaryKey([1])]
+  EmptyRelation
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_create_table_with_unique() {
+    let sql = "create table person (id int unique, name string)";
+    let plan = "CreateMemoryTable: Bare { table: \"person\" } constraints=[Unique([0])]\n  EmptyRelation";
     quick_test(sql, plan);
 }
 
@@ -326,6 +369,42 @@ fn plan_rollback_transaction_chained() {
 }
 
 #[test]
+fn plan_copy_to() {
+    let sql = "COPY test_decimal to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+  TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_explain_copy_to() {
+    let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
+    let plan = r#"
+Explain
+  CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+    TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_copy_to_query() {
+    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
+    let plan = r#"
+CopyTo: format=csv output_url=output.csv single_file_output=true options: ()
+  Limit: skip=0, fetch=10
+    Projection: test_decimal.id, test_decimal.price
+      TableScan: test_decimal
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
@@ -391,7 +470,7 @@ fn plan_update() {
     let plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, Utf8("Kay") AS last_name, person.age AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = Int64(1)
+    Filter: person.id = Int64(1)
       TableScan: person
       "#
     .trim();
@@ -434,7 +513,7 @@ fn select_repeated_column() {
     let sql = "SELECT age, age FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        r##"Plan("Projections require unique expression names but the expression \"person.age\" at position 0 and \"person.age\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
+        r#"Plan("Projections require unique expression names but the expression \"person.age\" at position 0 and \"person.age\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"#,
         format!("{err:?}")
     );
 }
@@ -444,7 +523,7 @@ fn select_wildcard_with_repeated_column() {
     let sql = "SELECT *, age FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        r##"Plan("Projections require unique expression names but the expression \"person.age\" at position 3 and \"person.age\" at position 8 have the same name. Consider aliasing (\"AS\") one of them.")"##,
+        r#"Plan("Projections require unique expression names but the expression \"person.age\" at position 3 and \"person.age\" at position 8 have the same name. Consider aliasing (\"AS\") one of them.")"#,
         format!("{err:?}")
     );
 }
@@ -1173,7 +1252,7 @@ fn select_simple_aggregate_repeated_aggregate() {
     let sql = "SELECT MIN(age), MIN(age) FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        r##"Plan("Projections require unique expression names but the expression \"MIN(person.age)\" at position 0 and \"MIN(person.age)\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
+        r#"Plan("Projections require unique expression names but the expression \"MIN(person.age)\" at position 0 and \"MIN(person.age)\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"#,
         format!("{err:?}")
     );
 }
@@ -1214,7 +1293,7 @@ fn select_simple_aggregate_repeated_aggregate_with_repeated_aliases() {
     let sql = "SELECT MIN(age) AS a, MIN(age) AS a FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        r##"Plan("Projections require unique expression names but the expression \"MIN(person.age) AS a\" at position 0 and \"MIN(person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
+        r#"Plan("Projections require unique expression names but the expression \"MIN(person.age) AS a\" at position 0 and \"MIN(person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"#,
         format!("{err:?}")
     );
 }
@@ -1244,7 +1323,7 @@ fn select_simple_aggregate_with_groupby_with_aliases_repeated() {
     let sql = "SELECT state AS a, MIN(age) AS a FROM person GROUP BY state";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        r##"Plan("Projections require unique expression names but the expression \"person.state AS a\" at position 0 and \"MIN(person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"##,
+        r#"Plan("Projections require unique expression names but the expression \"person.state AS a\" at position 0 and \"MIN(person.age) AS a\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.")"#,
         format!("{err:?}")
     );
 }
@@ -1381,7 +1460,7 @@ fn select_simple_aggregate_with_groupby_aggregate_repeated() {
     let sql = "SELECT state, MIN(age), MIN(age) FROM person GROUP BY state";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        r##"Plan("Projections require unique expression names but the expression \"MIN(person.age)\" at position 1 and \"MIN(person.age)\" at position 2 have the same name. Consider aliasing (\"AS\") one of them.")"##,
+        r#"Plan("Projections require unique expression names but the expression \"MIN(person.age)\" at position 1 and \"MIN(person.age)\" at position 2 have the same name. Consider aliasing (\"AS\") one of them.")"#,
         format!("{err:?}")
     );
 }
@@ -3850,7 +3929,7 @@ fn test_prepare_statement_update_infer() {
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = $2
+    Filter: person.id = $2
       TableScan: person
         "#
         .trim();
@@ -3870,7 +3949,7 @@ Dml: op=[Update] table=[person]
     let expected_plan = r#"
 Dml: op=[Update] table=[person]
   Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
-    Filter: id = UInt32(1)
+    Filter: person.id = UInt32(1)
       TableScan: person
         "#
         .trim();

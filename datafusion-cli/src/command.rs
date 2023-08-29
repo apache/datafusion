@@ -25,6 +25,7 @@ use clap::ArgEnum;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::exec_err;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::SessionContext;
 use std::fs::File;
@@ -81,9 +82,7 @@ impl Command {
                     exec_from_lines(ctx, &mut BufReader::new(file), print_options).await;
                     Ok(())
                 } else {
-                    Err(DataFusionError::Execution(
-                        "Required filename argument is missing".into(),
-                    ))
+                    exec_err!("Required filename argument is missing")
                 }
             }
             Self::QuietMode(quiet) => {
@@ -101,9 +100,7 @@ impl Command {
                 }
                 Ok(())
             }
-            Self::Quit => Err(DataFusionError::Execution(
-                "Unexpected quit, this should be handled outside".into(),
-            )),
+            Self::Quit => exec_err!("Unexpected quit, this should be handled outside"),
             Self::ListFunctions => display_all_functions(),
             Self::SearchFunctions(function) => {
                 if let Ok(func) = function.parse::<Function>() {
@@ -111,13 +108,12 @@ impl Command {
                     println!("{}", details);
                     Ok(())
                 } else {
-                    let msg = format!("{} is not a supported function", function);
-                    Err(DataFusionError::Execution(msg))
+                    exec_err!("{function} is not a supported function")
                 }
             }
-            Self::OutputFormat(_) => Err(DataFusionError::Execution(
-                "Unexpected change output format, this should be handled outside".into(),
-            )),
+            Self::OutputFormat(_) => exec_err!(
+                "Unexpected change output format, this should be handled outside"
+            ),
         }
     }
 
@@ -230,11 +226,11 @@ impl OutputFormat {
                     println!("Output format is {:?}.", print_options.format);
                     Ok(())
                 } else {
-                    Err(DataFusionError::Execution(format!(
+                    exec_err!(
                         "{:?} is not a valid format type [possible values: {:?}]",
                         format,
                         PrintFormat::value_variants()
-                    )))
+                    )
                 }
             }
         }

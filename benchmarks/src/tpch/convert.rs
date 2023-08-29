@@ -19,6 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use datafusion::common::not_impl_err;
 use datafusion::error::DataFusionError;
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -117,9 +118,7 @@ impl ConvertOpt {
                     ctx.write_parquet(csv, output_path, Some(props)).await?
                 }
                 other => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Invalid output format: {other}"
-                    )));
+                    return not_impl_err!("Invalid output format: {other}");
                 }
             }
             println!("Conversion completed in {} ms", start.elapsed().as_millis());
@@ -139,9 +138,7 @@ impl ConvertOpt {
             "lz0" => Compression::LZO,
             "zstd" => Compression::ZSTD(Default::default()),
             other => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Invalid compression format: {other}"
-                )));
+                return not_impl_err!("Invalid compression format: {other}");
             }
         })
     }

@@ -16,7 +16,6 @@
 // under the License.
 
 //! Execution plan for reading line-delimited JSON files
-use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -29,6 +28,7 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
     Statistics,
 };
+use datafusion_common::FileCompressionType;
 use datafusion_execution::TaskContext;
 
 use arrow::json::ReaderBuilder;
@@ -40,7 +40,7 @@ use datafusion_physical_expr::{
 use bytes::{Buf, Bytes};
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store;
-use object_store::{GetResult, ObjectStore};
+use object_store::{GetResultPayload, ObjectStore};
 use std::any::Any;
 use std::io::BufReader;
 use std::sync::Arc;
@@ -209,15 +209,16 @@ impl FileOpener for JsonOpener {
 
         let file_compression_type = self.file_compression_type.to_owned();
         Ok(Box::pin(async move {
-            match store.get(file_meta.location()).await? {
-                GetResult::File(file, _) => {
+            let r = store.get(file_meta.location()).await?;
+            match r.payload {
+                GetResultPayload::File(file, _) => {
                     let bytes = file_compression_type.convert_read(file)?;
                     let reader = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
                     Ok(futures::stream::iter(reader).boxed())
                 }
-                GetResult::Stream(s) => {
+                GetResultPayload::Stream(s) => {
                     let mut decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
@@ -320,17 +321,18 @@ mod tests {
     use object_store::local::LocalFileSystem;
 
     use crate::assert_batches_eq;
-    use crate::datasource::file_format::file_type::FileType;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::execution::context::SessionState;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::partitioned_file_groups;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
+    use datafusion_common::FileType;
+    use object_store::chunked::ChunkedStore;
     use rstest::*;
+    use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
     use url::Url;
@@ -699,11 +701,33 @@ mod tests {
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();
 
+        // get name of first part
+        let paths = fs::read_dir(&out_dir).unwrap();
+        let mut part_0_name: String = "".to_owned();
+        for path in paths {
+            let name = path
+                .unwrap()
+                .path()
+                .file_name()
+                .expect("Should be a file name")
+                .to_str()
+                .expect("Should be a str")
+                .to_owned();
+            if name.ends_with("_0.json") {
+                part_0_name = name;
+                break;
+            }
+        }
+
+        if part_0_name.is_empty() {
+            panic!("Did not find part_0 in json output files!")
+        }
+
         // register each partition as well as the top level dir
         let json_read_option = NdJsonReadOptions::default();
         ctx.register_json(
             "part0",
-            &format!("{out_dir}/part-0.json"),
+            &format!("{out_dir}/{part_0_name}"),
             json_read_option.clone(),
         )
         .await?;

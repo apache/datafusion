@@ -192,6 +192,10 @@ statement ok
 CREATE TABLE IF NOT EXISTS test AS VALUES('foo'),('Barrr'),('Bazzz'),('ZZZZZ');
 
 # async fn test_regexp_is_match
+query error Error during planning: Cannot infer common argument type for regex operation Int64 \~ Utf8
+SELECT * FROM test WHERE 12 ~ 'z'
+
+
 query T
 SELECT * FROM test WHERE column1 ~ 'z'
 ----
@@ -249,6 +253,40 @@ SELECT * FROM test WHERE column1 IN ('foo', 'Bar', 'fazzz')
 foo
 fazzz
 
+statement ok
+CREATE TABLE IF NOT EXISTS test_float AS VALUES(1.2),(2.1),(NULL),('NaN'::double),('-NaN'::double);
+
+# IN expr for float
+query R
+SELECT * FROM test_float WHERE column1 IN (0.0, -1.2)
+----
+
+query R
+SELECT * FROM test_float WHERE column1 IN (0.0, 1.2)
+----
+1.2
+
+query R
+SELECT * FROM test_float WHERE column1 IN (2.1, 1.2)
+----
+1.2
+2.1
+
+query R
+SELECT * FROM test_float WHERE column1 IN (0.0, 1.2, NULL)
+----
+1.2
+
+query R
+SELECT * FROM test_float WHERE column1 IN (0.0, -1.2, NULL)
+----
+
+query R
+SELECT * FROM test_float WHERE column1 IN (0.0, 1.2, 'NaN'::double, '-NaN'::double)
+----
+1.2
+NaN
+-NaN
 
 ###
 # Test logical plan simplifies large OR chains
@@ -347,6 +385,9 @@ drop table alltypes_plain;
 
 statement ok
 DROP TABLE test;
+
+statement ok
+DROP TABLE test_float;
 
 #########
 # Predicates on memory tables / statistics generation

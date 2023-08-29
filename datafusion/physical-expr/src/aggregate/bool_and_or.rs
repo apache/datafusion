@@ -23,7 +23,9 @@ use arrow::{
     array::{ArrayRef, BooleanArray},
     datatypes::Field,
 };
-use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -51,9 +53,9 @@ macro_rules! bool_and_or_batch {
                 typed_bool_and_or_batch!($VALUES, BooleanArray, Boolean, $OP)
             }
             e => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Bool and/Bool or is not expected to receive the type {e:?}"
-                )));
+                );
             }
         }
     }};
@@ -137,11 +139,11 @@ impl AggregateExpr for BoolAnd {
             DataType::Boolean => {
                 Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x && y)))
             }
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 self.name(),
                 self.data_type
-            ))),
+            ),
         }
     }
 
@@ -270,11 +272,11 @@ impl AggregateExpr for BoolOr {
             DataType::Boolean => {
                 Ok(Box::new(BooleanGroupsAccumulator::new(|x, y| x || y)))
             }
-            _ => Err(DataFusionError::NotImplemented(format!(
+            _ => not_impl_err!(
                 "GroupsAccumulator not supported for {} with {}",
                 self.name(),
                 self.data_type
-            ))),
+            ),
         }
     }
 

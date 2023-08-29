@@ -16,6 +16,7 @@
 // under the License.
 
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
@@ -25,7 +26,7 @@ use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -52,6 +53,24 @@ pub fn main() {
 #[cfg(not(target_family = "windows"))]
 pub async fn main() -> Result<()> {
     run_tests().await
+}
+
+/// Sets up an empty directory at test_files/scratch/<name>
+/// creating it if needed and clearing any file contents if it exists
+/// This allows tests for inserting to external tables or copy to
+/// to persist data to disk and have consistent state when running
+/// a new test
+fn setup_scratch_dir(name: &Path) -> Result<()> {
+    // go from copy.slt --> copy
+    let file_stem = name.file_stem().expect("File should have a stem");
+    let path = PathBuf::from("test_files").join("scratch").join(file_stem);
+
+    info!("Creating scratch dir in {path:?}");
+    if path.exists() {
+        fs::remove_dir_all(&path)?;
+    }
+    fs::create_dir_all(&path)?;
+    Ok(())
 }
 
 async fn run_tests() -> Result<()> {
@@ -102,10 +121,7 @@ async fn run_tests() -> Result<()> {
         for e in &errors {
             println!("{e}");
         }
-        Err(DataFusionError::Execution(format!(
-            "{} failures",
-            errors.len()
-        )))
+        exec_err!("{} failures", errors.len())
     } else {
         Ok(())
     }
@@ -121,6 +137,7 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
+    setup_scratch_dir(&relative_path)?;
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),

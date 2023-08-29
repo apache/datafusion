@@ -27,12 +27,13 @@ use arrow::array::{
 };
 use arrow::compute;
 use datafusion_common::plan_err;
-use datafusion_common::{cast::as_generic_string_array, DataFusionError, Result};
+use datafusion_common::{
+    cast::as_generic_string_array, internal_err, DataFusionError, Result,
+};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use hashbrown::HashMap;
-use lazy_static::lazy_static;
 use regex::Regex;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::functions::{make_scalar_function, make_scalar_function_with_hints, Hint};
 
@@ -71,19 +72,20 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 _ => compute::regexp_match(values, regex, flags).map_err(DataFusionError::ArrowError),
             }
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => internal_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
-        ))),
+        ),
     }
 }
 
 /// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
-    lazy_static! {
-        static ref CAPTURE_GROUPS_RE: Regex = Regex::new(r"(\\)(\d*)").unwrap();
+    fn capture_groups_re() -> &'static Regex {
+        static CAPTURE_GROUPS_RE_LOCK: OnceLock<Regex> = OnceLock::new();
+        CAPTURE_GROUPS_RE_LOCK.get_or_init(|| Regex::new(r"(\\)(\d*)").unwrap())
     }
-    CAPTURE_GROUPS_RE
+    capture_groups_re()
         .replace_all(replacement, "$${$2}")
         .into_owned()
 }
@@ -186,9 +188,9 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => internal_err!(
             "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
-        ))),
+        ),
     }
 }
 
@@ -219,9 +221,9 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         3 => None,
         4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort)),
         other => {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
-            )))
+            )
         }
     };
 

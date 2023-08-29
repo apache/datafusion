@@ -24,7 +24,8 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, SchemaError, UnnestOptions};
+use datafusion_common::file_options::StatementOptions;
+use datafusion_common::{DataFusionError, FileType, SchemaError, UnnestOptions};
 use parquet::file::properties::WriterProperties;
 
 use datafusion_common::{Column, DFSchema, ScalarValue};
@@ -37,7 +38,6 @@ use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
-use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::{
@@ -992,28 +992,55 @@ impl DataFrame {
     }
 
     /// Write a `DataFrame` to a CSV file.
-    pub async fn write_csv(self, path: &str) -> Result<()> {
-        let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        let task_ctx = Arc::new(self.task_ctx());
-        plan_to_csv(task_ctx, plan, path).await
+    pub async fn write_csv(
+        self,
+        path: &str,
+    ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        let plan = LogicalPlanBuilder::copy_to(
+            self.plan,
+            path.into(),
+            FileType::CSV,
+            false,
+            // TODO implement options
+            StatementOptions::new(vec![]),
+        )?
+        .build()?;
+        DataFrame::new(self.session_state, plan).collect().await
     }
 
     /// Write a `DataFrame` to a Parquet file.
     pub async fn write_parquet(
         self,
         path: &str,
-        writer_properties: Option<WriterProperties>,
-    ) -> Result<()> {
-        let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        let task_ctx = Arc::new(self.task_ctx());
-        plan_to_parquet(task_ctx, plan, path, writer_properties).await
+        _writer_properties: Option<WriterProperties>,
+    ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        let plan = LogicalPlanBuilder::copy_to(
+            self.plan,
+            path.into(),
+            FileType::PARQUET,
+            false,
+            // TODO implement options
+            StatementOptions::new(vec![]),
+        )?
+        .build()?;
+        DataFrame::new(self.session_state, plan).collect().await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
-    pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
-        let plan = self.session_state.create_physical_plan(&self.plan).await?;
-        let task_ctx = Arc::new(self.task_ctx());
-        plan_to_json(task_ctx, plan, path).await
+    pub async fn write_json(
+        self,
+        path: &str,
+    ) -> Result<Vec<RecordBatch>, DataFusionError> {
+        let plan = LogicalPlanBuilder::copy_to(
+            self.plan,
+            path.into(),
+            FileType::JSON,
+            false,
+            // TODO implement options
+            StatementOptions::new(vec![]),
+        )?
+        .build()?;
+        DataFrame::new(self.session_state, plan).collect().await
     }
 
     /// Add an additional column to the DataFrame.
@@ -1304,7 +1331,7 @@ mod tests {
         let df_results = df.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec!["+------+", "| f.c1 |", "+------+", "| 1    |", "| 10   |", "+------+",],
+            ["+------+", "| f.c1 |", "+------+", "| 1    |", "| 10   |", "+------+"],
             &df_results
         );
 
@@ -1328,8 +1355,7 @@ mod tests {
         let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
-                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
+            ["+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
                 "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) | AVG(aggregate_test_100.c12) | SUM(aggregate_test_100.c12) | COUNT(aggregate_test_100.c12) | COUNT(DISTINCT aggregate_test_100.c12) |",
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
                 "| a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |",
@@ -1337,8 +1363,7 @@ mod tests {
                 "| c  | 0.0494924465469434          | 0.991517828651004           | 0.6600456536439784          | 13.860958726523545          | 21                            | 21                                     |",
                 "| d  | 0.061029375346466685        | 0.9748360509016578          | 0.48855379387549824         | 8.793968289758968           | 18                            | 18                                     |",
                 "| e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |",
-                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
-            ],
+                "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+"],
             &df
         );
 
@@ -1377,8 +1402,7 @@ mod tests {
 
         #[rustfmt::skip]
         assert_batches_sorted_eq!(
-            vec![
-                "+----+",
+            ["+----+",
                 "| c1 |",
                 "+----+",
                 "| a  |",
@@ -1386,8 +1410,7 @@ mod tests {
                 "| c  |",
                 "| d  |",
                 "| e  |",
-                "+----+",
-            ],
+                "+----+"],
             &df_results
         );
 
@@ -1610,7 +1633,7 @@ mod tests {
         let table_results = &table.aggregate(group_expr, aggr_expr)?.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+-----------------------------+",
                 "| c1 | SUM(aggregate_test_100.c12) |",
                 "+----+-----------------------------+",
@@ -1619,14 +1642,14 @@ mod tests {
                 "| c  | 13.860958726523545          |",
                 "| d  | 8.793968289758968           |",
                 "| e  | 10.206140546981722          |",
-                "+----+-----------------------------+",
+                "+----+-----------------------------+"
             ],
             &df_results
         );
 
         // the results are the same as the results from the view, modulo the leaf table name
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+---------------------+",
                 "| c1 | SUM(test_table.c12) |",
                 "+----+---------------------+",
@@ -1635,7 +1658,7 @@ mod tests {
                 "| c  | 13.860958726523545  |",
                 "| d  | 8.793968289758968   |",
                 "| e  | 10.206140546981722  |",
-                "+----+---------------------+",
+                "+----+---------------------+"
             ],
             table_results
         );
@@ -1693,7 +1716,7 @@ mod tests {
         let df_results = df.clone().collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+-----+",
                 "| c1 | c2 | c3  | sum |",
                 "+----+----+-----+-----+",
@@ -1703,7 +1726,7 @@ mod tests {
                 "| a  | 3  | 13  | 16  |",
                 "| a  | 3  | 14  | 17  |",
                 "| a  | 3  | 17  | 20  |",
-                "+----+----+-----+-----+",
+                "+----+----+-----+-----+"
             ],
             &df_results
         );
@@ -1716,7 +1739,7 @@ mod tests {
             .await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+-----+----+-----+-----+",
                 "| c1  | c2 | c3  | sum |",
                 "+-----+----+-----+-----+",
@@ -1726,7 +1749,7 @@ mod tests {
                 "| 16  | 3  | 13  | 16  |",
                 "| 17  | 3  | 14  | 17  |",
                 "| 20  | 3  | 17  | 20  |",
-                "+-----+----+-----+-----+",
+                "+-----+----+-----+-----+"
             ],
             &df_results_overwrite
         );
@@ -1739,7 +1762,7 @@ mod tests {
             .await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+-----+",
                 "| c1 | c2 | c3  | sum |",
                 "+----+----+-----+-----+",
@@ -1749,7 +1772,7 @@ mod tests {
                 "| a  | 4  | 13  | 16  |",
                 "| a  | 4  | 14  | 17  |",
                 "| a  | 4  | 17  | 20  |",
-                "+----+----+-----+-----+",
+                "+----+----+-----+-----+"
             ],
             &df_results_overwrite_self
         );
@@ -1784,12 +1807,12 @@ mod tests {
             .await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+-----+-----+----+-------+",
                 "| one | two | c3 | total |",
                 "+-----+-----+----+-------+",
                 "| a   | 3   | 13 | 16    |",
-                "+-----+-----+----+-------+",
+                "+-----+-----+----+-------+"
             ],
             &df_sum_renamed
         );
@@ -1856,12 +1879,12 @@ mod tests {
 
         let df_results = df.clone().collect().await?;
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+----+----+-----+",
                 "| c1 | c2 | c3  | c1 | c2 | c3  |",
                 "+----+----+-----+----+----+-----+",
                 "| a  | 1  | -85 | a  | 1  | -85 |",
-                "+----+----+-----+----+----+-----+",
+                "+----+----+-----+----+----+-----+"
             ],
             &df_results
         );
@@ -1893,12 +1916,12 @@ mod tests {
         let df_results = df_renamed.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+-----+----+-----+----+----+-----+",
                 "| AAA | c2 | c3  | c1 | c2 | c3  |",
                 "+-----+----+-----+----+----+-----+",
                 "| a   | 1  | -85 | a  | 1  | -85 |",
-                "+-----+----+-----+----+----+-----+",
+                "+-----+----+-----+----+----+-----+"
             ],
             &df_results
         );
@@ -1935,12 +1958,12 @@ mod tests {
         let res = &df_renamed.clone().collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+---------+",
                 "| CoLuMn1 |",
                 "+---------+",
                 "| a       |",
-                "+---------+",
+                "+---------+"
             ],
             res
         );
@@ -1951,7 +1974,7 @@ mod tests {
             .await?;
 
         assert_batches_sorted_eq!(
-            vec!["+----+", "| c1 |", "+----+", "| a  |", "+----+",],
+            ["+----+", "| c1 |", "+----+", "| a  |", "+----+"],
             &df_renamed
         );
 
@@ -1996,12 +2019,12 @@ mod tests {
         let df_results = df.clone().collect().await?;
         df.clone().show().await?;
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+",
                 "| c2 | c3 | sum |",
                 "+----+----+-----+",
                 "| 2  | 1  | 3   |",
-                "+----+----+-----+",
+                "+----+----+-----+"
             ],
             &df_results
         );
@@ -2062,13 +2085,13 @@ mod tests {
         let df_results = df.collect().await?;
 
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+------+-------+",
                 "| f.c1 | f.c2  |",
                 "+------+-------+",
                 "| 1    | hello |",
                 "| 10   | hello |",
-                "+------+-------+",
+                "+------+-------+"
             ],
             &df_results
         );
@@ -2094,12 +2117,12 @@ mod tests {
         let df_results = df.collect().await?;
         let cached_df_results = cached_df.collect().await?;
         assert_batches_sorted_eq!(
-            vec![
+            [
                 "+----+----+-----+",
                 "| c2 | c3 | sum |",
                 "+----+----+-----+",
                 "| 2  | 1  | 3   |",
-                "+----+----+-----+",
+                "+----+----+-----+"
             ],
             &cached_df_results
         );

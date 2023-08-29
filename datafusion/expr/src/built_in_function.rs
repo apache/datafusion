@@ -24,15 +24,13 @@ use crate::{
     Volatility,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-
-use lazy_static::lazy_static;
 
 /// Enum of all built-in scalar functions
 // Contributor's guide for adding new scalar functions
@@ -84,6 +82,10 @@ pub enum BuiltinScalarFunction {
     Gcd,
     /// lcm, Least common multiple
     Lcm,
+    /// isnan
+    Isnan,
+    /// iszero
+    Iszero,
     /// ln, Natural logarithm
     Ln,
     /// log, same as log10
@@ -130,10 +132,14 @@ pub enum BuiltinScalarFunction {
     ArrayHasAll,
     /// array_has_any
     ArrayHasAny,
+    /// array_pop_back
+    ArrayPopBack,
     /// array_dims
     ArrayDims,
     /// array_element
     ArrayElement,
+    /// array_empty
+    ArrayEmpty,
     /// array_length
     ArrayLength,
     /// array_ndims
@@ -274,26 +280,34 @@ pub enum BuiltinScalarFunction {
     ArrowTypeof,
 }
 
-lazy_static! {
-    /// Maps the sql function name to `BuiltinScalarFunction`
-    static ref NAME_TO_FUNCTION: HashMap<&'static str, BuiltinScalarFunction> = {
-        let mut map: HashMap<&'static str, BuiltinScalarFunction> = HashMap::new();
+/// Maps the sql function name to `BuiltinScalarFunction`
+fn name_to_function() -> &'static HashMap<&'static str, BuiltinScalarFunction> {
+    static NAME_TO_FUNCTION_LOCK: OnceLock<HashMap<&'static str, BuiltinScalarFunction>> =
+        OnceLock::new();
+    NAME_TO_FUNCTION_LOCK.get_or_init(|| {
+        let mut map = HashMap::new();
         BuiltinScalarFunction::iter().for_each(|func| {
             let a = aliases(&func);
-            a.iter().for_each(|a| {map.insert(a, func);});
+            a.iter().for_each(|&a| {
+                map.insert(a, func);
+            });
         });
         map
-    };
+    })
+}
 
-    /// Maps `BuiltinScalarFunction` --> canonical sql function
-    /// First alias in the array is used to display function names
-    static ref FUNCTION_TO_NAME: HashMap<BuiltinScalarFunction, &'static str> = {
-        let mut map: HashMap<BuiltinScalarFunction, &'static str> = HashMap::new();
+/// Maps `BuiltinScalarFunction` --> canonical sql function
+/// First alias in the array is used to display function names
+fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
+    static FUNCTION_TO_NAME_LOCK: OnceLock<HashMap<BuiltinScalarFunction, &'static str>> =
+        OnceLock::new();
+    FUNCTION_TO_NAME_LOCK.get_or_init(|| {
+        let mut map = HashMap::new();
         BuiltinScalarFunction::iter().for_each(|func| {
-            map.insert(func, aliases(&func).first().unwrap_or(&"NO_ALIAS"));
+            map.insert(func, *aliases(&func).first().unwrap_or(&"NO_ALIAS"));
         });
         map
-    };
+    })
 }
 
 impl BuiltinScalarFunction {
@@ -334,6 +348,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
             BuiltinScalarFunction::Gcd => Volatility::Immutable,
+            BuiltinScalarFunction::Isnan => Volatility::Immutable,
+            BuiltinScalarFunction::Iszero => Volatility::Immutable,
             BuiltinScalarFunction::Lcm => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
             BuiltinScalarFunction::Log => Volatility::Immutable,
@@ -354,6 +370,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayEmpty => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAll => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHasAny => Volatility::Immutable,
             BuiltinScalarFunction::ArrayHas => Volatility::Immutable,
@@ -361,6 +378,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayElement => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPopBack => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
@@ -496,9 +514,7 @@ impl BuiltinScalarFunction {
                             DataType::List(_) => get_base_type(field.data_type()),
                             _ => Ok(data_type.to_owned()),
                         },
-                        _ => Err(DataFusionError::Internal(
-                            "Not reachable, data_type should be List".to_string(),
-                        )),
+                        _ => internal_err!("Not reachable, data_type should be List"),
                     }
                 }
 
@@ -521,9 +537,9 @@ impl BuiltinScalarFunction {
                             }
                         }
                         _ => {
-                            return Err(DataFusionError::Internal(format!(
+                            return plan_err!(
                                 "The {self} function can only accept list as the args."
-                            )))
+                            )
                         }
                     }
                 }
@@ -532,18 +548,20 @@ impl BuiltinScalarFunction {
             }
             BuiltinScalarFunction::ArrayHasAll
             | BuiltinScalarFunction::ArrayHasAny
-            | BuiltinScalarFunction::ArrayHas => Ok(Boolean),
+            | BuiltinScalarFunction::ArrayHas
+            | BuiltinScalarFunction::ArrayEmpty => Ok(Boolean),
             BuiltinScalarFunction::ArrayDims => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
             }
             BuiltinScalarFunction::ArrayElement => match &input_expr_types[0] {
                 List(field) => Ok(field.data_type().clone()),
-                _ => Err(DataFusionError::Internal(format!(
+                _ => plan_err!(
                     "The {self} function can only accept list as the first argument"
-                ))),
+                ),
             },
             BuiltinScalarFunction::ArrayLength => Ok(UInt64),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt64),
+            BuiltinScalarFunction::ArrayPopBack => Ok(input_expr_types[0].clone()),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt64),
             BuiltinScalarFunction::ArrayPositions => {
                 Ok(List(Arc::new(Field::new("item", UInt64, true))))
@@ -604,9 +622,9 @@ impl BuiltinScalarFunction {
                     Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
                     Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
                     Timestamp(Second, _) => Ok(Timestamp(Second, None)),
-                    _ => Err(DataFusionError::Internal(format!(
+                    _ => plan_err!(
                     "The {self} function can only accept timestamp as the second arg."
-                ))),
+                ),
                 }
             }
             BuiltinScalarFunction::InitCap => {
@@ -673,10 +691,9 @@ impl BuiltinScalarFunction {
                 LargeBinary => LargeUtf8,
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(
-                        "The encode function can only accept utf8 or binary.".to_string(),
-                    ));
+                    return plan_err!(
+                        "The encode function can only accept utf8 or binary."
+                    );
                 }
             }),
             BuiltinScalarFunction::Decode => Ok(match input_expr_types[0] {
@@ -686,10 +703,9 @@ impl BuiltinScalarFunction {
                 LargeBinary => LargeBinary,
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(
-                        "The decode function can only accept utf8 or binary.".to_string(),
-                    ));
+                    return plan_err!(
+                        "The decode function can only accept utf8 or binary."
+                    );
                 }
             }),
             BuiltinScalarFunction::SplitPart => {
@@ -705,10 +721,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ToHex => Ok(match input_expr_types[0] {
                 Int8 | Int16 | Int32 | Int64 => Utf8,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(
-                        "The to_hex function can only accept integers.".to_string(),
-                    ));
+                    return plan_err!("The to_hex function can only accept integers.");
                 }
             }),
             BuiltinScalarFunction::ToTimestamp => Ok(Timestamp(Nanosecond, None)),
@@ -733,11 +746,9 @@ impl BuiltinScalarFunction {
                 Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
                 Null => Null,
                 _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(
+                    return plan_err!(
                         "The regexp_extract function can only accept strings."
-                            .to_string(),
-                    ));
+                    );
                 }
             }),
 
@@ -773,6 +784,8 @@ impl BuiltinScalarFunction {
                 Float32 => Ok(Float32),
                 _ => Ok(Float64),
             },
+
+            BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => Ok(Boolean),
 
             BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
 
@@ -820,10 +833,12 @@ impl BuiltinScalarFunction {
         // for now, the list is small, as we do not have many built-in functions.
         match self {
             BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayPopBack => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayConcat => {
                 Signature::variadic_any(self.volatility())
             }
             BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayEmpty => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayElement => Signature::any(2, self.volatility()),
             BuiltinScalarFunction::Flatten => Signature::any(1, self.volatility()),
             BuiltinScalarFunction::ArrayHasAll
@@ -1184,6 +1199,12 @@ impl BuiltinScalarFunction {
             | BuiltinScalarFunction::CurrentTime => {
                 Signature::uniform(0, vec![], self.volatility())
             }
+            BuiltinScalarFunction::Isnan | BuiltinScalarFunction::Iszero => {
+                Signature::one_of(
+                    vec![Exact(vec![Float32]), Exact(vec![Float64])],
+                    self.volatility(),
+                )
+            }
         }
     }
 }
@@ -1208,6 +1229,8 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         BuiltinScalarFunction::Factorial => &["factorial"],
         BuiltinScalarFunction::Floor => &["floor"],
         BuiltinScalarFunction::Gcd => &["gcd"],
+        BuiltinScalarFunction::Isnan => &["isnan"],
+        BuiltinScalarFunction::Iszero => &["iszero"],
         BuiltinScalarFunction::Lcm => &["lcm"],
         BuiltinScalarFunction::Ln => &["ln"],
         BuiltinScalarFunction::Log => &["log"],
@@ -1306,6 +1329,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
             &["array_concat", "array_cat", "list_concat", "list_cat"]
         }
         BuiltinScalarFunction::ArrayDims => &["array_dims", "list_dims"],
+        BuiltinScalarFunction::ArrayEmpty => &["empty"],
         BuiltinScalarFunction::ArrayElement => &[
             "array_element",
             "array_extract",
@@ -1320,6 +1344,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         }
         BuiltinScalarFunction::ArrayLength => &["array_length", "list_length"],
         BuiltinScalarFunction::ArrayNdims => &["array_ndims", "list_ndims"],
+        BuiltinScalarFunction::ArrayPopBack => &["array_pop_back", "list_pop_back"],
         BuiltinScalarFunction::ArrayPosition => &[
             "array_position",
             "list_position",
@@ -1360,14 +1385,14 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
-        write!(f, "{}", FUNCTION_TO_NAME.get(self).unwrap())
+        write!(f, "{}", function_to_name().get(self).unwrap())
     }
 }
 
 impl FromStr for BuiltinScalarFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltinScalarFunction> {
-        if let Some(func) = NAME_TO_FUNCTION.get(name) {
+        if let Some(func) = name_to_function().get(name) {
             Ok(*func)
         } else {
             plan_err!("There is no built-in function named {name}")
@@ -1382,26 +1407,24 @@ macro_rules! make_utf8_to_return_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
                 DataType::Null => DataType::Null,
-                DataType::Dictionary(_, value_type) => {
-                    match **value_type {
-                        DataType::LargeUtf8 => $largeUtf8Type,
-                        DataType::Utf8 => $utf8Type,
-                        DataType::Null => DataType::Null,
-                        _ => {
-                            // this error is internal as `data_types` should have captured this.
-                            return Err(DataFusionError::Internal(format!(
-                                "The {:?} function can only accept strings.",
-                                name
-                            )));
-                        }
+                DataType::Dictionary(_, value_type) => match **value_type {
+                    DataType::LargeUtf8 => $largeUtf8Type,
+                    DataType::Utf8 => $utf8Type,
+                    DataType::Null => DataType::Null,
+                    _ => {
+                        return plan_err!(
+                            "The {:?} function can only accept strings, but got {:?}.",
+                            name,
+                            **value_type
+                        );
                     }
-                }
-                _ => {
-                    // this error is internal as `data_types` should have captured this.
-                    return Err(DataFusionError::Internal(format!(
-                        "The {:?} function can only accept strings.",
-                        name
-                    )));
+                },
+                data_type => {
+                    return plan_err!(
+                        "The {:?} function can only accept strings, but got {:?}.",
+                        name,
+                        data_type
+                    );
                 }
             })
         }
@@ -1419,10 +1442,9 @@ fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<Data
         | DataType::LargeBinary => DataType::Binary,
         DataType::Null => DataType::Null,
         _ => {
-            // this error is internal as `data_types` should have captured this.
-            return Err(DataFusionError::Internal(format!(
+            return plan_err!(
                 "The {name:?} function can only accept strings or binary arrays."
-            )));
+            );
         }
     })
 }
@@ -1437,7 +1459,7 @@ mod tests {
     // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same.
     fn test_display_and_from_str() {
-        for (_, func_original) in NAME_TO_FUNCTION.iter() {
+        for (_, func_original) in name_to_function().iter() {
             let func_name = func_original.to_string();
             let func_from_str = BuiltinScalarFunction::from_str(&func_name).unwrap();
             assert_eq!(func_from_str, *func_original);

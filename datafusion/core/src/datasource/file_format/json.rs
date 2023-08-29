@@ -20,7 +20,9 @@
 use std::any::Any;
 
 use bytes::Bytes;
+use datafusion_common::not_impl_err;
 use datafusion_common::DataFusionError;
+use datafusion_common::FileType;
 use datafusion_execution::TaskContext;
 use rand::distributions::Alphanumeric;
 use rand::distributions::DistString;
@@ -39,17 +41,16 @@ use async_trait::async_trait;
 use bytes::Buf;
 
 use datafusion_physical_expr::PhysicalExpr;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 use crate::datasource::physical_plan::FileGroupDisplay;
 use crate::physical_plan::insert::DataSink;
-use crate::physical_plan::insert::InsertExec;
+use crate::physical_plan::insert::FileSinkExec;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 
 use super::FileFormat;
 use super::FileScanConfig;
-use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::write::{
     create_writer, stateless_serialize_and_write_files, BatchSerializer, FileWriterMode,
 };
@@ -59,9 +60,8 @@ use crate::datasource::physical_plan::NdJsonExec;
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
+use datafusion_common::FileCompressionType;
 
-/// The default file extension of json files
-pub const DEFAULT_JSON_EXTENSION: &str = ".json";
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug)]
 pub struct JsonFormat {
@@ -121,14 +121,15 @@ impl FileFormat for JsonFormat {
                 should_take
             };
 
-            let schema = match store.get(&object.location).await? {
-                GetResult::File(file, _) => {
+            let r = store.as_ref().get(&object.location).await?;
+            let schema = match r.payload {
+                GetResultPayload::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
                     let mut reader = BufReader::new(decoder);
                     let iter = ValueIter::new(&mut reader, None);
                     infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
                 }
-                r @ GetResult::Stream(_) => {
+                GetResultPayload::Stream(_) => {
                     let data = r.bytes().await?;
                     let decoder = file_compression_type.convert_read(data.reader())?;
                     let mut reader = BufReader::new(decoder);
@@ -174,20 +175,20 @@ impl FileFormat for JsonFormat {
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented yet for Json".into(),
-            ));
+            return not_impl_err!("Overwrites are not implemented yet for Json");
         }
 
         if self.file_compression_type != FileCompressionType::UNCOMPRESSED {
-            return Err(DataFusionError::NotImplemented(
-                "Inserting compressed JSON is not implemented yet.".into(),
-            ));
+            return not_impl_err!("Inserting compressed JSON is not implemented yet.");
         }
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(JsonSink::new(conf, self.file_compression_type));
 
-        Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
+        Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::JSON
     }
 }
 
@@ -275,11 +276,18 @@ impl DataSink for JsonSink {
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
 
+        let writer_options = self.config.file_type_writer_options.try_into_json()?;
+
+        let compression = FileCompressionType::from(writer_options.compression);
+
         // Construct serializer and writer for each file group
         let mut serializers: Vec<Box<dyn BatchSerializer>> = vec![];
         let mut writers = vec![];
         match self.config.writer_mode {
             FileWriterMode::Append => {
+                if self.config.single_file_output {
+                    return Err(DataFusionError::NotImplemented("single_file_output=true is not implemented for JsonSink in Append mode".into()));
+                }
                 for file_group in &self.config.file_groups {
                     let serializer = JsonSerializer::new();
                     serializers.push(Box::new(serializer));
@@ -287,7 +295,7 @@ impl DataSink for JsonSink {
                     let file = file_group.clone();
                     let writer = create_writer(
                         self.config.writer_mode,
-                        self.file_compression_type,
+                        compression,
                         file.object_meta.clone().into(),
                         object_store.clone(),
                     )
@@ -296,40 +304,68 @@ impl DataSink for JsonSink {
                 }
             }
             FileWriterMode::Put => {
-                return Err(DataFusionError::NotImplemented(
-                    "Put Mode is not implemented for Json Sink yet".into(),
-                ))
+                return not_impl_err!("Put Mode is not implemented for Json Sink yet")
             }
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
                 let base_path = &self.config.table_paths[0];
-                // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
-                let write_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-                for part_idx in 0..num_partitions {
-                    let serializer = JsonSerializer::new();
-                    serializers.push(Box::new(serializer));
-                    let file_path = base_path
-                        .prefix()
-                        .child(format!("/{}_{}.json", write_id, part_idx));
-                    let object_meta = ObjectMeta {
-                        location: file_path,
-                        last_modified: chrono::offset::Utc::now(),
-                        size: 0,
-                        e_tag: None,
-                    };
-                    let writer = create_writer(
-                        self.config.writer_mode,
-                        self.file_compression_type,
-                        object_meta.into(),
-                        object_store.clone(),
-                    )
-                    .await?;
-                    writers.push(writer);
+                match self.config.single_file_output {
+                    false => {
+                        // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
+                        let write_id =
+                            Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                        for part_idx in 0..num_partitions {
+                            let serializer = JsonSerializer::new();
+                            serializers.push(Box::new(serializer));
+                            let file_path = base_path
+                                .prefix()
+                                .child(format!("{}_{}.json", write_id, part_idx));
+                            let object_meta = ObjectMeta {
+                                location: file_path,
+                                last_modified: chrono::offset::Utc::now(),
+                                size: 0,
+                                e_tag: None,
+                            };
+                            let writer = create_writer(
+                                self.config.writer_mode,
+                                compression,
+                                object_meta.into(),
+                                object_store.clone(),
+                            )
+                            .await?;
+                            writers.push(writer);
+                        }
+                    }
+                    true => {
+                        let serializer = JsonSerializer::new();
+                        serializers.push(Box::new(serializer));
+                        let file_path = base_path.prefix();
+                        let object_meta = ObjectMeta {
+                            location: file_path.clone(),
+                            last_modified: chrono::offset::Utc::now(),
+                            size: 0,
+                            e_tag: None,
+                        };
+                        let writer = create_writer(
+                            self.config.writer_mode,
+                            compression,
+                            object_meta.into(),
+                            object_store.clone(),
+                        )
+                        .await?;
+                        writers.push(writer);
+                    }
                 }
             }
         }
 
-        stateless_serialize_and_write_files(data, serializers, writers).await
+        stateless_serialize_and_write_files(
+            data,
+            serializers,
+            writers,
+            self.config.single_file_output,
+        )
+        .await
     }
 }
 

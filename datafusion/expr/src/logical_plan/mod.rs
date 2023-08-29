@@ -18,7 +18,7 @@
 pub mod builder;
 mod ddl;
 pub mod display;
-mod dml;
+pub mod dml;
 mod extension;
 mod plan;
 mod statement;

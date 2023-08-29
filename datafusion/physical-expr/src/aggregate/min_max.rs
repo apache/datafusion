@@ -31,12 +31,12 @@ use arrow::datatypes::{
 };
 use arrow::{
     array::{
-        ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+        LargeStringArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
@@ -44,6 +44,7 @@ use arrow_array::types::{
     Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
+use datafusion_common::internal_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -243,10 +244,10 @@ impl AggregateExpr for Max {
             // https://github.com/apache/arrow-datafusion/issues/6906
 
             // This is only reached if groups_accumulator_supported is out of sync
-            _ => Err(DataFusionError::Internal(format!(
+            _ => internal_err!(
                 "GroupsAccumulator not supported for max({})",
                 self.data_type
-            ))),
+            ),
         }
     }
 
@@ -279,6 +280,16 @@ macro_rules! typed_min_max_batch_string {
         let array = downcast_value!($VALUES, $ARRAYTYPE);
         let value = compute::$OP(array);
         let value = value.and_then(|e| Some(e.to_string()));
+        ScalarValue::$SCALAR(value)
+    }};
+}
+
+// Statically-typed version of min/max(array) -> ScalarValue for binay types.
+macro_rules! typed_min_max_batch_binary {
+    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
+        let array = downcast_value!($VALUES, $ARRAYTYPE);
+        let value = compute::$OP(array);
+        let value = value.and_then(|e| Some(e.to_vec()));
         ScalarValue::$SCALAR(value)
     }};
 }
@@ -383,10 +394,10 @@ macro_rules! min_max_batch {
             }
             other => {
                 // This should have been handled before
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "Min/Max accumulator not implemented for type {:?}",
                     other
-                )));
+                );
             }
         }
     }};
@@ -404,6 +415,17 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, min_boolean)
         }
+        DataType::Binary => {
+            typed_min_max_batch_binary!(&values, BinaryArray, Binary, min_binary)
+        }
+        DataType::LargeBinary => {
+            typed_min_max_batch_binary!(
+                &values,
+                LargeBinaryArray,
+                LargeBinary,
+                min_binary
+            )
+        }
         _ => min_max_batch!(values, min),
     })
 }
@@ -419,6 +441,17 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, max_boolean)
+        }
+        DataType::Binary => {
+            typed_min_max_batch_binary!(&values, BinaryArray, Binary, max_binary)
+        }
+        DataType::LargeBinary => {
+            typed_min_max_batch_binary!(
+                &values,
+                LargeBinaryArray,
+                LargeBinary,
+                max_binary
+            )
         }
         _ => min_max_batch!(values, max),
     })
@@ -466,9 +499,7 @@ macro_rules! interval_min_max {
             Some(interval_choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
-                return Err(DataFusionError::Internal(
-                    "Comparison error while computing interval min/max".to_string(),
-                ))
+                return internal_err!("Comparison error while computing interval min/max")
             }
         }
     }};
@@ -485,10 +516,10 @@ macro_rules! min_max {
                 if lhsp.eq(rhsp) && lhss.eq(rhss) {
                     typed_min_max!(lhsv, rhsv, Decimal128, $OP, lhsp, lhss)
                 } else {
-                    return Err(DataFusionError::Internal(format!(
+                    return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
                     (lhs, rhs)
-                )));
+                );
                 }
             }
             (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
@@ -529,6 +560,12 @@ macro_rules! min_max {
             }
             (ScalarValue::LargeUtf8(lhs), ScalarValue::LargeUtf8(rhs)) => {
                 typed_min_max_string!(lhs, rhs, LargeUtf8, $OP)
+            }
+            (ScalarValue::Binary(lhs), ScalarValue::Binary(rhs)) => {
+                typed_min_max_string!(lhs, rhs, Binary, $OP)
+            }
+            (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
+                typed_min_max_string!(lhs, rhs, LargeBinary, $OP)
             }
             (ScalarValue::TimestampSecond(lhs, l_tz), ScalarValue::TimestampSecond(rhs, _)) => {
                 typed_min_max!(lhs, rhs, TimestampSecond, $OP, l_tz)
@@ -627,10 +664,10 @@ macro_rules! min_max {
                 interval_min_max!($OP, $VALUE, $DELTA)
             }
             e => {
-                return Err(DataFusionError::Internal(format!(
+                return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
                     e
-                )))
+                )
             }
         })
     }};
@@ -875,10 +912,10 @@ impl AggregateExpr for Min {
                 instantiate_min_accumulator!(self, i128, Decimal128Type)
             }
             // This is only reached if groups_accumulator_supported is out of sync
-            _ => Err(DataFusionError::Internal(format!(
+            _ => internal_err!(
                 "GroupsAccumulator not supported for min({})",
                 self.data_type
-            ))),
+            ),
         }
     }
 

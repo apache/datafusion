@@ -543,10 +543,10 @@ select ln(0);
 query RRR rowsort
 select round(ln(a), 5), round(ln(b), 5), round(ln(c), 5) from signed_integers;
 ----
-0.69315 NaN 4.81218
+-NaN 4.60517 -NaN
+-NaN 9.21034 -NaN
+0.69315 -NaN 4.81218
 1.38629 NULL NULL
-NaN 4.60517 NaN
-NaN 9.21034 NaN
 
 ## log
 
@@ -595,10 +595,10 @@ Infinity 2 2
 query RRR rowsort
 select log(a, 64) a, log(b), log(10, b) from signed_integers;
 ----
+-NaN 2 2
+-NaN 4 4
 3 NULL NULL
-6 NaN NaN
-NaN 2 2
-NaN 4 4
+6 -NaN -NaN
 
 ## log10
 
@@ -625,10 +625,10 @@ select log10(0);
 query RRR rowsort
 select round(log(a), 5), round(log(b), 5), round(log(c), 5) from signed_integers;
 ----
-0.30103 NaN 2.08991
+-NaN 2 -NaN
+-NaN 4 -NaN
+0.30103 -NaN 2.08991
 0.60206 NULL NULL
-NaN 2 NaN
-NaN 4 NaN
 
 ## log2
 
@@ -655,10 +655,10 @@ select log2(0);
 query RRR rowsort
 select round(log2(a), 5), round(log2(b), 5), round(log2(c), 5) from signed_integers;
 ----
-1 NaN 6.94251
+-NaN 13.28771 -NaN
+-NaN 6.64386 -NaN
+1 -NaN 6.94251
 2 NULL NULL
-NaN 13.28771 NaN
-NaN 6.64386 NaN
 
 ## nanvl
 
@@ -694,6 +694,52 @@ select round(nanvl(asin(f + a), 2), 5), round(nanvl(asin(b + c), 3), 5), round(n
 2 -0.20136 0.7754
 2 -1.11977 4
 NULL NULL NULL
+
+## isnan
+
+# isnan scalar function
+query BBB
+select isnan(10.0), isnan('NaN'::DOUBLE), isnan(-'NaN'::DOUBLE)
+----
+false true true
+
+# isnan scalar nulls
+query B
+select isnan(NULL)
+----
+NULL
+
+# isnan with columns
+query BBBB
+select isnan(asin(a + b + c)), isnan(-asin(a + b + c)), isnan(asin(d + e + f)), isnan(-asin(d + e + f)) from small_floats;
+----
+true true false false
+false false true true
+true true false false
+NULL NULL NULL NULL
+
+## iszero
+
+# iszero scalar function
+query BBB
+select iszero(10.0), iszero(0.0), iszero(-0.0)
+----
+false true true
+
+# iszero scalar nulls
+query B
+select iszero(NULL)
+----
+NULL
+
+# iszero with columns
+query BBBB
+select iszero(floor(a + b + c)), iszero(-floor(a + b + c)), iszero(floor(d + e + f)), iszero(-floor(d + e + f)) from small_floats;
+----
+false false false false
+true true false false
+false false true true
+NULL NULL NULL NULL
 
 ## pi
 
@@ -733,10 +779,10 @@ NULL
 query RRR rowsort
 select round(power(a, b), 5), round(power(c, d), 5), round(power(e, f), 5) from small_floats;
 ----
-1.1487 0 NaN
+-NaN -NaN 2.32282
+1.1487 0 -NaN
 1.17462 1 0.31623
 NULL NULL NULL
-NaN NaN 2.32282
 
 ## radians
 
@@ -872,10 +918,10 @@ NULL
 query RRR rowsort
 select round(sqrt(a), 5), round(sqrt(b), 5), round(sqrt(c), 5) from signed_integers;
 ----
-1.41421 NaN 11.09054
+-NaN 10 -NaN
+-NaN 100 -NaN
+1.41421 -NaN 11.09054
 2 NULL NULL
-NaN 10 NaN
-NaN 100 NaN
 
 ## tan
 
