@@ -332,6 +332,7 @@ fn test_same_name_but_not_ambiguous() {
     assert_eq!(expected, format!("{plan:?}"));
 }
 
+#[allow(deprecated)]
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
