@@ -450,7 +450,7 @@ mod test {
         // get the first result, which should be an error
         let first_batch = stream.next().await.unwrap();
         let first_err = first_batch.unwrap_err();
-        assert_eq!(first_err.to_string(), "Execution error: Test1");
+        assert!(first_err.to_string().starts_with("Execution error: Test1"));
 
         // There should be no more batches produced (should not get the second error)
         assert!(stream.next().await.is_none());

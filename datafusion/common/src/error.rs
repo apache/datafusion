@@ -276,13 +276,18 @@ impl From<GenericError> for DataFusionError {
     }
 }
 
+fn get_back_trace() -> String {
+    let back_trace = Backtrace::capture();
+    if back_trace.status() == BacktraceStatus::Captured {
+        return format!("\nback trace: {}", back_trace);
+    }
+
+    "".to_string()
+}
+
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let back_trace = Backtrace::capture();
-        let mut back_trace_desc: String = "".to_string();
-        if back_trace.status() == BacktraceStatus::Captured {
-            back_trace_desc = format!("\nback trace: {}", back_trace);
-        }
+        let back_trace_desc: String = get_back_trace();
 
         match *self {
             DataFusionError::ArrowError(ref desc) => {
