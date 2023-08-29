@@ -462,6 +462,7 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
     bin_time.timestamp_nanos()
 }
 
+#[allow(deprecated)]
 fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
     let secs = nanos / 1_000_000_000;
     let nsec = (nanos % 1_000_000_000) as u32;
