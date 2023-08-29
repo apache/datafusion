@@ -514,41 +514,33 @@ pub fn to_substrait_groupings(
     ),
 ) -> Result<Vec<Grouping>> {
     match exprs.len() {
-        1 => {
-            match &exprs[0] {
-                Expr::GroupingSet(gs) => {
-                    match gs {
-                        GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
-                            "GroupingSet CUBE is not yet supported".to_string(),
-                        )),
-                        GroupingSet::GroupingSets(sets) => Ok(sets
-                            .iter()
-                            .map(|set| {
-                                parse_flat_grouping_exprs(set, schema, extension_info)
-                            })
-                            .collect::<Result<Vec<_>>>()?),
-                        GroupingSet::Rollup(set) => {
-                            let mut sets: Vec<Vec<Expr>> = vec![vec![]];
-                            for i in 0..set.len() {
-                                sets.push(set[..=i].to_vec());
-                            }
-                            Ok(sets
-                                .iter()
-                                .rev()
-                                .map(|set| {
-                                    parse_flat_grouping_exprs(set, schema, extension_info)
-                                })
-                                .collect::<Result<Vec<_>>>()?)
-                        }
+        1 => match &exprs[0] {
+            Expr::GroupingSet(gs) => match gs {
+                GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
+                    "GroupingSet CUBE is not yet supported".to_string(),
+                )),
+                GroupingSet::GroupingSets(sets) => Ok(sets
+                    .iter()
+                    .map(|set| parse_flat_grouping_exprs(set, schema, extension_info))
+                    .collect::<Result<Vec<_>>>()?),
+                GroupingSet::Rollup(set) => {
+                    let mut sets: Vec<Vec<Expr>> = vec![vec![]];
+                    for i in 0..set.len() {
+                        sets.push(set[..=i].to_vec());
                     }
+                    Ok(sets
+                        .iter()
+                        .rev()
+                        .map(|set| parse_flat_grouping_exprs(set, schema, extension_info))
+                        .collect::<Result<Vec<_>>>()?)
                 }
-                _ => Ok(vec![parse_flat_grouping_exprs(
-                    exprs,
-                    schema,
-                    extension_info,
-                )?]),
-            }
-        }
+            },
+            _ => Ok(vec![parse_flat_grouping_exprs(
+                exprs,
+                schema,
+                extension_info,
+            )?]),
+        },
         _ => Ok(vec![parse_flat_grouping_exprs(
             exprs,
             schema,
