@@ -578,7 +578,6 @@ pub async fn plan_to_csv(
 mod tests {
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
-    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
