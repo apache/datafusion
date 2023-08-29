@@ -398,7 +398,7 @@ fn stats_projection(
     exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
     schema: SchemaRef,
 ) -> Statistics {
-    let inner_exprs = exprs.map(|v| v).collect::<Vec<_>>();
+    let inner_exprs = exprs.collect::<Vec<_>>();
     let column_statistics = stats.column_statistics.map(|input_col_stats| {
         inner_exprs
             .clone()
@@ -416,16 +416,12 @@ fn stats_projection(
     });
 
     let primitive_row_size = inner_exprs
-        .clone()
         .into_iter()
         .map(|e| match e.data_type(schema.as_ref()) {
             Ok(data_type) => data_type.primitive_width(),
             Err(_) => None,
         })
-        .fold(Some(0usize), |init, v| match (init, v) {
-            (Some(l), Some(r)) => Some(l + r),
-            _ => None,
-        });
+        .try_fold(0usize, |init, v| v.map(|value| init + value));
 
     match (primitive_row_size, stats.num_rows) {
         (Some(row_size), Some(row_count)) => {
