@@ -49,10 +49,7 @@ impl CardinalityAwareRowConverter {
     }
     
     pub fn size(&self) -> usize {
-        match &self.inner {
-            Some(inner) => inner.size(),
-            None => 0,
-        }
+        return self.inner.as_ref().unwrap().size();
     }
 
     pub fn convert_rows(&self, rows: &Rows) -> Result<Vec<ArrayRef>, ArrowError> {
@@ -82,10 +79,10 @@ impl CardinalityAwareRowConverter {
                     }
                 }
             }
-            self.inner = Some(RowConverter::new(self.fields.clone())?);
             self.done = true;
         }
-        println!("convert_columns");
+
+        self.inner = Some(RowConverter::new(self.fields.clone())?);
         self.inner.as_mut().unwrap().convert_columns(columns)
     }
 }
