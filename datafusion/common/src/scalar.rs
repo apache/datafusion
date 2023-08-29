@@ -3239,10 +3239,9 @@ mod tests {
         let int_value = ScalarValue::Int32(Some(i32::MAX));
         let int_value_2 = ScalarValue::Int32(Some(i32::MIN));
         let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
-        assert!(
-            err.starts_with(,
-            "Arrow error: Compute error: Overflow happened on: 2147483647 - -2147483648")
-        )
+        assert!(err.starts_with(
+            "Arrow error: Compute error: Overflow happened on: 2147483647 - -2147483648"
+        ))
     }
 
     #[test]

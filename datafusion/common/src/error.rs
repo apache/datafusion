@@ -507,17 +507,15 @@ mod test {
     #[test]
     fn arrow_error_to_datafusion() {
         let res = return_arrow_error().unwrap_err();
-        assert!(
-            res.to_string().starts_with(,
-            "External error: Error during planning: foo")
-        );
+        assert!(res
+            .to_string()
+            .starts_with("External error: Error during planning: foo"));
     }
 
     #[test]
     fn datafusion_error_to_arrow() {
         let res = return_datafusion_error().unwrap_err();
-        assert_eq!(res
-            .to_string()
+        assert!(res
             .to_string()
             .starts_with("Arrow error: Schema error: bar"));
     }
@@ -631,7 +629,7 @@ mod test {
         let e = e.find_root();
 
         // DataFusionError does not implement Eq, so we use a string comparison + some cheap "same variant" test instead
-        assert!(e.to_string().starts_with(exp.to_string()));
+        assert!(e.to_string().starts_with(&exp.to_string()));
         assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
     }
 }

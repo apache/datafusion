@@ -914,10 +914,9 @@ mod tests {
         let left = DFSchema::try_from(test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
-        assert!(
-            join.unwrap_err().to_string().starts_with(,
-            "Schema error: Schema contains duplicate unqualified field name c0")
-        );
+        assert!(join.unwrap_err().to_string().starts_with(
+            "Schema error: Schema contains duplicate unqualified field name c0"
+        ));
         Ok(())
     }
 

@@ -428,7 +428,7 @@ mod tests {
             )
             .expect_err("should've failed to find field");
         let expected = r#"Schema error: No field named z. Valid fields are t1.a, t1.b, t2.c, t2.d, t3.a, t3.b, t3.c, t3.d, t3.e."#;
-        assert!(err.to_string().start_with(expected));
+        assert!(err.to_string().starts_with(expected));
 
         // ambiguous column reference
         let col = Column::from_name("a");
@@ -439,7 +439,7 @@ mod tests {
             )
             .expect_err("should've found ambiguous field");
         let expected = "Schema error: Ambiguous reference to unqualified field a";
-        assert!(err.to_string().start_with(expected));
+        assert!(err.to_string().starts_with(expected));
 
         Ok(())
     }
