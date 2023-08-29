@@ -276,18 +276,9 @@ impl From<GenericError> for DataFusionError {
     }
 }
 
-fn get_back_trace() -> String {
-    let back_trace = Backtrace::capture();
-    if back_trace.status() == BacktraceStatus::Captured {
-        return format!("\nback trace: {}", back_trace);
-    }
-
-    "".to_string()
-}
-
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let back_trace_desc: String = get_back_trace();
+        let back_trace_desc: String = DataFusionError::get_back_trace();
 
         match *self {
             DataFusionError::ArrowError(ref desc) => {
@@ -423,6 +414,24 @@ impl DataFusionError {
     pub fn context(self, description: impl Into<String>) -> Self {
         Self::Context(description.into(), Box::new(self))
     }
+
+    pub fn strip_backtrace(&self) -> String {
+        self.to_string()
+            .split("\n\nbacktrace: ")
+            .collect::<Vec<&str>>()
+            .first()
+            .unwrap_or_else(|| &"")
+            .to_string()
+    }
+
+    fn get_back_trace() -> String {
+        let back_trace = Backtrace::capture();
+        if back_trace.status() == BacktraceStatus::Captured {
+            return format!("\n\nbacktrace: {}", back_trace);
+        }
+
+        "".to_string()
+    }
 }
 
 /// Unwrap an `Option` if possible. Otherwise return an `DataFusionError::Internal`.
@@ -507,17 +516,16 @@ mod test {
     #[test]
     fn arrow_error_to_datafusion() {
         let res = return_arrow_error().unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("External error: Error during planning: foo"));
+        assert_eq!(
+            res.to_string(),
+            "External error: Error during planning: foo"
+        );
     }
 
     #[test]
     fn datafusion_error_to_arrow() {
         let res = return_datafusion_error().unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("Arrow error: Schema error: bar"));
+        assert_eq!(res.strip_backtrace(), "Arrow error: Schema error: bar");
     }
 
     #[test]
@@ -580,35 +588,39 @@ mod test {
     fn test_make_error_parse_input() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();
-        assert!(res.to_string().starts_with("Error during planning: Err"));
+        assert_eq!(res.strip_backtrace(), "Error during planning: Err");
 
         let extra1 = "extra1";
         let extra2 = "extra2";
 
         let res: Result<(), DataFusionError> = plan_err!("Err {} {}", extra1, extra2);
         let res = res.unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("Error during planning: Err extra1 extra2"));
+        assert_eq!(
+            res.strip_backtrace(),
+            "Error during planning: Err extra1 extra2"
+        );
 
         let res: Result<(), DataFusionError> =
             plan_err!("Err {:?} {:#?}", extra1, extra2);
         let res = res.unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("Error during planning: Err \"extra1\" \"extra2\""));
+        assert_eq!(
+            res.strip_backtrace(),
+            "Error during planning: Err \"extra1\" \"extra2\""
+        );
 
         let res: Result<(), DataFusionError> = plan_err!("Err {extra1} {extra2}");
         let res = res.unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("Error during planning: Err extra1 extra2"));
+        assert_eq!(
+            res.strip_backtrace(),
+            "Error during planning: Err extra1 extra2"
+        );
 
         let res: Result<(), DataFusionError> = plan_err!("Err {extra1:?} {extra2:#?}");
         let res = res.unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("Error during planning: Err \"extra1\" \"extra2\""));
+        assert_eq!(
+            res.strip_backtrace(),
+            "Error during planning: Err \"extra1\" \"extra2\""
+        );
     }
 
     /// Model what happens when implementing SendableRecordBatchStream:
@@ -629,7 +641,9 @@ mod test {
         let e = e.find_root();
 
         // DataFusionError does not implement Eq, so we use a string comparison + some cheap "same variant" test instead
-        assert!(e.to_string().starts_with(&exp.to_string()));
+        dbg!(e.to_string());
+        dbg!(exp.to_string());
+        assert_eq!(e.strip_backtrace(), exp.to_string());
         assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
     }
 }

@@ -1502,7 +1502,7 @@ mod tests {
             // try to sort on some value not present in input to distinct
             .sort(vec![col("c2").sort(true, true)])
             .unwrap_err();
-        assert!(err.to_string().starts_with("Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list"));
+        assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions c2 must appear in select list");
 
         Ok(())
     }
@@ -1560,7 +1560,7 @@ mod tests {
             .join_on(right, JoinType::Inner, [col("c1").eq(col("c1"))])
             .expect_err("join didn't fail check");
         let expected = "Schema error: Ambiguous reference to unqualified field c1";
-        assert!(join.to_string().starts_with(expected));
+        assert_eq!(join.strip_backtrace(), expected);
 
         Ok(())
     }
@@ -1917,7 +1917,7 @@ mod tests {
             .with_column_renamed("c2", "AAA")
             .unwrap_err();
         let expected_err = "Schema error: Ambiguous reference to unqualified field c2";
-        assert!(actual_err.to_string().starts_with(expected_err));
+        assert_eq!(actual_err.strip_backtrace(), expected_err);
 
         Ok(())
     }

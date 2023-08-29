@@ -3238,10 +3238,14 @@ mod tests {
     fn scalar_sub_trait_int32_overflow_test() {
         let int_value = ScalarValue::Int32(Some(i32::MAX));
         let int_value_2 = ScalarValue::Int32(Some(i32::MIN));
-        let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
-        assert!(err.starts_with(
+        let err = int_value
+            .sub_checked(&int_value_2)
+            .unwrap_err()
+            .strip_backtrace();
+        assert_eq!(
+            err,
             "Arrow error: Compute error: Overflow happened on: 2147483647 - -2147483648"
-        ))
+        )
     }
 
     #[test]
@@ -3257,8 +3261,11 @@ mod tests {
     fn scalar_sub_trait_int64_overflow_test() {
         let int_value = ScalarValue::Int64(Some(i64::MAX));
         let int_value_2 = ScalarValue::Int64(Some(i64::MIN));
-        let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
-        assert!(err.starts_with("Arrow error: Compute error: Overflow happened on: 9223372036854775807 - -9223372036854775808"))
+        let err = int_value
+            .sub_checked(&int_value_2)
+            .unwrap_err()
+            .strip_backtrace();
+        assert_eq!(err, "Arrow error: Compute error: Overflow happened on: 9223372036854775807 - -9223372036854775808")
     }
 
     #[test]

@@ -2355,9 +2355,10 @@ mod tests {
         let ctx = SessionContext::new();
 
         let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
-        assert!(err.to_string().starts_with(
+        assert_eq!(
+            err.strip_backtrace(),
             "Error during planning: variable [\"@=\"] has no type information"
-        ));
+        );
         Ok(())
     }
 

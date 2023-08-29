@@ -835,10 +835,10 @@ mod tests {
 
         // errors due to https://github.com/apache/arrow-datafusion/issues/4918
         let mut it = csv.execute(0, task_ctx)?;
-        let err = it.next().await.unwrap().unwrap_err().to_string();
-        assert!(
-            err.to_string().starts_with(
-            "Arrow error: Csv error: incorrect number of fields for line 1, expected 14 got 13")
+        let err = it.next().await.unwrap().unwrap_err().strip_backtrace();
+        assert_eq!(
+            err,
+            "Arrow error: Csv error: incorrect number of fields for line 1, expected 14 got 13"
         );
         Ok(())
     }
@@ -1075,7 +1075,7 @@ mod tests {
             .write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert!(e.to_string().starts_with("Arrow error: Parser error: Error while parsing value d for column 0 at line 4"));
+        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value d for column 0 at line 4");
         Ok(())
     }
 

@@ -237,7 +237,7 @@ mod tests {
 
         match catalog.register_schema("foo", schema) {
             Ok(_) => panic!("unexpected OK"),
-            Err(e) => assert!(e.to_string().starts_with("This feature is not implemented: Registering new schemas is not supported")),
+            Err(e) => assert_eq!(e.strip_backtrace(), "This feature is not implemented: Registering new schemas is not supported"),
         };
     }
 

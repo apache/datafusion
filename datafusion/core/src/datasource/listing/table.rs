@@ -1862,7 +1862,7 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
-        assert!(e.to_string().starts_with("Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)"));
+        assert_eq!(e.strip_backtrace(), "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)");
 
         Ok(())
     }
