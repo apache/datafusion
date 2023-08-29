@@ -402,6 +402,7 @@ pub mod union;
 pub mod unnest;
 pub mod values;
 pub mod windows;
+pub mod wrapper;
 
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;

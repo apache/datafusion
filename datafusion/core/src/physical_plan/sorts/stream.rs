@@ -18,10 +18,11 @@
 use crate::physical_plan::sorts::cursor::{FieldArray, FieldCursor, RowCursor};
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{PhysicalExpr, PhysicalSortExpr};
+use crate::physical_plan::wrapper::CardinalityAwareRowConverter;
 use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use arrow::row::{RowConverter, SortField, CardinalityAwareRowConverter};
+use arrow::row::SortField;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::stream::{Fuse, StreamExt};
