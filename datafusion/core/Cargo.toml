@@ -60,7 +60,7 @@ async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zst
 async-trait = "0.1.41"
 bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
-chrono = { version = "0.4.23", default-features = false }
+chrono = { version = "0.4.27", default-features = false }
 dashmap = "5.4.0"
 datafusion-common = { path = "../common", version = "30.0.0", features = ["parquet", "object_store"] }
 datafusion-execution = { path = "../execution", version = "30.0.0" }

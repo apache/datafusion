@@ -466,7 +466,7 @@ fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
     let secs = nanos / 1_000_000_000;
     let nsec = (nanos % 1_000_000_000) as u32;
     let date = NaiveDateTime::from_timestamp_opt(secs, nsec).unwrap();
-    DateTime::<Utc>::from_utc(date, Utc)
+    DateTime::<Utc>::from_naive_utc_and_offset(date, Utc)
 }
 
 /// DATE_BIN sql function
