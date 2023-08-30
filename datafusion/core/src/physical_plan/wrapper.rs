@@ -25,17 +25,15 @@ const LOW_CARDINALITY_THRESHOLD: usize = 10;
 
 #[derive(Debug)]
 pub struct CardinalityAwareRowConverter {
-    fields: Vec<SortField>,
+    fields: Option<Vec<SortField>>,
     inner: Option<RowConverter>,
-    done: bool,
 }
 
 impl CardinalityAwareRowConverter {
     pub fn new(fields: Vec<SortField>) -> Result<Self, ArrowError> {
         Ok(Self {
-            fields,
+            fields: Some(fields),
             inner: None,
-            done: false,
         })
     }
     
@@ -46,20 +44,18 @@ impl CardinalityAwareRowConverter {
     pub fn convert_columns(
         &mut self,
         columns: &[ArrayRef]) -> Result<Rows, ArrowError> {
-        
-        if !self.done {
+        if self.fields != None {
+            let mut updated_fields = self.fields.take();
             for (i, col) in columns.iter().enumerate() {
                 if let DataType::Dictionary(_, _) = col.data_type() {
                     let cardinality = col.as_any_dictionary_opt().unwrap().values().len();
                     if cardinality >= LOW_CARDINALITY_THRESHOLD {
-                        self.fields[i] = self.fields[i].clone().preserve_dictionaries(false);
+                        updated_fields.as_mut().unwrap()[i] = updated_fields.as_ref().unwrap()[i].clone().preserve_dictionaries(false);
                     }
                 }
             }
-            self.done = true;
+            self.inner = Some(RowConverter::new(updated_fields.unwrap())?);
         }
-
-        self.inner = Some(RowConverter::new(self.fields.clone())?);
         self.inner.as_mut().unwrap().convert_columns(columns)
     }
 }
