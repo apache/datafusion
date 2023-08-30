@@ -301,8 +301,6 @@ mod tests {
     fn make_infinite_sorted_stream(col_b_init: &u32) -> BoxStream<'static, RecordBatch> {
         let col_b_init_clone = col_b_init.clone();
         futures::stream::unfold((0, col_b_init_clone), move |(mut counter, mut col_b_ascii)| async move {
-            // stop the stream at 20 batch now. 
-            // Need to figure out how all the columns in the batches are sorted.
             if counter >= 12000 {
                 return None;
             }
@@ -316,7 +314,6 @@ mod tests {
             // building col `a`
             let mut values_vector: Vec<String> = Vec::new();
             for _i in 1..=8192 {
-                // values_vector.push(rand::thread_rng().gen_range(1..=1000));
                 values_vector.push(String::from(Uuid::new_v4().to_string()));
             }
             let values = StringArray::from(values_vector);
@@ -331,10 +328,7 @@ mod tests {
             // building col `b`
             let mut values: Vec<u32> = Vec::new();
             for _i in 1..=8192 {
-                // let ascii_value = rand::thread_rng().gen_range(97..=110);
-                // values.push(String::from(from_u32(col_b_ascii).unwrap()));
                 values.push(col_b_ascii);
-                // values.sort();
             }
             let col_b: ArrayRef = Arc::new(UInt32Array::from(values));
 
@@ -343,7 +337,7 @@ mod tests {
             Some((batch, (counter, col_b_ascii)))
         }).boxed()
     }
-    
+
     struct InfiniteStream {
         schema: SchemaRef,
         col_b_init: u32
