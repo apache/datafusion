@@ -420,7 +420,7 @@ impl DataFusionError {
             .split("\n\nbacktrace: ")
             .collect::<Vec<&str>>()
             .first()
-            .unwrap_or_else(|| &"")
+            .unwrap_or(&"")
             .to_string()
     }
 
@@ -514,16 +514,15 @@ mod test {
     use arrow::error::ArrowError;
 
     #[test]
-    fn arrow_error_to_datafusion() {
+    fn datafusion_error_to_arrow() {
         let res = return_arrow_error().unwrap_err();
-        assert_eq!(
-            res.to_string(),
-            "External error: Error during planning: foo"
-        );
+        assert!(res
+            .to_string()
+            .starts_with("External error: Error during planning: foo"));
     }
 
     #[test]
-    fn datafusion_error_to_arrow() {
+    fn arrow_error_to_datafusion() {
         let res = return_datafusion_error().unwrap_err();
         assert_eq!(res.strip_backtrace(), "Arrow error: Schema error: bar");
     }
@@ -641,9 +640,7 @@ mod test {
         let e = e.find_root();
 
         // DataFusionError does not implement Eq, so we use a string comparison + some cheap "same variant" test instead
-        dbg!(e.to_string());
-        dbg!(exp.to_string());
-        assert_eq!(e.strip_backtrace(), exp.to_string());
+        assert_eq!(e.strip_backtrace(), exp.strip_backtrace());
         assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
     }
 }

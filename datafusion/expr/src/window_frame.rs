@@ -332,7 +332,7 @@ mod tests {
         };
         let err = WindowFrame::try_from(window_frame).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: Invalid window frame: start bound cannot be UNBOUNDED FOLLOWING".to_owned()
         );
 
@@ -343,7 +343,7 @@ mod tests {
         };
         let err = WindowFrame::try_from(window_frame).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: Invalid window frame: end bound cannot be UNBOUNDED PRECEDING".to_owned()
         );
 

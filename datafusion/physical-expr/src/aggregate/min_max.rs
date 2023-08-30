@@ -1176,7 +1176,10 @@ mod tests {
             "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
             (Decimal128(Some(123), 10, 2), Decimal128(Some(124), 10, 3))
         ));
-        assert_eq!(expect.to_string(), result.unwrap_err().to_string());
+        assert_eq!(
+            expect.strip_backtrace(),
+            result.unwrap_err().strip_backtrace()
+        );
 
         // max batch
         let array: ArrayRef = Arc::new(

@@ -2647,7 +2647,7 @@ digraph {
             })),
             empty_schema,
         );
-        assert_eq!("Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)", format!("{}", p.err().unwrap()));
+        assert_eq!(p.err().unwrap().strip_backtrace(), "Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
         Ok(())
     }
 

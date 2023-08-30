@@ -432,7 +432,7 @@ mod test {
         let expected = "Internal error: Incorrect number of identifiers: 0. \
         This was likely caused by a bug in DataFusion's code and we would \
         welcome that you file an bug report in our issue tracker";
-        assert_eq!(err.to_string(), expected);
+        assert_eq!(err.strip_backtrace(), expected);
 
         let ids = vec!["a".to_string()];
         let (qualifier, column) = form_identifier(&ids)?;
@@ -470,7 +470,7 @@ mod test {
         let expected = "Internal error: Incorrect number of identifiers: 5. \
         This was likely caused by a bug in DataFusion's code and we would \
         welcome that you file an bug report in our issue tracker";
-        assert_eq!(err.to_string(), expected);
+        assert_eq!(err.strip_backtrace(), expected);
 
         Ok(())
     }

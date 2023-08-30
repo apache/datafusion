@@ -1456,7 +1456,7 @@ mod test {
         };
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: \
             Failed to coerce case (Interval(MonthDayNano)) and \
             when ([Float32, Binary, Utf8]) to common types in \
@@ -1474,7 +1474,7 @@ mod test {
         };
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: \
             Failed to coerce then ([Date32, Float32, Binary]) and \
             else (Some(Timestamp(Nanosecond, None))) to common types \

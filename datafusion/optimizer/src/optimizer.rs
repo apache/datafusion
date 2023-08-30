@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(
             "Optimizer rule 'bad rule' failed\ncaused by\n\
             Error during planning: rule failed",
-            err.to_string()
+            err.strip_backtrace()
         );
     }
 
@@ -507,7 +507,7 @@ mod tests {
              metadata: {}, functional_dependencies: FunctionalDependencies { deps: [] } }. \
              This was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
-            err.to_string()
+            err.strip_backtrace()
         );
     }
 

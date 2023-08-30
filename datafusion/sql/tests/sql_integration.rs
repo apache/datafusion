@@ -461,7 +461,7 @@ Dml: op=[Insert Into] table=[test_decimal]
 #[test]
 fn test_insert_schema_errors(#[case] sql: &str, #[case] error: &str) {
     let err = logical_plan(sql).unwrap_err();
-    assert_eq!(err.to_string(), error)
+    assert_eq!(err.strip_backtrace(), error)
 }
 
 #[test]
@@ -1344,7 +1344,7 @@ fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() 
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!("Schema error: No field named doesnotexist. Valid fields are \"SUM(person.age)\", \
         person.id, person.first_name, person.last_name, person.age, person.state, \
-        person.salary, person.birth_date, person.\"😀\".", format!("{err}"));
+        person.salary, person.birth_date, person.\"😀\".", err.strip_backtrace());
 }
 
 #[test]
@@ -2853,7 +2853,7 @@ fn cte_use_same_name_multiple_times() {
     let expected =
         "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
     let result = logical_plan(sql).err().unwrap();
-    assert_eq!(result.to_string(), expected);
+    assert_eq!(result.strip_backtrace(), expected);
 }
 
 #[test]
@@ -3116,7 +3116,7 @@ fn cte_unbalanced_number_of_columns() {
 
     let expected = "Error during planning: Source table contains 3 columns but only 1 names given as column alias";
     let result = logical_plan(sql).err().unwrap();
-    assert_eq!(result.to_string(), expected);
+    assert_eq!(result.strip_backtrace(), expected);
 }
 
 #[test]
@@ -3247,7 +3247,7 @@ fn order_by_ambiguous_name() {
     let expected = "Schema error: Ambiguous reference to unqualified field age";
 
     let err = logical_plan(sql).unwrap_err();
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
 }
 
 #[test]
@@ -3256,7 +3256,7 @@ fn group_by_ambiguous_name() {
     let expected = "Schema error: Ambiguous reference to unqualified field age";
 
     let err = logical_plan(sql).unwrap_err();
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
 }
 
 #[test]
@@ -3519,7 +3519,7 @@ fn test_select_distinct_order_by() {
     let result = logical_plan(sql);
     assert!(result.is_err());
     let err = result.err().unwrap();
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
 }
 
 #[rstest]
@@ -3546,7 +3546,7 @@ fn test_select_distinct_order_by() {
 #[test]
 fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str) {
     let err = logical_plan(sql).unwrap_err();
-    assert_eq!(err.to_string(), error)
+    assert_eq!(err.strip_backtrace(), error)
 }
 
 #[test]
@@ -3603,7 +3603,7 @@ fn test_ambiguous_column_references_in_on_join() {
     let result = logical_plan(sql);
     assert!(result.is_err());
     let err = result.err().unwrap();
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
 }
 
 #[test]
