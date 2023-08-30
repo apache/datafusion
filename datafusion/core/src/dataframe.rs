@@ -2374,16 +2374,11 @@ mod tests {
         let local_url = Url::parse("file://local").unwrap();
         let ctx = &test_df.session_state;
         ctx.runtime_env().register_object_store(&local_url, local);
-        let str_path = format!(
-            "{}/test.parquet",
-            tmp_dir
-                .path()
-                .to_str()
-                .expect("Temp dir should be valid str")
-        );
+
+        let output_path = "file://local/test.parquet";
         test_df
             .write_parquet(
-                str_path.as_str(),
+                output_path,
                 DataFrameWriteOptions::new().with_single_file_output(true),
                 Some(
                     WriterProperties::builder()
@@ -2394,7 +2389,7 @@ mod tests {
             .await?;
 
         // Check that file actually used snappy compression
-        let file = std::fs::File::open(std::path::Path::new(str_path.as_str()))?;
+        let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
 
         let reader =
             parquet::file::serialized_reader::SerializedFileReader::new(file).unwrap();
