@@ -18,19 +18,10 @@ use arrow::row::{SortField, Rows};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use arrow_array::*;
-use arrow_array::types::*;
+use arrow_array::cast::AsArray;
 use arrow::row::RowConverter;
 
 const LOW_CARDINALITY_THRESHOLD: usize = 10;
-
-macro_rules! downcast_dict {
-    ($array:ident, $key:ident) => {{
-        $array
-            .as_any()
-            .downcast_ref::<DictionaryArray<$key>>()
-            .unwrap()
-    }};
-}
 
 #[derive(Debug)]
 pub struct CardinalityAwareRowConverter {
@@ -52,28 +43,14 @@ impl CardinalityAwareRowConverter {
         return self.inner.as_ref().unwrap().size();
     }
 
-    pub fn convert_rows(&self, rows: &Rows) -> Result<Vec<ArrayRef>, ArrowError> {
-        self.inner.as_ref().unwrap().convert_rows(rows)
-    }
-
     pub fn convert_columns(
         &mut self,
         columns: &[ArrayRef]) -> Result<Rows, ArrowError> {
         
         if !self.done {
             for (i, col) in columns.iter().enumerate() {
-                if let DataType::Dictionary(k, _) = col.data_type() {
-                    let cardinality = match k.as_ref() {
-                        DataType::Int8 => downcast_dict!(col, Int32Type).values().len(),
-                        DataType::Int16 => downcast_dict!(col, Int32Type).values().len(),
-                        DataType::Int32 => downcast_dict!(col, Int32Type).values().len(),
-                        DataType::Int64 => downcast_dict!(col, Int64Type).values().len(),
-                        DataType::UInt16 => downcast_dict!(col, UInt16Type).values().len(),
-                        DataType::UInt32 => downcast_dict!(col, UInt32Type).values().len(),
-                        DataType::UInt64 => downcast_dict!(col, UInt64Type).values().len(),
-                        _ => unreachable!(),
-                    };
-
+                if let DataType::Dictionary(_, _) = col.data_type() {
+                    let cardinality = col.as_any_dictionary_opt().unwrap().values().len();
                     if cardinality >= LOW_CARDINALITY_THRESHOLD {
                         self.fields[i] = self.fields[i].clone().preserve_dictionaries(false);
                     }
