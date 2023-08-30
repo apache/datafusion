@@ -18,6 +18,6 @@
 mod aggregate_fuzz;
 mod join_fuzz;
 mod merge_fuzz;
-mod order_spill_fuzz;
+mod sort_fuzz;
 mod sort_preserving_repartition_fuzz;
 mod window_fuzz;
