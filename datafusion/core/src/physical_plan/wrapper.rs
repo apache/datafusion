@@ -42,7 +42,7 @@ pub struct CardinalityAwareRowConverter {
 impl CardinalityAwareRowConverter {
     pub fn new(fields: Vec<SortField>) -> Result<Self, ArrowError> {
         Ok(Self {
-            fields: fields.clone(),
+            fields,
             inner: None,
             done: false,
         })
