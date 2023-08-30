@@ -1318,6 +1318,10 @@ mod tests {
         WindowFunction,
     };
     use datafusion_physical_expr::expressions::Column;
+    use object_store::local::LocalFileSystem;
+    use parquet::file::reader::FileReader;
+    use tempfile::TempDir;
+    use url::Url;
 
     use crate::execution::context::SessionConfig;
     use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
@@ -2358,6 +2362,48 @@ mod tests {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_parquet_with_compression() -> Result<()> {
+        let test_df = test_table().await?;
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        let ctx = &test_df.session_state;
+        ctx.runtime_env().register_object_store(&local_url, local);
+        let str_path = format!(
+            "{}/test.parquet",
+            tmp_dir
+                .path()
+                .to_str()
+                .expect("Temp dir should be valid str")
+        );
+        test_df
+            .write_parquet(
+                str_path.as_str(),
+                DataFrameWriteOptions::new().with_single_file_output(true),
+                Some(
+                    WriterProperties::builder()
+                        .set_compression(parquet::basic::Compression::SNAPPY)
+                        .build(),
+                ),
+            )
+            .await?;
+
+        // Check that file actually used snappy compression
+        let file = std::fs::File::open(std::path::Path::new(str_path.as_str()))?;
+
+        let reader =
+            parquet::file::serialized_reader::SerializedFileReader::new(file).unwrap();
+
+        let parquet_metadata = reader.metadata();
+
+        let written_compression = parquet_metadata.row_group(0).column(0).compression();
+
+        assert_eq!(written_compression, parquet::basic::Compression::SNAPPY);
 
         Ok(())
     }
