@@ -79,7 +79,7 @@ LOCATION <literal>
 
 `file_type` is one of `CSV`, `PARQUET`, `AVRO` or `JSON`
 
-`LOCATION <literal>` specfies the location to find the data. It can be
+`LOCATION <literal>` specifies the location to find the data. It can be
 a path to a file or directory of partitioned files locally or on an
 object store.
 
