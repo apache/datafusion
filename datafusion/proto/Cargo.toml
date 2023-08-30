@@ -41,7 +41,7 @@ json = ["pbjson", "serde", "serde_json"]
 
 [dependencies]
 arrow = { workspace = true }
-chrono = { version = "0.4", default-features = false }
+chrono = { version = "0.4.27", default-features = false }
 datafusion = { path = "../core", version = "30.0.0" }
 datafusion-common = { path = "../common", version = "30.0.0" }
 datafusion-expr = { path = "../expr", version = "30.0.0" }
