@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use datafusion::logical_expr::Like;
+use datafusion::logical_expr::{Like, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -39,6 +39,7 @@ use datafusion::logical_expr::expr::{
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
+use substrait::proto::expression::window_function::BoundsType;
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -980,12 +981,14 @@ pub fn to_substrait_rex(
                 .collect::<Result<Vec<_>>>()?;
             // window frame
             let bounds = to_substrait_bounds(window_frame)?;
+            let bound_type = to_substrait_bound_type(window_frame)?;
             Ok(make_substrait_window_function(
                 function_anchor,
                 arguments,
                 partition_by,
                 order_by,
                 bounds,
+                bound_type,
             ))
         }
         Expr::Like(Like {
@@ -1197,6 +1200,7 @@ fn make_substrait_window_function(
     partitions: Vec<Expression>,
     sorts: Vec<SortField>,
     bounds: (Bound, Bound),
+    bounds_type: BoundsType,
 ) -> Expression {
     Expression {
         rex_type: Some(RexType::WindowFunction(SubstraitWindowFunction {
@@ -1211,6 +1215,7 @@ fn make_substrait_window_function(
             lower_bound: Some(bounds.0),
             upper_bound: Some(bounds.1),
             args: vec![],
+            bounds_type: bounds_type as i32,
         })),
     }
 }
@@ -1375,6 +1380,15 @@ fn to_substrait_bound(bound: &WindowFrameBound) -> Bound {
                 kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
             },
         },
+    }
+}
+
+fn to_substrait_bound_type(window_frame: &WindowFrame) -> Result<BoundsType> {
+    match window_frame.units {
+        WindowFrameUnits::Rows => Ok(BoundsType::Rows), // ROWS
+        WindowFrameUnits::Range => Ok(BoundsType::Range), // RANGE
+        // TODO: Support GROUPS
+        unit => not_impl_err!("Unsupported window frame unit: {unit:?}"),
     }
 }
 
