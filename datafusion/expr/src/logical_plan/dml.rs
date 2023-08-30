@@ -20,7 +20,9 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::{DFSchemaRef, FileType, OwnedTableReference};
+use datafusion_common::{
+    file_options::StatementOptions, DFSchemaRef, FileType, OwnedTableReference,
+};
 
 use crate::LogicalPlan;
 
@@ -36,9 +38,9 @@ pub struct CopyTo {
     /// If false, it is assumed output_url is a file to which all data should be written
     /// regardless of input partitioning. Otherwise, output_url is assumed to be a directory
     /// to which each output partition is written to its own output file
-    pub per_thread_output: bool,
+    pub single_file_output: bool,
     /// Arbitrary options as tuples
-    pub options: Vec<(String, String)>,
+    pub statement_options: StatementOptions,
 }
 
 /// The operator that modifies the content of a database (adapted from
