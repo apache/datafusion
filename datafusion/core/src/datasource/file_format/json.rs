@@ -221,6 +221,10 @@ impl BatchSerializer for JsonSerializer {
         //drop(writer);
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
     }
+
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>>{
+        Ok(Box::new(JsonSerializer::new()))
+    }
 }
 
 /// Implements [`DataSink`] for writing to a Json file.

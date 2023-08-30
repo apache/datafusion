@@ -33,12 +33,14 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, FileCompression
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion_execution::RecordBatchStream;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::task::{JoinSet, self, JoinHandle};
 
 /// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends
@@ -237,6 +239,10 @@ pub enum FileWriterMode {
 pub trait BatchSerializer: Unpin + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
+    /// Duplicates self to support serializing multiple batches in parralell on multiple cores
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>>{
+        return Err(DataFusionError::NotImplemented("Parallel serialization is not implemented for this file type".into()))
+    }
 }
 
 /// Checks if any of the passed writers have encountered an error
@@ -315,13 +321,56 @@ pub(crate) async fn create_writer(
     }
 }
 
+async fn serialize_rb_stream_to_object_store(
+    mut data_stream: Pin<Box<dyn RecordBatchStream + Send>>, 
+    mut serializer: Box<dyn BatchSerializer>,
+    mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>
+    ) -> Result<u64>{
+        let mut row_count = 0;
+        // Not using JoinSet here since we want to ulimately write to ObjectStore preserving file order
+        let mut serialize_tasks: Vec<JoinHandle<Result<(usize, Bytes), DataFusionError>>> = Vec::new();
+        while let Some(maybe_batch) = data_stream.next().await {
+            let mut serializer_clone = serializer.duplicate()?;
+            serialize_tasks.push(task::spawn(
+                async move {
+                    let batch = maybe_batch?;
+                    let num_rows = batch.num_rows();
+                    let bytes = serializer_clone.serialize(batch).await?;
+                    Ok((num_rows, bytes))
+                }
+            ));
+        }    
+        for serialize_result in serialize_tasks {
+            let result = serialize_result.await;
+            match result {
+                Ok(res) => {
+                    let (cnt, bytes) = res?;
+                    row_count += cnt;
+                    writer.write_all(&bytes)
+                        .await
+                        .map_err(|_| DataFusionError::Internal("Unexpected FileSink Error".to_string()))?;
+                },
+                Err(e) => {
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                    } else {
+                        unreachable!();
+                    }
+                }
+            }
+        }           
+        
+        writer.shutdown().await?;
+        Ok(row_count as u64)
+    }
+
 /// Contains the common logic for serializing RecordBatches and
 /// writing the resulting bytes to an ObjectStore.
 /// Serialization is assumed to be stateless, i.e.
 /// each RecordBatch can be serialized without any
 /// dependency on the RecordBatches before or after.
 pub(crate) async fn stateless_serialize_and_write_files(
-    mut data: Vec<SendableRecordBatchStream>,
+    data: Vec<SendableRecordBatchStream>,
     mut serializers: Vec<Box<dyn BatchSerializer>>,
     mut writers: Vec<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>>,
     single_file_output: bool,
@@ -334,39 +383,55 @@ pub(crate) async fn stateless_serialize_and_write_files(
         return internal_err!("single_file_ouput is false, but did not get 1 writer for each output partition!");
     }
     let mut row_count = 0;
-    // Map errors to DatafusionError.
-    let err_converter =
-        |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
-    // TODO parallelize serialization accross partitions and batches within partitions
-    // see: https://github.com/apache/arrow-datafusion/issues/7079
-    for (part_idx, data_stream) in data.iter_mut().enumerate().take(num_partitions) {
-        let idx = match single_file_output {
-            false => part_idx,
-            true => 0,
-        };
-        while let Some(maybe_batch) = data_stream.next().await {
-            // Write data to files in a round robin fashion:
-            let serializer = &mut serializers[idx];
-            let batch = check_for_errors(maybe_batch, &mut writers).await?;
-            row_count += batch.num_rows();
-            let bytes =
-                check_for_errors(serializer.serialize(batch).await, &mut writers).await?;
-            let writer = &mut writers[idx];
-            check_for_errors(
-                writer.write_all(&bytes).await.map_err(err_converter),
-                &mut writers,
-            )
-            .await?;
+    match single_file_output {
+    false => {
+        let mut join_set = JoinSet::new();
+        for (data_stream, serializer, writer) in 
+            data
+            .into_iter()
+            .zip(serializers.into_iter())
+            .zip(writers.into_iter())
+            .map(|((a,b), c)| (a,b,c))
+            {
+                join_set.spawn(async move {
+                    serialize_rb_stream_to_object_store(data_stream, serializer, writer).await
+                }
+            );
+            }
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(res) => {
+                    let cnt = res?;
+                    row_count += cnt;
+                },
+                Err(e) => {
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                    } else {
+                        unreachable!();
+                    }
+                }
+            }
         }
+    },
+    true => {
+        for mut data_stream in data.into_iter()
+            {
+                let serializer = &mut serializers[0];
+                let writer = &mut writers[0];
+                while let Some(maybe_batch) = data_stream.next().await {
+                    // Write data to files in a round robin fashion:
+                    let batch = maybe_batch?;
+                    row_count += batch.num_rows() as u64;
+                    let bytes = serializer.serialize(batch).await?;
+                    writer.write_all(&bytes)
+                    .await
+                    .map_err(|_| DataFusionError::Internal("Unexpected FileSink Error".to_string()))?;
+                }
+            }
+            writers[0].shutdown().await?;
+    }    
     }
-    // Perform cleanup:
-    let n_writers = writers.len();
-    for idx in 0..n_writers {
-        check_for_errors(
-            writers[idx].shutdown().await.map_err(err_converter),
-            &mut writers,
-        )
-        .await?;
-    }
-    Ok(row_count as u64)
+   
+    Ok(row_count)
 }
