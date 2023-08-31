@@ -3,7 +3,7 @@ use crate::physical_plan::sorts::builder::SortOrder;
 use crate::physical_plan::sorts::cursor::Cursor;
 use crate::physical_plan::sorts::merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::stream::{
-    BatchCursorStream, BatchTrackingStream, MergeStream, OffsetCursorStream,
+    BatchCursorStream, BatchId, BatchTrackingStream, MergeStream, OffsetCursorStream,
     YieldedCursorStream,
 };
 use crate::physical_plan::RecordBatchStream;
@@ -33,7 +33,7 @@ pub(crate) struct SortPreservingCascadeStream<C: Cursor> {
     schema: SchemaRef,
 
     /// Batches are collected on first yield from the RowCursorStream
-    /// Subsequent merges in cascade all refer to the [`BatchIdentifier`](super::stream::BatchIdentifier)
+    /// Subsequent merges in cascade all refer to the [`BatchId`]s
     record_batch_collector: Arc<parking_lot::Mutex<BatchTrackingStream<C>>>,
 }
 
@@ -111,12 +111,10 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
         }
     }
 
-    fn build_record_batch(
-        &mut self,
-        sort_order: Vec<SortOrder>,
-    ) -> Result<RecordBatch> {
+    fn build_record_batch(&mut self, sort_order: Vec<SortOrder>) -> Result<RecordBatch> {
         let mut batches_needed = Vec::with_capacity(sort_order.len());
-        let mut batches_seen: HashMap<uuid::Uuid, (usize, usize)> = HashMap::with_capacity(sort_order.len()); // (batch_idx, rows_sorted)
+        let mut batches_seen: HashMap<BatchId, (usize, usize)> =
+            HashMap::with_capacity(sort_order.len()); // (batch_idx, rows_sorted)
         let mut sort_order_offset_adjusted = Vec::with_capacity(sort_order.len());
         let mut batch_idx: usize = 0;
 

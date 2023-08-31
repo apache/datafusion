@@ -18,10 +18,9 @@
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::{SortOrder, SortOrderBuilder};
 use crate::physical_plan::sorts::cursor::Cursor;
-use crate::physical_plan::sorts::stream::{BatchOffset, CursorStream};
+use crate::physical_plan::sorts::stream::{BatchId, BatchOffset, CursorStream};
 use datafusion_common::Result;
 use futures::Stream;
-use uuid::Uuid;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
@@ -134,8 +133,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
     fn poll_next_inner(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>>>
-    {
+    ) -> Poll<Option<Result<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>>> {
         if self.aborted {
             return Poll::Ready(None);
         }
@@ -278,7 +276,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
 }
 
 impl<C: Cursor + Unpin> Stream for SortPreservingMergeStream<C> {
-    type Item = Result<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>;
+    type Item = Result<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,

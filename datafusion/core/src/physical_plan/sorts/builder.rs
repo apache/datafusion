@@ -16,19 +16,18 @@
 // under the License.
 
 use datafusion_common::Result;
-use uuid::Uuid;
 use std::collections::VecDeque;
 use std::mem::take;
 
 use super::cursor::Cursor;
-use super::stream::BatchOffset;
+use super::stream::{BatchId, BatchOffset};
 
-pub type SortOrder = (Uuid, usize, BatchOffset); // batch_id, row_idx (without offset)
+pub type SortOrder = (BatchId, usize, BatchOffset); // batch_id, row_idx (without offset)
 
 #[derive(Debug)]
 struct BatchCursor<C: Cursor> {
     /// The index into BatchTrackingStream::batches
-    batch: Uuid,
+    batch: BatchId,
     /// The row index within the given batch
     row_idx: usize,
     /// The offset of the row within the given batch, based on sliced cursors
@@ -69,7 +68,7 @@ impl<C: Cursor> SortOrderBuilder<C> {
         &mut self,
         stream_idx: usize,
         mut cursor: C,
-        batch: Uuid,
+        batch: BatchId,
         row_offset: BatchOffset,
     ) -> Result<()> {
         cursor.seek(0);
@@ -163,13 +162,13 @@ impl<C: Cursor> SortOrderBuilder<C> {
     /// This will drain the internal state of the builder, and return `None` if there are no pending
     pub fn yield_sort_order(
         &mut self,
-    ) -> Result<Option<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>> {
+    ) -> Result<Option<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>> {
         if self.is_empty() {
             return Ok(None);
         }
 
         let sort_order = take(&mut self.indices);
-        let mut cursors_to_yield: Vec<(C, Uuid, BatchOffset)> =
+        let mut cursors_to_yield: Vec<(C, BatchId, BatchOffset)> =
             Vec::with_capacity(self.stream_count * 2);
 
         // drain already complete cursors

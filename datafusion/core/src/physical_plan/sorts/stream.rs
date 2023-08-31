@@ -38,19 +38,21 @@ use std::task::{ready, Context, Poll};
 pub(crate) type BatchCursorStream<C> =
     Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
+pub type BatchId = Uuid;
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct BatchOffset(pub usize); // offset into a batch, used when a cursor is sliced
 
 /// A fallible [`PartitionedStream`] of [`Cursor`] and a batch identifier (Uuid)
 pub(crate) type CursorStream<C> =
-    Box<dyn PartitionedStream<Output = Result<(C, Uuid, BatchOffset)>>>;
+    Box<dyn PartitionedStream<Output = Result<(C, BatchId, BatchOffset)>>>;
 
 /// A stream of yielded [`SortOrder`]s, with the corresponding [`Cursor`]s and [`Uuid`]s
 pub(crate) type MergeStream<C> = std::pin::Pin<
     Box<
         dyn Send
             + futures::Stream<
-                Item = Result<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>,
+                Item = Result<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>,
             >,
     >,
 >;
@@ -257,7 +259,7 @@ impl<C: Cursor> OffsetCursorStream<C> {
 }
 
 impl<C: Cursor> PartitionedStream for OffsetCursorStream<C> {
-    type Output = Result<(C, Uuid, BatchOffset)>;
+    type Output = Result<(C, BatchId, BatchOffset)>;
 
     fn partitions(&self) -> usize {
         self.limit - self.offset
@@ -287,7 +289,7 @@ impl<C: Cursor> std::fmt::Debug for OffsetCursorStream<C> {
 
 pub struct BatchTrackingStream<C: Cursor> {
     /// Write once, read many [`RecordBatch`]s
-    batches: HashMap<Uuid, Arc<RecordBatch>, RandomState>,
+    batches: HashMap<BatchId, Arc<RecordBatch>, RandomState>,
     /// Input streams yielding [`Cursor`]s and [`RecordBatch`]es
     streams: BatchCursorStream<C>,
     /// Accounts for memory used by buffered batches
@@ -303,11 +305,14 @@ impl<C: Cursor> BatchTrackingStream<C> {
         }
     }
 
-    pub fn get_batches(&self, batch_ids: &[Uuid]) -> Vec<Arc<RecordBatch>> {
-        batch_ids.iter().map(|id| self.batches[id].clone()).collect()
+    pub fn get_batches(&self, batch_ids: &[BatchId]) -> Vec<Arc<RecordBatch>> {
+        batch_ids
+            .iter()
+            .map(|id| self.batches[id].clone())
+            .collect()
     }
 
-    pub fn remove_batches(&mut self, batch_ids: &[Uuid]) {
+    pub fn remove_batches(&mut self, batch_ids: &[BatchId]) {
         for id in batch_ids {
             self.batches.remove(id);
         }
@@ -317,7 +322,7 @@ impl<C: Cursor> BatchTrackingStream<C> {
         &mut self,
         cx: &mut Context<'_>,
         stream_idx: usize,
-    ) -> Poll<Option<Result<(C, Uuid, BatchOffset)>>> {
+    ) -> Poll<Option<Result<(C, BatchId, BatchOffset)>>> {
         Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
             r.and_then(|(cursor, batch)| {
                 self.reservation.try_grow(batch.get_array_memory_size())?;
@@ -338,8 +343,7 @@ impl<C: Cursor> FusedMergeStreams<C> {
         &mut self,
         cx: &mut Context<'_>,
         stream_idx: usize,
-    ) -> Poll<Option<Result<(Vec<(C, Uuid, BatchOffset)>, Vec<SortOrder>)>>>
-    {
+    ) -> Poll<Option<Result<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>>> {
         loop {
             match ready!(self.0[stream_idx].poll_next_unpin(cx)) {
                 Some(Ok((_, sort_order))) if sort_order.len() == 0 => continue,
@@ -350,8 +354,8 @@ impl<C: Cursor> FusedMergeStreams<C> {
 }
 
 pub struct YieldedCursorStream<C: Cursor> {
-    // inner polled batch cursors, per stream_idx, which are partially yielded
-    cursors: Vec<Option<VecDeque<(C, Uuid, BatchOffset)>>>,
+    // Inner polled batch cursors, per stream_idx, which represent partially yielded batches.
+    cursors: Vec<Option<VecDeque<(C, BatchId, BatchOffset)>>>,
     /// Streams being polled
     streams: FusedMergeStreams<C>,
 }
@@ -368,7 +372,7 @@ impl<C: Cursor + std::marker::Send> YieldedCursorStream<C> {
     fn incr_next_batch(
         &mut self,
         stream_idx: usize,
-    ) -> Option<(C, Uuid, BatchOffset)> {
+    ) -> Option<(C, BatchId, BatchOffset)> {
         self.cursors[stream_idx]
             .as_mut()
             .map(|queue| queue.pop_front())
@@ -381,16 +385,16 @@ impl<C: Cursor + std::marker::Send> YieldedCursorStream<C> {
     fn try_parse_batches(
         &mut self,
         stream_idx: usize,
-        cursors: Vec<(C, Uuid, BatchOffset)>,
+        cursors: Vec<(C, BatchId, BatchOffset)>,
         sort_order: Vec<SortOrder>,
     ) -> Result<()> {
-        let mut cursors_per_batch: HashMap<(Uuid, BatchOffset), C, RandomState> =
+        let mut cursors_per_batch: HashMap<(BatchId, BatchOffset), C, RandomState> =
             HashMap::with_capacity_and_hasher(cursors.len(), RandomState::new());
         for (cursor, batch_id, batch_offset) in cursors {
             cursors_per_batch.insert((batch_id, batch_offset), cursor);
         }
 
-        let mut parsed_cursors: Vec<(C, Uuid, BatchOffset)> =
+        let mut parsed_cursors: Vec<(C, BatchId, BatchOffset)> =
             Vec::with_capacity(sort_order.len());
         let (mut prev_batch_id, mut prev_row_idx, mut prev_batch_offset) = sort_order[0];
         let mut len = 0;
@@ -435,7 +439,7 @@ impl<C: Cursor + std::marker::Send> YieldedCursorStream<C> {
 }
 
 impl<C: Cursor + std::marker::Send> PartitionedStream for YieldedCursorStream<C> {
-    type Output = Result<(C, Uuid, BatchOffset)>;
+    type Output = Result<(C, BatchId, BatchOffset)>;
 
     fn partitions(&self) -> usize {
         self.streams.0.len()
