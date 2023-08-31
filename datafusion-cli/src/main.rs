@@ -26,10 +26,11 @@ use datafusion_cli::{
     exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
+use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -252,26 +253,71 @@ fn is_valid_memory_pool_size(size: &str) -> Result<(), String> {
     }
 }
 
-fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
-    let mut size = size;
-    let factor = if let Some(last_char) = size.chars().last() {
-        match last_char {
-            'm' | 'M' => {
-                size = &size[..size.len() - 1];
-                1024 * 1024
-            }
-            'g' | 'G' => {
-                size = &size[..size.len() - 1];
-                1024 * 1024 * 1024
-            }
-            _ => 1,
-        }
-    } else {
-        return Err(format!("Invalid memory pool size '{}'", size));
-    };
+#[derive(Debug, Clone, Copy)]
+enum ByteUnit {
+    Byte,
+    KiB,
+    MiB,
+    GiB,
+    TiB,
+}
 
-    match size.parse::<usize>() {
-        Ok(size) if size > 0 => Ok(factor * size),
-        _ => Err(format!("Invalid memory pool size '{}'", size)),
+impl ByteUnit {
+    fn multiplier(&self) -> usize {
+        match self {
+            ByteUnit::Byte => 1,
+            ByteUnit::KiB => 1 << 10,
+            ByteUnit::MiB => 1 << 20,
+            ByteUnit::GiB => 1 << 30,
+            ByteUnit::TiB => 1 << 40,
+        }
+    }
+}
+
+fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
+    fn byte_suffixes() -> &'static HashMap<&'static str, ByteUnit> {
+        static BYTE_SUFFIXES: OnceLock<HashMap<&'static str, ByteUnit>> = OnceLock::new();
+        BYTE_SUFFIXES.get_or_init(|| {
+            let mut m = HashMap::new();
+            m.insert("b", ByteUnit::Byte);
+            m.insert("k", ByteUnit::KiB);
+            m.insert("kb", ByteUnit::KiB);
+            m.insert("m", ByteUnit::MiB);
+            m.insert("mb", ByteUnit::MiB);
+            m.insert("g", ByteUnit::GiB);
+            m.insert("gb", ByteUnit::GiB);
+            m.insert("t", ByteUnit::TiB);
+            m.insert("tb", ByteUnit::TiB);
+            m
+        })
+    }
+
+    fn suffix_re() -> &'static regex::Regex {
+        static SUFFIX_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+        SUFFIX_REGEX.get_or_init(|| regex::Regex::new(r"(-?[0-9]+)([a-z]+)?").unwrap())
+    }
+
+    let lower = size.to_lowercase();
+    if let Some(caps) = suffix_re().captures(&lower) {
+        let num_str = caps.get(1).unwrap().as_str();
+        if num_str.starts_with('-') {
+            return Err(format!(
+                "Negative memory pool size value is not allowed: '{}'",
+                size
+            ));
+        }
+
+        let num = num_str.parse::<usize>().map_err(|_| {
+            format!("Invalid numeric value in memory pool size '{}'", size)
+        })?;
+
+        let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
+        let unit = byte_suffixes()
+            .get(suffix)
+            .ok_or_else(|| format!("Invalid memory pool size '{}'", size))?;
+
+        Ok(num * unit.multiplier())
+    } else {
+        Err(format!("Invalid memory pool size '{}'", size))
     }
 }
