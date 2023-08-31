@@ -975,6 +975,8 @@ pub fn find_orderings_of_exprs(
                 orderings.push(None);
             }
         }
+    } else {
+        orderings.extend(expr.iter().map(|_| None));
     }
     Ok(orderings)
 }
@@ -1972,6 +1974,57 @@ mod tests {
         .iter()
         .zip(expected_oeq.classes())
         .any(|(a, b)| a.head().ne(b.head()) || a.others().ne(b.others())));
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_empty_output_ordering() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let empty_ordering = find_orderings_of_exprs(
+            &[
+                (Arc::new(Column::new("b", 1)), "b_new".to_string()),
+                (Arc::new(Column::new("a", 0)), "a_new".to_string()),
+            ],
+            Some(&[PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            }]),
+            EquivalenceProperties::new(Arc::new(schema.clone())),
+            OrderingEquivalenceProperties::new(Arc::new(schema.clone())),
+        )?;
+
+        assert_eq!(
+            vec![
+                Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new("b_new", 0)),
+                    options: SortOptions::default(),
+                }),
+                None,
+            ],
+            empty_ordering
+        );
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let empty_ordering = find_orderings_of_exprs(
+            &[
+                (Arc::new(Column::new("c", 2)), "c_new".to_string()),
+                (Arc::new(Column::new("b", 1)), "b_new".to_string()),
+            ],
+            Some(&[]),
+            EquivalenceProperties::new(Arc::new(schema.clone())),
+            OrderingEquivalenceProperties::new(Arc::new(schema)),
+        )?;
+
+        assert_eq!(vec![None, None], empty_ordering);
 
         Ok(())
     }
