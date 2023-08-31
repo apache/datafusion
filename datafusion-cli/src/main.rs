@@ -361,10 +361,19 @@ mod tests {
         assert_conversion("2T", Ok(2 * 1024 * 1024 * 1024 * 1024));
 
         // Test invalid input
-        assert_conversion("invalid", Err("Invalid memory pool size 'invalid'".to_string()));
+        assert_conversion(
+            "invalid",
+            Err("Invalid memory pool size 'invalid'".to_string()),
+        );
         assert_conversion("4kbx", Err("Invalid memory pool size '4kbx'".to_string()));
-        assert_conversion("-20mb", Err("Negative memory pool size value is not allowed '-20mb'".to_string()));
-        assert_conversion("-100", Err("Negative memory pool size value is not allowed '-100'".to_string()));
+        assert_conversion(
+            "-20mb",
+            Err("Negative memory pool size value is not allowed '-20mb'".to_string()),
+        );
+        assert_conversion(
+            "-100",
+            Err("Negative memory pool size value is not allowed '-100'".to_string()),
+        );
 
         Ok(())
     }
