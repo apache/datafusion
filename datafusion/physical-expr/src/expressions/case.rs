@@ -24,8 +24,9 @@ use crate::expressions::NoOp;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::*;
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, eq_dyn, is_null, not, or, prep_null_mask_filter};
+use arrow::compute::{and, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::exec_err;
@@ -138,7 +139,7 @@ impl CaseExpr {
                 .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows());
             // build boolean array representing which rows match the "when" value
-            let when_match = eq_dyn(&when_value, base_value.as_ref())?;
+            let when_match = eq(&when_value, &base_value)?;
             // Treat nulls as false
             let when_match = match when_match.null_count() {
                 0 => Cow::Borrowed(&when_match),

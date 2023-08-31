@@ -41,6 +41,7 @@ use crate::{
     Expr, ExprSchemable, TableSource,
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::file_options::StatementOptions;
 use datafusion_common::plan_err;
 use datafusion_common::UnnestOptions;
 use datafusion_common::{
@@ -238,15 +239,15 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         output_url: String,
         file_format: FileType,
-        per_thread_output: bool,
-        options: Vec<(String, String)>,
+        single_file_output: bool,
+        statement_options: StatementOptions,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
             file_format,
-            per_thread_output,
-            options,
+            single_file_output,
+            statement_options,
         })))
     }
 

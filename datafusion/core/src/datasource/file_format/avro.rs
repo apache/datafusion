@@ -23,8 +23,9 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion_common::FileType;
 use datafusion_physical_expr::PhysicalExpr;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
@@ -52,9 +53,12 @@ impl FileFormat for AvroFormat {
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
         for object in objects {
-            let schema = match store.get(&object.location).await? {
-                GetResult::File(mut file, _) => read_avro_schema_from_reader(&mut file)?,
-                r @ GetResult::Stream(_) => {
+            let r = store.as_ref().get(&object.location).await?;
+            let schema = match r.payload {
+                GetResultPayload::File(mut file, _) => {
+                    read_avro_schema_from_reader(&mut file)?
+                }
+                GetResultPayload::Stream(_) => {
                     // TODO: Fetching entire file to get schema is potentially wasteful
                     let data = r.bytes().await?;
                     read_avro_schema_from_reader(&mut data.as_ref())?
@@ -84,6 +88,10 @@ impl FileFormat for AvroFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = AvroExec::new(conf);
         Ok(Arc::new(exec))
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::AVRO
     }
 }
 
