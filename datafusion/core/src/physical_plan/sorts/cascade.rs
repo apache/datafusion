@@ -48,8 +48,6 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
     ) -> Self {
         let stream_count = streams.partitions();
 
-        // TODO: We can do slicing followed by concating of Cursors yielded from each merge.
-        // Refer to YieldedCursorStream for where the concat would happen (TODO).
         let streams = Arc::new(parking_lot::Mutex::new(BatchTrackingStream::new(
             streams,
             reservation.new_empty(),

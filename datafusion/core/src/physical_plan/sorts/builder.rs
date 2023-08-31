@@ -157,9 +157,20 @@ impl<C: Cursor> SortOrderBuilder<C> {
         }
     }
 
-    /// Takes the batches which already are sorted, and returns them with the corresponding cursors and sort order
+    /// Takes the batches which already are sorted, and returns them with the corresponding cursors and sort order.
     ///
-    /// This will drain the internal state of the builder, and return `None` if there are no pending
+    /// This will drain the internal state of the builder, and return `None` if there are no pending.
+    ///
+    /// This slices cursors for each record batch, as follows:
+    /// 1. input was N record_batchs of up to max M size
+    /// 2. yielded ordered rows can only equal up to M size
+    /// 3. of the N record_batches, each will be:
+    ///         a. fully yielded (all rows)
+    ///         b. partially yielded (some rows) => slice cursor, and adjust BatchOffset
+    ///         c. not yielded (no rows) => retain cursor
+    /// 4. output will be:
+    ///        - SortOrder
+    ///        - corresponding cursors, each up to total yielded rows [cursor_batch_0, cursor_batch_1, ..]
     pub fn yield_sort_order(
         &mut self,
     ) -> Result<Option<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>> {

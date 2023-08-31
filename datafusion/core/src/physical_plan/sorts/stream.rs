@@ -34,20 +34,33 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-/// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
+/// A fallible [`PartitionedStream`] of record batches.
+///
+/// Each [`Cursor`] and [`RecordBatch`] represents a single record batch.
 pub(crate) type BatchCursorStream<C> =
     Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
 pub type BatchId = Uuid;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct BatchOffset(pub usize); // offset into a batch, used when a cursor is sliced
+pub struct BatchOffset(pub usize);
 
-/// A fallible [`PartitionedStream`] of [`Cursor`] and a batch identifier (Uuid)
+/// A [`PartitionedStream`] representing partial record batches.
+///
+/// Each ([`Cursor`], [`BatchId`], [`BatchOffset`]) represents part of a record batch
+/// with the cursor.row_idx=0 representing the normalized key for the row at batch[idx=BatchOffset].
+///
+/// Each merge node (a `SortPreservingMergeStream` loser tree) will consume a [`CursorStream`].
 pub(crate) type CursorStream<C> =
     Box<dyn PartitionedStream<Output = Result<(C, BatchId, BatchOffset)>>>;
 
-/// A stream of yielded [`SortOrder`]s, with the corresponding [`Cursor`]s and [`Uuid`]s
+/// A fallible stream of yielded [`SortOrder`]s is a [`MergeStream`].
+///
+/// Within a cascade of merge nodes, (each node being a `SortPreservingMergeStream` loser tree),
+/// the merge node will yield a SortOrder as well as any partial record batches from the SortOrder.
+///
+/// [`YieldedCursorStream`] then converts an output [`MergeStream`]
+/// into an input [`CursorStream`] for the next merge.
 pub(crate) type MergeStream<C> = std::pin::Pin<
     Box<
         dyn Send
@@ -236,9 +249,13 @@ impl<T: FieldArray> PartitionedStream for FieldCursorStream<T> {
     }
 }
 
-/// A wrapper around [`CursorStream<C>`] that implements [`PartitionedStream`]
-/// and provides polling of a subset of the streams.
+/// A wrapper around [`CursorStream`] that provides polling of a subset of the partitioned streams.
+///
+/// This is used in the leaf nodes of the cascading merge tree.
+/// To have the same [`CursorStream`] (with the same RowConverter)
+/// be separately polled by multiple leaf nodes.
 pub struct OffsetCursorStream<C: Cursor> {
+    // Input streams. [`BatchTrackingStream`] is a [`CursorStream`].
     streams: Arc<Mutex<BatchTrackingStream<C>>>,
     offset: usize,
     limit: usize,
@@ -287,6 +304,10 @@ impl<C: Cursor> std::fmt::Debug for OffsetCursorStream<C> {
     }
 }
 
+/// Converts a [`BatchCursorStream`] into a [`CursorStream`].
+///
+/// While storing the record batches outside of the cascading merge tree.
+/// Should be used with a Mutex.
 pub struct BatchTrackingStream<C: Cursor> {
     /// Write once, read many [`RecordBatch`]s
     batches: HashMap<BatchId, Arc<RecordBatch>, RandomState>,
@@ -317,6 +338,14 @@ impl<C: Cursor> BatchTrackingStream<C> {
             self.batches.remove(id);
         }
     }
+}
+
+impl<C: Cursor> PartitionedStream for BatchTrackingStream<C> {
+    type Output = Result<(C, BatchId, BatchOffset)>;
+
+    fn partitions(&self) -> usize {
+        self.streams.partitions()
+    }
 
     fn poll_next(
         &mut self,
@@ -331,6 +360,14 @@ impl<C: Cursor> BatchTrackingStream<C> {
                 Ok((cursor, batch_id, BatchOffset(0_usize)))
             })
         }))
+    }
+}
+
+impl<C: Cursor> std::fmt::Debug for BatchTrackingStream<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchTrackingStream")
+            .field("num_partitions", &self.partitions())
+            .finish()
     }
 }
 
@@ -353,8 +390,16 @@ impl<C: Cursor> FusedMergeStreams<C> {
     }
 }
 
+impl<C: Cursor> std::fmt::Debug for FusedMergeStreams<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FusedMergeStreams").finish()
+    }
+}
+
+/// [`YieldedCursorStream`] converts an output [`MergeStream`]
+/// into an input [`CursorStream`] for the next merge.
 pub struct YieldedCursorStream<C: Cursor> {
-    // Inner polled batch cursors, per stream_idx, which represent partially yielded batches.
+    // Inner polled batch cursors, per stream_idx, which represents partially yielded batches.
     cursors: Vec<Option<VecDeque<(C, BatchId, BatchOffset)>>>,
     /// Streams being polled
     streams: FusedMergeStreams<C>,
@@ -379,9 +424,20 @@ impl<C: Cursor + std::marker::Send> YieldedCursorStream<C> {
             .flatten()
     }
 
-    // TODO: in order to handle sort_order, we need to either:
-    // parse further
-    // or concat the cursors
+    // The input [`SortOrder`] is across batches.
+    // We need to further parse the cursors into smaller batches.
+    //
+    // Input:
+    // - sort_order: Vec<(BatchId, row_idx)> = [(0,0), (0,1), (1,0), (0,2), (0,3)]
+    // - cursors: Vec<(C, BatchId, BatchOffset)> = [cursor_0, cursor_1]
+    //
+    // Output stream:
+    // Needs to be yielded to the next merge in three partial batches:
+    // [(0,0),(0,1)] with cursor => then [(1,0)] with cursor => then [(0,2),(0,3)] with cursor
+    //
+    // This additional parsing is only required when streaming into another merge node,
+    // and not required when yielding to the final interleave step.
+    // (Performance slightly decreases when doing this additional parsing for all SortOrderBuilder yields.)
     fn try_parse_batches(
         &mut self,
         stream_idx: usize,
