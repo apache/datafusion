@@ -300,15 +300,19 @@ pub(crate) async fn create_writer(
 }
 
 /// Serializes a single data stream in parallel and writes to an ObjectStore
-/// concurrently. Data order is preserved. In the event of an error, 
+/// concurrently. Data order is preserved. In the event of an error,
 /// the ObjectStore writer is returned to the caller in addition to an error,
-/// so that the caller may handle aborting failed writes. 
+/// so that the caller may handle aborting failed writes.
 async fn serialize_rb_stream_to_object_store(
     mut data_stream: Pin<Box<dyn RecordBatchStream + Send>>,
     mut serializer: Box<dyn BatchSerializer>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> std::result::Result<
-    (Box<dyn BatchSerializer>, AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>, u64),
+    (
+        Box<dyn BatchSerializer>,
+        AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+        u64,
+    ),
     (
         AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
         DataFusionError,
@@ -460,7 +464,13 @@ pub(crate) async fn stateless_serialize_and_write_files(
             let mut serializer = serializers.remove(0);
             let mut cnt;
             for data_stream in data.into_iter() {
-                (serializer, writer, cnt) = match serialize_rb_stream_to_object_store(data_stream, serializer, writer).await{
+                (serializer, writer, cnt) = match serialize_rb_stream_to_object_store(
+                    data_stream,
+                    serializer,
+                    writer,
+                )
+                .await
+                {
                     Ok((s, w, c)) => (s, w, c),
                     Err((w, e)) => {
                         any_errors = true;
