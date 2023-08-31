@@ -222,7 +222,7 @@ impl BatchSerializer for JsonSerializer {
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
     }
 
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>>{
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
         Ok(Box::new(JsonSerializer::new()))
     }
 }

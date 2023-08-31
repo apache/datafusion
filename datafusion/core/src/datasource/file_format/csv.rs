@@ -433,7 +433,7 @@ impl BatchSerializer for CsvSerializer {
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
     }
 
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>>{
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
         let new_self = CsvSerializer::new()
             .with_builder(self.builder.clone())
             .with_header(self.header);

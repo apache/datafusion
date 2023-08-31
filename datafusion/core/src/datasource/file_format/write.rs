@@ -40,7 +40,7 @@ use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::task::{JoinSet, self, JoinHandle};
+use tokio::task::{self, JoinHandle, JoinSet};
 
 /// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends
@@ -240,32 +240,10 @@ pub trait BatchSerializer: Unpin + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
     /// Duplicates self to support serializing multiple batches in parralell on multiple cores
-    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>>{
-        return Err(DataFusionError::NotImplemented("Parallel serialization is not implemented for this file type".into()))
-    }
-}
-
-/// Checks if any of the passed writers have encountered an error
-/// and if so, all writers are aborted.
-async fn check_for_errors<T, W: AsyncWrite + Unpin + Send>(
-    result: Result<T>,
-    writers: &mut [AbortableWrite<W>],
-) -> Result<T> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(e) => {
-            // Abort all writers before returning the error:
-            for writer in writers {
-                let mut abort_future = writer.abort_writer();
-                if let Ok(abort_future) = &mut abort_future {
-                    let _ = abort_future.await;
-                }
-                // Ignore errors that occur during abortion,
-                // We do try to abort all writers before returning error.
-            }
-            // After aborting writers return original error.
-            Err(e)
-        }
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
+        Err(DataFusionError::NotImplemented(
+            "Parallel serialization is not implemented for this file type".into(),
+        ))
     }
 }
 
@@ -322,47 +300,73 @@ pub(crate) async fn create_writer(
 }
 
 async fn serialize_rb_stream_to_object_store(
-    mut data_stream: Pin<Box<dyn RecordBatchStream + Send>>, 
+    mut data_stream: Pin<Box<dyn RecordBatchStream + Send>>,
     mut serializer: Box<dyn BatchSerializer>,
-    mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>
-    ) -> Result<u64>{
-        let mut row_count = 0;
-        // Not using JoinSet here since we want to ulimately write to ObjectStore preserving file order
-        let mut serialize_tasks: Vec<JoinHandle<Result<(usize, Bytes), DataFusionError>>> = Vec::new();
-        while let Some(maybe_batch) = data_stream.next().await {
-            let mut serializer_clone = serializer.duplicate()?;
-            serialize_tasks.push(task::spawn(
-                async move {
-                    let batch = maybe_batch?;
-                    let num_rows = batch.num_rows();
-                    let bytes = serializer_clone.serialize(batch).await?;
-                    Ok((num_rows, bytes))
-                }
-            ));
-        }    
-        for serialize_result in serialize_tasks {
-            let result = serialize_result.await;
-            match result {
-                Ok(res) => {
-                    let (cnt, bytes) = res?;
-                    row_count += cnt;
-                    writer.write_all(&bytes)
-                        .await
-                        .map_err(|_| DataFusionError::Internal("Unexpected FileSink Error".to_string()))?;
-                },
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
-                    }
-                }
+    mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+) -> std::result::Result<
+    (AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>, u64),
+    (
+        AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+        DataFusionError,
+    ),
+> {
+    let mut row_count = 0;
+    // Not using JoinSet here since we want to ulimately write to ObjectStore preserving file order
+    let mut serialize_tasks: Vec<JoinHandle<Result<(usize, Bytes), DataFusionError>>> =
+        Vec::new();
+    while let Some(maybe_batch) = data_stream.next().await {
+        let mut serializer_clone = match serializer.duplicate() {
+            Ok(s) => s,
+            Err(_) => {
+                return Err((
+                    writer,
+                    DataFusionError::Internal(
+                        "Unknown error writing to object store".into(),
+                    ),
+                ))
             }
-        }           
-        
-        writer.shutdown().await?;
-        Ok(row_count as u64)
+        };
+        serialize_tasks.push(task::spawn(async move {
+            let batch = maybe_batch?;
+            let num_rows = batch.num_rows();
+            let bytes = serializer_clone.serialize(batch).await?;
+            Ok((num_rows, bytes))
+        }));
     }
+    for serialize_result in serialize_tasks {
+        let result = serialize_result.await;
+        match result {
+            Ok(res) => {
+                let (cnt, bytes) = match res {
+                    Ok(r) => r,
+                    Err(e) => return Err((writer, e)),
+                };
+                row_count += cnt;
+                match writer.write_all(&bytes).await {
+                    Ok(_) => (),
+                    Err(_) => {
+                        return Err((
+                            writer,
+                            DataFusionError::Internal(
+                                "Unknown error writing to object store".into(),
+                            ),
+                        ))
+                    }
+                };
+            }
+            Err(_) => {
+                return Err((
+                    writer,
+                    DataFusionError::Internal(
+                        "Unknown error writing to object store".into(),
+                    ),
+                ))
+            }
+        }
+    }
+
+    Ok((writer, row_count as u64))
+}
 
 /// Contains the common logic for serializing RecordBatches and
 /// writing the resulting bytes to an ObjectStore.
@@ -379,59 +383,117 @@ pub(crate) async fn stateless_serialize_and_write_files(
         return internal_err!("single_file_output is true, but got more than 1 writer!");
     }
     let num_partitions = data.len();
-    if !single_file_output && (num_partitions != writers.len()) {
+    let num_writers = writers.len();
+    if !single_file_output && (num_partitions != num_writers) {
         return internal_err!("single_file_ouput is false, but did not get 1 writer for each output partition!");
     }
     let mut row_count = 0;
+    // tracks if any writers encountered an error triggering the need to abort
+    let mut any_errors = false;
+    // tracks the specific error triggering abort
+    let mut triggering_error = None;
+    // tracks if any errors were encountered in the process of aborting writers.
+    // if true, we may not have a guarentee that all written data was cleaned up.
+    let mut any_abort_errors = false;
     match single_file_output {
-    false => {
-        let mut join_set = JoinSet::new();
-        for (data_stream, serializer, writer) in 
-            data
-            .into_iter()
-            .zip(serializers.into_iter())
-            .zip(writers.into_iter())
-            .map(|((a,b), c)| (a,b,c))
+        false => {
+            let mut join_set = JoinSet::new();
+            for (data_stream, serializer, writer) in data
+                .into_iter()
+                .zip(serializers.into_iter())
+                .zip(writers.into_iter())
+                .map(|((a, b), c)| (a, b, c))
             {
                 join_set.spawn(async move {
-                    serialize_rb_stream_to_object_store(data_stream, serializer, writer).await
-                }
-            );
+                    serialize_rb_stream_to_object_store(data_stream, serializer, writer)
+                        .await
+                });
             }
-        while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok(res) => {
-                    let cnt = res?;
-                    row_count += cnt;
-                },
-                Err(e) => {
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    } else {
-                        unreachable!();
+            let mut finished_writers = Vec::with_capacity(num_writers);
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(res) => match res {
+                        Ok((writer, cnt)) => {
+                            finished_writers.push(writer);
+                            row_count += cnt;
+                        }
+                        Err((writer, e)) => {
+                            finished_writers.push(writer);
+                            any_errors = true;
+                            triggering_error = Some(e);
+                        }
+                    },
+                    Err(_) => {
+                        // Don't panic, instead try to clean up as many writers as possible.
+                        // If we hit this code, ownership of a writer was not joined back to
+                        // this thread, so we cannot clean it up (hence any_abort_errors is true)
+                        any_errors = true;
+                        any_abort_errors = true;
+                    }
+                }
+            }
+
+            // Finalize or abort writers as appropriate
+            for mut writer in finished_writers.into_iter() {
+                match any_errors {
+                    true => {
+                        let abort_result = writer.abort_writer();
+                        if abort_result.is_err() {
+                            any_abort_errors = true;
+                        }
+                    }
+                    false => {
+                        // TODO if we encounter an error during shutdown, delete previously written files?
+                        writer.shutdown()
+                            .await
+                            .map_err(|_| DataFusionError::Internal("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!".into()))?;
                     }
                 }
             }
         }
-    },
-    true => {
-        for mut data_stream in data.into_iter()
-            {
+        true => {
+            // TODO use fn call in this branch
+            'outer: for mut data_stream in data.into_iter() {
                 let serializer = &mut serializers[0];
                 let writer = &mut writers[0];
                 while let Some(maybe_batch) = data_stream.next().await {
                     // Write data to files in a round robin fashion:
-                    let batch = maybe_batch?;
+                    let batch = match maybe_batch {
+                        Ok(b) => b,
+                        Err(e) => {
+                            any_errors = true;
+                            triggering_error = Some(e);
+                            break 'outer;
+                        }
+                    };
                     row_count += batch.num_rows() as u64;
                     let bytes = serializer.serialize(batch).await?;
-                    writer.write_all(&bytes)
-                    .await
-                    .map_err(|_| DataFusionError::Internal("Unexpected FileSink Error".to_string()))?;
+                    writer.write_all(&bytes).await.map_err(|_| {
+                        DataFusionError::Internal("Unexpected FileSink Error".to_string())
+                    })?;
                 }
             }
-            writers[0].shutdown().await?;
-    }    
+            match any_errors {
+                true => {
+                    let abort_result = writers[0].abort_writer();
+                    if abort_result.is_err() {
+                        any_abort_errors = true;
+                    }
+                }
+                false => writers[0].shutdown().await?,
+            }
+        }
     }
-   
+
+    if any_errors {
+        match any_abort_errors{
+            true => return Err(DataFusionError::Internal("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written.".into())),
+            false => match triggering_error {
+                Some(e) => return Err(e),
+                None => return Err(DataFusionError::Internal("Unknown Error encountered during writing to ObjectStore. All writers succesfully aborted.".into()))
+            }
+        }
+    }
+
     Ok(row_count)
 }
