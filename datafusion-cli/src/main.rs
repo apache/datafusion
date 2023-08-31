@@ -294,19 +294,12 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
 
     fn suffix_re() -> &'static regex::Regex {
         static SUFFIX_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-        SUFFIX_REGEX.get_or_init(|| regex::Regex::new(r"(-?[0-9]+)([a-z]+)?").unwrap())
+        SUFFIX_REGEX.get_or_init(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap())
     }
 
     let lower = size.to_lowercase();
     if let Some(caps) = suffix_re().captures(&lower) {
         let num_str = caps.get(1).unwrap().as_str();
-        if num_str.starts_with('-') {
-            return Err(format!(
-                "Negative memory pool size value is not allowed '{}'",
-                size
-            ));
-        }
-
         let num = num_str.parse::<usize>().map_err(|_| {
             format!("Invalid numeric value in memory pool size '{}'", size)
         })?;
@@ -368,11 +361,15 @@ mod tests {
         assert_conversion("4kbx", Err("Invalid memory pool size '4kbx'".to_string()));
         assert_conversion(
             "-20mb",
-            Err("Negative memory pool size value is not allowed '-20mb'".to_string()),
+            Err("Invalid numeric value in memory pool size '-20mb'".to_string()),
         );
         assert_conversion(
             "-100",
-            Err("Negative memory pool size value is not allowed '-100'".to_string()),
+            Err("Invalid numeric value in memory pool size '-100'".to_string()),
+        );
+        assert_conversion(
+            "12k12k",
+            Err("Invalid memory pool size '12k12k'".to_string()),
         );
 
         Ok(())
