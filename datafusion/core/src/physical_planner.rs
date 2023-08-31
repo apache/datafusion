@@ -1887,6 +1887,7 @@ impl DefaultPhysicalPlanner {
                     Ok(input) => {
                         stringified_plans.push(
                             displayable(input.as_ref())
+                                .set_show_statistics(config.show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
@@ -1898,12 +1899,14 @@ impl DefaultPhysicalPlanner {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans.push(
                                     displayable(plan)
+                                        .set_show_statistics(config.show_statistics)
                                         .to_stringified(e.verbose, plan_type),
                                 );
                             },
                         ) {
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
+                                    .set_show_statistics(config.show_statistics)
                                     .to_stringified(e.verbose, FinalPhysicalPlan),
                             ),
                             Err(DataFusionError::Context(optimizer_name, e)) => {
@@ -1927,7 +1930,13 @@ impl DefaultPhysicalPlanner {
         } else if let LogicalPlan::Analyze(a) = logical_plan {
             let input = self.create_physical_plan(&a.input, session_state).await?;
             let schema = SchemaRef::new((*a.schema).clone().into());
-            Ok(Some(Arc::new(AnalyzeExec::new(a.verbose, input, schema))))
+            let show_statistics = session_state.config_options().explain.show_statistics;
+            Ok(Some(Arc::new(AnalyzeExec::new(
+                a.verbose,
+                show_statistics,
+                input,
+                schema,
+            ))))
         } else {
             Ok(None)
         }
@@ -2710,5 +2719,28 @@ digraph {
         let generated_graph = format!("{}", displayable(&*plan).graphviz());
 
         assert_eq!(expected_graph, generated_graph);
+    }
+
+    #[tokio::test]
+    async fn test_display_graphviz_with_statistics() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .project(vec![col("id") + lit(2)])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).await.unwrap();
+
+        let expected_tooltip = ", tooltip=\"statistics=[";
+
+        let generated_graph = format!(
+            "{}",
+            displayable(&*plan).set_show_statistics(true).graphviz()
+        );
+
+        assert_contains!(generated_graph, expected_tooltip);
     }
 }

@@ -251,3 +251,22 @@ physical_plan after EnforceSorting SAME TEXT AS ABOVE
 physical_plan after coalesce_batches SAME TEXT AS ABOVE
 physical_plan after PipelineChecker SAME TEXT AS ABOVE
 physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], has_header=true
+
+
+# test EXPLAIN with display statistics enabled
+statement ok
+set datafusion.explain.show_statistics = true;
+
+query TT
+EXPLAIN SELECT a, b, c FROM simple_explain_test limit 10;
+----
+logical_plan
+Limit: skip=0, fetch=10
+--TableScan: simple_explain_test projection=[a, b, c], fetch=10
+physical_plan
+GlobalLimitExec: skip=0, fetch=10, statistics=[rows=10, bytes=None, exact=false]
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], limit=10, has_header=true, statistics=[]
+
+statement ok
+set datafusion.explain.show_statistics = false;
+
