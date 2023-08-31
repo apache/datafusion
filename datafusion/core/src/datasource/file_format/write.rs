@@ -299,12 +299,16 @@ pub(crate) async fn create_writer(
     }
 }
 
+/// Serializes a single data stream in parallel and writes to an ObjectStore
+/// concurrently. Data order is preserved. In the event of an error, 
+/// the ObjectStore writer is returned to the caller in addition to an error,
+/// so that the caller may handle aborting failed writes. 
 async fn serialize_rb_stream_to_object_store(
     mut data_stream: Pin<Box<dyn RecordBatchStream + Send>>,
     mut serializer: Box<dyn BatchSerializer>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
 ) -> std::result::Result<
-    (AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>, u64),
+    (Box<dyn BatchSerializer>, AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>, u64),
     (
         AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
         DataFusionError,
@@ -365,7 +369,7 @@ async fn serialize_rb_stream_to_object_store(
         }
     }
 
-    Ok((writer, row_count as u64))
+    Ok((serializer, writer, row_count as u64))
 }
 
 /// Contains the common logic for serializing RecordBatches and
@@ -413,7 +417,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
             while let Some(result) = join_set.join_next().await {
                 match result {
                     Ok(res) => match res {
-                        Ok((writer, cnt)) => {
+                        Ok((_, writer, cnt)) => {
                             finished_writers.push(writer);
                             row_count += cnt;
                         }
@@ -452,35 +456,29 @@ pub(crate) async fn stateless_serialize_and_write_files(
             }
         }
         true => {
-            // TODO use fn call in this branch
-            'outer: for mut data_stream in data.into_iter() {
-                let serializer = &mut serializers[0];
-                let writer = &mut writers[0];
-                while let Some(maybe_batch) = data_stream.next().await {
-                    // Write data to files in a round robin fashion:
-                    let batch = match maybe_batch {
-                        Ok(b) => b,
-                        Err(e) => {
-                            any_errors = true;
-                            triggering_error = Some(e);
-                            break 'outer;
-                        }
-                    };
-                    row_count += batch.num_rows() as u64;
-                    let bytes = serializer.serialize(batch).await?;
-                    writer.write_all(&bytes).await.map_err(|_| {
-                        DataFusionError::Internal("Unexpected FileSink Error".to_string())
-                    })?;
-                }
+            let mut writer = writers.remove(0);
+            let mut serializer = serializers.remove(0);
+            let mut cnt;
+            for data_stream in data.into_iter() {
+                (serializer, writer, cnt) = match serialize_rb_stream_to_object_store(data_stream, serializer, writer).await{
+                    Ok((s, w, c)) => (s, w, c),
+                    Err((w, e)) => {
+                        any_errors = true;
+                        triggering_error = Some(e);
+                        writer = w;
+                        break;
+                    }
+                };
+                row_count += cnt;
             }
             match any_errors {
                 true => {
-                    let abort_result = writers[0].abort_writer();
+                    let abort_result = writer.abort_writer();
                     if abort_result.is_err() {
                         any_abort_errors = true;
                     }
                 }
-                false => writers[0].shutdown().await?,
+                false => writer.shutdown().await?,
             }
         }
     }
