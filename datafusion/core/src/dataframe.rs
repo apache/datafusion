@@ -2398,7 +2398,7 @@ mod tests {
             )
             .await?;
 
-            // Check that file actually used snappy compression
+            // Check that file actually used the specified compression
             let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
 
             let reader =
