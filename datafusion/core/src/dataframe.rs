@@ -1319,6 +1319,7 @@ mod tests {
     };
     use datafusion_physical_expr::expressions::Column;
     use object_store::local::LocalFileSystem;
+    use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
     use url::Url;
@@ -2369,36 +2370,48 @@ mod tests {
     #[tokio::test]
     async fn write_parquet_with_compression() -> Result<()> {
         let test_df = test_table().await?;
-        let tmp_dir = TempDir::new()?;
-        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
-        let local_url = Url::parse("file://local").unwrap();
-        let ctx = &test_df.session_state;
-        ctx.runtime_env().register_object_store(&local_url, local);
 
         let output_path = "file://local/test.parquet";
-        test_df
-            .write_parquet(
+        let test_compressions = vec![
+            parquet::basic::Compression::SNAPPY,
+            parquet::basic::Compression::LZ4,
+            parquet::basic::Compression::LZ4_RAW,
+            parquet::basic::Compression::GZIP(GzipLevel::default()),
+            parquet::basic::Compression::BROTLI(BrotliLevel::default()),
+            parquet::basic::Compression::ZSTD(ZstdLevel::default()),
+        ];
+        for compression in test_compressions.into_iter() {
+            let df = test_df.clone();
+            let tmp_dir = TempDir::new()?;
+            let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+            let local_url = Url::parse("file://local").unwrap();
+            let ctx = &test_df.session_state;
+            ctx.runtime_env().register_object_store(&local_url, local);
+            df.write_parquet(
                 output_path,
                 DataFrameWriteOptions::new().with_single_file_output(true),
                 Some(
                     WriterProperties::builder()
-                        .set_compression(parquet::basic::Compression::SNAPPY)
+                        .set_compression(compression)
                         .build(),
                 ),
             )
             .await?;
 
-        // Check that file actually used snappy compression
-        let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
+            // Check that file actually used snappy compression
+            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
 
-        let reader =
-            parquet::file::serialized_reader::SerializedFileReader::new(file).unwrap();
+            let reader =
+                parquet::file::serialized_reader::SerializedFileReader::new(file)
+                    .unwrap();
 
-        let parquet_metadata = reader.metadata();
+            let parquet_metadata = reader.metadata();
 
-        let written_compression = parquet_metadata.row_group(0).column(0).compression();
+            let written_compression =
+                parquet_metadata.row_group(0).column(0).compression();
 
-        assert_eq!(written_compression, parquet::basic::Compression::SNAPPY);
+            assert_eq!(written_compression, compression);
+        }
 
         Ok(())
     }
