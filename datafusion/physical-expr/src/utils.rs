@@ -934,8 +934,11 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq(
 ///
 /// * `expr` - A slice of tuples containing expressions and their corresponding aliases.
 ///
-/// * `input` - A reference to an execution plan that provides output ordering and equivalence
-/// properties.
+/// * `input_output_ordering` - Output ordering of the input plan.
+///
+/// * `input_equal_properties` - Equivalence properties of the columns in the input plan.
+///
+/// * `input_ordering_equal_properties` - Ordering equivalence properties of the columns in the input plan.
 ///
 /// # Returns
 ///
@@ -951,7 +954,7 @@ pub fn find_orderings_of_exprs(
 ) -> Result<Vec<Option<PhysicalSortExpr>>> {
     let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
     if let Some(leading_ordering) =
-        input_output_ordering.map(|output_ordering| &output_ordering[0])
+        input_output_ordering.and_then(|output_ordering| output_ordering.first())
     {
         for (index, (expression, name)) in expr.iter().enumerate() {
             let initial_expr = ExprOrdering::new(expression.clone());
