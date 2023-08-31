@@ -27,9 +27,9 @@ use crate::physical_plan::ExecutionPlan;
 use arrow::ipc::reader::FileReader;
 use arrow_schema::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::Statistics;
+use datafusion_common::{FileType, Statistics};
 use datafusion_physical_expr::PhysicalExpr;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
+use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 use std::any::Any;
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -52,9 +52,12 @@ impl FileFormat for ArrowFormat {
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
         for object in objects {
-            let schema = match store.get(&object.location).await? {
-                GetResult::File(mut file, _) => read_arrow_schema_from_reader(&mut file)?,
-                r @ GetResult::Stream(_) => {
+            let r = store.as_ref().get(&object.location).await?;
+            let schema = match r.payload {
+                GetResultPayload::File(mut file, _) => {
+                    read_arrow_schema_from_reader(&mut file)?
+                }
+                GetResultPayload::Stream(_) => {
                     // TODO: Fetching entire file to get schema is potentially wasteful
                     let data = r.bytes().await?;
                     let mut cursor = std::io::Cursor::new(&data);
@@ -85,6 +88,10 @@ impl FileFormat for ArrowFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = ArrowExec::new(conf);
         Ok(Arc::new(exec))
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::ARROW
     }
 }
 

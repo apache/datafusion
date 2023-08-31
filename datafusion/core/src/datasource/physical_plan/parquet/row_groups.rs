@@ -807,7 +807,7 @@ mod tests {
 
     fn get_test_schema_descr(fields: Vec<PrimitiveTypeField>) -> SchemaDescPtr {
         use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
-        let mut schema_fields = fields
+        let schema_fields = fields
             .iter()
             .map(|field| {
                 let mut builder =
@@ -829,7 +829,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let schema = SchemaType::group_type_builder("schema")
-            .with_fields(&mut schema_fields)
+            .with_fields(schema_fields)
             .build()
             .unwrap();
 
