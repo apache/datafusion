@@ -302,7 +302,7 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
         let num_str = caps.get(1).unwrap().as_str();
         if num_str.starts_with('-') {
             return Err(format!(
-                "Negative memory pool size value is not allowed: '{}'",
+                "Negative memory pool size value is not allowed '{}'",
                 size
             ));
         }
@@ -319,5 +319,53 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
         Ok(num * unit.multiplier())
     } else {
         Err(format!("Invalid memory pool size '{}'", size))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_conversion(input: &str, expected: Result<usize, String>) {
+        let result = extract_memory_pool_size(input);
+        match expected {
+            Ok(v) => assert_eq!(result.unwrap(), v),
+            Err(e) => assert_eq!(result.unwrap_err(), e),
+        }
+    }
+
+    #[test]
+    fn memory_pool_size() -> Result<(), String> {
+        // Test basic sizes without suffix, assumed to be bytes
+        assert_conversion("5", Ok(5));
+        assert_conversion("100", Ok(100));
+
+        // Test various units
+        assert_conversion("5b", Ok(5));
+        assert_conversion("4k", Ok(4 * 1024));
+        assert_conversion("4kb", Ok(4 * 1024));
+        assert_conversion("20m", Ok(20 * 1024 * 1024));
+        assert_conversion("20mb", Ok(20 * 1024 * 1024));
+        assert_conversion("2g", Ok(2 * 1024 * 1024 * 1024));
+        assert_conversion("2gb", Ok(2 * 1024 * 1024 * 1024));
+        assert_conversion("3t", Ok(3 * 1024 * 1024 * 1024 * 1024));
+        assert_conversion("4tb", Ok(4 * 1024 * 1024 * 1024 * 1024));
+
+        // Test case insensitivity
+        assert_conversion("4K", Ok(4 * 1024));
+        assert_conversion("4KB", Ok(4 * 1024));
+        assert_conversion("20M", Ok(20 * 1024 * 1024));
+        assert_conversion("20MB", Ok(20 * 1024 * 1024));
+        assert_conversion("2G", Ok(2 * 1024 * 1024 * 1024));
+        assert_conversion("2GB", Ok(2 * 1024 * 1024 * 1024));
+        assert_conversion("2T", Ok(2 * 1024 * 1024 * 1024 * 1024));
+
+        // Test invalid input
+        assert_conversion("invalid", Err("Invalid memory pool size 'invalid'".to_string()));
+        assert_conversion("4kbx", Err("Invalid memory pool size '4kbx'".to_string()));
+        assert_conversion("-20mb", Err("Negative memory pool size value is not allowed '-20mb'".to_string()));
+        assert_conversion("-100", Err("Negative memory pool size value is not allowed '-100'".to_string()));
+
+        Ok(())
     }
 }
