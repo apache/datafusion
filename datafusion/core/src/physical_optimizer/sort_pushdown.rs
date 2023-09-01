@@ -31,7 +31,7 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{
-    ordering_satisfy_requirement, requirements_compatible,
+    ordering_satisfy, ordering_satisfy_requirement, requirements_compatible,
 };
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 
@@ -261,13 +261,25 @@ fn pushdown_requirement_to_children(
         || plan.as_any().is::<ProjectionExec>()
         || is_limit(plan)
         || plan.as_any().is::<HashJoinExec>()
-        // Do not pushdown through SortPreservingMergeExec because it may invalidate
-        // input expectation of SortPreservingMerge
-        || plan.as_any().is::<SortPreservingMergeExec>()
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // Pushing down is not beneficial
+        Ok(None)
+    } else if plan.as_any().is::<SortPreservingMergeExec>()
+        && !ordering_satisfy(
+            parent_required
+                .map(|req| PhysicalSortRequirement::to_sort_exprs(req.to_vec()))
+                .as_deref(),
+            plan.output_ordering(),
+            || plan.equivalence_properties(),
+            || plan.ordering_equivalence_properties(),
+        )
+    {
+        println!("parent_required: {:?}", parent_required);
+        println!("plan.output_ordering(): {:?}", plan.output_ordering());
+        // Do not pushdown through SortPreservingMergeExec when
+        // ordering requirement invalidates requirement of sort preserving merge exec.
         Ok(None)
     } else {
         Ok(Some(

@@ -2739,7 +2739,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_parallelize_sort() -> Result<()> {
+    async fn test_do_not_pushdown_through_spm() -> Result<()> {
         let schema = create_test_schema3()?;
         let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
         let source = csv_exec_sorted(&schema, sort_exprs.clone(), false);
@@ -2753,6 +2753,34 @@ mod tests {
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         let expected_optimized = ["SortExec: expr=[b@1 ASC]",
             "  SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pushdown_through_spm() -> Result<()> {
+        let schema = create_test_schema3()?;
+        let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+        let source = csv_exec_sorted(&schema, sort_exprs.clone(), false);
+        let repartition_rr = repartition_exec(source);
+        let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
+        let physical_plan = sort_exec(
+            vec![
+                sort_expr("a", &schema),
+                sort_expr("b", &schema),
+                sort_expr("c", &schema),
+            ],
+            spm,
+        );
+
+        let expected_input = ["SortExec: expr=[a@0 ASC,b@1 ASC,c@2 ASC]",
+            "  SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+        let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
+            "  SortExec: expr=[a@0 ASC,b@1 ASC,c@2 ASC]",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
