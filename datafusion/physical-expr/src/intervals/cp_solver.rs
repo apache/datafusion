@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use datafusion_common::scalar::{MILLISECS_IN_ONE_DAY, NANOSECS_IN_ONE_DAY};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
@@ -236,6 +236,8 @@ pub fn propagate_arithmetic(
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let inverse_op = get_inverse_op(*op);
     match (left_child.get_datatype()?, right_child.get_datatype()?) {
+        // If we have a child of Interval type, we need a special handling
+        // since timestamp difference results in Duration type.
         (DataType::Timestamp(..), DataType::Interval(_)) => {
             propagate_interval_at_right(left_child, right_child, parent, op, &inverse_op)
         }
@@ -308,10 +310,12 @@ pub fn propagate_comparison(
         match (left_child.get_datatype()?, right_child.get_datatype()?) {
             // A comparison between Duration type and Interval type
             // cannot be done without a timestamp information.
-            // TODO: If the Interval does not have a month field, the comparison can indeed be done.
+            // TODO: If the Interval does not have a month field, the comparison can be done though)
             (DataType::Interval(_), DataType::Duration(_))
             | (DataType::Duration(_), DataType::Interval(_)) => {
-                return Ok((Some(left_child.clone()), Some(right_child.clone())))
+                return Err(DataFusionError::Internal(
+                    "Interval vs Duration do not support comparison yet".to_string(),
+                ))
             }
             (left, right) => (left, right),
         };
