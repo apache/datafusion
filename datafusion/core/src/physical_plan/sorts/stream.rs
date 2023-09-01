@@ -28,7 +28,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::stream::{Fuse, StreamExt};
 use parking_lot::Mutex;
-use uuid::Uuid;
 use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -40,7 +39,7 @@ use std::task::{ready, Context, Poll};
 pub(crate) type BatchCursorStream<C> =
     Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
-pub type BatchId = Uuid;
+pub type BatchId = u64;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct BatchOffset(pub usize);
@@ -309,6 +308,8 @@ impl<C: Cursor> std::fmt::Debug for OffsetCursorStream<C> {
 /// While storing the record batches outside of the cascading merge tree.
 /// Should be used with a Mutex.
 pub struct BatchTrackingStream<C: Cursor> {
+    /// Monotonically increasing batch id
+    monotonic_counter: u64,
     /// Write once, read many [`RecordBatch`]s
     batches: HashMap<BatchId, Arc<RecordBatch>, RandomState>,
     /// Input streams yielding [`Cursor`]s and [`RecordBatch`]es
@@ -320,6 +321,7 @@ pub struct BatchTrackingStream<C: Cursor> {
 impl<C: Cursor> BatchTrackingStream<C> {
     pub fn new(streams: BatchCursorStream<C>, reservation: MemoryReservation) -> Self {
         Self {
+            monotonic_counter: 0,
             batches: HashMap::with_hasher(RandomState::new()),
             streams,
             reservation,
@@ -355,7 +357,8 @@ impl<C: Cursor> PartitionedStream for BatchTrackingStream<C> {
         Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
             r.and_then(|(cursor, batch)| {
                 self.reservation.try_grow(batch.get_array_memory_size())?;
-                let batch_id = Uuid::new_v4();
+                let batch_id = self.monotonic_counter;
+                self.monotonic_counter += 1;
                 self.batches.insert(batch_id, Arc::new(batch));
                 Ok((cursor, batch_id, BatchOffset(0_usize)))
             })
