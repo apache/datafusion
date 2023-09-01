@@ -22,6 +22,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion_common::scalar::{MILLISECS_IN_ONE_DAY, NANOSECS_IN_ONE_DAY};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
@@ -30,7 +31,10 @@ use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
 
-use crate::expressions::{BinaryExpr, CastExpr, Column, Literal};
+use crate::expressions::{
+    interval_dt_to_duration_ms, interval_mdn_to_duration_ns, BinaryExpr, CastExpr,
+    Column, Literal,
+};
 use crate::intervals::interval_aritmetic::{
     apply_operator, is_operator_supported, Interval,
 };
@@ -233,33 +237,11 @@ pub fn propagate_arithmetic(
     let inverse_op = get_inverse_op(*op);
     match (left_child.get_datatype()?, right_child.get_datatype()?) {
         (DataType::Timestamp(..), DataType::Interval(_)) => {
-            // First, propagate to the left:
-            match apply_operator(&inverse_op, parent, right_child)?
-                .intersect(left_child)?
-            {
-                // Left is feasible:
-                Some(left_child) => {
-                    // Propagate to the right using the new left.
-                    let right = Some(right_child);
-                    // Return intervals for both children:
-                    Ok((Some(left_child), right.cloned()))
-                }
-                // If the left child is infeasible, short-circuit.
-                None => Ok((None, None)),
-            }
+            propagate_interval_at_right(left_child, right_child, parent, op, &inverse_op)
         }
         (DataType::Interval(_), DataType::Timestamp(..)) => {
-            // Propagate to the right using the new left.
-            let right = match op {
-                Operator::Minus => apply_operator(op, left_child, parent),
-                Operator::Plus => apply_operator(&inverse_op, parent, left_child),
-                _ => unreachable!(),
-            }?
-            .intersect(right_child)?;
-            // Return intervals for both children:
-            Ok((Some(left_child.clone()), right))
+            propagate_interval_at_left(left_child, right_child, parent, op, &inverse_op)
         }
-
         _ => {
             // First, propagate to the left:
             match apply_operator(&inverse_op, parent, right_child)?
@@ -598,6 +580,161 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
         expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
     };
     expr_supported && expr.children().iter().all(check_support)
+}
+
+fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval> {
+    if let (Some(lower), Some(upper)) = (
+        convert_interval_bound_to_duration(&interval.lower),
+        convert_interval_bound_to_duration(&interval.upper),
+    ) {
+        Some(Interval::new(lower, upper))
+    } else {
+        None
+    }
+}
+
+fn convert_interval_bound_to_duration(
+    interval_bound: &IntervalBound,
+) -> Option<IntervalBound> {
+    match interval_bound.value {
+        ScalarValue::IntervalMonthDayNano(Some(mdn)) => {
+            if let Ok(duration) = interval_mdn_to_duration_ns(&mdn) {
+                Some(IntervalBound::new(
+                    ScalarValue::DurationNanosecond(Some(duration)),
+                    interval_bound.open,
+                ))
+            } else {
+                None
+            }
+        }
+        ScalarValue::IntervalDayTime(Some(dt)) => {
+            if let Ok(duration) = interval_dt_to_duration_ms(&dt) {
+                Some(IntervalBound::new(
+                    ScalarValue::DurationMillisecond(Some(duration)),
+                    interval_bound.open,
+                ))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval> {
+    if let (Some(lower), Some(upper)) = (
+        convert_duration_bound_to_interval(&interval.lower),
+        convert_duration_bound_to_interval(&interval.upper),
+    ) {
+        Some(Interval::new(lower, upper))
+    } else {
+        None
+    }
+}
+
+fn convert_duration_bound_to_interval(
+    interval_bound: &IntervalBound,
+) -> Option<IntervalBound> {
+    match interval_bound.value {
+        ScalarValue::DurationNanosecond(Some(duration)) => Some(IntervalBound::new(
+            ScalarValue::new_interval_mdn(
+                0,
+                (duration / NANOSECS_IN_ONE_DAY) as i32,
+                duration % NANOSECS_IN_ONE_DAY,
+            ),
+            interval_bound.open,
+        )),
+        ScalarValue::DurationMillisecond(Some(duration)) => Some(IntervalBound::new(
+            ScalarValue::new_interval_dt(
+                (duration / MILLISECS_IN_ONE_DAY) as i32,
+                (duration % MILLISECS_IN_ONE_DAY) as i32,
+            ),
+            interval_bound.open,
+        )),
+        _ => None,
+    }
+}
+
+fn propagate_interval_at_right(
+    left_child: &Interval,
+    right_child: &Interval,
+    parent: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    // If the Interval type is a singleton, propagate to the left only:
+    if right_child.lower.value == right_child.upper.value
+        && right_child.lower.open == right_child.upper.open
+    {
+        match apply_operator(inverse_op, parent, right_child)?.intersect(left_child)? {
+            Some(left_child) => Ok((Some(left_child), Some(right_child.clone()))),
+            None => Ok((None, None)),
+        }
+    } else {
+        // Otherwise, we check if the Interval type child has a non-zero month field.
+        // If so, we will return as they are without propagating. If not, we first convert
+        // them to Duration type, then propagate, and then convert to Interval type again.
+        if let Some(duration) = convert_interval_type_to_duration(right_child) {
+            match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
+                Some(value) => {
+                    let right = match op {
+                        Operator::Minus => apply_operator(op, &value, parent),
+                        Operator::Plus => apply_operator(inverse_op, parent, &value),
+                        _ => unreachable!(),
+                    }?
+                    .intersect(duration)?;
+                    let right =
+                        right.and_then(|right| convert_duration_type_to_interval(&right));
+                    Ok((Some(value), right))
+                }
+                None => Ok((None, None)),
+            }
+        } else {
+            Ok((Some(left_child.clone()), Some(right_child.clone())))
+        }
+    }
+}
+
+fn propagate_interval_at_left(
+    left_child: &Interval,
+    right_child: &Interval,
+    parent: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    // If the Interval type is a singleton, propagate to the right only:
+    if left_child.lower.value == left_child.upper.value
+        && left_child.lower.open == left_child.upper.open
+    {
+        let right = match op {
+            Operator::Minus => apply_operator(op, left_child, parent),
+            Operator::Plus => apply_operator(inverse_op, parent, left_child),
+            _ => unreachable!(),
+        }?
+        .intersect(right_child)?;
+        Ok((Some(left_child.clone()), right))
+    } else {
+        // Otherwise, we check if the Interval type child has a non-zero month field.
+        // If so, we will return as they are without propagating. If not, we first convert
+        // them to Duration type, then propagate, and then convert to Interval type again.
+        if let Some(duration) = convert_interval_type_to_duration(left_child) {
+            match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
+                Some(value) => {
+                    let right = match op {
+                        Operator::Minus => apply_operator(op, &value, parent),
+                        Operator::Plus => apply_operator(inverse_op, parent, &value),
+                        _ => unreachable!(),
+                    }?
+                    .intersect(right_child)?;
+                    let new_interval = convert_duration_type_to_interval(&value);
+                    Ok((new_interval, right))
+                }
+                None => Ok((None, None)),
+            }
+        } else {
+            Ok((Some(left_child.clone()), Some(right_child.clone())))
+        }
+    }
 }
 
 #[cfg(test)]

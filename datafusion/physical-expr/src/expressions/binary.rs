@@ -40,6 +40,7 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow_array::Datum;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::scalar::{MILLISECS_IN_ONE_DAY, NANOSECS_IN_ONE_DAY};
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
@@ -49,6 +50,10 @@ use kernels::{
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
 };
+
+const MDN_DAY_MASK: i128 = 0xFFFF_FFFF_0000_0000_0000_0000;
+const MDN_NS_MASK: i128 = 0xFFFF_FFFF_FFFF_FFFF;
+const DT_MS_MASK: i64 = 0xFFFF_FFFF;
 
 /// Binary expression
 #[derive(Debug, Hash, Clone)]
@@ -613,6 +618,31 @@ pub fn binary(
     _input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
+}
+
+pub fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
+    let months = mdn >> 96;
+    let days = (mdn & MDN_DAY_MASK) >> 64;
+    let nanoseconds = mdn & MDN_NS_MASK;
+    if months != 0 {
+        return Err(DataFusionError::Internal(
+            "The interval value must have a zero month field to convert it to duration"
+                .to_string(),
+        ));
+    }
+    let duration_ns = days * NANOSECS_IN_ONE_DAY as i128 + nanoseconds;
+    if duration_ns > i64::MAX as i128 {
+        return Err(DataFusionError::Internal(
+            "Resulting duration exceeds i64::MAX".to_string(),
+        ));
+    }
+    Ok(duration_ns as i64)
+}
+pub fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
+    let days = dt >> 32;
+    let milliseconds = dt & DT_MS_MASK;
+    let duration_ms = days * MILLISECS_IN_ONE_DAY + milliseconds;
+    Ok(duration_ms)
 }
 
 #[cfg(test)]
@@ -3848,21 +3878,21 @@ mod tests {
     }
 
     #[test]
-    fn test_propagate_constraints() -> Result<()> {
+    fn test_propagate_constraints_singleton_interval_at_right() -> Result<()> {
         let expression = BinaryExpr::new(
             Arc::new(Column::new("ts_column", 0)),
             Operator::Plus,
-            Arc::new(Literal::new(ScalarValue::new_interval_mdn(0, 2, 1230654))),
+            Arc::new(Literal::new(ScalarValue::new_interval_mdn(0, 1, 321))),
         );
         let parent = Interval::new(
             IntervalBound::new(
-                // 15.10.2020 - 10:11:12 AM
-                ScalarValue::TimestampNanosecond(Some(1_602_756_672_000_000_000), None),
+                // 15.10.2020 - 10:11:12.000_000_321 AM
+                ScalarValue::TimestampNanosecond(Some(1_602_756_672_000_000_321), None),
                 false,
             ),
             IntervalBound::new(
-                // 16.10.2020 - 10:11:12 AM
-                ScalarValue::TimestampNanosecond(Some(1_602_843_072_000_000_000), None),
+                // 16.10.2020 - 10:11:12.000_000_321 AM
+                ScalarValue::TimestampNanosecond(Some(1_602_843_072_000_000_321), None),
                 false,
             ),
         );
@@ -3880,17 +3910,18 @@ mod tests {
         );
         let right_child = Interval::new(
             IntervalBound::new(
-                // 1 day
-                ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0000)),
+                // 1 day 321 ns
+                ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
                 false,
             ),
             IntervalBound::new(
-                // 1 day
-                ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0000)),
+                // 1 day 321 ns
+                ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
                 false,
             ),
         );
         let children = vec![&left_child, &right_child];
+        let result = expression.propagate_constraints(&parent, &children)?;
 
         assert_eq!(
             Some(Interval::new(
@@ -3911,22 +3942,102 @@ mod tests {
                     false,
                 ),
             )),
-            expression.propagate_constraints(&parent, &children)?[0]
+            result[0]
         );
         assert_eq!(
             Some(Interval::new(
-                // 1 day in Duration type
+                // 1 day 321 ns in Duration type
                 IntervalBound::new(
-                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0000)),
+                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
                     false,
                 ),
-                // 1 day in Duration type
+                // 1 day 321 ns in Duration type
                 IntervalBound::new(
-                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0000)),
+                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
                     false,
                 ),
             )),
-            expression.propagate_constraints(&parent, &children)?[1]
+            result[1]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_constraints_column_interval_at_left() -> Result<()> {
+        let expression = BinaryExpr::new(
+            Arc::new(Column::new("interval_column", 1)),
+            Operator::Plus,
+            Arc::new(Column::new("ts_column", 0)),
+        );
+        let parent = Interval::new(
+            IntervalBound::new(
+                // 15.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampMillisecond(Some(1_602_756_672_000), None),
+                false,
+            ),
+            IntervalBound::new(
+                // 16.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampMillisecond(Some(1_602_843_072_000), None),
+                false,
+            ),
+        );
+        let right_child = Interval::new(
+            IntervalBound::new(
+                // 10.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
+                false,
+            ),
+            IntervalBound::new(
+                // 20.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampMillisecond(Some(1_603_188_672_000), None),
+                false,
+            ),
+        );
+        let left_child = Interval::new(
+            IntervalBound::new(
+                // 2 days
+                ScalarValue::IntervalDayTime(Some(0x2_0000_0000)),
+                false,
+            ),
+            IntervalBound::new(
+                // 10 days
+                ScalarValue::IntervalDayTime(Some(0xA_0000_0000)),
+                false,
+            ),
+        );
+        let children = vec![&left_child, &right_child];
+        let result = expression.propagate_constraints(&parent, &children)?;
+
+        assert_eq!(
+            Some(Interval::new(
+                // 10.10.2020 - 10:11:12 AM
+                IntervalBound::new(
+                    ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
+                    false,
+                ),
+                // 14.10.2020 - 10:11:12 AM
+                IntervalBound::new(
+                    ScalarValue::TimestampMillisecond(Some(1_602_670_272_000), None),
+                    false,
+                )
+            )),
+            result[1]
+        );
+        assert_eq!(
+            Some(Interval::new(
+                IntervalBound::new(
+                    // 2 days
+                    ScalarValue::IntervalDayTime(Some(0x2_0000_0000)),
+                    false,
+                ),
+                IntervalBound::new(
+                    // 6 days
+                    ScalarValue::IntervalDayTime(Some(0x6_0000_0000)),
+                    false,
+                ),
+            )),
+            result[0]
         );
 
         Ok(())
