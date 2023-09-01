@@ -231,22 +231,56 @@ pub fn propagate_arithmetic(
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let inverse_op = get_inverse_op(*op);
-    // First, propagate to the left:
-    match apply_operator(&inverse_op, parent, right_child)?.intersect(left_child)? {
-        // Left is feasible:
-        Some(value) => {
+    match (left_child.get_datatype()?, right_child.get_datatype()?) {
+        (DataType::Timestamp(..), DataType::Interval(_)) => {
+            // First, propagate to the left:
+            match apply_operator(&inverse_op, parent, right_child)?
+                .intersect(left_child)?
+            {
+                // Left is feasible:
+                Some(left_child) => {
+                    // Propagate to the right using the new left.
+                    let right = Some(right_child);
+                    // Return intervals for both children:
+                    Ok((Some(left_child), right.cloned()))
+                }
+                // If the left child is infeasible, short-circuit.
+                None => Ok((None, None)),
+            }
+        }
+        (DataType::Interval(_), DataType::Timestamp(..)) => {
             // Propagate to the right using the new left.
             let right = match op {
-                Operator::Minus => apply_operator(op, &value, parent),
-                Operator::Plus => apply_operator(&inverse_op, parent, &value),
+                Operator::Minus => apply_operator(op, left_child, parent),
+                Operator::Plus => apply_operator(&inverse_op, parent, left_child),
                 _ => unreachable!(),
             }?
             .intersect(right_child)?;
             // Return intervals for both children:
-            Ok((Some(value), right))
+            Ok((Some(left_child.clone()), right))
         }
-        // If the left child is infeasible, short-circuit.
-        None => Ok((None, None)),
+
+        _ => {
+            // First, propagate to the left:
+            match apply_operator(&inverse_op, parent, right_child)?
+                .intersect(left_child)?
+            {
+                // Left is feasible:
+                Some(value) => {
+                    // Propagate to the right using the new left.
+                    let right = match op {
+                        Operator::Minus => apply_operator(op, &value, parent),
+                        Operator::Plus => apply_operator(&inverse_op, parent, &value),
+                        _ => unreachable!(),
+                    }?
+                    .intersect(right_child)?;
+                    // Return intervals for both children:
+                    Ok((Some(value), right))
+                }
+                // If the left child is infeasible, short-circuit.
+                None => Ok((None, None)),
+            }
+        }
     }
 }
 
@@ -288,11 +322,19 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    let parent = comparison_operator_target(
-        &left_child.get_datatype()?,
-        op,
-        &right_child.get_datatype()?,
-    )?;
+    let (left_type, right_type) =
+        match (left_child.get_datatype()?, right_child.get_datatype()?) {
+            // A comparison between Duration type and Interval type
+            // cannot be done without a timestamp information.
+            // TODO: If the Interval does not have a month field, the comparison can indeed be done.
+            (DataType::Interval(_), DataType::Duration(_))
+            | (DataType::Duration(_), DataType::Interval(_)) => {
+                return Ok((Some(left_child.clone()), Some(right_child.clone())))
+            }
+            (left, right) => (left, right),
+        };
+
+    let parent = comparison_operator_target(&left_type, op, &right_type)?;
     propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
 }
 

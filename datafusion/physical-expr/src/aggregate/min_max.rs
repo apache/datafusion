@@ -663,6 +663,30 @@ macro_rules! min_max {
             ) => {
                 interval_min_max!($OP, $VALUE, $DELTA)
             }
+                    (
+                ScalarValue::DurationSecond(lhs),
+                ScalarValue::DurationSecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, DurationSecond, $OP)
+            }
+                                (
+                ScalarValue::DurationMillisecond(lhs),
+                ScalarValue::DurationMillisecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, DurationMillisecond, $OP)
+            }
+                                (
+                ScalarValue::DurationMicrosecond(lhs),
+                ScalarValue::DurationMicrosecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, DurationMicrosecond, $OP)
+            }
+                                        (
+                ScalarValue::DurationNanosecond(lhs),
+                ScalarValue::DurationNanosecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, DurationNanosecond, $OP)
+            }
             e => {
                 return internal_err!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
