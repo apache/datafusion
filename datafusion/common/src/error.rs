@@ -278,63 +278,58 @@ impl From<GenericError> for DataFusionError {
 
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let back_trace_desc: String = DataFusionError::get_back_trace();
-
         match *self {
             DataFusionError::ArrowError(ref desc) => {
-                write!(f, "Arrow error: {desc}{back_trace_desc}")
+                write!(f, "Arrow error: {desc}")
             }
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => {
-                write!(f, "Parquet error: {desc}{back_trace_desc}")
+                write!(f, "Parquet error: {desc}")
             }
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => {
-                write!(f, "Avro error: {desc}{back_trace_desc}")
+                write!(f, "Avro error: {desc}")
             }
             DataFusionError::IoError(ref desc) => {
-                write!(f, "IO error: {desc}{back_trace_desc}")
+                write!(f, "IO error: {desc}")
             }
             DataFusionError::SQL(ref desc) => {
-                write!(f, "SQL error: {desc:?}{back_trace_desc}")
+                write!(f, "SQL error: {desc:?}")
             }
             DataFusionError::Configuration(ref desc) => {
                 write!(f, "Invalid or Unsupported Configuration: {desc}")
             }
             DataFusionError::NotImplemented(ref desc) => {
-                write!(
-                    f,
-                    "This feature is not implemented: {desc}{back_trace_desc}"
-                )
+                write!(f, "This feature is not implemented: {desc}")
             }
             DataFusionError::Internal(ref desc) => {
                 write!(f, "Internal error: {desc}. This was likely caused by a bug in DataFusion's \
-                    code and we would welcome that you file an bug report in our issue tracker{back_trace_desc}")
+                    code and we would welcome that you file an bug report in our issue tracker")
             }
             DataFusionError::Plan(ref desc) => {
-                write!(f, "Error during planning: {desc}{back_trace_desc}")
+                write!(f, "Error during planning: {desc}")
             }
             DataFusionError::SchemaError(ref desc) => {
-                write!(f, "Schema error: {desc}{back_trace_desc}")
+                write!(f, "Schema error: {desc}")
             }
             DataFusionError::Execution(ref desc) => {
-                write!(f, "Execution error: {desc}{back_trace_desc}")
+                write!(f, "Execution error: {desc}")
             }
             DataFusionError::ResourcesExhausted(ref desc) => {
-                write!(f, "Resources exhausted: {desc}{back_trace_desc}")
+                write!(f, "Resources exhausted: {desc}")
             }
             DataFusionError::External(ref desc) => {
-                write!(f, "External error: {desc}{back_trace_desc}")
+                write!(f, "External error: {desc}")
             }
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(ref desc) => {
-                write!(f, "Object Store error: {desc}{back_trace_desc}")
+                write!(f, "Object Store error: {desc}")
             }
             DataFusionError::Context(ref desc, ref err) => {
                 write!(f, "{}\ncaused by\n{}", desc, *err)
             }
             DataFusionError::Substrait(ref desc) => {
-                write!(f, "Substrait error: {desc}{back_trace_desc}")
+                write!(f, "Substrait error: {desc}")
             }
         }
     }
@@ -424,7 +419,7 @@ impl DataFusionError {
             .to_string()
     }
 
-    fn get_back_trace() -> String {
+    pub fn get_back_trace() -> String {
         let back_trace = Backtrace::capture();
         if back_trace.status() == BacktraceStatus::Captured {
             return format!("\n\nbacktrace: {}", back_trace);
@@ -472,7 +467,7 @@ macro_rules! make_error {
                 #[macro_export]
                 macro_rules! $NAME {
                     ($d($d args:expr),*) => {
-                        Err(DataFusionError::$ERR(format!($d($d args),*).into()))
+                        Err(DataFusionError::$ERR(format!("{}{}", format!($d($d args),*), DataFusionError::get_back_trace()).into()))
                     }
                 }
             }
