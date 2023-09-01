@@ -254,39 +254,45 @@ foo
 fazzz
 
 statement ok
-CREATE TABLE IF NOT EXISTS test_float AS VALUES(1.2),(2.1),(NULL),('NaN'::double),('-NaN'::double);
+CREATE TABLE IF NOT EXISTS test_float AS VALUES
+ ('a', 1.2),
+ ('b', 2.1),
+ ('c', NULL),
+ ('d', 'NaN'::double),
+ ('e', '-NaN'::double)
+ ;
 
 # IN expr for float
-query R
-SELECT * FROM test_float WHERE column1 IN (0.0, -1.2)
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, -1.2)
 ----
 
-query R
-SELECT * FROM test_float WHERE column1 IN (0.0, 1.2)
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, 1.2)
 ----
-1.2
+a
 
-query R
-SELECT * FROM test_float WHERE column1 IN (2.1, 1.2)
+query T
+SELECT column1 FROM test_float WHERE column2 IN (2.1, 1.2)
 ----
-1.2
-2.1
+a
+b
 
-query R
-SELECT * FROM test_float WHERE column1 IN (0.0, 1.2, NULL)
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, 1.2, NULL)
 ----
-1.2
+a
 
-query R
-SELECT * FROM test_float WHERE column1 IN (0.0, -1.2, NULL)
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, -1.2, NULL)
 ----
 
-query R
-SELECT * FROM test_float WHERE column1 IN (0.0, 1.2, 'NaN'::double, '-NaN'::double)
+query T
+SELECT column1 FROM test_float WHERE column2 IN (0.0, 1.2, 'NaN'::double, '-NaN'::double)
 ----
-1.2
-NaN
-NaN
+a
+d
+e
 
 ###
 # Test logical plan simplifies large OR chains
