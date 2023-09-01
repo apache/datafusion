@@ -1030,6 +1030,50 @@ impl Expr {
     pub fn contains_outer(&self) -> bool {
         !find_out_reference_exprs(self).is_empty()
     }
+
+    /// Flatten the nested array expressions until the base array is reached.
+    /// For example:
+    /// [[1, 2, 3], [4, 5, 6]] => [1, 2, 3, 4, 5, 6]
+    /// [[[1, 2], [3, 4]], [[5, 6], [7, 8]]] => [1, 2, 3, 4, 5, 6, 7, 8]
+    /// Panics if the expression cannot be flattened.
+    pub fn flatten(&self) -> Self {
+        self.try_flatten().unwrap_or_else(|_| self.clone())
+    }
+
+    /// Flatten the nested array expressions until the base array is reached.
+    /// For example:
+    /// [[1, 2, 3], [4, 5, 6]] => [1, 2, 3, 4, 5, 6]
+    /// [[[1, 2], [3, 4]], [[5, 6], [7, 8]]] => [1, 2, 3, 4, 5, 6, 7, 8]
+    /// Returns an error if the expression cannot be flattened.
+    pub fn try_flatten(&self) -> Result<Self> {
+        match self {
+            Self::ScalarFunction(ScalarFunction {
+                fun: built_in_function::BuiltinScalarFunction::MakeArray,
+                args,
+            }) => {
+                let flatten_args: Vec<Expr> =
+                    args.iter().flat_map(Self::flatten_internal).collect();
+                Ok(Self::ScalarFunction(ScalarFunction {
+                    fun: built_in_function::BuiltinScalarFunction::MakeArray,
+                    args: flatten_args,
+                }))
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Cannot flatten expression {:?}",
+                self
+            ))),
+        }
+    }
+
+    fn flatten_internal(&self) -> Vec<Self> {
+        match self {
+            Self::ScalarFunction(ScalarFunction {
+                fun: built_in_function::BuiltinScalarFunction::MakeArray,
+                args,
+            }) => args.iter().flat_map(Self::flatten_internal).collect(),
+            _ => vec![self.clone()],
+        }
+    }
 }
 
 #[macro_export]
@@ -1645,5 +1689,119 @@ mod test {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_flatten() {
+        let arr = Expr::ScalarFunction(super::ScalarFunction {
+            fun: crate::BuiltinScalarFunction::MakeArray,
+            args: vec![
+                Expr::ScalarFunction(super::ScalarFunction {
+                    fun: crate::BuiltinScalarFunction::MakeArray,
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(Some(10))),
+                        Expr::Literal(ScalarValue::Int64(Some(20))),
+                        Expr::Literal(ScalarValue::Int64(Some(30))),
+                    ],
+                }),
+                Expr::ScalarFunction(super::ScalarFunction {
+                    fun: crate::BuiltinScalarFunction::MakeArray,
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(Some(1))),
+                        Expr::Literal(ScalarValue::Int64(None)),
+                        Expr::Literal(ScalarValue::Int64(Some(10))),
+                    ],
+                }),
+                Expr::ScalarFunction(super::ScalarFunction {
+                    fun: crate::BuiltinScalarFunction::MakeArray,
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(Some(4))),
+                        Expr::Literal(ScalarValue::Int64(Some(5))),
+                        Expr::Literal(ScalarValue::Int64(Some(6))),
+                    ],
+                }),
+            ],
+        });
+
+        let flattened = arr.flatten();
+        assert_eq!(
+            flattened,
+            Expr::ScalarFunction(super::ScalarFunction {
+                fun: crate::BuiltinScalarFunction::MakeArray,
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(Some(10))),
+                    Expr::Literal(ScalarValue::Int64(Some(20))),
+                    Expr::Literal(ScalarValue::Int64(Some(30))),
+                    Expr::Literal(ScalarValue::Int64(Some(1))),
+                    Expr::Literal(ScalarValue::Int64(None)),
+                    Expr::Literal(ScalarValue::Int64(Some(10))),
+                    Expr::Literal(ScalarValue::Int64(Some(4))),
+                    Expr::Literal(ScalarValue::Int64(Some(5))),
+                    Expr::Literal(ScalarValue::Int64(Some(6))),
+                ]
+            })
+        );
+
+        // [[[1, 2], [3, 4]], [[5, 6], [7, 8]]] -> [1, 2, 3, 4, 5, 6, 7, 8]
+        let arr = Expr::ScalarFunction(super::ScalarFunction {
+            fun: crate::BuiltinScalarFunction::MakeArray,
+            args: vec![
+                Expr::ScalarFunction(super::ScalarFunction {
+                    fun: crate::BuiltinScalarFunction::MakeArray,
+                    args: vec![
+                        Expr::ScalarFunction(super::ScalarFunction {
+                            fun: crate::BuiltinScalarFunction::MakeArray,
+                            args: vec![
+                                Expr::Literal(ScalarValue::Int64(Some(1))),
+                                Expr::Literal(ScalarValue::Int64(Some(2))),
+                            ],
+                        }),
+                        Expr::ScalarFunction(super::ScalarFunction {
+                            fun: crate::BuiltinScalarFunction::MakeArray,
+                            args: vec![
+                                Expr::Literal(ScalarValue::Int64(Some(3))),
+                                Expr::Literal(ScalarValue::Int64(Some(4))),
+                            ],
+                        }),
+                    ],
+                }),
+                Expr::ScalarFunction(super::ScalarFunction {
+                    fun: crate::BuiltinScalarFunction::MakeArray,
+                    args: vec![
+                        Expr::ScalarFunction(super::ScalarFunction {
+                            fun: crate::BuiltinScalarFunction::MakeArray,
+                            args: vec![
+                                Expr::Literal(ScalarValue::Int64(Some(5))),
+                                Expr::Literal(ScalarValue::Int64(Some(6))),
+                            ],
+                        }),
+                        Expr::ScalarFunction(super::ScalarFunction {
+                            fun: crate::BuiltinScalarFunction::MakeArray,
+                            args: vec![
+                                Expr::Literal(ScalarValue::Int64(Some(7))),
+                                Expr::Literal(ScalarValue::Int64(Some(8))),
+                            ],
+                        }),
+                    ],
+                }),
+            ],
+        });
+        let flattened = arr.flatten();
+        assert_eq!(
+            flattened,
+            Expr::ScalarFunction(super::ScalarFunction {
+                fun: crate::BuiltinScalarFunction::MakeArray,
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(Some(1))),
+                    Expr::Literal(ScalarValue::Int64(Some(2))),
+                    Expr::Literal(ScalarValue::Int64(Some(3))),
+                    Expr::Literal(ScalarValue::Int64(Some(4))),
+                    Expr::Literal(ScalarValue::Int64(Some(5))),
+                    Expr::Literal(ScalarValue::Int64(Some(6))),
+                    Expr::Literal(ScalarValue::Int64(Some(7))),
+                    Expr::Literal(ScalarValue::Int64(Some(8))),
+                ]
+            })
+        );
     }
 }
