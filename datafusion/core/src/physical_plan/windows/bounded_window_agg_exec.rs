@@ -31,7 +31,7 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_execution::TaskContext;
 
 use ahash::RandomState;
@@ -187,7 +187,7 @@ impl BoundedWindowAggExec {
                 if self.window_expr()[0].partition_by().len()
                     != ordered_partition_by_indices.len()
                 {
-                    return Err(DataFusionError::Execution("All partition by columns should have an ordering in Sorted mode.".to_string()));
+                    return exec_err!("All partition by columns should have an ordering in Sorted mode.");
                 }
                 Box::new(SortedSearch {
                     partition_by_sort_keys,
@@ -950,7 +950,7 @@ impl BoundedWindowAggStream {
                 .columns()
                 .iter()
                 .map(|elem| elem.slice(0, n_out))
-                .chain(window_expr_out.into_iter())
+                .chain(window_expr_out)
                 .collect::<Vec<_>>();
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;
@@ -1128,9 +1128,9 @@ fn get_aggregate_result_out_column(
         }
     }
     if running_length != len_to_show {
-        return Err(DataFusionError::Execution(format!(
+        return exec_err!(
             "Generated row number should be {len_to_show}, it is {running_length}"
-        )));
+        );
     }
     result
         .ok_or_else(|| DataFusionError::Execution("Should contain something".to_string()))

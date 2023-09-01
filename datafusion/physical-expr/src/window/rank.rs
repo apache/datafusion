@@ -28,7 +28,7 @@ use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::utils::get_row_at_idx;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::PartitionEvaluator;
 
 use std::any::Any;
@@ -156,9 +156,9 @@ impl PartitionEvaluator for RankEvaluator {
                 self.state.last_rank_boundary as u64 + 1,
             ))),
             RankType::Dense => Ok(ScalarValue::UInt64(Some(self.state.n_rank as u64))),
-            RankType::Percent => Err(DataFusionError::Execution(
-                "Can not execute PERCENT_RANK in a streaming fashion".to_string(),
-            )),
+            RankType::Percent => {
+                exec_err!("Can not execute PERCENT_RANK in a streaming fashion")
+            }
         }
     }
 
@@ -227,6 +227,7 @@ mod tests {
         test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
     }
 
+    #[allow(clippy::single_range_in_vec_init)]
     fn test_without_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..8], expected)
     }
@@ -275,6 +276,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn test_percent_rank() -> Result<()> {
         let r = percent_rank("arr".into());
 

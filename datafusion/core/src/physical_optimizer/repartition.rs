@@ -27,7 +27,6 @@ fn init() {
 mod tests {
     use std::sync::Arc;
 
-    use crate::datasource::file_format::file_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
@@ -52,6 +51,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::FileCompressionType;
     use datafusion_physical_expr::PhysicalSortRequirement;
 
     fn schema() -> SchemaRef {

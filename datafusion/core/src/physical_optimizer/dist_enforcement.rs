@@ -50,7 +50,7 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::{
-    map_columns_before_projection, ordering_satisfy, ordering_satisfy_requirement,
+    map_columns_before_projection, ordering_satisfy_requirement,
     ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
@@ -1078,14 +1078,6 @@ fn remove_unnecessary_repartition(
     })
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> () {
-    let formatted = crate::physical_plan::displayable(plan.as_ref())
-        .indent(true)
-        .to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-}
-
 fn remove_order_preservation(exec_tree: &ExecTree) -> Result<Arc<dyn ExecutionPlan>> {
     let mut updated_children = exec_tree.plan.children();
     for child in &exec_tree.children {
@@ -1161,13 +1153,6 @@ fn ensure_distribution(
                 // Unless partitioning doesn't increase the partition count, it is not beneficial:
                 && child.output_partitioning().partition_count() < target_partitions
             {
-                let should_preserve_ordering =
-                    should_preserve_ordering(&child, required_input_ordering.as_deref())
-                        || maintains;
-
-                // println!("should_preserve_ordering:{:?}", should_preserve_ordering);
-                // print_plan(&child);
-
                 // When `repartition_file_scans` is set, leverage source operators
                 // (`ParquetExec`, `CsvExec` etc.) to increase parallelism at the source.
                 if repartition_file_scans {
@@ -1232,28 +1217,6 @@ fn ensure_distribution(
             // Preserving ordering through RepartitionExec is meaningless if any one of the conditions is true
             // - Ordering is not maintained in the current operator and operator doesn't require ordering itself such as FilterExec
             // - Ordering requirement of the operator cannot be satisfied with existing ordering
-
-            // println!("child.output_ordering(): {:?}", child.output_ordering());
-            // println!("required_input_ordering: {:?}", required_input_ordering);
-            // println!("maintains(): {:?}", maintains);
-            // print_plan(&child);
-
-            // if !ordering_satisfy_requirement(
-            //     child.output_ordering(),
-            //     required_input_ordering.as_deref(),
-            //     || child.equivalence_properties(),
-            //     || child.ordering_equivalence_properties(),
-            // ) || (!maintains && required_input_ordering.is_none())
-            // {
-            //     if let Some(repartition_onward) = repartition_onward {
-            //         println!("before");
-            //         print_plan(&child);
-            //         child = remove_order_preservation(repartition_onward)?;
-            //         print_plan(&child);
-            //         println!("after");
-            //     }
-            //     *repartition_onward = None;
-            // }
             match requirement {
                 Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
                     if !ordering_satisfy_requirement(
@@ -1263,11 +1226,7 @@ fn ensure_distribution(
                         || child.ordering_equivalence_properties(),
                     ) {
                         if let Some(repartition_onward) = repartition_onward {
-                            // println!("before");
-                            // print_plan(&child);
                             child = remove_order_preservation(repartition_onward)?;
-                            // print_plan(&child);
-                            // println!("after");
                         }
                     }
                     *repartition_onward = None;
@@ -1281,11 +1240,7 @@ fn ensure_distribution(
                     ) || !maintains
                     {
                         if let Some(repartition_onward) = repartition_onward {
-                            // println!("before");
-                            // print_plan(&child);
                             child = remove_order_preservation(repartition_onward)?;
-                            // print_plan(&child);
-                            // println!("after");
                         }
                         *repartition_onward = None;
                     }
@@ -1527,7 +1482,7 @@ impl PlanWithKeyRequirements {
         assert_eq!(plan_children.len(), self.request_key_ordering.len());
         plan_children
             .into_iter()
-            .zip(self.request_key_ordering.clone().into_iter())
+            .zip(self.request_key_ordering.clone())
             .map(|(child, required)| {
                 let from_parent = required.unwrap_or_default();
                 let length = child.children().len();

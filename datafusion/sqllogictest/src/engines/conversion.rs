@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{Decimal128Type, DecimalType};
+use arrow::datatypes::{i256, Decimal128Type, Decimal256Type, DecimalType};
 use bigdecimal::BigDecimal;
 use half::f16;
 use rust_decimal::prelude::*;
@@ -41,7 +41,11 @@ pub(crate) fn varchar_to_str(value: &str) -> String {
 
 pub(crate) fn f16_to_str(value: f16) -> String {
     if value.is_nan() {
-        "NaN".to_string()
+        if value.is_sign_positive() {
+            "NaN".to_string()
+        } else {
+            "-NaN".to_string()
+        }
     } else if value == f16::INFINITY {
         "Infinity".to_string()
     } else if value == f16::NEG_INFINITY {
@@ -53,7 +57,11 @@ pub(crate) fn f16_to_str(value: f16) -> String {
 
 pub(crate) fn f32_to_str(value: f32) -> String {
     if value.is_nan() {
-        "NaN".to_string()
+        if value.is_sign_positive() {
+            "NaN".to_string()
+        } else {
+            "-NaN".to_string()
+        }
     } else if value == f32::INFINITY {
         "Infinity".to_string()
     } else if value == f32::NEG_INFINITY {
@@ -65,7 +73,11 @@ pub(crate) fn f32_to_str(value: f32) -> String {
 
 pub(crate) fn f64_to_str(value: f64) -> String {
     if value.is_nan() {
-        "NaN".to_string()
+        if value.is_sign_positive() {
+            "NaN".to_string()
+        } else {
+            "-NaN".to_string()
+        }
     } else if value == f64::INFINITY {
         "Infinity".to_string()
     } else if value == f64::NEG_INFINITY {
@@ -78,6 +90,13 @@ pub(crate) fn f64_to_str(value: f64) -> String {
 pub(crate) fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
     big_decimal_to_str(
         BigDecimal::from_str(&Decimal128Type::format_decimal(value, *precision, *scale))
+            .unwrap(),
+    )
+}
+
+pub(crate) fn i256_to_str(value: i256, precision: &u8, scale: &i8) -> String {
+    big_decimal_to_str(
+        BigDecimal::from_str(&Decimal256Type::format_decimal(value, *precision, *scale))
             .unwrap(),
     )
 }

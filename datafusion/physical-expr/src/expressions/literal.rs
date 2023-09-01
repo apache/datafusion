@@ -22,6 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
+use crate::sort_properties::SortProperties;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -87,6 +88,10 @@ impl PhysicalExpr for Literal {
     fn dyn_hash(&self, state: &mut dyn Hasher) {
         let mut s = state;
         self.hash(&mut s);
+    }
+
+    fn get_ordering(&self, _children: &[SortProperties]) -> SortProperties {
+        SortProperties::Singleton
     }
 }
 

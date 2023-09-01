@@ -220,10 +220,8 @@ async fn topk_query() -> Result<()> {
 async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
-    let mut expected = vec![
-        "| logical_plan after topk                               | TopK: k=3                                                                     |",
-        "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |",
-    ].join("\n");
+    let mut expected = ["| logical_plan after topk                               | TopK: k=3                                                                     |",
+        "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |"].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
     let actual_output = exec_sql(&mut ctx, &explain_query).await?;

@@ -25,7 +25,7 @@ pub use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::catalog::schema::SchemaProvider;
 use dashmap::DashMap;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -125,9 +125,7 @@ pub trait CatalogProvider: Sync + Send {
         // use variables to avoid unused variable warnings
         let _ = name;
         let _ = schema;
-        Err(DataFusionError::NotImplemented(
-            "Registering new schemas is not supported".to_string(),
-        ))
+        not_impl_err!("Registering new schemas is not supported")
     }
 
     /// Removes a schema from this catalog. Implementations of this method should return
@@ -145,9 +143,7 @@ pub trait CatalogProvider: Sync + Send {
         _name: &str,
         _cascade: bool,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        Err(DataFusionError::NotImplemented(
-            "Deregistering new schemas is not supported".to_string(),
-        ))
+        not_impl_err!("Deregistering new schemas is not supported")
     }
 }
 
@@ -198,11 +194,11 @@ impl CatalogProvider for MemoryCatalogProvider {
                     let (_, removed) = self.schemas.remove(name).unwrap();
                     Ok(Some(removed))
                 }
-                (false, false) => Err(DataFusionError::Execution(format!(
+                (false, false) => exec_err!(
                     "Cannot drop schema {} because other tables depend on it: {}",
                     name,
                     itertools::join(table_names.iter(), ", ")
-                ))),
+                ),
             }
         } else {
             Ok(None)

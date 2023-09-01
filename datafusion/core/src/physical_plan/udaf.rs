@@ -28,7 +28,7 @@ use arrow::{
 
 use super::{expressions::format_state_name, Accumulator, AggregateExpr};
 use crate::physical_plan::PhysicalExpr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 pub use datafusion_expr::AggregateUDF;
 
 use datafusion_physical_expr::aggregate::utils::down_cast_any_ref;
@@ -152,11 +152,11 @@ impl AggregateExpr for AggregateFunctionExpr {
         // approach. In window function (when they use a window frame)
         // they get all the desired range during evaluation.
         if !accumulator.supports_retract_batch() {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "Aggregate can not be used as a sliding accumulator because \
                      `retract_batch` is not implemented: {}",
                 self.name
-            )));
+            );
         }
         Ok(accumulator)
     }

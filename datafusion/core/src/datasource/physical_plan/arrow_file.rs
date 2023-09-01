@@ -32,7 +32,7 @@ use datafusion_physical_expr::{
     PhysicalSortExpr,
 };
 use futures::StreamExt;
-use object_store::{GetResult, ObjectStore};
+use object_store::{GetResultPayload, ObjectStore};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -158,13 +158,14 @@ impl FileOpener for ArrowOpener {
         let object_store = self.object_store.clone();
         let projection = self.projection.clone();
         Ok(Box::pin(async move {
-            match object_store.get(file_meta.location()).await? {
-                GetResult::File(file, _) => {
+            let r = object_store.get(file_meta.location()).await?;
+            match r.payload {
+                GetResultPayload::File(file, _) => {
                     let arrow_reader =
                         arrow::ipc::reader::FileReader::try_new(file, projection)?;
                     Ok(futures::stream::iter(arrow_reader).boxed())
                 }
-                r @ GetResult::Stream(_) => {
+                GetResultPayload::Stream(_) => {
                     let bytes = r.bytes().await?;
                     let cursor = std::io::Cursor::new(bytes);
                     let arrow_reader =

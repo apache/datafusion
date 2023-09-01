@@ -228,20 +228,16 @@ impl AggregateFunction {
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
 
-        let coerced_data_types = crate::type_coercion::aggregates::coerce_types(
-            self,
-            input_expr_types,
-            &self.signature(),
-        )
-        // original errors are all related to wrong function signature
-        // aggregate them for better error message
-        .map_err(|_| {
-            DataFusionError::Plan(utils::generate_signature_error_msg(
-                &format!("{self}"),
-                self.signature(),
-                input_expr_types,
-            ))
-        })?;
+        let coerced_data_types = coerce_types(self, input_expr_types, &self.signature())
+            // original errors are all related to wrong function signature
+            // aggregate them for better error message
+            .map_err(|_| {
+                DataFusionError::Plan(utils::generate_signature_error_msg(
+                    &format!("{self}"),
+                    self.signature(),
+                    input_expr_types,
+                ))
+            })?;
 
         match self {
             AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
@@ -342,6 +338,7 @@ impl AggregateFunction {
                     .chain(TIMESTAMPS.iter())
                     .chain(DATES.iter())
                     .chain(TIMES.iter())
+                    .chain(BINARYS.iter())
                     .cloned()
                     .collect::<Vec<_>>();
                 Signature::uniform(1, valid, Volatility::Immutable)

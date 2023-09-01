@@ -31,12 +31,12 @@ use arrow::datatypes::{
 };
 use arrow::{
     array::{
-        ArrayRef, BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+        LargeStringArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
     datatypes::Field,
 };
@@ -284,6 +284,16 @@ macro_rules! typed_min_max_batch_string {
     }};
 }
 
+// Statically-typed version of min/max(array) -> ScalarValue for binay types.
+macro_rules! typed_min_max_batch_binary {
+    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
+        let array = downcast_value!($VALUES, $ARRAYTYPE);
+        let value = compute::$OP(array);
+        let value = value.and_then(|e| Some(e.to_vec()));
+        ScalarValue::$SCALAR(value)
+    }};
+}
+
 // Statically-typed version of min/max(array) -> ScalarValue for non-string types.
 macro_rules! typed_min_max_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident $(, $EXTRA_ARGS:ident)*) => {{
@@ -405,6 +415,17 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, min_boolean)
         }
+        DataType::Binary => {
+            typed_min_max_batch_binary!(&values, BinaryArray, Binary, min_binary)
+        }
+        DataType::LargeBinary => {
+            typed_min_max_batch_binary!(
+                &values,
+                LargeBinaryArray,
+                LargeBinary,
+                min_binary
+            )
+        }
         _ => min_max_batch!(values, min),
     })
 }
@@ -420,6 +441,17 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         }
         DataType::Boolean => {
             typed_min_max_batch!(values, BooleanArray, Boolean, max_boolean)
+        }
+        DataType::Binary => {
+            typed_min_max_batch_binary!(&values, BinaryArray, Binary, max_binary)
+        }
+        DataType::LargeBinary => {
+            typed_min_max_batch_binary!(
+                &values,
+                LargeBinaryArray,
+                LargeBinary,
+                max_binary
+            )
         }
         _ => min_max_batch!(values, max),
     })
@@ -467,9 +499,7 @@ macro_rules! interval_min_max {
             Some(interval_choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
-                return Err(DataFusionError::Internal(
-                    "Comparison error while computing interval min/max".to_string(),
-                ))
+                return internal_err!("Comparison error while computing interval min/max")
             }
         }
     }};
@@ -530,6 +560,12 @@ macro_rules! min_max {
             }
             (ScalarValue::LargeUtf8(lhs), ScalarValue::LargeUtf8(rhs)) => {
                 typed_min_max_string!(lhs, rhs, LargeUtf8, $OP)
+            }
+            (ScalarValue::Binary(lhs), ScalarValue::Binary(rhs)) => {
+                typed_min_max_string!(lhs, rhs, Binary, $OP)
+            }
+            (ScalarValue::LargeBinary(lhs), ScalarValue::LargeBinary(rhs)) => {
+                typed_min_max_string!(lhs, rhs, LargeBinary, $OP)
             }
             (ScalarValue::TimestampSecond(lhs, l_tz), ScalarValue::TimestampSecond(rhs, _)) => {
                 typed_min_max!(lhs, rhs, TimestampSecond, $OP, l_tz)

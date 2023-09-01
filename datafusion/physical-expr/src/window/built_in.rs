@@ -170,7 +170,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 row_wise_results.push(value);
                 last_range = range;
             }
-            ScalarValue::iter_to_array(row_wise_results.into_iter())
+            ScalarValue::iter_to_array(row_wise_results)
         } else if evaluator.include_rank() {
             let columns = self.order_by_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;

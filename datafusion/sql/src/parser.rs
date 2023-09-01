@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion SQL Parser based on [`sqlparser`]
+//! [`DFParser`]: DataFusion SQL Parser based on [`sqlparser`]
 
 use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::ast::{OrderByExpr, Query, Value};
@@ -44,6 +44,35 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
 
+/// DataFusion specific EXPLAIN (needed so we can EXPLAIN datafusion
+/// specific COPY and other statements)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplainStatement {
+    pub analyze: bool,
+    pub verbose: bool,
+    pub statement: Box<Statement>,
+}
+
+impl fmt::Display for ExplainStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            analyze,
+            verbose,
+            statement,
+        } = self;
+
+        write!(f, "EXPLAIN ")?;
+        if *analyze {
+            write!(f, "ANALYZE ")?;
+        }
+        if *verbose {
+            write!(f, "VERBOSE ")?;
+        }
+
+        write!(f, "{statement}")
+    }
+}
+
 /// DataFusion extension DDL for `COPY`
 ///
 /// # Syntax:
@@ -62,7 +91,7 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
 ///  (format parquet,
 ///   partitions 16,
 ///   row_group_limit_rows 100000,
-//    row_group_limit_bytes 200000
+///   row_group_limit_bytes 200000
 ///  )
 ///
 /// COPY (SELECT l_orderkey from lineitem) to 'lineitem.parquet';
@@ -74,7 +103,7 @@ pub struct CopyToStatement {
     /// The URL to where the data is heading
     pub target: String,
     /// Target specific options
-    pub options: HashMap<String, Value>,
+    pub options: Vec<(String, Value)>,
 }
 
 impl fmt::Display for CopyToStatement {
@@ -88,10 +117,8 @@ impl fmt::Display for CopyToStatement {
         write!(f, "COPY {source} TO {target}")?;
 
         if !options.is_empty() {
-            let mut opts: Vec<_> =
-                options.iter().map(|(k, v)| format!("{k} {v}")).collect();
+            let opts: Vec<_> = options.iter().map(|(k, v)| format!("{k} {v}")).collect();
             // print them in sorted order
-            opts.sort_unstable();
             write!(f, " ({})", opts.join(", "))?;
         }
 
@@ -176,7 +203,7 @@ impl fmt::Display for CreateExternalTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CREATE EXTERNAL TABLE ")?;
         if self.if_not_exists {
-            write!(f, "IF NOT EXSISTS ")?;
+            write!(f, "IF NOT EXISTS ")?;
         }
         write!(f, "{} ", self.name)?;
         write!(f, "STORED AS {} ", self.file_type)?;
@@ -191,9 +218,13 @@ pub struct DescribeTableStmt {
     pub table_name: ObjectName,
 }
 
-/// DataFusion Statement representations.
+/// DataFusion SQL Statement.
 ///
-/// Tokens parsed by [`DFParser`] are converted into these values.
+/// This can either be a [`Statement`] from [`sqlparser`] from a
+/// standard SQL dialect, or a DataFusion extension such as `CREATE
+/// EXTERAL TABLE`. See [`DFParser`] for more information.
+///
+/// [`Statement`]: sqlparser::ast::Statement
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     /// ANSI SQL AST node (from sqlparser-rs)
@@ -204,6 +235,8 @@ pub enum Statement {
     DescribeTableStmt(DescribeTableStmt),
     /// Extension: `COPY TO`
     CopyTo(CopyToStatement),
+    /// EXPLAIN for extensions
+    Explain(ExplainStatement),
 }
 
 impl fmt::Display for Statement {
@@ -213,14 +246,20 @@ impl fmt::Display for Statement {
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::DescribeTableStmt(_) => write!(f, "DESCRIBE TABLE ..."),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
+            Statement::Explain(stmt) => write!(f, "{stmt}"),
         }
     }
 }
 
-/// DataFusion SQL Parser based on [`sqlparser`]
+/// Datafusion SQL Parser based on [`sqlparser`]
 ///
-/// This parser handles DataFusion specific statements, delegating to
-/// [`Parser`](sqlparser::parser::Parser) for other SQL statements.
+/// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s
+/// [`Parser`](sqlparser::parser::Parser).
+///
+/// DataFusion mostly follows existing SQL dialects via
+/// `sqlparser`. However, certain statements such as `COPY` and
+/// `CREATE EXTERNAL TABLE` have special syntax in DataFusion. See
+/// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
     parser: Parser<'a>,
 }
@@ -298,24 +337,24 @@ impl<'a> DFParser<'a> {
             Token::Word(w) => {
                 match w.keyword {
                     Keyword::CREATE => {
-                        // move one token forward
-                        self.parser.next_token();
-                        // use custom parsing
+                        self.parser.next_token(); // CREATE
                         self.parse_create()
                     }
                     Keyword::COPY => {
-                        // move one token forward
-                        self.parser.next_token();
+                        self.parser.next_token(); // COPY
                         self.parse_copy()
                     }
                     Keyword::DESCRIBE => {
-                        // move one token forward
-                        self.parser.next_token();
-                        // use custom parsing
+                        self.parser.next_token(); // DESCRIBE
                         self.parse_describe()
                     }
+                    Keyword::EXPLAIN => {
+                        // (TODO parse all supported statements)
+                        self.parser.next_token(); // EXPLAIN
+                        self.parse_explain()
+                    }
                     _ => {
-                        // use the native parser
+                        // use sqlparser-rs parser
                         Ok(Statement::Statement(Box::from(
                             self.parser.parse_statement()?,
                         )))
@@ -360,7 +399,7 @@ impl<'a> DFParser<'a> {
         let options = if self.parser.peek_token().token == Token::LParen {
             self.parse_value_options()?
         } else {
-            HashMap::new()
+            vec![]
         };
 
         Ok(Statement::CopyTo(CopyToStatement {
@@ -410,6 +449,19 @@ impl<'a> DFParser<'a> {
             },
             _ => self.parser.expected("string or numeric value", next_token),
         }
+    }
+
+    /// Parse a SQL `EXPLAIN`
+    pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
+        let analyze = self.parser.parse_keyword(Keyword::ANALYZE);
+        let verbose = self.parser.parse_keyword(Keyword::VERBOSE);
+        let statement = self.parse_statement()?;
+
+        Ok(Statement::Explain(ExplainStatement {
+            statement: Box::new(statement),
+            analyze,
+            verbose,
+        }))
     }
 
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
@@ -749,14 +801,14 @@ impl<'a> DFParser<'a> {
     /// Unlike [`Self::parse_string_options`], this method supports
     /// keywords as key names as well as multiple value types such as
     /// Numbers as well as Strings.
-    fn parse_value_options(&mut self) -> Result<HashMap<String, Value>, ParserError> {
-        let mut options = HashMap::new();
+    fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>, ParserError> {
+        let mut options = vec![];
         self.parser.expect_token(&Token::LParen)?;
 
         loop {
             let key = self.parse_option_key()?;
             let value = self.parse_option_value()?;
-            options.insert(key, value);
+            options.push((key, value));
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
                 // allow a trailing comma, even though it's not in standard
@@ -1096,7 +1148,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // Ordered Col
-        let sqls = vec!["CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'",
+        let sqls = ["CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'",
                         "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'",
                         "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS LAST) LOCATION 'foo.csv'",
                         "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC) LOCATION 'foo.csv'",
@@ -1276,10 +1328,36 @@ mod tests {
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
             target: "bar".to_string(),
-            options: HashMap::new(),
+            options: vec![],
         });
 
         assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn explain_copy_to_table_to_table() -> Result<(), ParserError> {
+        let cases = vec![
+            ("EXPLAIN COPY foo TO bar", false, false),
+            ("EXPLAIN ANALYZE COPY foo TO bar", true, false),
+            ("EXPLAIN VERBOSE COPY foo TO bar", false, true),
+            ("EXPLAIN ANALYZE VERBOSE COPY foo TO bar", true, true),
+        ];
+        for (sql, analyze, verbose) in cases {
+            println!("sql: {sql}, analyze: {analyze}, verbose: {verbose}");
+
+            let expected_copy = Statement::CopyTo(CopyToStatement {
+                source: object_name("foo"),
+                target: "bar".to_string(),
+                options: vec![],
+            });
+            let expected = Statement::Explain(ExplainStatement {
+                analyze,
+                verbose,
+                statement: Box::new(expected_copy),
+            });
+            assert_eq!(verified_stmt(sql), expected);
+        }
         Ok(())
     }
 
@@ -1304,7 +1382,7 @@ mod tests {
         let expected = Statement::CopyTo(CopyToStatement {
             source: CopyToSource::Query(query),
             target: "bar".to_string(),
-            options: HashMap::new(),
+            options: vec![],
         });
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
@@ -1316,10 +1394,10 @@ mod tests {
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
             target: "bar".to_string(),
-            options: HashMap::from([(
+            options: vec![(
                 "row_group_size".to_string(),
                 Value::Number("55".to_string(), false),
-            )]),
+            )],
         });
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
@@ -1327,17 +1405,11 @@ mod tests {
 
     #[test]
     fn copy_to_multi_options() -> Result<(), ParserError> {
+        // order of options is preserved
         let sql =
             "COPY foo TO bar (format parquet, row_group_size 55, compression snappy)";
-        // canonical order is alphabetical
-        let canonical =
-            "COPY foo TO bar (compression snappy, format parquet, row_group_size 55)";
 
-        let expected_options = HashMap::from([
-            (
-                "compression".to_string(),
-                Value::UnQuotedString("snappy".to_string()),
-            ),
+        let expected_options = vec![
             (
                 "format".to_string(),
                 Value::UnQuotedString("parquet".to_string()),
@@ -1346,14 +1418,17 @@ mod tests {
                 "row_group_size".to_string(),
                 Value::Number("55".to_string(), false),
             ),
-        ]);
+            (
+                "compression".to_string(),
+                Value::UnQuotedString("snappy".to_string()),
+            ),
+        ];
 
-        let options =
-            if let Statement::CopyTo(copy_to) = one_statement_parses_to(sql, canonical) {
-                copy_to.options
-            } else {
-                panic!("Expected copy");
-            };
+        let options = if let Statement::CopyTo(copy_to) = verified_stmt(sql) {
+            copy_to.options
+        } else {
+            panic!("Expected copy");
+        };
 
         assert_eq!(options, expected_options);
 

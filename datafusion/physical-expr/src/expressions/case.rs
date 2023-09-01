@@ -24,11 +24,13 @@ use crate::expressions::NoOp;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::*;
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, eq_dyn, is_null, not, or, prep_null_mask_filter};
+use arrow::compute::{and, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
+use datafusion_common::exec_err;
+use datafusion_common::{cast::as_boolean_array, internal_err, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
@@ -86,9 +88,7 @@ impl CaseExpr {
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         if when_then_expr.is_empty() {
-            Err(DataFusionError::Execution(
-                "There must be at least one WHEN clause".to_string(),
-            ))
+            exec_err!("There must be at least one WHEN clause")
         } else {
             Ok(Self {
                 expr,
@@ -139,7 +139,7 @@ impl CaseExpr {
                 .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows());
             // build boolean array representing which rows match the "when" value
-            let when_match = eq_dyn(&when_value, base_value.as_ref())?;
+            let when_match = eq(&when_value, &base_value)?;
             // Treat nulls as false
             let when_match = match when_match.null_count() {
                 0 => Cow::Borrowed(&when_match),
@@ -319,9 +319,7 @@ impl PhysicalExpr for CaseExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         if children.len() != self.children().len() {
-            Err(DataFusionError::Internal(
-                "CaseExpr: Wrong number of children".to_string(),
-            ))
+            internal_err!("CaseExpr: Wrong number of children")
         } else {
             assert_eq!(children.len() % 2, 0);
             let expr = match children[0].clone().as_any().downcast_ref::<NoOp>() {
@@ -1011,11 +1009,10 @@ mod tests {
         };
         thens_type
             .iter()
-            .fold(Some(else_type), |left, right_type| match left {
-                None => None,
+            .try_fold(else_type, |left_type, right_type| {
                 // TODO: now just use the `equal` coercion rule for case when. If find the issue, and
                 // refactor again.
-                Some(left_type) => comparison_coercion(&left_type, right_type),
+                comparison_coercion(&left_type, right_type)
             })
     }
 }

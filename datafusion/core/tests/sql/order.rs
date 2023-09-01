@@ -125,7 +125,7 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| id | name |",
         "+----+------+",
@@ -156,7 +156,7 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let expected = vec![
+    let expected = [
         "+----+------+",
         "| id | name |",
         "+----+------+",
@@ -235,7 +235,7 @@ ORDER BY 1, 2;
         let actual = execute_to_batches(&ctx, sql).await;
 
         // in https://github.com/apache/arrow-datafusion/issues/5970 the order of the output was sometimes not right
-        let expected = vec![
+        let expected = [
             "+---+---+",
             "| m | t |",
             "+---+---+",
