@@ -289,16 +289,21 @@ mod tests {
     /// Runs the repartition optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
         ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr) => {
-            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, 10, false, 1024);
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, 10, false, 1024, false);
         };
 
         ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr) => {
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $TARGET_PARTITIONS, $REPARTITION_FILE_SCANS, $REPARTITION_FILE_MIN_SIZE, false);
+        };
+
+        ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr, $BOUNDED_ORDER_PRESERVING_VARIANTS: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
             config.execution.target_partitions = $TARGET_PARTITIONS;
             config.optimizer.repartition_file_scans = $REPARTITION_FILE_SCANS;
             config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
+            config.optimizer.bounded_order_preserving_variants = $BOUNDED_ORDER_PRESERVING_VARIANTS;
 
             let optimized = if $FIRST_ENFORCE_DIST{
                 // Run the optimizer to first apply distribution enforcement
@@ -890,7 +895,7 @@ mod tests {
 
         let expected_parquet = &[
             "GlobalLimitExec: skip=0, fetch=100",
-            "SortPreservingMergeExec: [c1@0 ASC]",
+            "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // even though data is sorted, we can use repartition here. Since
@@ -902,7 +907,7 @@ mod tests {
         ];
         let expected_csv = &[
             "GlobalLimitExec: skip=0, fetch=100",
-            "SortPreservingMergeExec: [c1@0 ASC]",
+            "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // even though data is sorted, we can use repartition here. Since
@@ -1110,14 +1115,34 @@ mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
-        assert_optimized!(expected, physical_plan.clone(), true, 10, false, 10);
-        // assert_optimized!(expected, physical_plan, false, 10, false, 10);
+        // last flag sets config.optimizer.bounded_order_preserving_variants
+        assert_optimized!(expected, physical_plan.clone(), true, 10, false, 10, true);
+        assert_optimized!(expected, physical_plan, false, 10, false, 10, true);
 
         Ok(())
     }
 
     #[test]
     fn do_not_preserve_ordering_through_repartition() -> Result<()> {
+        let input = parquet_exec_multiple_sorted();
+        let physical_plan = sort_preserving_merge_exec(filter_exec(input));
+
+        let expected = &[
+            "SortPreservingMergeExec: [c1@0 ASC]",
+            "SortExec: expr=[c1@0 ASC]",
+            "FilterExec: c1@0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[c1], output_ordering=[c1@0 ASC]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true, 10, false, 10);
+        assert_optimized!(expected, physical_plan, false, 10, false, 10);
+
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
         let input = parquet_exec_multiple_sorted2();
         let physical_plan = sort_preserving_merge_exec2(filter_exec(input));
 

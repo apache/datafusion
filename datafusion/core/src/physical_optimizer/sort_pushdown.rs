@@ -35,6 +35,7 @@ use datafusion_physical_expr::utils::{
 };
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use itertools::izip;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
@@ -260,6 +261,9 @@ fn pushdown_requirement_to_children(
         || plan.as_any().is::<ProjectionExec>()
         || is_limit(plan)
         || plan.as_any().is::<HashJoinExec>()
+        // Do not pushdown through SortPreservingMergeExec because it may invalidate
+        // input expectation of SortPreservingMerge
+        || plan.as_any().is::<SortPreservingMergeExec>()
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
