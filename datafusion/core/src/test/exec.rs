@@ -38,7 +38,7 @@ use crate::physical_plan::{
 use crate::physical_plan::{expressions::PhysicalSortExpr, DisplayAs};
 use crate::{
     error::{DataFusionError, Result},
-    physical_plan::stream::RecordBatchReceiverStream,
+    physical_plan::stream::ReceiverStream,
 };
 use crate::{
     execution::context::TaskContext, physical_plan::stream::RecordBatchStreamAdapter,
@@ -216,7 +216,7 @@ impl ExecutionPlan for MockExec {
             .collect();
 
         if self.use_task {
-            let mut builder = RecordBatchReceiverStream::builder(self.schema(), 2);
+            let mut builder = ReceiverStream::builder(self.schema(), 2);
             // send data in order but in a separate task (to ensure
             // the batches are not available without the stream
             // yielding).
@@ -349,7 +349,7 @@ impl ExecutionPlan for BarrierExec {
     ) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
-        let mut builder = RecordBatchReceiverStream::builder(self.schema(), 2);
+        let mut builder = ReceiverStream::builder(self.schema(), 2);
 
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
