@@ -28,7 +28,7 @@ use crate::{
     DataFusionError, Result,
 };
 
-use super::{StatementOptions, parse_utils::parse_column_level_option_tuples};
+use super::{parse_utils::parse_column_level_option_tuples, StatementOptions};
 
 /// Options for writing parquet files
 #[derive(Clone, Debug)]

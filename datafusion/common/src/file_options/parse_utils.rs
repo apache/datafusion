@@ -19,7 +19,8 @@
 
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
-    file::properties::{EnabledStatistics, WriterVersion}, schema::types::ColumnPath,
+    file::properties::{EnabledStatistics, WriterVersion},
+    schema::types::ColumnPath,
 };
 
 use crate::{DataFusionError, Result};
@@ -184,29 +185,41 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
 
 /// Parses a string which contains tuples which determine column level parquet settings
 /// e.g. '(col1 snappy, col2 zstd(5), col3.nested.nested2 zstd(10))'
-pub(crate) fn parse_column_level_option_tuples(col_options: &str) -> Result<Vec<(ColumnPath, String)>>{
-
+pub(crate) fn parse_column_level_option_tuples(
+    col_options: &str,
+) -> Result<Vec<(ColumnPath, String)>> {
     println!("{}", col_options);
 
     let col_options = col_options.replace('\'', "").trim().to_owned();
 
-    if !(col_options.chars().nth(0)==Some('(') && col_options.chars().nth_back(0)==Some(')')){
-        return Err(DataFusionError::Configuration(format!("Unable to parse column level options specified as {col_options}")))
+    if !(col_options.chars().nth(0) == Some('(')
+        && col_options.chars().nth_back(0) == Some(')'))
+    {
+        return Err(DataFusionError::Configuration(format!(
+            "Unable to parse column level options specified as {col_options}"
+        )));
     }
 
-    println!("clipped {}", &col_options[1..col_options.len()-1]);
-    
-    col_options[1..col_options.len()-1]
+    println!("clipped {}", &col_options[1..col_options.len() - 1]);
+
+    col_options[1..col_options.len() - 1]
         .split(',')
-        .map(|s| s
-            .trim()
-            .split_once(' ')
-            .map(|(s1, s2)| (
-                ColumnPath::new(s1
-                    .split('.')
-                    .map(|sn| sn.to_owned())
-                    .collect::<Vec<String>>()), 
-                s2.to_owned()))
-            .ok_or(DataFusionError::Configuration(format!("Unable to parse column level options specified as {col_options}"))))
+        .map(|s| {
+            s.trim()
+                .split_once(' ')
+                .map(|(s1, s2)| {
+                    (
+                        ColumnPath::new(
+                            s1.split('.')
+                                .map(|sn| sn.to_owned())
+                                .collect::<Vec<String>>(),
+                        ),
+                        s2.to_owned(),
+                    )
+                })
+                .ok_or(DataFusionError::Configuration(format!(
+                    "Unable to parse column level options specified as {col_options}"
+                )))
+        })
         .collect()
 }
