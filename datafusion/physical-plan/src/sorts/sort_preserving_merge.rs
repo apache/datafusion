@@ -282,7 +282,7 @@ mod tests {
     use crate::memory::MemoryExec;
     use crate::metrics::{MetricValue, Timestamp};
     use crate::sorts::sort::SortExec;
-    use crate::stream::RecordBatchReceiverStream;
+    use crate::stream::ReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
@@ -792,10 +792,11 @@ mod tests {
             sorted_partitioned_input(sort.clone(), &[5, 7, 3], task_ctx.clone()).await?;
 
         let partition_count = batches.output_partitioning().partition_count();
-        let mut streams = Vec::with_capacity(partition_count);
+        let mut streams: Vec<SendableRecordBatchStream> =
+            Vec::with_capacity(partition_count);
 
         for partition in 0..partition_count {
-            let mut builder = RecordBatchReceiverStream::builder(schema.clone(), 1);
+            let mut builder = ReceiverStream::<RecordBatch>::builder(schema.clone(), 1);
 
             let sender = builder.tx();
 
