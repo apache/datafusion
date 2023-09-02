@@ -28,7 +28,7 @@ use crate::{
     DataFusionError, Result,
 };
 
-use super::StatementOptions;
+use super::{StatementOptions, parse_utils::parse_column_level_option_tuples};
 
 /// Options for writing parquet files
 #[derive(Clone, Debug)]
@@ -141,13 +141,27 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for ParquetWriterOptions {
                 "bloom_filter_enabled" => builder
                     .set_bloom_filter_enabled(value.parse()
                     .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?),
-                "encoding" => builder
+                "encoding_default" => builder
                     .set_encoding(parse_encoding_string(value)?),
+                "encoding" => {
+                    for (col, col_val) in parse_column_level_option_tuples(value)?.into_iter(){
+                        println!("{} {}", col, col_val);
+                        builder = builder.set_column_encoding(col, parse_encoding_string(&col_val)?);
+                    };
+                    builder
+                }
                 "dictionary_enabled" => builder
                     .set_dictionary_enabled(value.parse()
                     .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?),
-                "compression" => builder
+                "compression_default" => builder
                     .set_compression(parse_compression_string(value)?),
+                "compression" => {
+                    for (col, col_val) in parse_column_level_option_tuples(value)?.into_iter(){
+                        println!("{} {}", col, col_val);
+                        builder = builder.set_column_compression(col, parse_compression_string(&col_val)?)
+                    }
+                    builder
+                }
                 "statistics_enabled" => builder
                     .set_statistics_enabled(parse_statistics_string(value)?),
                 "max_statistics_size" => builder

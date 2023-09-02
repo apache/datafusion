@@ -21,15 +21,15 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # Copy to directory as multiple files
 query IT
-COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
+COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression_default 'zstd(10)');
 ----
 2
 
 query TT
-EXPLAIN COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression 'zstd(10)');
+EXPLAIN COPY source_table TO 'test_files/scratch/copy/table' (format parquet, single_file_output false, compression_default 'zstd(10)');
 ----
 logical_plan
-CopyTo: format=parquet output_url=test_files/scratch/copy/table single_file_output=false options: (compression 'zstd(10)')
+CopyTo: format=parquet output_url=test_files/scratch/copy/table single_file_output=false options: (compression_default 'zstd(10)')
 --TableScan: source_table projection=[col1, col2]
 physical_plan
 InsertExec: sink=ParquetSink(writer_mode=PutMultipart, file_groups=[])
@@ -70,7 +70,8 @@ COPY source_table
 TO 'test_files/scratch/copy/table_with_options' 
 (format parquet,
 single_file_output false,
-compression 'snappy',
+compression_default 'snappy',
+compression '(col1 snappy, col2 zstd(5), col3.nested.nested2 zstd(10))',
 max_row_group_size 12345,
 data_pagesize_limit 1234,
 write_batch_size 1234,
@@ -80,7 +81,8 @@ created_by 'DF copy.slt',
 column_index_truncate_length 123,
 data_page_row_count_limit 1234,
 bloom_filter_enabled true,
-encoding plain,
+encoding_default plain,
+encoding '(col1 delta_binary_packed, col2 plain)',
 dictionary_enabled false,
 statistics_enabled page,
 max_statistics_size 123,
