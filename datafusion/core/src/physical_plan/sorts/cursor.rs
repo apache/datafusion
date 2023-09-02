@@ -94,7 +94,7 @@ impl Ord for RowCursor {
 }
 
 /// A cursor into a sorted batch of rows
-pub trait Cursor: Ord {
+pub trait Cursor: Ord + Send + Sync {
     /// Returns true if there are no more rows in this cursor
     fn is_finished(&self) -> bool;
 
@@ -319,7 +319,7 @@ impl<T: FieldValues> Ord for FieldCursor<T> {
     }
 }
 
-impl<T: FieldValues> Cursor for FieldCursor<T> {
+impl<T: FieldValues + Send + Sync> Cursor for FieldCursor<T> {
     fn is_finished(&self) -> bool {
         self.offset == self.values.len()
     }

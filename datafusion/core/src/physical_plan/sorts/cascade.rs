@@ -6,6 +6,7 @@ use crate::physical_plan::sorts::stream::{
     BatchCursorStream, BatchId, BatchTrackingStream, MergeStream, OffsetCursorStream,
     YieldedCursorStream,
 };
+use crate::physical_plan::stream::ReceiverStream;
 use crate::physical_plan::RecordBatchStream;
 
 use arrow::compute::interleave;
@@ -13,8 +14,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
-use futures::Stream;
-use std::collections::{VecDeque, HashMap};
+use futures::{Stream, StreamExt};
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -66,12 +67,16 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
             let streams =
                 OffsetCursorStream::new(Arc::clone(&streams), stream_offset, limit);
 
-            divided_streams.push_back(Box::pin(SortPreservingMergeStream::new(
-                Box::new(streams),
-                metrics.clone(),
-                batch_size,
-                None, // fetch, the LIMIT, is applied to the final merge
-            )));
+            divided_streams.push_back(spawn_buffered_merge(
+                Box::pin(SortPreservingMergeStream::new(
+                    Box::new(streams),
+                    metrics.clone(),
+                    batch_size,
+                    None, // fetch, the LIMIT, is applied to the final merge
+                )),
+                schema.clone(),
+                2,
+            ));
         }
 
         // build rest of tree
@@ -82,16 +87,20 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
                 .drain(0..std::cmp::min(max_streams_per_merge, divided_streams.len()))
                 .collect();
 
-            next_level.push_back(Box::pin(SortPreservingMergeStream::new(
-                Box::new(YieldedCursorStream::new(fan_in)),
-                metrics.clone(),
-                batch_size,
-                if divided_streams.is_empty() && next_level.is_empty() {
-                    fetch
-                } else {
-                    None
-                }, // fetch, the LIMIT, is applied to the final merge
-            )));
+            next_level.push_back(spawn_buffered_merge(
+                Box::pin(SortPreservingMergeStream::new(
+                    Box::new(YieldedCursorStream::new(fan_in)),
+                    metrics.clone(),
+                    batch_size,
+                    if divided_streams.is_empty() && next_level.is_empty() {
+                        fetch
+                    } else {
+                        None
+                    }, // fetch, the LIMIT, is applied to the final merge
+                )),
+                schema.clone(),
+                2,
+            ));
             // in order to maintain sort-preserving streams, don't mix the merge tree levels.
             if divided_streams.is_empty() {
                 divided_streams = next_level.drain(..).collect();
@@ -124,7 +133,7 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
                     let batch_now = batch_idx;
                     batch_idx += 1;
                     batch_now
-                },
+                }
             };
             sort_order_offset_adjusted.push((batch_idx, *row_idx + offset.0));
             batches_seen.insert(*batch_id, (batch_idx, *row_idx + offset.0 + 1));
@@ -206,5 +215,33 @@ impl<C: Cursor + Unpin + Send + 'static> RecordBatchStream
 {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+fn spawn_buffered_merge<C: Send + Sync + 'static>(
+    mut input: MergeStream<C>,
+    schema: SchemaRef,
+    buffer: usize,
+) -> MergeStream<C> {
+    // Use tokio only if running from a multi-thread tokio context
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle)
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
+        {
+            let mut builder = ReceiverStream::builder(schema, buffer);
+
+            let sender = builder.tx();
+
+            builder.spawn(async move {
+                while let Some(item) = input.next().await {
+                    if sender.send(item).await.is_err() {
+                        return;
+                    }
+                }
+            });
+
+            builder.build()
+        }
+        _ => input,
     }
 }
