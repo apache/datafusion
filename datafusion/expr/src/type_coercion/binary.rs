@@ -779,8 +779,8 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 mod tests {
     use arrow::datatypes::DataType;
 
+    use datafusion_common::assert_contains;
     use datafusion_common::Result;
-    use datafusion_common::{assert_contains, internal_err, DataFusionError};
 
     use crate::Operator;
 
@@ -791,15 +791,9 @@ mod tests {
         let result_type =
             get_input_types(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
 
-        if let Err(DataFusionError::Plan(e)) = result_type {
-            assert_eq!(
-                e,
-                "Cannot coerce arithmetic expression Float32 + Utf8 to valid types"
-            );
-            Ok(())
-        } else {
-            internal_err!("Coercion should have returned an DataFusionError::Internal")
-        }
+        let e = result_type.unwrap_err();
+        assert_eq!(e.strip_backtrace(), "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types");
+        Ok(())
     }
 
     #[test]

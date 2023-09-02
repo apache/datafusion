@@ -303,7 +303,7 @@ impl Display for DataFusionError {
                 write!(f, "This feature is not implemented: {desc}")
             }
             DataFusionError::Internal(ref desc) => {
-                write!(f, "Internal error: {desc}. This was likely caused by a bug in DataFusion's \
+                write!(f, "Internal error: {desc}.\nThis was likely caused by a bug in DataFusion's \
                     code and we would welcome that you file an bug report in our issue tracker")
             }
             DataFusionError::Plan(ref desc) => {
