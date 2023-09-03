@@ -290,8 +290,32 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_merge_interleave() {
+    macro_rules! run_test_in_threaded_envs {
+        ($name: ident, ret = $ret:ty, $($test:tt)*) => {
+            paste::paste! {
+                #[tokio::test]
+                async fn $name() -> $ret
+                $($test)*
+
+                #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+                async fn [<$name _multithreaded>]() -> $ret
+                $($test)*
+            }
+        };
+        ($name: ident, $($test:tt)*) => {
+            paste::paste! {
+                #[tokio::test]
+                async fn $name()
+                $($test)*
+
+                #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+                async fn [<$name _multithreaded>]()
+                $($test)*
+            }
+        };
+    }
+
+    run_test_in_threaded_envs!(test_merge_interleave, {
         let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
@@ -336,10 +360,9 @@ mod tests {
             task_ctx,
         )
         .await;
-    }
+    });
 
-    #[tokio::test]
-    async fn test_merge_some_overlap() {
+    run_test_in_threaded_envs!(test_merge_some_overlap, {
         let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
@@ -384,10 +407,9 @@ mod tests {
             task_ctx,
         )
         .await;
-    }
+    });
 
-    #[tokio::test]
-    async fn test_merge_no_overlap() {
+    run_test_in_threaded_envs!(test_merge_no_overlap, {
         let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
@@ -432,10 +454,9 @@ mod tests {
             task_ctx,
         )
         .await;
-    }
+    });
 
-    #[tokio::test]
-    async fn test_merge_three_partitions() {
+    run_test_in_threaded_envs!(test_merge_three_partitions, {
         let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
@@ -497,7 +518,7 @@ mod tests {
             task_ctx,
         )
         .await;
-    }
+    });
 
     async fn _test_merge(
         partitions: &[Vec<RecordBatch>],
@@ -555,8 +576,7 @@ mod tests {
         result.remove(0)
     }
 
-    #[tokio::test]
-    async fn test_partition_sort() -> Result<()> {
+    run_test_in_threaded_envs!(test_partition_sort, ret = Result<()>, {
         let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
         let tmp_dir = TempDir::new()?;
@@ -601,7 +621,7 @@ mod tests {
         );
 
         Ok(())
-    }
+    });
 
     // Split the provided record batch into multiple batch_size record batches
     fn split_batch(sorted: &RecordBatch, batch_size: usize) -> Vec<RecordBatch> {
@@ -643,8 +663,7 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn test_partition_sort_streaming_input() -> Result<()> {
+    run_test_in_threaded_envs!(test_partition_sort_streaming_input, ret = Result<()>, {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let sort = vec![
@@ -689,10 +708,9 @@ mod tests {
         assert_eq!(basic, partition);
 
         Ok(())
-    }
+    });
 
-    #[tokio::test]
-    async fn test_partition_sort_streaming_input_output() -> Result<()> {
+    run_test_in_threaded_envs!(test_partition_sort_streaming_input_output, ret = Result<()>, {
         let schema = test_util::aggr_test_schema();
 
         let sort = vec![
@@ -738,10 +756,9 @@ mod tests {
         assert_eq!(basic, partition);
 
         Ok(())
-    }
+    });
 
-    #[tokio::test]
-    async fn test_nulls() {
+    run_test_in_threaded_envs!(test_nulls, {
         let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
@@ -819,10 +836,9 @@ mod tests {
             ],
             collected.as_slice()
         );
-    }
+    });
 
-    #[tokio::test]
-    async fn test_async() -> Result<()> {
+    run_test_in_threaded_envs!(test_async, ret = Result<()>, {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test_util::aggr_test_schema();
         let sort = vec![PhysicalSortExpr {
@@ -889,10 +905,9 @@ mod tests {
         );
 
         Ok(())
-    }
+    });
 
-    #[tokio::test]
-    async fn test_merge_metrics() {
+    run_test_in_threaded_envs!(test_merge_metrics, {
         let task_ctx = Arc::new(TaskContext::default());
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"), Some("c")]));
@@ -945,10 +960,9 @@ mod tests {
 
         assert!(saw_start);
         assert!(saw_end);
-    }
+    });
 
-    #[tokio::test]
-    async fn test_drop_cancel() -> Result<()> {
+    run_test_in_threaded_envs!(test_drop_cancel, ret = Result<()>, {
         let task_ctx = Arc::new(TaskContext::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
@@ -971,10 +985,9 @@ mod tests {
         assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
-    }
+    });
 
-    #[tokio::test]
-    async fn test_stable_sort() {
+    run_test_in_threaded_envs!(test_stable_sort, {
         let task_ctx = Arc::new(TaskContext::default());
 
         // Create record batches like:
@@ -1050,5 +1063,5 @@ mod tests {
             ],
             collected.as_slice()
         );
-    }
+    });
 }
