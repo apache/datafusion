@@ -40,6 +40,17 @@ arrow-schema = { version = "45.0.0", default-features = false }
 parquet = { version = "45.0.0", features = ["arrow", "async", "object_store"] }
 sqlparser = { version = "0.37.0", features = ["visitor"] }
 
+[patch.crates-io]
+arrow = { git = "https://github.com/wiedld/arrow-rs.git", package = "arrow", branch = "datafusion-7181/enable-row-slicing" }
+arrow-array = { git = "https://github.com/wiedld/arrow-rs.git", package = "arrow-array", branch = "datafusion-7181/enable-row-slicing" }
+arrow-buffer = { git = "https://github.com/wiedld/arrow-rs.git", package = "arrow-buffer", branch = "datafusion-7181/enable-row-slicing" }
+arrow-flight = { git = "https://github.com/wiedld/arrow-rs.git", package = "arrow-flight", branch = "datafusion-7181/enable-row-slicing" }
+arrow-ord = { git = "https://github.com/wiedld/arrow-rs.git", package = "arrow-ord", branch = "datafusion-7181/enable-row-slicing" }
+arrow-schema = { git = "https://github.com/wiedld/arrow-rs.git", package = "arrow-schema", branch = "datafusion-7181/enable-row-slicing" }
+arrow-select = { git = "https://github.com/wiedld/arrow-rs.git", package = "arrow-select", branch = "datafusion-7181/enable-row-slicing" }
+arrow-string = { git = "https://github.com/wiedld/arrow-rs.git", package = "arrow-string", branch = "datafusion-7181/enable-row-slicing" }
+parquet = { git = "https://github.com/wiedld/arrow-rs.git", package = "parquet", branch = "datafusion-7181/enable-row-slicing" }
+
 [profile.release]
 codegen-units = 1
 lto = true
