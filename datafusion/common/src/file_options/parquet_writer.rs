@@ -28,7 +28,7 @@ use crate::{
     DataFusionError, Result,
 };
 
-use super::StatementOptions;
+use super::{parse_utils::split_option_and_column_path, StatementOptions};
 
 /// Options for writing parquet files
 #[derive(Clone, Debug)]
@@ -115,6 +115,7 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for ParquetWriterOptions {
         let statement_options = configs_and_statement_options.1;
         let mut builder = default_builder(configs)?;
         for (option, value) in &statement_options.options {
+            let (option, col_path) = split_option_and_column_path(option);
             builder = match option.to_lowercase().as_str(){
                 "max_row_group_size" => builder
                     .set_max_row_group_size(value.parse()
@@ -146,8 +147,14 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for ParquetWriterOptions {
                 "dictionary_enabled" => builder
                     .set_dictionary_enabled(value.parse()
                     .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?),
-                "compression" => builder
-                    .set_compression(parse_compression_string(value)?),
+                "compression" => {
+                    println!("Got {value} for {col_path:?}");
+                    let parsed_compression = parse_compression_string(value)?;
+                    match col_path{
+                        Some(path) => builder.set_column_compression(path, parsed_compression),
+                        None => builder.set_compression(parsed_compression)
+                    }
+                },
                 "statistics_enabled" => builder
                     .set_statistics_enabled(parse_statistics_string(value)?),
                 "max_statistics_size" => builder

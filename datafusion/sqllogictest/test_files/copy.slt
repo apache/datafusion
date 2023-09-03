@@ -70,7 +70,10 @@ COPY source_table
 TO 'test_files/scratch/copy/table_with_options' 
 (format parquet,
 single_file_output false,
-compression 'snappy',
+compression snappy,
+'compression::col1' 'zstd(5)',
+'compression::col2' 'zstd(10)',
+'compression::col3.nested' 'zstd(12)',
 max_row_group_size 12345,
 data_pagesize_limit 1234,
 write_batch_size 1234,
