@@ -43,6 +43,8 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 
 use crate::simplify_expressions::SimplifyInfo;
 
+use crate::simplify_expressions::guarantees::{Guarantee, GuaranteeRewriter};
+
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
     info: S,
@@ -148,6 +150,22 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut expr_rewrite = TypeCoercionRewriter { schema };
 
         expr.rewrite(&mut expr_rewrite)
+    }
+
+    /// Add guarantees
+    pub fn simplify_with_gurantee<'a>(
+        &self,
+        expr: Expr,
+        guarantees: impl IntoIterator<Item = &'a (Expr, Guarantee)>,
+    ) -> Result<Expr> {
+        // Do a simplification pass in case it reveals places where a guarantee
+        // could be applied.
+        let expr = self.simplify(expr)?;
+        let mut rewriter = GuaranteeRewriter::new(guarantees);
+        let expr = expr.rewrite(&mut rewriter)?;
+        // Simplify after guarantees are applied, since constant folding should
+        // now be able to fold more expressions.
+        self.simplify(expr)
     }
 }
 

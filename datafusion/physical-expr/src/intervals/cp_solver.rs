@@ -16,6 +16,99 @@
 // under the License.
 
 //! Constraint propagator/solver for custom PhysicalExpr graphs.
+//! 
+//! Interval arithmetic provides a way to perform mathematical operations on
+//! intervals, which represent a range of possible values rather than a single
+//! point value. This allows for the propagation of ranges through mathematical
+//! operations, and can be used to compute bounds for a complicated expression.
+//! The key idea is that by breaking down a complicated expression into simpler
+//! terms, and then combining the bounds for those simpler terms, one can
+//! obtain bounds for the overall expression.
+//!
+//! For example, consider a mathematical expression such as x^2 + y = 4. Since
+//! it would be a binary tree in [PhysicalExpr] notation, this type of an
+//! hierarchical computation is well-suited for a graph based implementation.
+//! In such an implementation, an equation system f(x) = 0 is represented by a
+//! directed acyclic expression graph (DAEG).
+//!
+//! In order to use interval arithmetic to compute bounds for this expression,
+//! one would first determine intervals that represent the possible values of x
+//! and y. Let's say that the interval for x is [1, 2] and the interval for y
+//! is [-3, 1]. In the chart below, you can see how the computation takes place.
+//!
+//! This way of using interval arithmetic to compute bounds for a complex
+//! expression by combining the bounds for the constituent terms within the
+//! original expression allows us to reason about the range of possible values
+//! of the expression. This information later can be used in range pruning of
+//! the provably unnecessary parts of `RecordBatch`es.
+//!
+//! References
+//! 1 - Kabak, Mehmet Ozan. Analog Circuit Start-Up Behavior Analysis: An Interval
+//! Arithmetic Based Approach, Chapter 4. Stanford University, 2015.
+//! 2 - Moore, Ramon E. Interval analysis. Vol. 4. Englewood Cliffs: Prentice-Hall, 1966.
+//! 3 - F. Messine, "Deterministic global optimization using interval constraint
+//! propagation techniques," RAIRO-Operations Research, vol. 38, no. 04,
+//! pp. 277{293, 2004.
+//!
+//! ``` text
+//! Computing bounds for an expression using interval arithmetic.           Constraint propagation through a top-down evaluation of the expression
+//!                                                                         graph using inverse semantics.
+//!
+//!                                                                                 [-2, 5] ∩ [4, 4] = [4, 4]              [4, 4]
+//!             +-----+                        +-----+                                      +-----+                        +-----+
+//!        +----|  +  |----+              +----|  +  |----+                            +----|  +  |----+              +----|  +  |----+
+//!        |    |     |    |              |    |     |    |                            |    |     |    |              |    |     |    |
+//!        |    +-----+    |              |    +-----+    |                            |    +-----+    |              |    +-----+    |
+//!        |               |              |               |                            |               |              |               |
+//!    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
+//!    |   2 |           |  y  |      |   2 | [1, 4]    |  y  |                    |   2 | [1, 4]    |  y  |      |   2 | [1, 4]    |  y  | [0, 1]*
+//!    |[.]  |           |     |      |[.]  |           |     |                    |[.]  |           |     |      |[.]  |           |     |
+//!    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
+//!       |                              |                                            |              [-3, 1]         |
+//!       |                              |                                            |                              |
+//!     +---+                          +---+                                        +---+                          +---+
+//!     | x | [1, 2]                   | x | [1, 2]                                 | x | [1, 2]                   | x | [1, 2]
+//!     +---+                          +---+                                        +---+                          +---+
+//!
+//!  (a) Bottom-up evaluation: Step1 (b) Bottom up evaluation: Step2             (a) Top-down propagation: Step1 (b) Top-down propagation: Step2
+//!
+//!                                        [1 - 3, 4 + 1] = [-2, 5]                                                    [1 - 3, 4 + 1] = [-2, 5]
+//!             +-----+                        +-----+                                      +-----+                        +-----+
+//!        +----|  +  |----+              +----|  +  |----+                            +----|  +  |----+              +----|  +  |----+
+//!        |    |     |    |              |    |     |    |                            |    |     |    |              |    |     |    |
+//!        |    +-----+    |              |    +-----+    |                            |    +-----+    |              |    +-----+    |
+//!        |               |              |               |                            |               |              |               |
+//!    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
+//!    |   2 |[1, 4]     |  y  |      |   2 |[1, 4]     |  y  |                    |   2 |[3, 4]**   |  y  |      |   2 |[1, 4]     |  y  |
+//!    |[.]  |           |     |      |[.]  |           |     |                    |[.]  |           |     |      |[.]  |           |     |
+//!    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
+//!       |              [-3, 1]         |              [-3, 1]                       |              [0, 1]          |              [-3, 1]
+//!       |                              |                                            |                              |
+//!     +---+                          +---+                                        +---+                          +---+
+//!     | x | [1, 2]                   | x | [1, 2]                                 | x | [1, 2]                   | x | [sqrt(3), 2]***
+//!     +---+                          +---+                                        +---+                          +---+
+//!
+//!  (c) Bottom-up evaluation: Step3 (d) Bottom-up evaluation: Step4             (c) Top-down propagation: Step3  (d) Top-down propagation: Step4
+//!
+//!                                                                             * [-3, 1] ∩ ([4, 4] - [1, 4]) = [0, 1]
+//!                                                                             ** [1, 4] ∩ ([4, 4] - [0, 1]) = [3, 4]
+//!                                                                             *** [1, 2] ∩ [sqrt(3), sqrt(4)] = [sqrt(3), 2]
+//! ```
+//! 
+//! # Examples
+//! 
+//! ```
+//! # Expression: (x + 4) - y
+//! 
+//! 
+//! # x: [0, 4), y: (1, 3]
+//! 
+//! # Result: 
+//! ```
+//! 
+//! # Null handling
+//! 
+//! 
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -39,83 +132,7 @@ use crate::PhysicalExpr;
 
 use super::IntervalBound;
 
-// Interval arithmetic provides a way to perform mathematical operations on
-// intervals, which represent a range of possible values rather than a single
-// point value. This allows for the propagation of ranges through mathematical
-// operations, and can be used to compute bounds for a complicated expression.
-// The key idea is that by breaking down a complicated expression into simpler
-// terms, and then combining the bounds for those simpler terms, one can
-// obtain bounds for the overall expression.
-//
-// For example, consider a mathematical expression such as x^2 + y = 4. Since
-// it would be a binary tree in [PhysicalExpr] notation, this type of an
-// hierarchical computation is well-suited for a graph based implementation.
-// In such an implementation, an equation system f(x) = 0 is represented by a
-// directed acyclic expression graph (DAEG).
-//
-// In order to use interval arithmetic to compute bounds for this expression,
-// one would first determine intervals that represent the possible values of x
-// and y. Let's say that the interval for x is [1, 2] and the interval for y
-// is [-3, 1]. In the chart below, you can see how the computation takes place.
-//
-// This way of using interval arithmetic to compute bounds for a complex
-// expression by combining the bounds for the constituent terms within the
-// original expression allows us to reason about the range of possible values
-// of the expression. This information later can be used in range pruning of
-// the provably unnecessary parts of `RecordBatch`es.
-//
-// References
-// 1 - Kabak, Mehmet Ozan. Analog Circuit Start-Up Behavior Analysis: An Interval
-// Arithmetic Based Approach, Chapter 4. Stanford University, 2015.
-// 2 - Moore, Ramon E. Interval analysis. Vol. 4. Englewood Cliffs: Prentice-Hall, 1966.
-// 3 - F. Messine, "Deterministic global optimization using interval constraint
-// propagation techniques," RAIRO-Operations Research, vol. 38, no. 04,
-// pp. 277{293, 2004.
-//
-// ``` text
-// Computing bounds for an expression using interval arithmetic.           Constraint propagation through a top-down evaluation of the expression
-//                                                                         graph using inverse semantics.
-//
-//                                                                                 [-2, 5] ∩ [4, 4] = [4, 4]              [4, 4]
-//             +-----+                        +-----+                                      +-----+                        +-----+
-//        +----|  +  |----+              +----|  +  |----+                            +----|  +  |----+              +----|  +  |----+
-//        |    |     |    |              |    |     |    |                            |    |     |    |              |    |     |    |
-//        |    +-----+    |              |    +-----+    |                            |    +-----+    |              |    +-----+    |
-//        |               |              |               |                            |               |              |               |
-//    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
-//    |   2 |           |  y  |      |   2 | [1, 4]    |  y  |                    |   2 | [1, 4]    |  y  |      |   2 | [1, 4]    |  y  | [0, 1]*
-//    |[.]  |           |     |      |[.]  |           |     |                    |[.]  |           |     |      |[.]  |           |     |
-//    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
-//       |                              |                                            |              [-3, 1]         |
-//       |                              |                                            |                              |
-//     +---+                          +---+                                        +---+                          +---+
-//     | x | [1, 2]                   | x | [1, 2]                                 | x | [1, 2]                   | x | [1, 2]
-//     +---+                          +---+                                        +---+                          +---+
-//
-//  (a) Bottom-up evaluation: Step1 (b) Bottom up evaluation: Step2             (a) Top-down propagation: Step1 (b) Top-down propagation: Step2
-//
-//                                        [1 - 3, 4 + 1] = [-2, 5]                                                    [1 - 3, 4 + 1] = [-2, 5]
-//             +-----+                        +-----+                                      +-----+                        +-----+
-//        +----|  +  |----+              +----|  +  |----+                            +----|  +  |----+              +----|  +  |----+
-//        |    |     |    |              |    |     |    |                            |    |     |    |              |    |     |    |
-//        |    +-----+    |              |    +-----+    |                            |    +-----+    |              |    +-----+    |
-//        |               |              |               |                            |               |              |               |
-//    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
-//    |   2 |[1, 4]     |  y  |      |   2 |[1, 4]     |  y  |                    |   2 |[3, 4]**   |  y  |      |   2 |[1, 4]     |  y  |
-//    |[.]  |           |     |      |[.]  |           |     |                    |[.]  |           |     |      |[.]  |           |     |
-//    +-----+           +-----+      +-----+           +-----+                    +-----+           +-----+      +-----+           +-----+
-//       |              [-3, 1]         |              [-3, 1]                       |              [0, 1]          |              [-3, 1]
-//       |                              |                                            |                              |
-//     +---+                          +---+                                        +---+                          +---+
-//     | x | [1, 2]                   | x | [1, 2]                                 | x | [1, 2]                   | x | [sqrt(3), 2]***
-//     +---+                          +---+                                        +---+                          +---+
-//
-//  (c) Bottom-up evaluation: Step3 (d) Bottom-up evaluation: Step4             (c) Top-down propagation: Step3  (d) Top-down propagation: Step4
-//
-//                                                                             * [-3, 1] ∩ ([4, 4] - [1, 4]) = [0, 1]
-//                                                                             ** [1, 4] ∩ ([4, 4] - [0, 1]) = [3, 4]
-//                                                                             *** [1, 2] ∩ [sqrt(3), sqrt(4)] = [sqrt(3), 2]
-// ```
+
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
@@ -561,6 +578,7 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_expr::expr;
     use itertools::Itertools;
 
     use crate::expressions::{BinaryExpr, Column};
@@ -1123,6 +1141,36 @@ mod tests {
         let final_node_count = graph.node_count();
         // Assert that the final node count is equal the previous node count (i.e., no node was pruned).
         assert_eq!(prev_node_count, final_node_count);
+        Ok(())
+    }
+
+    #[test]
+    fn my_test() -> Result<()> {
+        let expr_x = Arc::new(Column::new("x", 0));
+        let expr_y = Arc::new(Column::new("y", 1));
+        let expression = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                expr_x.clone(),
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(4)))),
+            )),
+            Operator::Minus,
+            expr_y.clone(),
+        ));
+
+        let mut graph = ExprIntervalGraph::try_new(expression.clone()).unwrap();
+        // Pass in expr_x and expr_y so we can input their intervals
+        let mapping = graph.gather_node_indices(&[expr_x, expr_y]);
+
+        let interval_x = Interval::make(Some(0), Some(4), (false, true));
+        let interval_y = Interval::make(Some(1), Some(3), (true, false));
+        graph.assign_intervals(&[
+            (mapping[0].1, interval_x.clone()),
+            (mapping[1].1, interval_y.clone()),
+        ]);
+
+        
+
         Ok(())
     }
 }
