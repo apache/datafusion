@@ -93,7 +93,7 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
     )
 }
 
-/// Converts the [`Interval`] of time interval to [`Interval`] of duration, if it is applicable, or returns [`None`].
+/// Converts an [`Interval`] of time intervals to one of `Duration`s, if applicable. Otherwise, returns [`None`].
 pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval> {
     if let (Some(lower), Some(upper)) = (
         convert_interval_bound_to_duration(&interval.lower),
