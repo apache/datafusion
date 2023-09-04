@@ -93,7 +93,7 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
     )
 }
 
-/// Converts the [`Interval`] of time interval to [`Interval`] of duration, if it is applicable, or returns [`None`].
+/// Converts an [`Interval`] of time intervals to one of `Duration`s, if applicable. Otherwise, returns [`None`].
 pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval> {
     if let (Some(lower), Some(upper)) = (
         convert_interval_bound_to_duration(&interval.lower),
@@ -105,7 +105,7 @@ pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval
     }
 }
 
-/// Converts the [`IntervalBound`] of time interval to [`IntervalBound`] of duration, if it is applicable, or returns [`None`].
+/// Converts an [`IntervalBound`] containing a time interval to one containing a `Duration`, if applicable. Otherwise, returns [`None`].
 fn convert_interval_bound_to_duration(
     interval_bound: &IntervalBound,
 ) -> Option<IntervalBound> {
@@ -130,7 +130,7 @@ fn convert_interval_bound_to_duration(
     }
 }
 
-/// Converts the [`Interval`] of duration to [`Interval`] of time interval, if it is applicable, or returns [`None`].
+/// Converts an [`Interval`] of `Duration`s to one of time intervals, if applicable. Otherwise, returns [`None`].
 pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval> {
     if let (Some(lower), Some(upper)) = (
         convert_duration_bound_to_interval(&interval.lower),
@@ -142,7 +142,7 @@ pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval
     }
 }
 
-/// Converts the [`IntervalBound`] of duration to [`IntervalBound`] of time interval, if it is applicable, or returns [`None`].
+/// Converts an [`IntervalBound`] containing a `Duration` to one containing a time interval, if applicable. Otherwise, returns [`None`].
 fn convert_duration_bound_to_interval(
     interval_bound: &IntervalBound,
 ) -> Option<IntervalBound> {

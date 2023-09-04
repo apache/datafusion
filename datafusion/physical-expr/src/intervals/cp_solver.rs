@@ -307,7 +307,7 @@ pub fn propagate_comparison(
     let right_type = right_child.get_datatype()?;
     let parent = comparison_operator_target(&left_type, op, &right_type)?;
     match (&left_type, &right_type) {
-        // We can not compare a Duration type with a (time) Interval type
+        // We can not compare a Duration type with a time interval type
         // without a reference timestamp unless the latter has a zero month field.
         (DataType::Interval(_), DataType::Duration(_)) => {
             propagate_comparison_to_time_interval_at_left(
@@ -574,9 +574,9 @@ impl ExprIntervalGraph {
 }
 
 /// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
-/// operation, the result would be of type `duration`. However, we may encounter a situation where a `time interval`
-/// is involved in an arithmetic operation with that `duration`. This function offers special handling for such cases,
-/// where the `time interval` resides on the left child of the operation.
+/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
+/// where the time interval resides on the left side of the operation.
 fn propagate_time_interval_at_left(
     left_child: &Interval,
     right_child: &Interval,
@@ -611,9 +611,9 @@ fn propagate_time_interval_at_left(
 }
 
 /// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
-/// operation, the result would be of type `duration`. However, we may encounter a situation where a `time interval`
-/// is involved in an arithmetic operation with that `duration`. This function offers special handling for such cases,
-/// where the `time interval` resides on the right child of the operation.
+/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
+/// where the time interval resides on the right side of the operation.
 fn propagate_time_interval_at_right(
     left_child: &Interval,
     right_child: &Interval,
