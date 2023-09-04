@@ -32,4 +32,4 @@ publish = false
 [dependencies]
 # Pin these dependencies so that the generated output is deterministic
 pbjson-build = { version = "=0.5.1" }
-prost-build = { version = "=0.11.9" }
+prost-build = { version = "=0.12.0" }
