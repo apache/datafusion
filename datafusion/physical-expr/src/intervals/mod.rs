@@ -22,5 +22,6 @@ pub mod interval_aritmetic;
 pub mod rounding;
 
 pub mod test_utils;
-pub use cp_solver::{check_support, ExprIntervalGraph};
+pub mod utils;
+pub use cp_solver::ExprIntervalGraph;
 pub use interval_aritmetic::*;

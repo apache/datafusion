@@ -626,7 +626,7 @@ pub fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
     let nanoseconds = mdn & MDN_NS_MASK;
     if months != 0 {
         return Err(DataFusionError::Internal(
-            "The interval value must have a zero month field to convert it to duration"
+            "The interval cannot have a non-zero month value for duration convertibility"
                 .to_string(),
         ));
     }
@@ -641,15 +641,13 @@ pub fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
 pub fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
     let days = dt >> 32;
     let milliseconds = dt & DT_MS_MASK;
-    let duration_ms = days * MILLISECS_IN_ONE_DAY + milliseconds;
-    Ok(duration_ms)
+    Ok(days * MILLISECS_IN_ONE_DAY + milliseconds)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, Column};
-    use crate::expressions::{try_cast, Literal};
+    use crate::expressions::{col, lit, try_cast, Column, Literal};
     use crate::intervals::IntervalBound;
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,

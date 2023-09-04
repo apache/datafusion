@@ -22,7 +22,6 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use arrow_schema::DataType;
-use datafusion_common::scalar::{MILLISECS_IN_ONE_DAY, NANOSECS_IN_ONE_DAY};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
@@ -31,16 +30,14 @@ use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
 
-use crate::expressions::{
-    interval_dt_to_duration_ms, interval_mdn_to_duration_ns, BinaryExpr, CastExpr,
-    Column, Literal,
-};
-use crate::intervals::interval_aritmetic::{
-    apply_operator, is_operator_supported, Interval,
-};
+use crate::expressions::Literal;
+use crate::intervals::interval_aritmetic::{apply_operator, Interval};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
+use super::utils::{
+    convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
+};
 use super::IntervalBound;
 
 // Interval arithmetic provides a way to perform mathematical operations on
@@ -207,15 +204,6 @@ impl PartialEq for ExprIntervalGraphNode {
     }
 }
 
-// This function returns the inverse operator of the given operator.
-fn get_inverse_op(op: Operator) -> Operator {
-    match op {
-        Operator::Plus => Operator::Minus,
-        Operator::Minus => Operator::Plus,
-        _ => unreachable!(),
-    }
-}
-
 /// This function refines intervals `left_child` and `right_child` by applying
 /// constraint propagation through `parent` via operation. The main idea is
 /// that we can shrink ranges of variables x and y using parent interval p.
@@ -236,13 +224,25 @@ pub fn propagate_arithmetic(
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let inverse_op = get_inverse_op(*op);
     match (left_child.get_datatype()?, right_child.get_datatype()?) {
-        // If we have a child of Interval type, we need a special handling
-        // since timestamp difference results in Duration type.
+        // If we have a child whose type is a time interval (i.e. DataType::Interval), we need special handling
+        // since timestamp differencing results in Duration type.
         (DataType::Timestamp(..), DataType::Interval(_)) => {
-            propagate_interval_at_right(left_child, right_child, parent, op, &inverse_op)
+            propagate_time_interval_at_right(
+                left_child,
+                right_child,
+                parent,
+                op,
+                &inverse_op,
+            )
         }
         (DataType::Interval(_), DataType::Timestamp(..)) => {
-            propagate_interval_at_left(left_child, right_child, parent, op, &inverse_op)
+            propagate_time_interval_at_left(
+                left_child,
+                right_child,
+                parent,
+                op,
+                &inverse_op,
+            )
         }
         _ => {
             // First, propagate to the left:
@@ -252,12 +252,9 @@ pub fn propagate_arithmetic(
                 // Left is feasible:
                 Some(value) => {
                     // Propagate to the right using the new left.
-                    let right = match op {
-                        Operator::Minus => apply_operator(op, &value, parent),
-                        Operator::Plus => apply_operator(&inverse_op, parent, &value),
-                        _ => unreachable!(),
-                    }?
-                    .intersect(right_child)?;
+                    let right =
+                        propagate_right(&value, parent, right_child, op, &inverse_op)?;
+
                     // Return intervals for both children:
                     Ok((Some(value), right))
                 }
@@ -306,22 +303,31 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    let (left_type, right_type) =
-        match (left_child.get_datatype()?, right_child.get_datatype()?) {
-            // A comparison between Duration type and Interval type
-            // cannot be done without a timestamp information.
-            // TODO: If the Interval does not have a month field, the comparison can be done though)
-            (DataType::Interval(_), DataType::Duration(_))
-            | (DataType::Duration(_), DataType::Interval(_)) => {
-                return Err(DataFusionError::Internal(
-                    "Interval vs Duration do not support comparison yet".to_string(),
-                ))
-            }
-            (left, right) => (left, right),
-        };
-
+    let left_type = left_child.get_datatype()?;
+    let right_type = right_child.get_datatype()?;
     let parent = comparison_operator_target(&left_type, op, &right_type)?;
-    propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
+    // Duration vs Time Interval operations are not allowed in `get_result_type`.
+    // Once they are added to allowable operations, comparison operators can be
+    // propagated for Duration vs Time Interval or vice versa.
+    match (&left_type, &right_type) {
+        // We can not compare a Duration type with a (time) Interval type
+        // without a reference timestamp unless the latter has a zero month field.
+        (DataType::Interval(_), DataType::Duration(_)) => {
+            propagate_comparison_to_time_interval_at_left(
+                left_child,
+                &parent,
+                right_child,
+            )
+        }
+        (DataType::Duration(_), DataType::Interval(_)) => {
+            propagate_comparison_to_time_interval_at_left(
+                left_child,
+                &parent,
+                right_child,
+            )
+        }
+        _ => propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child),
+    }
 }
 
 impl ExprIntervalGraph {
@@ -570,103 +576,55 @@ impl ExprIntervalGraph {
     }
 }
 
-/// Indicates whether interval arithmetic is supported for the given expression.
-/// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
-/// We do not support every type of [`Operator`]s either. Over time, this check
-/// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
-/// Currently, [`CastExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
-pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let expr_any = expr.as_any();
-    let expr_supported = if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>()
-    {
-        is_operator_supported(binary_expr.op())
-    } else {
-        expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
-    };
-    expr_supported && expr.children().iter().all(check_support)
-}
-
-fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval> {
-    if let (Some(lower), Some(upper)) = (
-        convert_interval_bound_to_duration(&interval.lower),
-        convert_interval_bound_to_duration(&interval.upper),
-    ) {
-        Some(Interval::new(lower, upper))
-    } else {
-        None
-    }
-}
-
-fn convert_interval_bound_to_duration(
-    interval_bound: &IntervalBound,
-) -> Option<IntervalBound> {
-    match interval_bound.value {
-        ScalarValue::IntervalMonthDayNano(Some(mdn)) => {
-            if let Ok(duration) = interval_mdn_to_duration_ns(&mdn) {
-                Some(IntervalBound::new(
-                    ScalarValue::DurationNanosecond(Some(duration)),
-                    interval_bound.open,
-                ))
-            } else {
-                None
-            }
-        }
-        ScalarValue::IntervalDayTime(Some(dt)) => {
-            if let Ok(duration) = interval_dt_to_duration_ms(&dt) {
-                Some(IntervalBound::new(
-                    ScalarValue::DurationMillisecond(Some(duration)),
-                    interval_bound.open,
-                ))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval> {
-    if let (Some(lower), Some(upper)) = (
-        convert_duration_bound_to_interval(&interval.lower),
-        convert_duration_bound_to_interval(&interval.upper),
-    ) {
-        Some(Interval::new(lower, upper))
-    } else {
-        None
-    }
-}
-
-fn convert_duration_bound_to_interval(
-    interval_bound: &IntervalBound,
-) -> Option<IntervalBound> {
-    match interval_bound.value {
-        ScalarValue::DurationNanosecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_mdn(
-                0,
-                (duration / NANOSECS_IN_ONE_DAY) as i32,
-                duration % NANOSECS_IN_ONE_DAY,
-            ),
-            interval_bound.open,
-        )),
-        ScalarValue::DurationMillisecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_dt(
-                (duration / MILLISECS_IN_ONE_DAY) as i32,
-                (duration % MILLISECS_IN_ONE_DAY) as i32,
-            ),
-            interval_bound.open,
-        )),
-        _ => None,
-    }
-}
-
-fn propagate_interval_at_right(
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
+/// operation, the result would be of type `duration`. However, we may encounter a situation where a `time interval`
+/// is involved in an arithmetic operation with that `duration`. This function offers special handling for such cases,
+/// where the `time interval` resides on the left child of the operation.
+fn propagate_time_interval_at_left(
     left_child: &Interval,
     right_child: &Interval,
     parent: &Interval,
     op: &Operator,
     inverse_op: &Operator,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    // If the Interval type is a singleton, propagate to the left only:
+    // If the time interval is a singleton, propagate to the right only:
+    if left_child.lower.value == left_child.upper.value
+        && left_child.lower.open == left_child.upper.open
+    {
+        let right = propagate_right(left_child, parent, right_child, op, inverse_op)?;
+        Ok((Some(left_child.clone()), right))
+    } else {
+        // Otherwise, we check if the child's time interval(s) has a non-zero month field(s).
+        // If so, we return them as is without propagating. Otherwise, we first convert
+        // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
+        if let Some(duration) = convert_interval_type_to_duration(left_child) {
+            match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
+                Some(value) => {
+                    let right =
+                        propagate_right(&value, parent, right_child, op, inverse_op)?;
+                    let new_interval = convert_duration_type_to_interval(&value);
+                    Ok((new_interval, right))
+                }
+                None => Ok((None, None)),
+            }
+        } else {
+            Ok((Some(left_child.clone()), Some(right_child.clone())))
+        }
+    }
+}
+
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
+/// operation, the result would be of type `duration`. However, we may encounter a situation where a `time interval`
+/// is involved in an arithmetic operation with that `duration`. This function offers special handling for such cases,
+/// where the `time interval` resides on the right child of the operation.
+fn propagate_time_interval_at_right(
+    left_child: &Interval,
+    right_child: &Interval,
+    parent: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    // If the time interval is a singleton, propagate to the left only:
     if right_child.lower.value == right_child.upper.value
         && right_child.lower.open == right_child.upper.open
     {
@@ -675,18 +633,14 @@ fn propagate_interval_at_right(
             None => Ok((None, None)),
         }
     } else {
-        // Otherwise, we check if the Interval type child has a non-zero month field.
-        // If so, we will return as they are without propagating. If not, we first convert
-        // them to Duration type, then propagate, and then convert to Interval type again.
+        // Otherwise, we check if the child's time interval(s) has a non-zero month field(s).
+        // If so, we return them as is without propagating. Otherwise, we first convert
+        // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
         if let Some(duration) = convert_interval_type_to_duration(right_child) {
             match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
                 Some(value) => {
-                    let right = match op {
-                        Operator::Minus => apply_operator(op, &value, parent),
-                        Operator::Plus => apply_operator(inverse_op, parent, &value),
-                        _ => unreachable!(),
-                    }?
-                    .intersect(duration)?;
+                    let right =
+                        propagate_right(left_child, parent, &duration, op, inverse_op)?;
                     let right =
                         right.and_then(|right| convert_duration_type_to_interval(&right));
                     Ok((Some(value), right))
@@ -699,45 +653,49 @@ fn propagate_interval_at_right(
     }
 }
 
-fn propagate_interval_at_left(
-    left_child: &Interval,
-    right_child: &Interval,
+/// This is a subfunction of the `propagate_arithmetics` function that propagates to the right child.
+fn propagate_right(
+    left: &Interval,
     parent: &Interval,
+    right: &Interval,
     op: &Operator,
     inverse_op: &Operator,
+) -> Result<Option<Interval>> {
+    match op {
+        Operator::Minus => apply_operator(op, left, parent),
+        Operator::Plus => apply_operator(inverse_op, parent, left),
+        _ => unreachable!(),
+    }?
+    .intersect(right)
+}
+
+/// Converts the `time interval` (as the left child) to duration, then performs the propagation rule for comparison operators.
+pub fn propagate_comparison_to_time_interval_at_left(
+    left_child: &Interval,
+    parent: &Interval,
+    right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    // If the Interval type is a singleton, propagate to the right only:
-    if left_child.lower.value == left_child.upper.value
-        && left_child.lower.open == left_child.upper.open
-    {
-        let right = match op {
-            Operator::Minus => apply_operator(op, left_child, parent),
-            Operator::Plus => apply_operator(inverse_op, parent, left_child),
-            _ => unreachable!(),
-        }?
-        .intersect(right_child)?;
-        Ok((Some(left_child.clone()), right))
+    if let Some(converted) = convert_interval_type_to_duration(left_child) {
+        propagate_arithmetic(&Operator::Minus, parent, &converted, right_child)
     } else {
-        // Otherwise, we check if the Interval type child has a non-zero month field.
-        // If so, we will return as they are without propagating. If not, we first convert
-        // them to Duration type, then propagate, and then convert to Interval type again.
-        if let Some(duration) = convert_interval_type_to_duration(left_child) {
-            match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
-                Some(value) => {
-                    let right = match op {
-                        Operator::Minus => apply_operator(op, &value, parent),
-                        Operator::Plus => apply_operator(inverse_op, parent, &value),
-                        _ => unreachable!(),
-                    }?
-                    .intersect(right_child)?;
-                    let new_interval = convert_duration_type_to_interval(&value);
-                    Ok((new_interval, right))
-                }
-                None => Ok((None, None)),
-            }
-        } else {
-            Ok((Some(left_child.clone()), Some(right_child.clone())))
-        }
+        Err(DataFusionError::Internal(
+                    "Interval type has a non-zero month field, cannot compare with a Duration type".to_string(),
+                ))
+    }
+}
+
+/// Converts the `time interval` (as the right child) to duration, then performs the propagation rule for comparison operators.
+pub fn propagate_comparison_to_time_interval_at_right(
+    left_child: &Interval,
+    parent: &Interval,
+    right_child: &Interval,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    if let Some(converted) = convert_interval_type_to_duration(right_child) {
+        propagate_arithmetic(&Operator::Minus, parent, left_child, &converted)
+    } else {
+        Err(DataFusionError::Internal(
+                    "Interval type has a non-zero month field, cannot compare with a Duration type".to_string(),
+                ))
     }
 }
 
