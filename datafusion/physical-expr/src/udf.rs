@@ -39,5 +39,6 @@ pub fn create_physical_expr(
         fun.fun.clone(),
         input_phy_exprs.to_vec(),
         (fun.return_type)(&input_exprs_types)?.as_ref(),
+        None,
     )))
 }
