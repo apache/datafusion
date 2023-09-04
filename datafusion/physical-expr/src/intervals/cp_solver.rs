@@ -225,7 +225,7 @@ pub fn propagate_arithmetic(
     let inverse_op = get_inverse_op(*op);
     match (left_child.get_datatype()?, right_child.get_datatype()?) {
         // If we have a child whose type is a time interval (i.e. DataType::Interval), we need special handling
-        // since timestamp differencing results in Duration type.
+        // since timestamp differencing results in a Duration type.
         (DataType::Timestamp(..), DataType::Interval(_)) => {
             propagate_time_interval_at_right(
                 left_child,
