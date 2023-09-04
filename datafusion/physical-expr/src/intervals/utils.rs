@@ -130,7 +130,7 @@ fn convert_interval_bound_to_duration(
     }
 }
 
-/// Converts the [`Interval`] of duration to [`Interval`] of time interval, if it is applicable, or returns [`None`].
+/// Converts an [`Interval`] of `Duration`s to one of time intervals, if applicable. Otherwise, returns [`None`].
 pub fn convert_duration_type_to_interval(interval: &Interval) -> Option<Interval> {
     if let (Some(lower), Some(upper)) = (
         convert_duration_bound_to_interval(&interval.lower),
