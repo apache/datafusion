@@ -105,7 +105,7 @@ pub fn convert_interval_type_to_duration(interval: &Interval) -> Option<Interval
     }
 }
 
-/// Converts the [`IntervalBound`] of time interval to [`IntervalBound`] of duration, if it is applicable, or returns [`None`].
+/// Converts an [`IntervalBound`] containing a time interval to one containing a `Duration`, if applicable. Otherwise, returns [`None`].
 fn convert_interval_bound_to_duration(
     interval_bound: &IntervalBound,
 ) -> Option<IntervalBound> {
