@@ -1985,7 +1985,7 @@ mod tests {
             Field::new("b", DataType::Int32, true),
             Field::new("c", DataType::Int32, true),
         ]);
-        let empty_ordering = find_orderings_of_exprs(
+        let one_ordering = find_orderings_of_exprs(
             &[
                 (Arc::new(Column::new("b", 1)), "b_new".to_string()),
                 (Arc::new(Column::new("a", 0)), "a_new".to_string()),
@@ -2006,7 +2006,7 @@ mod tests {
                 }),
                 None,
             ],
-            empty_ordering
+            one_ordering
         );
 
         let schema = Schema::new(vec![
