@@ -152,7 +152,58 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         expr.rewrite(&mut expr_rewrite)
     }
 
-    /// Add guarantees
+    /// Input guarantees and simplify the expression.
+    ///
+    /// The guarantees can simplify expressions. For example, if a column is
+    /// guaranteed to always be a certain value, it's references in the expression
+    /// can be replaced with that literal.
+    ///
+    /// ```rust
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_physical_expr::execution_props::ExecutionProps;
+    /// use datafusion_optimizer::simplify_expressions::{
+    ///     ExprSimplifier, SimplifyContext,
+    ///     guarantees::{Guarantee, GuaranteeBound, NullStatus}};
+    ///
+    /// let schema = Schema::new(vec![
+    ///   Field::new("x", DataType::Int64, false),
+    ///   Field::new("y", DataType::UInt32, false),
+    ///   Field::new("z", DataType::Int64, false),
+    ///   ])
+    ///   .to_dfschema_ref().unwrap();
+    ///
+    /// // Create the simplifier
+    /// let props = ExecutionProps::new();
+    /// let context = SimplifyContext::new(&props)
+    ///    .with_schema(schema);
+    /// let simplifier = ExprSimplifier::new(context);
+    ///
+    /// // Expression: (x >= 3) AND (y + 2 < 10) AND (z > 5)
+    /// let expr_x = col("x").gt_eq(lit(3_i64));
+    /// let expr_y = (col("y") + lit(2_u32)).lt(lit(10_u32));
+    /// let expr_z = col("z").gt(lit(5_i64));
+    /// let expr = expr_x.and(expr_y).and(expr_z.clone());
+    ///
+    /// let guarantees = vec![
+    ///    // x is guaranteed to be between 3 and 5
+    ///    (
+    ///        col("x"),
+    ///        Guarantee::new(
+    ///            Some(GuaranteeBound::new(ScalarValue::Int64(Some(3)), false)),
+    ///            Some(GuaranteeBound::new(ScalarValue::Int64(Some(5)), false)),
+    ///            NullStatus::NeverNull,
+    ///        )
+    ///    ),
+    ///    // y is guaranteed to be 3
+    ///    (col("y"), Guarantee::from(&ScalarValue::UInt32(Some(3)))),
+    /// ];
+    /// let output = simplifier.simplify_with_guarantees(expr, &guarantees).unwrap();
+    /// // Expression becomes: true AND true AND (z > 5), which simplifies to
+    /// // z > 5.
+    /// assert_eq!(output, expr_z);
+    /// ```
     pub fn simplify_with_guarantees<'a>(
         &self,
         expr: Expr,

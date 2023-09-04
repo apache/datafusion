@@ -15,8 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Logic to inject guarantees with expressions.
+//! Guarantees which can be used with [ExprSimplifier::simplify_with_guarantees()][crate::simplify_expressions::expr_simplifier::ExprSimplifier::simplify_with_guarantees].
 //!
+//! Guarantees can represent single values or possible ranges of values.
+//!
+//! ``` 
+//! use datafusion_common::scalar::ScalarValue;
+//! use datafusion_optimizer::simplify_expressions::guarantees::{
+//!     Guarantee, GuaranteeBound, NullStatus};
+//!
+//! // Guarantee that value is always 1_i32
+//! Guarantee::from(&ScalarValue::Int32(Some(1)));
+//! // Guarantee that value is always NULL
+//! Guarantee::from(&ScalarValue::Null);
+//! // Guarantee that value is always between 1_i32 and 10_i32 (inclusive)
+//! // and never null.
+//! Guarantee::new(
+//!    Some(GuaranteeBound::new(ScalarValue::Int32(Some(1)), false)),
+//!    Some(GuaranteeBound::new(ScalarValue::Int32(Some(10)), false)),
+//!    NullStatus::NeverNull,
+//! );
+//! ```
 use datafusion_common::{tree_node::TreeNodeRewriter, Result, ScalarValue};
 use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr, Operator};
 use std::collections::HashMap;
@@ -24,7 +43,7 @@ use std::collections::HashMap;
 /// A bound on the value of an expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GuaranteeBound {
-    /// The value of the bound.
+    /// The value of the bound. If the bound is null, then there is no bound.
     pub bound: ScalarValue,
     /// If true, the bound is exclusive. If false, the bound is inclusive.
     /// In terms of inequalities, this means the bound is `<` or `>` rather than
@@ -40,6 +59,7 @@ impl GuaranteeBound {
 }
 
 impl Default for GuaranteeBound {
+    /// Default value is a closed bound at null.
     fn default() -> Self {
         Self {
             bound: ScalarValue::Null,
@@ -70,9 +90,11 @@ pub enum NullStatus {
 /// nulls.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Guarantee {
-    /// The min values that the expression can take on. If `min.bound` is
+    /// The min values that the expression can take on. If the min is null, then
+    /// there is no known min.
     pub min: GuaranteeBound,
-    /// The max values that the expression can take on.
+    /// The max values that the expression can take on. If the max is null,
+    /// then there is no known max.
     pub max: GuaranteeBound,
     /// Whether the expression is expected to be either always null or never null.
     pub null_status: NullStatus,
@@ -97,14 +119,19 @@ impl Guarantee {
         self.min.bound > *value || (self.min.bound == *value && self.min.open)
     }
 
+    /// Whether values are guaranteed to be greater than or equal to the given
+    /// value.
     fn greater_than_or_eq(&self, value: &ScalarValue) -> bool {
         self.min.bound >= *value
     }
 
+    /// Whether values are guaranteed to be less than the given value.
     fn less_than(&self, value: &ScalarValue) -> bool {
         self.max.bound < *value || (self.max.bound == *value && self.max.open)
     }
 
+    /// Whether values are guaranteed to be less than or equal to the given
+    /// value.
     fn less_than_or_eq(&self, value: &ScalarValue) -> bool {
         self.max.bound <= *value
     }
@@ -136,8 +163,6 @@ impl From<&ScalarValue> for Guarantee {
 }
 
 /// Rewrite expressions to incorporate guarantees.
-///
-///
 pub(crate) struct GuaranteeRewriter<'a> {
     guarantees: HashMap<&'a Expr, &'a Guarantee>,
 }
