@@ -614,9 +614,9 @@ fn propagate_time_interval_at_left(
 }
 
 /// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
-/// operation, the result would be of type `duration`. However, we may encounter a situation where a `time interval`
-/// is involved in an arithmetic operation with that `duration`. This function offers special handling for such cases,
-/// where the `time interval` resides on the right child of the operation.
+/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
+/// where the time interval resides on the right side of the operation.
 fn propagate_time_interval_at_right(
     left_child: &Interval,
     right_child: &Interval,
