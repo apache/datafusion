@@ -310,7 +310,7 @@ pub fn propagate_comparison(
     // Once they are added to allowable operations, comparison operators can be
     // propagated for Duration vs Time Interval or vice versa.
     match (&left_type, &right_type) {
-        // We can not compare a Duration type with a (time) Interval type
+        // We can not compare a Duration type with a time interval type
         // without a reference timestamp unless the latter has a zero month field.
         (DataType::Interval(_), DataType::Duration(_)) => {
             propagate_comparison_to_time_interval_at_left(
