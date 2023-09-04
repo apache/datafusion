@@ -1922,6 +1922,25 @@ SELECT DISTINCT + col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 59
 61
 
+statement ok
+CREATE TABLE tab3(col0 INTEGER, col1 INTEGER, col2 INTEGER)
+
+statement ok
+INSERT INTO tab3 VALUES(0,1,12)
+
+statement ok
+INSERT INTO tab3 VALUES(0,2,13)
+
+statement ok
+INSERT INTO tab3 VALUES(0,1,10)
+
+query IIR rowsort
+SELECT col1, col0, AVG(col2) FROM tab3 GROUP BY ALL
+----
+1 0 11
+2 0 13
+
+
 # query below should work in multi partition, successfully.
 query II
 SELECT l.col0, LAST_VALUE(r.col1 ORDER BY r.col0) as last_col1
