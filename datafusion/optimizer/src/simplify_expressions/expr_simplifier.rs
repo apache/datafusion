@@ -153,7 +153,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     }
 
     /// Add guarantees
-    pub fn simplify_with_gurantee<'a>(
+    pub fn simplify_with_guarantees<'a>(
         &self,
         expr: Expr,
         guarantees: impl IntoIterator<Item = &'a (Expr, Guarantee)>,
@@ -1215,6 +1215,7 @@ mod tests {
     };
 
     use crate::simplify_expressions::{
+        guarantees::{GuaranteeBound, NullStatus},
         utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
         SimplifyContext,
     };
@@ -2693,6 +2694,17 @@ mod tests {
         try_simplify(expr).unwrap()
     }
 
+    fn simplify_with_guarantee(expr: Expr, guarantees: &[(Expr, Guarantee)]) -> Expr {
+        let schema = expr_test_schema();
+        let execution_props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&execution_props).with_schema(schema),
+        );
+        simplifier
+            .simplify_with_guarantees(expr, guarantees)
+            .unwrap()
+    }
+
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
             DFSchema::new_with_metadata(
@@ -3155,5 +3167,57 @@ mod tests {
 
         let expr = not_ilike(null, "%");
         assert_eq!(simplify(expr), lit_bool_null());
+    }
+
+    #[test]
+    fn test_simplify_with_guarantee() {
+        // (x >= 3) AND (y + 2 < 10 OR (z NOT IN ("a", "b")))
+        let expr_x = col("c3").gt(lit(3_i64));
+        let expr_y = (col("c4") + lit(2_u32)).lt(lit(10_u32));
+        let expr_z = col("c1").in_list(vec![lit("a"), lit("b")], true);
+        let expr = expr_x.clone().and(expr_y.or(expr_z));
+
+        // All guaranteed null
+        let guarantees = vec![
+            (col("c3"), Guarantee::from(&ScalarValue::Int64(None))),
+            (col("c4"), Guarantee::from(&ScalarValue::UInt32(None))),
+            (col("c1"), Guarantee::from(&ScalarValue::Utf8(None))),
+        ];
+
+        let output = simplify_with_guarantee(expr.clone(), &guarantees);
+        assert_eq!(output, lit_bool_null());
+
+        // All guaranteed false
+        let guarantees = vec![
+            (
+                col("c3"),
+                Guarantee::new(
+                    Some(GuaranteeBound::new(ScalarValue::Int64(Some(0)), false)),
+                    Some(GuaranteeBound::new(ScalarValue::Int64(Some(2)), false)),
+                    NullStatus::NeverNull,
+                ),
+            ),
+            (col("c4"), Guarantee::from(&ScalarValue::UInt32(Some(9)))),
+            (
+                col("c1"),
+                Guarantee::from(&ScalarValue::Utf8(Some("a".to_string()))),
+            ),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), &guarantees);
+        assert_eq!(output, lit(false));
+
+        // Sufficient true guarantees
+        let guarantees = vec![
+            (col("c3"), Guarantee::from(&ScalarValue::Int64(Some(9)))),
+            (col("c4"), Guarantee::from(&ScalarValue::UInt32(Some(3)))),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), &guarantees);
+        assert_eq!(output, lit(true));
+
+        // Only partially simplify
+        let guarantees =
+            vec![(col("c4"), Guarantee::from(&ScalarValue::UInt32(Some(3))))];
+        let output = simplify_with_guarantee(expr.clone(), &guarantees);
+        assert_eq!(&output, &expr_x);
     }
 }
