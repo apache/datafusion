@@ -17,24 +17,25 @@
 
 //! Utility functions for the interval arithmetic library
 
-use std::sync::Arc;
-
 use arrow_schema::DataType;
 use datafusion_common::{
     scalar::{MILLISECS_IN_ONE_DAY, NANOSECS_IN_ONE_DAY},
-    ScalarValue,
+    DataFusionError, Result, ScalarValue,
 };
+
 use datafusion_expr::Operator;
+use std::sync::Arc;
 
 use crate::{
-    expressions::{
-        interval_dt_to_duration_ms, interval_mdn_to_duration_ns, BinaryExpr, CastExpr,
-        Column, Literal,
-    },
+    expressions::{BinaryExpr, CastExpr, Column, Literal},
     PhysicalExpr,
 };
 
 use super::{Interval, IntervalBound};
+
+const MDN_DAY_MASK: i128 = 0xFFFF_FFFF_0000_0000_0000_0000;
+const MDN_NS_MASK: i128 = 0xFFFF_FFFF_FFFF_FFFF;
+const DT_MS_MASK: i64 = 0xFFFF_FFFF;
 
 /// Indicates whether interval arithmetic is supported for the given expression.
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
@@ -164,4 +165,29 @@ fn convert_duration_bound_to_interval(
         )),
         _ => None,
     }
+}
+
+fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
+    let months = mdn >> 96;
+    let days = (mdn & MDN_DAY_MASK) >> 64;
+    let nanoseconds = mdn & MDN_NS_MASK;
+    if months != 0 {
+        return Err(DataFusionError::Internal(
+            "The interval cannot have a non-zero month value for duration convertibility"
+                .to_string(),
+        ));
+    }
+    let duration_ns = days * NANOSECS_IN_ONE_DAY as i128 + nanoseconds;
+    if duration_ns > i64::MAX as i128 {
+        return Err(DataFusionError::Internal(
+            "Resulting duration exceeds i64::MAX".to_string(),
+        ));
+    }
+    Ok(duration_ns as i64)
+}
+
+fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
+    let days = dt >> 32;
+    let milliseconds = dt & DT_MS_MASK;
+    Ok(days * MILLISECS_IN_ONE_DAY + milliseconds)
 }

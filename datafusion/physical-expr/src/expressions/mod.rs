@@ -76,9 +76,7 @@ pub use crate::window::rank::{dense_rank, percent_rank, rank};
 pub use crate::window::rank::{Rank, RankType};
 pub use crate::window::row_number::RowNumber;
 
-pub use binary::{
-    binary, interval_dt_to_duration_ms, interval_mdn_to_duration_ns, BinaryExpr,
-};
+pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{cast, cast_column, cast_with_options, CastExpr};
 pub use column::{col, Column, UnKnownColumn};

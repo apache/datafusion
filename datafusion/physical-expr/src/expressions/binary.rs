@@ -40,7 +40,6 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow_array::Datum;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::scalar::{MILLISECS_IN_ONE_DAY, NANOSECS_IN_ONE_DAY};
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
@@ -50,10 +49,6 @@ use kernels::{
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
 };
-
-const MDN_DAY_MASK: i128 = 0xFFFF_FFFF_0000_0000_0000_0000;
-const MDN_NS_MASK: i128 = 0xFFFF_FFFF_FFFF_FFFF;
-const DT_MS_MASK: i64 = 0xFFFF_FFFF;
 
 /// Binary expression
 #[derive(Debug, Hash, Clone)]
@@ -620,35 +615,10 @@ pub fn binary(
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
 }
 
-pub fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
-    let months = mdn >> 96;
-    let days = (mdn & MDN_DAY_MASK) >> 64;
-    let nanoseconds = mdn & MDN_NS_MASK;
-    if months != 0 {
-        return Err(DataFusionError::Internal(
-            "The interval cannot have a non-zero month value for duration convertibility"
-                .to_string(),
-        ));
-    }
-    let duration_ns = days * NANOSECS_IN_ONE_DAY as i128 + nanoseconds;
-    if duration_ns > i64::MAX as i128 {
-        return Err(DataFusionError::Internal(
-            "Resulting duration exceeds i64::MAX".to_string(),
-        ));
-    }
-    Ok(duration_ns as i64)
-}
-pub fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
-    let days = dt >> 32;
-    let milliseconds = dt & DT_MS_MASK;
-    Ok(days * MILLISECS_IN_ONE_DAY + milliseconds)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, try_cast, Column, Literal};
-    use crate::intervals::IntervalBound;
+    use crate::expressions::{col, lit, try_cast, Literal};
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };

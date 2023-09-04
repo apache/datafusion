@@ -650,7 +650,7 @@ fn propagate_time_interval_at_right(
     }
 }
 
-/// This is a subfunction of the `propagate_arithmetics` function that propagates to the right child.
+/// This is a subfunction of the `propagate_arithmetic` function that propagates to the right child.
 fn propagate_right(
     left: &Interval,
     parent: &Interval,
