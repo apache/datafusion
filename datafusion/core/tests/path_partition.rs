@@ -43,7 +43,8 @@ use datafusion_common::ScalarValue;
 use futures::stream;
 use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartId,
+    ObjectMeta, ObjectStore,
 };
 use tokio::io::AsyncWrite;
 use url::Url;
@@ -648,7 +649,19 @@ impl ObjectStore for MirroringObjectStore {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let file = File::open(&path).unwrap();
-        Ok(GetResult::File(file, path))
+        let metadata = file.metadata().unwrap();
+        let meta = ObjectMeta {
+            location: location.clone(),
+            last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
+            size: metadata.len() as usize,
+            e_tag: None,
+        };
+
+        Ok(GetResult {
+            range: 0..meta.size,
+            payload: GetResultPayload::File(file, path),
+            meta,
+        })
     }
 
     async fn get_range(

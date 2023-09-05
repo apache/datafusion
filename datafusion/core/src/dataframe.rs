@@ -24,6 +24,7 @@ use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
+use datafusion_common::file_options::StatementOptions;
 use datafusion_common::{DataFusionError, FileType, SchemaError, UnnestOptions};
 use parquet::file::properties::WriterProperties;
 
@@ -999,9 +1000,9 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::CSV,
-            true,
+            false,
             // TODO implement options
-            vec![],
+            StatementOptions::new(vec![]),
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1017,9 +1018,9 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::PARQUET,
-            true,
+            false,
             // TODO implement options
-            vec![],
+            StatementOptions::new(vec![]),
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await
@@ -1034,9 +1035,9 @@ impl DataFrame {
             self.plan,
             path.into(),
             FileType::JSON,
-            true,
+            false,
             // TODO implement options
-            vec![],
+            StatementOptions::new(vec![]),
         )?
         .build()?;
         DataFrame::new(self.session_state, plan).collect().await

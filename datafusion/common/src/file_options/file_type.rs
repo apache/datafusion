@@ -151,7 +151,9 @@ impl FileCompressionType {
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_not_impl_err!("Compression feature is not enabled")
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -174,7 +176,9 @@ impl FileCompressionType {
             ZSTD => Box::new(ZstdEncoder::new(w)),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_not_impl_err!("Compression feature is not enabled")
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
             }
             UNCOMPRESSED => w,
         })
@@ -204,7 +208,9 @@ impl FileCompressionType {
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_not_impl_err!("Compression feature is not enabled")
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -229,7 +235,9 @@ impl FileCompressionType {
             },
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
-                return crate::error::_not_impl_err!("Compression feature is not enabled")
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
             }
             UNCOMPRESSED => Box::new(r),
         })
@@ -287,7 +295,9 @@ impl FromStr for FileType {
             "PARQUET" => Ok(FileType::PARQUET),
             "CSV" => Ok(FileType::CSV),
             "JSON" | "NDJSON" => Ok(FileType::JSON),
-            _ => crate::error::_not_impl_err!("Unknown FileType: {s}"),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unknown FileType: {s}"
+            ))),
         }
     }
 }
@@ -301,9 +311,9 @@ impl FileType {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
             FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
-                _ => crate::error::_internal_err!(
-                    "FileCompressionType can be specified for CSV/JSON FileType."
-                ),
+                _ => Err(DataFusionError::Internal(
+                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
+                )),
             },
         }
     }
@@ -312,7 +322,7 @@ impl FileType {
 #[cfg(test)]
 mod tests {
     use crate::error::DataFusionError;
-    use crate::file_type::{FileCompressionType, FileType};
+    use crate::file_options::file_type::{FileCompressionType, FileType};
     use std::str::FromStr;
 
     #[test]

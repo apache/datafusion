@@ -1117,16 +1117,18 @@ impl LogicalPlan {
                         input: _,
                         output_url,
                         file_format,
-                        per_thread_output,
-                        options,
+                        single_file_output,
+                        statement_options,
                     }) => {
-                        let op_str = options
+                        let op_str = statement_options
+                            .clone()
+                            .into_inner()
                             .iter()
                             .map(|(k, v)| format!("{k} {v}"))
                             .collect::<Vec<String>>()
                             .join(", ");
 
-                        write!(f, "CopyTo: format={file_format} output_url={output_url} per_thread_output={per_thread_output} options: ({op_str})")
+                        write!(f, "CopyTo: format={file_format} output_url={output_url} single_file_output={single_file_output} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())

@@ -15,9 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod aggregate_fuzz;
-mod join_fuzz;
-mod merge_fuzz;
-mod sort_fuzz;
-mod sort_preserving_repartition_fuzz;
-mod window_fuzz;
+//! Options related to how avro files should be written
+
+use crate::{
+    config::ConfigOptions,
+    error::{DataFusionError, Result},
+};
+
+use super::StatementOptions;
+
+#[derive(Clone, Debug)]
+pub struct AvroWriterOptions {}
+
+impl TryFrom<(&ConfigOptions, &StatementOptions)> for AvroWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(_value: (&ConfigOptions, &StatementOptions)) -> Result<Self> {
+        Ok(AvroWriterOptions {})
+    }
+}
