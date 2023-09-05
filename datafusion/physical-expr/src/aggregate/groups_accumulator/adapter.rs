@@ -22,14 +22,12 @@ use arrow::{
     array::{AsArray, UInt32Builder},
     compute,
     datatypes::UInt32Type,
-    record_batch::RecordBatch,
 };
 use arrow_array::{ArrayRef, BooleanArray, PrimitiveArray};
 use datafusion_common::{
     utils::get_arrayref_at_indices, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::Accumulator;
-use std::collections::TryReserveError;
 
 /// An adapter that implements [`GroupsAccumulator`] for any [`Accumulator`]
 ///
@@ -344,12 +342,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     fn size(&self) -> usize {
         self.allocation_bytes
     }
-
-    fn try_reserve(&mut self, _batch: &RecordBatch) -> Result<(), TryReserveError> {
-        Ok(())
-    }
-
-    fn clear_shrink(&mut self, _batch: &RecordBatch) {}
 }
 
 /// Extension trait for [`Vec`] to account for allocations.

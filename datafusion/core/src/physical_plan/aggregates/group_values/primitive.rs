@@ -208,24 +208,6 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
-    // FIXME: cannot return std::collections::TryReserveError because std::collections::TryReserveErrorKind
-    //   is unstable. For now, use hashbrown::TryReserveError instead.
-    fn try_reserve(
-        &mut self,
-        batch: &RecordBatch,
-    ) -> Result<(), hashbrown::TryReserveError> {
-        let additional = batch.num_rows();
-        self.values
-            .try_reserve(additional)
-            .map_err(|_| hashbrown::TryReserveError::CapacityOverflow)
-            .and({
-                let state = &self.random_state;
-                self.map.try_reserve(additional, |g| unsafe {
-                    self.values.get_unchecked(*g).hash(state)
-                })
-            })
-    }
-
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         let count = batch.num_rows();
         self.values.clear();

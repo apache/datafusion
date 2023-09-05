@@ -186,21 +186,6 @@ impl GroupValues for GroupValuesRows {
         })
     }
 
-    // FIXME: cannot return std::collections::TryReserveError because std::collections::TryReserveErrorKind
-    //   is unstable. For now, use hashbrown::TryReserveError instead.
-    fn try_reserve(
-        &mut self,
-        batch: &RecordBatch,
-    ) -> Result<(), hashbrown::TryReserveError> {
-        let additional = batch.num_rows();
-        // FIXME: there is no good way to try_reserve for self.row_converter self.group_values
-        self.map.try_reserve(additional, |(hash, _)| *hash).and(
-            self.hashes_buffer
-                .try_reserve(additional)
-                .map_err(|_| hashbrown::TryReserveError::CapacityOverflow),
-        )
-    }
-
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         let count = batch.num_rows();
         // FIXME: there is no good way to clear_shrink for self.row_converter self.group_values

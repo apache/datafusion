@@ -21,7 +21,7 @@ use arrow::array::{AsArray, PrimitiveBuilder};
 use log::debug;
 
 use std::any::Any;
-use std::collections::TryReserveError;
+
 use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::accumulate::NullState;
@@ -33,7 +33,6 @@ use arrow::datatypes::{DataType, Decimal128Type, Float64Type, UInt64Type};
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
-    record_batch::RecordBatch,
 };
 use arrow_array::{
     Array, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, PrimitiveArray,
@@ -519,21 +518,6 @@ where
     fn size(&self) -> usize {
         self.counts.capacity() * std::mem::size_of::<u64>()
             + self.sums.capacity() * std::mem::size_of::<T>()
-    }
-
-    fn try_reserve(&mut self, batch: &RecordBatch) -> Result<(), TryReserveError> {
-        let additional = batch.num_rows();
-        self.counts
-            .try_reserve(additional)
-            .and(self.sums.try_reserve(additional))
-    }
-
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        let count = batch.num_rows();
-        self.counts.clear();
-        self.counts.shrink_to(count);
-        self.sums.clear();
-        self.sums.shrink_to(count);
     }
 }
 

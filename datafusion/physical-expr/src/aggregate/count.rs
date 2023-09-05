@@ -18,7 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::collections::TryReserveError;
+
 use std::fmt::Debug;
 use std::ops::BitAnd;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
 use arrow::compute;
 use arrow::datatypes::DataType;
-use arrow::{array::ArrayRef, datatypes::Field, record_batch::RecordBatch};
+use arrow::{array::ArrayRef, datatypes::Field};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::PrimitiveArray;
@@ -190,15 +190,6 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
     fn size(&self) -> usize {
         self.counts.capacity() * std::mem::size_of::<usize>()
-    }
-
-    fn try_reserve(&mut self, batch: &RecordBatch) -> Result<(), TryReserveError> {
-        self.counts.try_reserve(batch.num_rows())
-    }
-
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        self.counts.clear();
-        self.counts.shrink_to(batch.num_rows());
     }
 }
 

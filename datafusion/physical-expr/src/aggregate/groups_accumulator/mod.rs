@@ -21,9 +21,6 @@ pub(crate) mod accumulate;
 mod adapter;
 
 pub use adapter::GroupsAccumulatorAdapter;
-use arrow::record_batch::RecordBatch;
-
-use std::collections::TryReserveError;
 
 pub(crate) mod bool_op;
 pub(crate) mod prim_op;
@@ -161,14 +158,4 @@ pub trait GroupsAccumulator: Send {
     /// in bytes. This function is called once per batch, so it should
     /// be `O(n)` to compute, not `O(num_groups)`
     fn size(&self) -> usize;
-
-    /// Try to reserve capacity the that at least a single [`RecordBatch`] can be inserted. The
-    /// accumulator may reserve more space to speculatively avoid frequent re-allocations. After
-    /// calling try_reserve, capacity will be greater than or equal to self.len() + additional if
-    /// it returns Ok(()). Does nothing if capacity is already sufficient. This method preserves
-    /// the contents even if an error occurs.
-    fn try_reserve(&mut self, batch: &RecordBatch) -> Result<(), TryReserveError>;
-
-    /// clear the contents and shrink the capacity
-    fn clear_shrink(&mut self, batch: &RecordBatch);
 }
