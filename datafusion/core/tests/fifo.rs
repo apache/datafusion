@@ -336,7 +336,6 @@ mod unix_test {
 
     /// It tests the INSERT INTO functionality.
     #[tokio::test]
-    #[ignore]
     async fn test_sql_insert_into_fifo() -> Result<()> {
         // To make unbounded deterministic
         let waiting = Arc::new(AtomicBool::new(true));

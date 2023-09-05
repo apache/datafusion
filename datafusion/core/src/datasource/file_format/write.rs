@@ -40,7 +40,8 @@ use futures::{ready, StreamExt};
 use object_store::path::Path;
 use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
-use tokio::task::{self, JoinHandle, JoinSet};
+use tokio::sync::mpsc;
+use tokio::task::{JoinHandle, JoinSet};
 
 /// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends
@@ -319,7 +320,7 @@ async fn serialize_rb_stream_to_object_store(
     ),
 > {
     let (tx, mut rx) =
-        mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100); // buffer size of 100, adjust as needed
+        mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100); 
 
     let serialize_task = tokio::spawn(async move {
         while let Some(maybe_batch) = data_stream.next().await {
@@ -336,7 +337,6 @@ async fn serialize_rb_stream_to_object_store(
                             "Unknown error writing to object store".into(),
                         )
                     })?;
-                    yield_now().await;
                 }
                 Err(_) => {
                     return Err(DataFusionError::Internal(
@@ -393,7 +393,7 @@ async fn serialize_rb_stream_to_object_store(
     };
     Ok((serializer, writer, row_count as u64))
 }
-}
+
 
 /// Contains the common logic for serializing RecordBatches and
 /// writing the resulting bytes to an ObjectStore.
