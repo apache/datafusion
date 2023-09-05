@@ -48,8 +48,8 @@ use arrow::{
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
 // Constants we use throughout this file:
-pub const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
-pub const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
+const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
+const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
 const SECS_IN_ONE_MONTH: i64 = 2_592_000; // assuming 30 days.
 const MILLISECS_IN_ONE_MONTH: i64 = 2_592_000_000; // assuming 30 days.
 const MICROSECS_IN_ONE_MONTH: i64 = 2_592_000_000_000; // assuming 30 days.

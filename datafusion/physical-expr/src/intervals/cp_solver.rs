@@ -21,24 +21,24 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use arrow_schema::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::type_coercion::binary::get_result_type;
-use datafusion_expr::Operator;
-use petgraph::graph::NodeIndex;
-use petgraph::stable_graph::{DefaultIx, StableGraph};
-use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
-use petgraph::Outgoing;
-
+use super::utils::{
+    convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
+};
+use super::IntervalBound;
 use crate::expressions::Literal;
 use crate::intervals::interval_aritmetic::{apply_operator, Interval};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
-use super::utils::{
-    convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
-};
-use super::IntervalBound;
+use arrow_schema::DataType;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::get_result_type;
+use datafusion_expr::Operator;
+
+use petgraph::graph::NodeIndex;
+use petgraph::stable_graph::{DefaultIx, StableGraph};
+use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
+use petgraph::Outgoing;
 
 // Interval arithmetic provides a way to perform mathematical operations on
 // intervals, which represent a range of possible values rather than a single
