@@ -1922,24 +1922,51 @@ SELECT DISTINCT + col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 59
 61
 
+# Group By All tests
 statement ok
-CREATE TABLE tab3(col0 INTEGER, col1 INTEGER, col2 INTEGER)
+CREATE TABLE tab3(col0 INTEGER, col1 INTEGER, col2 INTEGER, col3 INTEGER)
 
 statement ok
-INSERT INTO tab3 VALUES(0,1,12)
+INSERT INTO tab3 VALUES(0,1,12,-1)
 
 statement ok
-INSERT INTO tab3 VALUES(0,2,13)
+INSERT INTO tab3 VALUES(0,2,13,-1)
 
 statement ok
-INSERT INTO tab3 VALUES(0,1,10)
+INSERT INTO tab3 VALUES(0,1,10,-2)
+
+statement ok
+INSERT INTO tab3 VALUES(0,2,15,-2)
+
+statement ok
+INSERT INTO tab3 VALUES(1, NULL, 10, -2)
+
+query IRI rowsort
+SELECT col1, AVG(col2), col0 FROM tab3 GROUP BY ALL
+----
+1 11 0
+2 14 0
+NULL 10 1
 
 query IIR rowsort
-SELECT col1, col0, AVG(col2) FROM tab3 GROUP BY ALL
+SELECT sub.col1, sub.col0, AVG(sub.col2) AS avg_col2
+FROM (
+  SELECT col1, col0, col2
+  FROM tab3
+  WHERe col3 = -1
+  GROUP BY ALL
+) AS sub
+GROUP BY ALL;
 ----
-1 0 11
+1 0 12
 2 0 13
 
+query IIII rowsort
+SELECT col0, col1, COUNT(col2), SUM(col3) FROM tab3 GROUP BY ALL
+----
+0 1 2 -3
+0 2 2 -3
+1 NULL 1 -2
 
 # query below should work in multi partition, successfully.
 query II

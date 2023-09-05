@@ -166,14 +166,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .collect::<Result<Vec<Expr>>>()?
         } else {
             // 'group by all' groups wrt. all select expressions except 'AggregateFunction's.
-            let mut non_aggregate_exprs = vec![];
-            for select_expr in &select_exprs {
-                match select_expr {
-                    Expr::AggregateFunction(_) | Expr::AggregateUDF(_) => continue,
-                    _ => non_aggregate_exprs.push(select_expr.clone()),
-                }
-            }
-            non_aggregate_exprs
+            // Filter and collect non-aggregate select expressions
+            select_exprs
+                .iter()
+                .filter(|select_expr| match select_expr {
+                    Expr::AggregateFunction(_) | Expr::AggregateUDF(_) => false,
+                    Expr::Alias(Alias { expr, name: _ }) => !matches!(
+                        **expr,
+                        Expr::AggregateFunction(_) | Expr::AggregateUDF(_)
+                    ),
+                    _ => true,
+                })
+                .cloned()
+                .collect()
         };
 
         // process group by, aggregation or having
