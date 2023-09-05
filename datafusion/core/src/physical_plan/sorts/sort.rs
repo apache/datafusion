@@ -328,6 +328,12 @@ impl ExternalSorter {
             }
 
             for spill in self.spills.drain(..) {
+                if !spill.path().exists() {
+                    return Err(DataFusionError::Internal(format!(
+                        "Spill file {:?} does not exist",
+                        spill.path()
+                    )));
+                }
                 let stream = read_spill_as_stream(spill, self.schema.clone())?;
                 streams.push(stream);
             }
