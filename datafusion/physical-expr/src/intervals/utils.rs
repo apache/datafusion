@@ -156,7 +156,7 @@ fn convert_duration_bound_to_interval(
     }
 }
 
-/// If both the month and day fields of [`ScalarValue::IntervalMonthDayNano`] are zero, this function returns the nanoseconds part. 
+/// If both the month and day fields of [`ScalarValue::IntervalMonthDayNano`] are zero, this function returns the nanoseconds part.
 /// Otherwise, it returns an error.
 fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
     let months = mdn >> 96;
@@ -175,7 +175,7 @@ fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
     }
 }
 
-/// If the day field of the [`ScalarValue::IntervalDayTime`] is zero, this function returns the milliseconds part. 
+/// If the day field of the [`ScalarValue::IntervalDayTime`] is zero, this function returns the milliseconds part.
 /// Otherwise, it returns an error.
 fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
     let days = dt >> 32;
