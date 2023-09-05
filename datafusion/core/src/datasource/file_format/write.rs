@@ -318,38 +318,40 @@ async fn serialize_rb_stream_to_object_store(
         DataFusionError,
     ),
 > {
-    let mut row_count = 0;
-    // Not using JoinSet here since we want to ulimately write to ObjectStore preserving file order
-    let mut serialize_tasks: Vec<JoinHandle<Result<(usize, Bytes), DataFusionError>>> =
-        Vec::new();
-    while let Some(maybe_batch) = data_stream.next().await {
-        let mut serializer_clone = match serializer.duplicate() {
-            Ok(s) => s,
-            Err(_) => {
-                return Err((
-                    writer,
-                    DataFusionError::Internal(
+    let (tx, mut rx) =
+        mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100); // buffer size of 100, adjust as needed
+
+    let serialize_task = tokio::spawn(async move {
+        while let Some(maybe_batch) = data_stream.next().await {
+            match serializer.duplicate() {
+                Ok(mut serializer_clone) => {
+                    let handle = tokio::spawn(async move {
+                        let batch = maybe_batch?;
+                        let num_rows = batch.num_rows();
+                        let bytes = serializer_clone.serialize(batch).await?;
+                        Ok((num_rows, bytes))
+                    });
+                    tx.send(handle).await.map_err(|_| {
+                        DataFusionError::Internal(
+                            "Unknown error writing to object store".into(),
+                        )
+                    })?;
+                    yield_now().await;
+                }
+                Err(_) => {
+                    return Err(DataFusionError::Internal(
                         "Unknown error writing to object store".into(),
-                    ),
-                ))
+                    ))
+                }
             }
-        };
-        serialize_tasks.push(task::spawn(async move {
-            let batch = maybe_batch?;
-            let num_rows = batch.num_rows();
-            let bytes = serializer_clone.serialize(batch).await?;
-            Ok((num_rows, bytes))
-        }));
-    }
-    for serialize_result in serialize_tasks {
-        let result = serialize_result.await;
-        match result {
-            Ok(res) => {
-                let (cnt, bytes) = match res {
-                    Ok(r) => r,
-                    Err(e) => return Err((writer, e)),
-                };
-                row_count += cnt;
+        }
+        Ok(serializer)
+    });
+
+    let mut row_count = 0;
+    while let Some(handle) = rx.recv().await {
+        match handle.await {
+            Ok(Ok((cnt, bytes))) => {
                 match writer.write_all(&bytes).await {
                     Ok(_) => (),
                     Err(_) => {
@@ -361,19 +363,36 @@ async fn serialize_rb_stream_to_object_store(
                         ))
                     }
                 };
+                row_count += cnt;
+            }
+            Ok(Err(e)) => {
+                // Return the writer along with the error
+                return Err((writer, e));
             }
             Err(_) => {
+                // Handle task panic or cancellation
                 return Err((
                     writer,
                     DataFusionError::Internal(
-                        "Unknown error writing to object store".into(),
+                        "Serialization task panicked or was cancelled".into(),
                     ),
-                ))
+                ));
             }
         }
     }
 
+    let serializer = match serialize_task.await {
+        Ok(Ok(serializer)) => serializer,
+        Ok(Err(e)) => return Err((writer, e)),
+        Err(_) => {
+            return Err((
+                writer,
+                DataFusionError::Internal("Unknown error writing to object store".into()),
+            ))
+        }
+    };
     Ok((serializer, writer, row_count as u64))
+}
 }
 
 /// Contains the common logic for serializing RecordBatches and
