@@ -320,7 +320,7 @@ async fn serialize_rb_stream_to_object_store(
     ),
 > {
     let (tx, mut rx) =
-        mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100); 
+        mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
 
     let serialize_task = tokio::spawn(async move {
         while let Some(maybe_batch) = data_stream.next().await {
@@ -393,7 +393,6 @@ async fn serialize_rb_stream_to_object_store(
     };
     Ok((serializer, writer, row_count as u64))
 }
-
 
 /// Contains the common logic for serializing RecordBatches and
 /// writing the resulting bytes to an ObjectStore.
