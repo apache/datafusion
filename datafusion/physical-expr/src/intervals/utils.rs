@@ -175,8 +175,8 @@ fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
     }
 }
 
-/// Unless the number of [`ScalarValue::IntervalDayTime`] has a non-zero day field, returns
-/// the milliseconds part as it will construct a [`ScalarValue::DurationMillisecond`]. Otherwise, returns an error.
+/// If the day field of the [`ScalarValue::IntervalDayTime`] is zero, this function returns the milliseconds part. 
+/// Otherwise, it returns an error.
 fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
     let days = dt >> 32;
     let milliseconds = dt & DT_MS_MASK;
