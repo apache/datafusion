@@ -584,29 +584,21 @@ fn propagate_time_interval_at_left(
     op: &Operator,
     inverse_op: &Operator,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    // If the time interval is a singleton, propagate to the right only:
-    if left_child.lower.value == left_child.upper.value
-        && left_child.lower.open == left_child.upper.open
-    {
+    // We check if the child's time interval(s) has a non-zero month or day field(s).
+    // If so, we return it as is without propagating. Otherwise, we first convert
+    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
+    if let Some(duration) = convert_interval_type_to_duration(left_child) {
+        match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
+            Some(value) => {
+                let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
+                let new_interval = convert_duration_type_to_interval(&value);
+                Ok((new_interval, right))
+            }
+            None => Ok((None, None)),
+        }
+    } else {
         let right = propagate_right(left_child, parent, right_child, op, inverse_op)?;
         Ok((Some(left_child.clone()), right))
-    } else {
-        // Otherwise, we check if the child's time interval(s) has a non-zero month field(s).
-        // If so, we return them as is without propagating. Otherwise, we first convert
-        // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
-        if let Some(duration) = convert_interval_type_to_duration(left_child) {
-            match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
-                Some(value) => {
-                    let right =
-                        propagate_right(&value, parent, right_child, op, inverse_op)?;
-                    let new_interval = convert_duration_type_to_interval(&value);
-                    Ok((new_interval, right))
-                }
-                None => Ok((None, None)),
-            }
-        } else {
-            Ok((Some(left_child.clone()), Some(right_child.clone())))
-        }
     }
 }
 
@@ -621,31 +613,24 @@ fn propagate_time_interval_at_right(
     op: &Operator,
     inverse_op: &Operator,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    // If the time interval is a singleton, propagate to the left only:
-    if right_child.lower.value == right_child.upper.value
-        && right_child.lower.open == right_child.upper.open
-    {
-        match apply_operator(inverse_op, parent, right_child)?.intersect(left_child)? {
-            Some(left_child) => Ok((Some(left_child), Some(right_child.clone()))),
+    // We check if the child's time interval(s) has a non-zero month or day field(s).
+    // If so, we return it as is without propagating. Otherwise, we first convert
+    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
+    if let Some(duration) = convert_interval_type_to_duration(right_child) {
+        match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
+            Some(value) => {
+                let right =
+                    propagate_right(left_child, parent, &duration, op, inverse_op)?;
+                let right =
+                    right.and_then(|right| convert_duration_type_to_interval(&right));
+                Ok((Some(value), right))
+            }
             None => Ok((None, None)),
         }
     } else {
-        // Otherwise, we check if the child's time interval(s) has a non-zero month field(s).
-        // If so, we return them as is without propagating. Otherwise, we first convert
-        // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
-        if let Some(duration) = convert_interval_type_to_duration(right_child) {
-            match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
-                Some(value) => {
-                    let right =
-                        propagate_right(left_child, parent, &duration, op, inverse_op)?;
-                    let right =
-                        right.and_then(|right| convert_duration_type_to_interval(&right));
-                    Ok((Some(value), right))
-                }
-                None => Ok((None, None)),
-            }
-        } else {
-            Ok((Some(left_child.clone()), Some(right_child.clone())))
+        match apply_operator(inverse_op, parent, right_child)?.intersect(left_child)? {
+            Some(value) => Ok((Some(value), Some(right_child.clone()))),
+            None => Ok((None, None)),
         }
     }
 }
@@ -1384,12 +1369,12 @@ mod tests {
         let left_child = Interval::new(
             IntervalBound::new(
                 // 2 days
-                ScalarValue::IntervalDayTime(Some(0x2_0000_0000)),
+                ScalarValue::IntervalDayTime(Some(172_800_000)),
                 false,
             ),
             IntervalBound::new(
                 // 10 days
-                ScalarValue::IntervalDayTime(Some(0xA_0000_0000)),
+                ScalarValue::IntervalDayTime(Some(864_000_000)),
                 false,
             ),
         );
@@ -1415,12 +1400,12 @@ mod tests {
             Some(Interval::new(
                 IntervalBound::new(
                     // 2 days
-                    ScalarValue::IntervalDayTime(Some(0x2_0000_0000)),
+                    ScalarValue::IntervalDayTime(Some(172_800_000)),
                     false,
                 ),
                 IntervalBound::new(
                     // 6 days
-                    ScalarValue::IntervalDayTime(Some(0x6_0000_0000)),
+                    ScalarValue::IntervalDayTime(Some(518_400_000)),
                     false,
                 ),
             )),

@@ -18,10 +18,7 @@
 //! Utility functions for the interval arithmetic library
 
 use arrow_schema::DataType;
-use datafusion_common::{
-    scalar::{MILLISECS_IN_ONE_DAY, NANOSECS_IN_ONE_DAY},
-    DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 
 use datafusion_expr::Operator;
 use std::sync::Arc;
@@ -149,45 +146,48 @@ fn convert_duration_bound_to_interval(
 ) -> Option<IntervalBound> {
     match interval_bound.value {
         ScalarValue::DurationNanosecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_mdn(
-                0,
-                (duration / NANOSECS_IN_ONE_DAY) as i32,
-                duration % NANOSECS_IN_ONE_DAY,
-            ),
+            ScalarValue::new_interval_mdn(0, 0, duration),
             interval_bound.open,
         )),
         ScalarValue::DurationMillisecond(Some(duration)) => Some(IntervalBound::new(
-            ScalarValue::new_interval_dt(
-                (duration / MILLISECS_IN_ONE_DAY) as i32,
-                (duration % MILLISECS_IN_ONE_DAY) as i32,
-            ),
+            ScalarValue::new_interval_dt(0, duration as i32),
             interval_bound.open,
         )),
         _ => None,
     }
 }
 
+/// Unless the number of [`ScalarValue::IntervalMonthDayNano`] has a non-zero month or day field,
+/// returns the nanoseconds part as it will construct a [`ScalarValue::DurationNanosecond`]. Otherwise, returns an error.
 fn interval_mdn_to_duration_ns(mdn: &i128) -> Result<i64> {
     let months = mdn >> 96;
     let days = (mdn & MDN_DAY_MASK) >> 64;
     let nanoseconds = mdn & MDN_NS_MASK;
-    if months != 0 {
-        return Err(DataFusionError::Internal(
-            "The interval cannot have a non-zero month value for duration convertibility"
+
+    if months == 0 && days == 0 {
+        nanoseconds.try_into().map_err(|_| {
+            DataFusionError::Internal("Resulting duration exceeds i64::MAX".to_string())
+        })
+    } else {
+        Err(DataFusionError::Internal(
+            "The interval cannot have a non-zero month or day value for duration convertibility"
                 .to_string(),
-        ));
+        ))
     }
-    let duration_ns = days * NANOSECS_IN_ONE_DAY as i128 + nanoseconds;
-    if duration_ns > i64::MAX as i128 {
-        return Err(DataFusionError::Internal(
-            "Resulting duration exceeds i64::MAX".to_string(),
-        ));
-    }
-    Ok(duration_ns as i64)
 }
 
+/// Unless the number of [`ScalarValue::IntervalDayTime`] has a non-zero day field, returns
+/// the milliseconds part as it will construct a [`ScalarValue::DurationMillisecond`]. Otherwise, returns an error.
 fn interval_dt_to_duration_ms(dt: &i64) -> Result<i64> {
     let days = dt >> 32;
     let milliseconds = dt & DT_MS_MASK;
-    Ok(days * MILLISECS_IN_ONE_DAY + milliseconds)
+
+    if days == 0 {
+        Ok(milliseconds)
+    } else {
+        Err(DataFusionError::Internal(
+            "The interval cannot have a non-zero day value for duration convertibility"
+                .to_string(),
+        ))
+    }
 }
