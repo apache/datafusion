@@ -1110,6 +1110,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "predicates",
+ "regex",
  "rstest",
  "rustyline",
  "tokio",
