@@ -40,7 +40,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 use datafusion_physical_expr::intervals::check_support;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries,
@@ -153,7 +153,11 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.input.ordering_equivalence_properties()
+        let mut res = self.input.ordering_equivalence_properties();
+        let constants = collect_constants_from_predicate(self.predicate());
+        println!("constants: {:?}", constants);
+        res.add_constants(constants);
+        res
     }
 
     fn with_new_children(
@@ -373,6 +377,42 @@ fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAnd
 /// The equals Column-Pairs and Non-equals Column-Pairs in the Predicates
 pub type EqualAndNonEqual<'a> =
     (Vec<(&'a Column, &'a Column)>, Vec<(&'a Column, &'a Column)>);
+
+fn is_literal(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any().is::<Literal>()
+}
+
+fn is_column(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any().is::<Column>()
+}
+
+fn get_constant_expr(binary: &BinaryExpr) -> Option<Arc<dyn PhysicalExpr>> {
+    if binary.op() == &Operator::Eq
+        && is_literal(binary.left())
+        && is_column(binary.right())
+    {
+        Some(binary.right().clone())
+    } else if binary.op() == &Operator::Eq
+        && is_literal(binary.right())
+        && is_column(binary.left())
+    {
+        Some(binary.left().clone())
+    } else {
+        None
+    }
+}
+
+fn collect_constants_from_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    let mut res = vec![];
+    if let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(expr) = get_constant_expr(binary) {
+            res.push(expr);
+        }
+    }
+    res
+}
 
 #[cfg(test)]
 mod tests {

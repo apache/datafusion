@@ -194,6 +194,7 @@ impl EquivalenceProperties {
 #[derive(Debug, Clone)]
 pub struct OrderingEquivalenceProperties {
     oeq_class: Option<OrderingEquivalentClass>,
+    constants: Vec<Arc<dyn PhysicalExpr>>,
     schema: SchemaRef,
 }
 
@@ -201,6 +202,7 @@ impl OrderingEquivalenceProperties {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             oeq_class: None,
+            constants: vec![],
             schema,
         }
     }
@@ -235,6 +237,13 @@ impl OrderingEquivalenceProperties {
         }
     }
 
+    pub fn add_constants(&mut self, constants: Vec<Arc<dyn PhysicalExpr>>) {
+        for constant in constants {
+            // TODO: Add already inserted check
+            self.constants.push(constant);
+        }
+    }
+
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -247,7 +256,15 @@ impl OrderingEquivalenceProperties {
         let mut normalized_sort_reqs = sort_reqs.to_vec();
         if let Some(oeq_class) = &self.oeq_class {
             for item in oeq_class.others() {
+                // // println!("item bef: {:?}", item);
+                // let item2 = prune_constants(item, &self.constants);
+                // // println!("item aft: {:?}", item2);
+                // if &item2 != item{
+                //     println!("item bef: {:?}", item);
+                //     println!("item aft: {:?}", item2);
+                // }
                 let item = PhysicalSortRequirement::from_sort_exprs(item);
+                let item = prune_constants(&item, &self.constants);
                 let ranges =
                     get_compatible_ranges(&normalized_sort_reqs, &item, is_aggressive);
                 let mut offset: i64 = 0;
@@ -274,7 +291,8 @@ impl OrderingEquivalenceProperties {
                 }
             }
         }
-        collapse_vec(normalized_sort_reqs)
+        let res = collapse_vec(normalized_sort_reqs);
+        prune_constants(&res, &self.constants)
     }
 }
 
@@ -697,7 +715,10 @@ fn get_compatible_ranges(
         let mut res = vec![];
         for i in 0..given.len() {
             let mut count = 0;
-            while i + count < given.len() && count < section.len() && given[i + count] == section[count] {
+            while i + count < given.len()
+                && count < section.len()
+                && given[i + count] == section[count]
+            {
                 count += 1;
             }
             if count > 0 {
@@ -726,6 +747,25 @@ fn get_compatible_ranges(
             })
             .collect()
     }
+}
+
+fn expr_contains(constants: &[Arc<dyn PhysicalExpr>], expr: &Arc<dyn PhysicalExpr>) -> bool {
+    for constant in constants{
+        if constant.eq(expr){
+            return true;
+        }
+    }
+    false
+}
+
+fn prune_constants(ordering: &[PhysicalSortRequirement], constants: &[Arc<dyn PhysicalExpr>]) -> Vec<PhysicalSortRequirement> {
+    let mut new_ordering = vec![];
+    for order in ordering{
+        if !expr_contains(constants, &order.expr){
+            new_ordering.push(order.clone())
+        }
+    }
+    new_ordering
 }
 
 #[cfg(test)]

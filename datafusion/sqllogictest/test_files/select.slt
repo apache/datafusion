@@ -882,6 +882,23 @@ physical_plan
 ProjectionExec: expr=[a@0 as a, b@1 as b, 2 as Int64(2)]
 --CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
 
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0
+ORDER BY b, c;
+----
+logical_plan
+Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
+--Filter: annotated_data_finite2.a = Int32(0)
+----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
+physical_plan
+SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=8192
+----FilterExec: a@1 = 0
+------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
 statement ok
 drop table annotated_data_finite2;
 
