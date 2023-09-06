@@ -83,8 +83,7 @@ LOCATION <literal>
 a path to a file or directory of partitioned files locally or on an
 object store.
 
-Parquet data sources can be registered by executing a `CREATE EXTERNAL
-TABLE` SQL statement such as the following. It is not necessary to
+Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement such as the following. It is not necessary to
 provide schema information for Parquet files.
 
 ```sql
@@ -112,7 +111,6 @@ COMPRESSION TYPE GZIP
 WITH HEADER ROW
 LOCATION '/path/to/aggregate_simple.csv.gz';
 ```
-
 
 It is also possible to specify the schema manually.
 
