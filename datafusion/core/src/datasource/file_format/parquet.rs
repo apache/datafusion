@@ -821,7 +821,6 @@ mod tests {
     use super::*;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
-    use crate::datasource::physical_plan::get_scan_files;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
