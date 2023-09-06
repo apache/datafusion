@@ -22,7 +22,6 @@ use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
-use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -33,10 +32,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{
-    exec_err,
-    tree_node::{TreeNode, VisitRecursion},
-};
+use datafusion_common::exec_err;
 use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
@@ -70,22 +66,6 @@ pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
 /// which can wrap the types.
 pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
-}
-
-/// Get all of the [`PartitionedFile`] to be scanned for an [`ExecutionPlan`]
-pub fn get_scan_files(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
-    let mut collector: Vec<Vec<Vec<PartitionedFile>>> = vec![];
-    plan.apply(&mut |plan| {
-        if let Some(file_scan_config) = plan.file_scan_config() {
-            collector.push(file_scan_config.file_groups.clone());
-            Ok(VisitRecursion::Skip)
-        } else {
-            Ok(VisitRecursion::Continue)
-        }
-    })?;
-    Ok(collector)
 }
 
 /// The base configurations to provide when creating a physical plan for

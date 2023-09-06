@@ -1416,25 +1416,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_get_scan_files() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-        let projection = Some(vec![9]);
-        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
-        let scan_files = get_scan_files(exec)?;
-        assert_eq!(scan_files.len(), 1);
-        assert_eq!(scan_files[0].len(), 1);
-        assert_eq!(scan_files[0][0].len(), 1);
-        assert!(scan_files[0][0][0]
-            .object_meta
-            .location
-            .to_string()
-            .contains("alltypes_plain.parquet"));
-
-        Ok(())
-    }
-
     fn check_page_index_validation(
         page_index: Option<&ParquetColumnIndex>,
         offset_index: Option<&ParquetOffsetIndex>,

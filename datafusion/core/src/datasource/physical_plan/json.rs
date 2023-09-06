@@ -170,10 +170,6 @@ impl ExecutionPlan for NdJsonExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
-
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        Some(&self.base_config)
-    }
 }
 
 /// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]

@@ -161,10 +161,6 @@ impl ExecutionPlan for AvroExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
-
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        Some(&self.base_config)
-    }
 }
 
 #[cfg(feature = "avro")]
