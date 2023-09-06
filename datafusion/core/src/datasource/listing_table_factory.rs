@@ -137,9 +137,15 @@ impl TableProviderFactory for ListingTableFactory {
         let mut statement_options = StatementOptions::from(&cmd.options);
 
         // Extract ListingTable specific options if present or set default
-        let unbounded = statement_options
+        let unbounded = if infinite_source{
+            statement_options.take_str_option("unbounded");
+            infinite_source
+        } else{
+            statement_options
             .take_bool_option("unbounded")?
-            .unwrap_or(false);
+            .unwrap_or(false)
+        };
+        
         let create_local_path = statement_options
             .take_bool_option("create_local_path")?
             .unwrap_or(false);
