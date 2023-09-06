@@ -248,7 +248,7 @@ impl OrderingEquivalenceProperties {
         if let Some(oeq_class) = &self.oeq_class {
             for item in oeq_class.others() {
                 let item = PhysicalSortRequirement::from_sort_exprs(item);
-                let ranges = get_compatible_ranges(&normalized_sort_reqs, &item);
+                let ranges = get_compatible_ranges(&normalized_sort_reqs, &item, is_aggressive);
                 let mut offset: i64 = 0;
                 for Range { start, end } in ranges {
                     let mut head = oeq_class
@@ -879,7 +879,7 @@ mod tests {
                 .into_iter()
                 .map(|(start, end)| Range { start, end })
                 .collect::<Vec<_>>();
-            assert_eq!(get_compatible_ranges(&searched, &to_search), expected);
+            assert_eq!(get_compatible_ranges(&searched, &to_search, false), expected);
         }
         Ok(())
     }
