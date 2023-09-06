@@ -681,11 +681,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options,
         } = statement;
 
-        if file_type != "CSV"
-            && file_type != "JSON"
+        if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
         {
-            plan_err!("File compression type can be specified for CSV/JSON files.")?;
+            plan_err!(
+                "File compression type cannot be set for PARQUET, AVRO, or ARROW files."
+            )?;
         }
 
         let schema = self.build_schema(columns)?;
