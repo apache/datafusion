@@ -308,6 +308,7 @@ async fn serialize_rb_stream_to_object_store(
     mut data_stream: Pin<Box<dyn RecordBatchStream + Send>>,
     mut serializer: Box<dyn BatchSerializer>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
+    unbounded_input: bool,
 ) -> std::result::Result<
     (
         Box<dyn BatchSerializer>,
@@ -337,6 +338,9 @@ async fn serialize_rb_stream_to_object_store(
                             "Unknown error writing to object store".into(),
                         )
                     })?;
+                    if unbounded_input {
+                        tokio::task::yield_now().await;
+                    }
                 }
                 Err(_) => {
                     return Err(DataFusionError::Internal(
@@ -404,6 +408,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
     mut serializers: Vec<Box<dyn BatchSerializer>>,
     mut writers: Vec<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>>,
     single_file_output: bool,
+    unbounded_input: bool,
 ) -> Result<u64> {
     if single_file_output && (serializers.len() != 1 || writers.len() != 1) {
         return internal_err!("single_file_output is true, but got more than 1 writer!");
@@ -431,8 +436,13 @@ pub(crate) async fn stateless_serialize_and_write_files(
                 .map(|((a, b), c)| (a, b, c))
             {
                 join_set.spawn(async move {
-                    serialize_rb_stream_to_object_store(data_stream, serializer, writer)
-                        .await
+                    serialize_rb_stream_to_object_store(
+                        data_stream,
+                        serializer,
+                        writer,
+                        unbounded_input,
+                    )
+                    .await
                 });
             }
             let mut finished_writers = Vec::with_capacity(num_writers);
@@ -486,6 +496,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
                     data_stream,
                     serializer,
                     writer,
+                    unbounded_input,
                 )
                 .await
                 {

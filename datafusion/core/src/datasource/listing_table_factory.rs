@@ -137,8 +137,9 @@ impl TableProviderFactory for ListingTableFactory {
         let mut statement_options = StatementOptions::from(&cmd.options);
 
         // Extract ListingTable specific options if present or set default
-        // Discard unbounded option if present
-        statement_options.take_str_option("unbounded");
+        let unbounded = statement_options
+            .take_bool_option("unbounded")?
+            .unwrap_or(false);
         let create_local_path = statement_options
             .take_bool_option("create_local_path")?
             .unwrap_or(false);
@@ -213,7 +214,8 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_sort_order(cmd.order_exprs.clone())
             .with_insert_mode(insert_mode)
             .with_single_file(single_file)
-            .with_write_options(file_type_writer_options);
+            .with_write_options(file_type_writer_options)
+            .with_infinite_source(unbounded);
 
         let resolved_schema = match provided_schema {
             None => options.infer_schema(state, &table_path).await?,

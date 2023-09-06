@@ -587,6 +587,7 @@ impl DataSink for CsvSink {
             serializers,
             writers,
             self.config.single_file_output,
+            self.config.unbounded_input,
         )
         .await
     }
