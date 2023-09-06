@@ -50,7 +50,7 @@ pub struct RecordBatchReceiverStreamBuilder {
     tx: Sender<Result<RecordBatch>>,
     rx: Receiver<Result<RecordBatch>>,
     schema: SchemaRef,
-    join_set: JoinSet<()>,
+    join_set: JoinSet<Result<()>>,
 }
 
 impl RecordBatchReceiverStreamBuilder {
@@ -78,7 +78,7 @@ impl RecordBatchReceiverStreamBuilder {
     /// retrieved from `Self::tx`
     pub fn spawn<F>(&mut self, task: F)
     where
-        F: Future<Output = ()>,
+        F: Future<Output = Result<()>>,
         F: Send + 'static,
     {
         self.join_set.spawn(task);
@@ -91,7 +91,7 @@ impl RecordBatchReceiverStreamBuilder {
     /// retrieved from `Self::tx`
     pub fn spawn_blocking<F>(&mut self, f: F)
     where
-        F: FnOnce(),
+        F: FnOnce() -> Result<()>,
         F: Send + 'static,
     {
         self.join_set.spawn_blocking(f);
@@ -120,7 +120,7 @@ impl RecordBatchReceiverStreamBuilder {
                         "Stopping execution: error executing input: {}",
                         displayable(input.as_ref()).one_line()
                     );
-                    return;
+                    return Ok(());
                 }
                 Ok(stream) => stream,
             };
@@ -137,7 +137,7 @@ impl RecordBatchReceiverStreamBuilder {
                         "Stopping execution: output is gone, plan cancelling: {}",
                         displayable(input.as_ref()).one_line()
                     );
-                    return;
+                    return Ok(());
                 }
 
                 // stop after the first error is encontered (don't
@@ -147,9 +147,11 @@ impl RecordBatchReceiverStreamBuilder {
                         "Stopping execution: plan returned error: {}",
                         displayable(input.as_ref()).one_line()
                     );
-                    return;
+                    return Ok(());
                 }
             }
+
+            Ok(())
         });
     }
 
@@ -169,7 +171,16 @@ impl RecordBatchReceiverStreamBuilder {
         let check = async move {
             while let Some(result) = join_set.join_next().await {
                 match result {
-                    Ok(()) => continue, // nothing to report
+                    Ok(task_result) => {
+                        match task_result {
+                            // nothing to report
+                            Ok(_) => continue,
+                            // This means a blocking task error
+                            Err(e) => {
+                                return Some(internal_err!("Spawned Task error: {e}"));
+                            }
+                        }
+                    }
                     // This means a tokio task error, likely a panic
                     Err(e) => {
                         if e.is_panic() {

@@ -109,9 +109,13 @@ pub(crate) fn spawn_buffered(
             builder.spawn(async move {
                 while let Some(item) = input.next().await {
                     if sender.send(item).await.is_err() {
-                        return;
+                        return Err(DataFusionError::Execution(
+                            "Failed to send record batch".to_string(),
+                        ));
                     }
                 }
+
+                Ok(())
             });
 
             builder.build()
