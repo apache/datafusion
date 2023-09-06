@@ -692,8 +692,8 @@ fn get_compatible_ranges(
     is_aggressive: bool,
 ) -> Vec<Range<usize>> {
     if is_aggressive {
-        println!("given: {:?}", given);
-        println!("section: {:?}", section);
+        // println!("given: {:?}", given);
+        // println!("section: {:?}", section);
         let mut res = vec![];
         for i in 0..given.len() {
             let mut count = 0;

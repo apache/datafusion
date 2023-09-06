@@ -214,8 +214,8 @@ pub fn ordering_satisfy_concrete<
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
-    println!("required_normalized: {:?}", required_normalized);
-    println!("provided_normalized: {:?}", provided_normalized);
+    // println!("required_normalized: {:?}", required_normalized);
+    // println!("provided_normalized: {:?}", provided_normalized);
     required_normalized
         .into_iter()
         .zip(provided_normalized)
@@ -990,66 +990,61 @@ mod tests {
         let provided = Some(&provided[..]);
         let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
+        let requirements = vec![
+            // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
+            (vec![(col_a, option1)], true),
+            (vec![(col_a, option2)], false),
+            // Test whether equivalence works as expected
+            (vec![(col_c, option1)], true),
+            (vec![(col_c, option2)], false),
+            // Test whether ordering equivalence works as expected
+            (vec![(col_d, option1)], true),
+            (vec![(col_d, option1), (col_b, option1)], true),
+            (vec![(col_d, option2), (col_b, option1)], false),
+            (vec![(col_e, option2), (col_b, option1)], true),
+            (vec![(col_e, option1), (col_b, option1)], false),
+            (
+                vec![
+                    (col_d, option1),
+                    (col_b, option1),
+                    (col_d, option1),
+                    (col_b, option1),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (col_d, option1),
+                    (col_b, option1),
+                    (col_e, option2),
+                    (col_b, option1),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    (col_d, option1),
+                    (col_b, option1),
+                    (col_d, option2),
+                    (col_b, option1),
+                ],
+                false,
+            ),
+            (
+                vec![
+                    (col_d, option1),
+                    (col_b, option1),
+                    (col_e, option1),
+                    (col_b, option1),
+                ],
+                false,
+            ),
+        ];
+
         // let requirements = vec![
-        //     // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
-        //     (vec![(col_a, option1)], true),
-        //     (vec![(col_a, option2)], false),
-        //     // Test whether equivalence works as expected
-        //     (vec![(col_c, option1)], true),
-        //     (vec![(col_c, option2)], false),
-        //     // Test whether ordering equivalence works as expected
-        //     (vec![(col_d, option1)], false),
-        //     (vec![(col_d, option1), (col_b, option1)], true),
-        //     (vec![(col_d, option2), (col_b, option1)], false),
-        //     (vec![(col_e, option2), (col_b, option1)], true),
-        //     (vec![(col_e, option1), (col_b, option1)], false),
-        //     (
-        //         vec![
-        //             (col_d, option1),
-        //             (col_b, option1),
-        //             (col_d, option1),
-        //             (col_b, option1),
-        //         ],
-        //         true,
-        //     ),
-        //     (
-        //         vec![
-        //             (col_d, option1),
-        //             (col_b, option1),
-        //             (col_e, option2),
-        //             (col_b, option1),
-        //         ],
-        //         true,
-        //     ),
-        //     (
-        //         vec![
-        //             (col_d, option1),
-        //             (col_b, option1),
-        //             (col_d, option2),
-        //             (col_b, option1),
-        //         ],
-        //         false,
-        //     ),
-        //     (
-        //         vec![
-        //             (col_d, option1),
-        //             (col_b, option1),
-        //             (col_e, option1),
-        //             (col_b, option1),
-        //         ],
-        //         false,
-        //     ),
+        //     (vec![(col_d, option1)], true),
         // ];
 
-        let requirements = vec![(
-            vec![
-                (col_d, option1),
-                (col_b, option1),
-                (col_e, option2),
-                (col_b, option1),
-            ],
-            true,
-        )];
         for (cols, expected) in requirements {
             let err_msg = format!("Error in test case:{cols:?}");
             let required = cols
