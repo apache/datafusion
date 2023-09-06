@@ -37,6 +37,12 @@ pub struct ParquetWriterOptions {
 }
 
 impl ParquetWriterOptions {
+    pub fn new(writer_options: WriterProperties) -> Self {
+        Self { writer_options }
+    }
+}
+
+impl ParquetWriterOptions {
     pub fn writer_options(&self) -> &WriterProperties {
         &self.writer_options
     }
@@ -44,7 +50,7 @@ impl ParquetWriterOptions {
 
 /// Constructs a default Parquet WriterPropertiesBuilder using
 /// Session level ConfigOptions to initialize settings
-fn default_builder(options: &ConfigOptions) -> Result<WriterPropertiesBuilder> {
+pub fn default_builder(options: &ConfigOptions) -> Result<WriterPropertiesBuilder> {
     let parquet_session_options = &options.execution.parquet;
     let mut builder = WriterProperties::builder()
         .set_data_page_size_limit(parquet_session_options.data_pagesize_limit)

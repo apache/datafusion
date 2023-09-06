@@ -17,6 +17,7 @@
 
 //! Logical plan types
 
+use crate::dml::CopyOptions;
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::expr_vec_fmt;
@@ -1118,15 +1119,18 @@ impl LogicalPlan {
                         output_url,
                         file_format,
                         single_file_output,
-                        statement_options,
+                        copy_options,
                     }) => {
-                        let op_str = statement_options
-                            .clone()
-                            .into_inner()
-                            .iter()
-                            .map(|(k, v)| format!("{k} {v}"))
-                            .collect::<Vec<String>>()
-                            .join(", ");
+                        let op_str = match copy_options {
+                            CopyOptions::SQLOptions(statement) => statement
+                                .clone()
+                                .into_inner()
+                                .iter()
+                                .map(|(k, v)| format!("{k} {v}"))
+                                .collect::<Vec<String>>()
+                                .join(", "),
+                            CopyOptions::WriterOptions(_) => "".into(),
+                        };
 
                         write!(f, "CopyTo: format={file_format} output_url={output_url} single_file_output={single_file_output} options: ({op_str})")
                     }
