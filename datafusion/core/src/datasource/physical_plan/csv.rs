@@ -43,10 +43,9 @@ use super::FileScanConfig;
 use bytes::{Buf, Bytes};
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
-use object_store::local::LocalFileSystem;
-use object_store::{GetOptions, GetResult, ObjectStore};
+use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use std::any::Any;
-use std::io::Cursor;
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 use std::task::Poll;
@@ -286,30 +285,22 @@ impl CsvConfig {
 }
 
 impl CsvConfig {
-    fn open<R: std::io::Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
-            .has_header(self.has_header)
-            .with_delimiter(self.delimiter)
-            .with_quote(self.quote)
-            .with_batch_size(self.batch_size);
-        if let Some(escape) = self.escape {
-            builder = builder.with_escape(escape);
-        }
-        if let Some(p) = &self.file_projection {
-            builder = builder.with_projection(p.clone());
-        }
-
-        Ok(builder.build(reader)?)
+    fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
+        Ok(self.builder().build(reader)?)
     }
 
     fn builder(&self) -> csv::ReaderBuilder {
         let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
             .with_delimiter(self.delimiter)
             .with_batch_size(self.batch_size)
-            .has_header(self.has_header);
+            .has_header(self.has_header)
+            .with_quote(self.quote);
 
         if let Some(proj) = &self.file_projection {
             builder = builder.with_projection(proj.clone());
+        }
+        if let Some(escape) = self.escape {
+            builder = builder.with_escape(escape)
         }
 
         builder
@@ -335,30 +326,6 @@ impl CsvOpener {
     }
 }
 
-/// Returns the position of the first newline in the byte stream, or the total length if no newline is found.
-fn find_first_newline_bytes<R: std::io::Read>(reader: &mut R) -> Result<usize> {
-    let mut buffer = [0; 1];
-    let mut index = 0;
-
-    loop {
-        let result = reader.read(&mut buffer);
-        match result {
-            Ok(n) => {
-                if n == 0 {
-                    return Ok(index); // End of file, no newline found
-                }
-                if buffer[0] == b'\n' {
-                    return Ok(index);
-                }
-                index += 1;
-            }
-            Err(e) => {
-                return Err(DataFusionError::IoError(e));
-            }
-        }
-    }
-}
-
 /// Returns the offset of the first newline in the object store range [start, end), or the end offset if no newline is found.
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
@@ -374,54 +341,30 @@ async fn find_first_newline(
         ..Default::default()
     };
 
-    let offset = match object_store.get_opts(location, options).await? {
-        GetResult::File(_, _) => {
-            // Range currently is ignored for GetResult::File(...)
-            // Alternative get_range() will copy the whole range into memory, thus set a limit of
-            // max bytes to read to find the first newline
-            let max_line_length = 4096; // in bytes
-            let get_range_end_result = object_store
-                .get_range(
-                    location,
-                    Range {
-                        start: start_byte,
-                        end: std::cmp::min(start_byte + max_line_length, end_byte),
-                    },
-                )
-                .await;
-            let mut decoder_tail = Cursor::new(get_range_end_result?);
-            find_first_newline_bytes(&mut decoder_tail)?
-        }
-        GetResult::Stream(s) => {
-            let mut input = s.map_err(DataFusionError::from);
-            let mut buffered = Bytes::new();
+    let r = object_store.get_opts(location, options).await?;
+    let mut input = r.into_stream();
 
-            let future_index = async move {
-                let mut index = 0;
+    let mut buffered = Bytes::new();
+    let mut index = 0;
 
-                loop {
-                    if buffered.is_empty() {
-                        match input.next().await {
-                            Some(Ok(b)) => buffered = b,
-                            Some(Err(e)) => return Err(e),
-                            None => return Ok(index),
-                        };
-                    }
-
-                    for byte in &buffered {
-                        if *byte == b'\n' {
-                            return Ok(index);
-                        }
-                        index += 1;
-                    }
-
-                    buffered.advance(buffered.len());
-                }
+    loop {
+        if buffered.is_empty() {
+            match input.next().await {
+                Some(Ok(b)) => buffered = b,
+                Some(Err(e)) => return Err(e.into()),
+                None => return Ok(index),
             };
-            future_index.await?
         }
-    };
-    Ok(offset)
+
+        for byte in &buffered {
+            if *byte == b'\n' {
+                return Ok(index);
+            }
+            index += 1;
+        }
+
+        buffered.advance(buffered.len());
+    }
 }
 
 impl FileOpener for CsvOpener {
@@ -476,8 +419,8 @@ impl FileOpener for CsvOpener {
         Ok(Box::pin(async move {
             let file_size = file_meta.object_meta.size;
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
-            let (start_byte, end_byte) = match file_meta.range {
-                None => (0, file_size),
+            let range = match file_meta.range {
+                None => None,
                 Some(FileRange { start, end }) => {
                     let (start, end) = (start as usize, end as usize);
                     // Partition byte range is [start, end), the boundary might be in the middle of
@@ -504,57 +447,41 @@ impl FileOpener for CsvOpener {
                     } else {
                         0
                     };
-                    (start + start_delta, end + end_delta)
+                    let range = start + start_delta..end + end_delta;
+                    if range.start == range.end {
+                        return Ok(
+                            futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
+                        );
+                    }
+                    Some(range)
                 }
             };
 
-            // For special case: If `Range` has equal `start` and `end`, object store will fetch
-            // the whole file
-            let localfs: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
-            let is_localfs = localfs.type_id() == config.object_store.type_id();
-            if start_byte == end_byte && !is_localfs {
-                return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed());
-            }
-
             let options = GetOptions {
-                range: Some(Range {
-                    start: start_byte,
-                    end: end_byte,
-                }),
+                range,
                 ..Default::default()
             };
-
-            match config
+            let result = config
                 .object_store
                 .get_opts(file_meta.location(), options)
-                .await?
-            {
-                GetResult::File(file, _) => {
+                .await?;
+
+            match result.payload {
+                GetResultPayload::File(mut file, _) => {
                     let is_whole_file_scanned = file_meta.range.is_none();
                     let decoder = if is_whole_file_scanned {
-                        // For special case: `get_range()` will interpret `start` and `end` as the
-                        // byte range after decompression for compressed files
+                        // Don't seek if no range as breaks FIFO files
                         file_compression_type.convert_read(file)?
                     } else {
-                        // Range currently is ignored for GetResult::File(...)
-                        let bytes = Cursor::new(
-                            config
-                                .object_store
-                                .get_range(
-                                    file_meta.location(),
-                                    Range {
-                                        start: start_byte,
-                                        end: end_byte,
-                                    },
-                                )
-                                .await?,
-                        );
-                        file_compression_type.convert_read(bytes)?
+                        file.seek(SeekFrom::Start(result.range.start as _))?;
+                        file_compression_type.convert_read(
+                            file.take((result.range.end - result.range.start) as u64),
+                        )?
                     };
 
                     Ok(futures::stream::iter(config.open(decoder)?).boxed())
                 }
-                GetResult::Stream(s) => {
+                GetResultPayload::Stream(s) => {
                     let mut decoder = config.builder().build_decoder();
                     let s = s.map_err(DataFusionError::from);
                     let mut input =
@@ -650,7 +577,7 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
+    use crate::dataframe::DataFrameWriteOptions;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
@@ -658,6 +585,7 @@ mod tests {
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::FileType;
     use futures::StreamExt;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
     use std::fs::{self, File};
@@ -1144,7 +1072,7 @@ mod tests {
 
         let out_dir_url = "file://local/out";
         let e = df
-            .write_csv(out_dir_url)
+            .write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -1179,7 +1107,8 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_csv(out_dir_url).await?;
+        df.write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
+            .await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();

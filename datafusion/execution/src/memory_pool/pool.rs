@@ -143,6 +143,7 @@ struct FairSpillPoolState {
 impl FairSpillPool {
     /// Allocate up to `limit` bytes
     pub fn new(pool_size: usize) -> Self {
+        debug!("Created new FairSpillPool(pool_size={pool_size})");
         Self {
             pool_size,
             state: Mutex::new(FairSpillPoolState {

@@ -38,8 +38,9 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::FileType;
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -555,18 +556,28 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                    per_thread_output,
-                    options: _,
+                    single_file_output,
+                    copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
 
                     // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
                     // TODO: add additional configurable options for if existing files should be overwritten or
                     // appended to
-                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, *per_thread_output)?;
+                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, !*single_file_output)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
+
+                    let file_type_writer_options = match copy_options{
+                        CopyOptions::SQLOptions(statement_options) => {
+                            FileTypeWriterOptions::build(
+                                file_format,
+                                session_state.config_options(),
+                                statement_options)?
+                        },
+                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
+                    };
 
                     // Set file sink related options
                     let config = FileSinkConfig {
@@ -576,12 +587,11 @@ impl DefaultPhysicalPlanner {
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
                         writer_mode: FileWriterMode::PutMultipart,
-                        per_thread_output: *per_thread_output,
+                        single_file_output: *single_file_output,
                         overwrite: false,
+                        file_type_writer_options
                     };
 
-                    // TODO: implement statement level overrides for each file type
-                    // E.g. CsvFormat::from_options(options)
                     let sink_format: Arc<dyn FileFormat> = match file_format {
                         FileType::CSV => Arc::new(CsvFormat::default()),
                         FileType::PARQUET => Arc::new(ParquetFormat::default()),

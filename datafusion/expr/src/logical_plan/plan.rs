@@ -17,6 +17,7 @@
 
 //! Logical plan types
 
+use crate::dml::CopyOptions;
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -602,14 +603,14 @@ impl LogicalPlan {
                 input: _,
                 output_url,
                 file_format,
-                per_thread_output,
-                options,
+                copy_options,
+                single_file_output,
             }) => Ok(LogicalPlan::Copy(CopyTo {
                 input: Arc::new(inputs[0].clone()),
                 output_url: output_url.clone(),
                 file_format: file_format.clone(),
-                per_thread_output: *per_thread_output,
-                options: options.clone(),
+                single_file_output: *single_file_output,
+                copy_options: copy_options.clone(),
             })),
             LogicalPlan::Values(Values { schema, .. }) => {
                 Ok(LogicalPlan::Values(Values {
@@ -1488,16 +1489,21 @@ impl LogicalPlan {
                         input: _,
                         output_url,
                         file_format,
-                        per_thread_output,
-                        options,
+                        single_file_output,
+                        copy_options,
                     }) => {
-                        let op_str = options
-                            .iter()
-                            .map(|(k, v)| format!("{k} {v}"))
-                            .collect::<Vec<String>>()
-                            .join(", ");
+                        let op_str = match copy_options {
+                            CopyOptions::SQLOptions(statement) => statement
+                                .clone()
+                                .into_inner()
+                                .iter()
+                                .map(|(k, v)| format!("{k} {v}"))
+                                .collect::<Vec<String>>()
+                                .join(", "),
+                            CopyOptions::WriterOptions(_) => "".into(),
+                        };
 
-                        write!(f, "CopyTo: format={file_format} output_url={output_url} per_thread_output={per_thread_output} options: ({op_str})")
+                        write!(f, "CopyTo: format={file_format} output_url={output_url} single_file_output={single_file_output} options: ({op_str})")
                     }
                     LogicalPlan::Ddl(ddl) => {
                         write!(f, "{}", ddl.display())

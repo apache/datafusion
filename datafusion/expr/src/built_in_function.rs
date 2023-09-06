@@ -28,11 +28,9 @@ use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-
-use lazy_static::lazy_static;
 
 /// Enum of all built-in scalar functions
 // Contributor's guide for adding new scalar functions
@@ -282,26 +280,34 @@ pub enum BuiltinScalarFunction {
     ArrowTypeof,
 }
 
-lazy_static! {
-    /// Maps the sql function name to `BuiltinScalarFunction`
-    static ref NAME_TO_FUNCTION: HashMap<&'static str, BuiltinScalarFunction> = {
-        let mut map: HashMap<&'static str, BuiltinScalarFunction> = HashMap::new();
+/// Maps the sql function name to `BuiltinScalarFunction`
+fn name_to_function() -> &'static HashMap<&'static str, BuiltinScalarFunction> {
+    static NAME_TO_FUNCTION_LOCK: OnceLock<HashMap<&'static str, BuiltinScalarFunction>> =
+        OnceLock::new();
+    NAME_TO_FUNCTION_LOCK.get_or_init(|| {
+        let mut map = HashMap::new();
         BuiltinScalarFunction::iter().for_each(|func| {
             let a = aliases(&func);
-            a.iter().for_each(|a| {map.insert(a, func);});
+            a.iter().for_each(|&a| {
+                map.insert(a, func);
+            });
         });
         map
-    };
+    })
+}
 
-    /// Maps `BuiltinScalarFunction` --> canonical sql function
-    /// First alias in the array is used to display function names
-    static ref FUNCTION_TO_NAME: HashMap<BuiltinScalarFunction, &'static str> = {
-        let mut map: HashMap<BuiltinScalarFunction, &'static str> = HashMap::new();
+/// Maps `BuiltinScalarFunction` --> canonical sql function
+/// First alias in the array is used to display function names
+fn function_to_name() -> &'static HashMap<BuiltinScalarFunction, &'static str> {
+    static FUNCTION_TO_NAME_LOCK: OnceLock<HashMap<BuiltinScalarFunction, &'static str>> =
+        OnceLock::new();
+    FUNCTION_TO_NAME_LOCK.get_or_init(|| {
+        let mut map = HashMap::new();
         BuiltinScalarFunction::iter().for_each(|func| {
-            map.insert(func, aliases(&func).first().unwrap_or(&"NO_ALIAS"));
+            map.insert(func, *aliases(&func).first().unwrap_or(&"NO_ALIAS"));
         });
         map
-    };
+    })
 }
 
 impl BuiltinScalarFunction {
@@ -1379,14 +1385,14 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
-        write!(f, "{}", FUNCTION_TO_NAME.get(self).unwrap())
+        write!(f, "{}", function_to_name().get(self).unwrap())
     }
 }
 
 impl FromStr for BuiltinScalarFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltinScalarFunction> {
-        if let Some(func) = NAME_TO_FUNCTION.get(name) {
+        if let Some(func) = name_to_function().get(name) {
             Ok(*func)
         } else {
             plan_err!("There is no built-in function named {name}")
@@ -1453,7 +1459,7 @@ mod tests {
     // and then back to a variant. The test asserts that the original variant and
     // the reconstructed variant are the same.
     fn test_display_and_from_str() {
-        for (_, func_original) in NAME_TO_FUNCTION.iter() {
+        for (_, func_original) in name_to_function().iter() {
             let func_name = func_original.to_string();
             let func_from_str = BuiltinScalarFunction::from_str(&func_name).unwrap();
             assert_eq!(func_from_str, *func_original);

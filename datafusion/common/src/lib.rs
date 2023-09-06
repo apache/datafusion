@@ -22,7 +22,7 @@ pub mod config;
 mod dfschema;
 pub mod display;
 mod error;
-pub mod file_type;
+pub mod file_options;
 pub mod format;
 mod functional_dependencies;
 mod join_type;
@@ -44,11 +44,13 @@ pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
 };
-pub use file_type::{
+
+pub use file_options::file_type::{
     FileCompressionType, FileType, GetExt, DEFAULT_ARROW_EXTENSION,
     DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION,
     DEFAULT_PARQUET_EXTENSION,
 };
+pub use file_options::FileTypeWriterOptions;
 pub use functional_dependencies::{
     aggregate_functional_dependencies, get_target_functional_dependencies, Constraints,
     Dependency, FunctionalDependence, FunctionalDependencies,

@@ -17,7 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::dml::CopyTo;
+use crate::dml::{CopyOptions, CopyTo};
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -238,15 +238,15 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         output_url: String,
         file_format: FileType,
-        per_thread_output: bool,
-        options: Vec<(String, String)>,
+        single_file_output: bool,
+        copy_options: CopyOptions,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
             file_format,
-            per_thread_output,
-            options,
+            single_file_output,
+            copy_options,
         })))
     }
 
