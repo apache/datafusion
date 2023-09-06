@@ -254,39 +254,91 @@ foo
 fazzz
 
 statement ok
-CREATE TABLE IF NOT EXISTS test_float AS VALUES(1.2),(2.1),(NULL),('NaN'::double),('-NaN'::double);
+CREATE TABLE IF NOT EXISTS test_float AS VALUES
+ (1.2, 2.3, 1.2, -3.5, 1.1),
+ (2.1, 'NaN'::double, -1.7, -8.2, NULL),
+ (NULL, NULL, '-NaN'::double, -5.4, 1.5),
+ ('NaN'::double, 'NaN'::double, 1.1, '-NaN'::double, NULL),
+ ('-NaN'::double, 6.2, 'NaN'::double, -3.3, 5.6)
+ ;
 
 # IN expr for float
 query R
-SELECT * FROM test_float WHERE column1 IN (0.0, -1.2)
+SELECT column1 FROM test_float WHERE column1 IN (0.0, -1.2)
 ----
 
 query R
-SELECT * FROM test_float WHERE column1 IN (0.0, 1.2)
+SELECT column1 FROM test_float WHERE column1 IN (0.0, 1.2)
 ----
 1.2
 
 query R
-SELECT * FROM test_float WHERE column1 IN (2.1, 1.2)
+SELECT column1 FROM test_float WHERE column1 IN (2.1, 1.2)
 ----
 1.2
 2.1
 
 query R
-SELECT * FROM test_float WHERE column1 IN (0.0, 1.2, NULL)
+SELECT column1 FROM test_float WHERE column1 IN (0.0, 1.2, NULL)
 ----
 1.2
 
 query R
-SELECT * FROM test_float WHERE column1 IN (0.0, -1.2, NULL)
+SELECT column1 FROM test_float WHERE column1 IN (0.0, -1.2, NULL)
 ----
 
 query R
-SELECT * FROM test_float WHERE column1 IN (0.0, 1.2, 'NaN'::double, '-NaN'::double)
+SELECT column1 FROM test_float WHERE column1 IN (0.0, 1.2, 'NaN'::double, '-NaN'::double)
 ----
 1.2
 NaN
 -NaN
+
+query RRRRR
+SELECT * FROM test_float WHERE column1 IN (column2, column3, column4, column5)
+----
+1.2 2.3 1.2 -3.5 1.1
+NaN NaN 1.1 -NaN NULL
+
+query RRRRR
+SELECT * FROM test_float WHERE column1 IN (column2, column3, column4, column5, 2.1, NULL, '-NaN'::double)
+----
+1.2 2.3 1.2 -3.5 1.1
+2.1 NaN -1.7 -8.2 NULL
+NaN NaN 1.1 -NaN NULL
+-NaN 6.2 NaN -3.3 5.6
+
+query RRRRR
+SELECT * FROM test_float WHERE column1 NOT IN (column2, column3, column4, column5)
+----
+-NaN 6.2 NaN -3.3 5.6
+
+query RRRRR
+SELECT * FROM test_float WHERE column1 NOT IN (column2, column3, column4, column5, 2.1, NULL, '-NaN'::double)
+----
+
+query R
+SELECT column1 FROM test_float WHERE NULL IN (column1, column1 + 1, column1 + 2, column1 + 3)
+----
+
+query R
+SELECT column1 FROM test_float WHERE 'NaN'::double IN (column1, column1 + 1, column1 + 2, column1 + 3)
+----
+NaN
+
+query R
+SELECT column1 FROM test_float WHERE '-NaN'::double IN (column1, column1 + 1, column1 + 2, column1 + 3)
+----
+-NaN
+
+query II
+SELECT c3, c7 FROM aggregate_test_100 WHERE c3 IN (c7 / 10, c7 / 20, c7 / 30, c7 / 40, 68, 103)
+----
+1 25
+103 146
+68 224
+68 121
+3 133
 
 ###
 # Test logical plan simplifies large OR chains
