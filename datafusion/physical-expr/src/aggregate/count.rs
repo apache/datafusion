@@ -18,7 +18,6 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-
 use std::fmt::Debug;
 use std::ops::BitAnd;
 use std::sync::Arc;

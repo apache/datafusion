@@ -165,8 +165,6 @@ struct FirstValueAccumulator {
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
-    // Whether merge_batch() is called before
-    is_merge_called: bool,
 }
 
 impl FirstValueAccumulator {
@@ -185,7 +183,6 @@ impl FirstValueAccumulator {
             is_set: false,
             orderings,
             ordering_req,
-            is_merge_called: false,
         })
     }
 
@@ -201,9 +198,7 @@ impl Accumulator for FirstValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.first.clone()];
         result.extend(self.orderings.iter().cloned());
-        if !self.is_merge_called {
-            result.push(ScalarValue::Boolean(Some(self.is_set)));
-        }
+        result.push(ScalarValue::Boolean(Some(self.is_set)));
         Ok(result)
     }
 
@@ -218,7 +213,6 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.is_merge_called = true;
         // FIRST_VALUE(first1, first2, first3, ...)
         // last index contains is_set flag.
         let is_set_idx = states.len() - 1;
@@ -390,8 +384,6 @@ struct LastValueAccumulator {
     orderings: Vec<ScalarValue>,
     // Stores the applicable ordering requirement.
     ordering_req: LexOrdering,
-    // Whether merge_batch() is called before
-    is_merge_called: bool,
 }
 
 impl LastValueAccumulator {
@@ -410,7 +402,6 @@ impl LastValueAccumulator {
             is_set: false,
             orderings,
             ordering_req,
-            is_merge_called: false,
         })
     }
 
@@ -426,9 +417,7 @@ impl Accumulator for LastValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut result = vec![self.last.clone()];
         result.extend(self.orderings.clone());
-        if !self.is_merge_called {
-            result.push(ScalarValue::Boolean(Some(self.is_set)));
-        }
+        result.push(ScalarValue::Boolean(Some(self.is_set)));
         Ok(result)
     }
 
@@ -442,7 +431,6 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.is_merge_called = true;
         // LAST_VALUE(last1, last2, last3, ...)
         // last index contains is_set flag.
         let is_set_idx = states.len() - 1;

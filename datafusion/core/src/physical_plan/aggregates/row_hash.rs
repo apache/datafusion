@@ -160,32 +160,32 @@ struct SpillState {
 ///
 /// # Spilling
 ///
-/// The sizes of group values and accumulators can become large. Before that causes
-/// out of memory, this hash aggregator spills those data to local disk using Arrow
-/// IPC format. For every input [`RecordBatch`], the memory manager checks whether
-/// the new input size meets the memory configuration. If not, spilling happens, and
-/// later stream-merge sort the spilled data to read back. As the rows cannot be
-/// grouped between spilled data stored on disk, the read back merged data needs to
-/// be re-grouped again.
+/// The sizes of group values and accumulators can become large. Before that causes out of memory,
+/// this hash aggregator outputs those data early for partial aggregation or spills to local disk
+/// using Arrow IPC format for final aggregation. For every input [`RecordBatch`], the memory
+/// manager checks whether the new input size meets the memory configuration. If not, outputting or
+/// spilling happens. For outputting, the final aggregation takes care of re-grouping. For spilling,
+/// later stream-merge sort on reading back the spilled data does re-grouping. Note the rows cannot
+/// be grouped once spilled onto disk, the read back data needs to be re-grouped again.
 ///
 /// ```text
 /// Partial Aggregation [batch_size = 2] (max memory = 3 rows)
 ///
-///  INPUTS        PARTIALLY AGGREGATED (UPDATE BATCH)   RE-GROUPED (SORTED)
-/// ┌─────────┐    ┌─────────────────┐                   [Similar to final aggregation merge,
-/// │ a │ b   │    │ a │    AVG(b)   │                    but using the partial schema]
-/// │---│-----│    │   │[count]│[sum]│                   ┌─────────────────┐
-/// │ 3 │ 3.0 │ ─▶ │---│-------│-----│                   │ a │    AVG(b)   │
-/// │ 2 │ 2.0 │    │ 2 │ 1     │ 2.0 │ ─▶ spill ─┐       │   │[count]│[sum]│
-/// └─────────┘    │ 3 │ 2     │ 7.0 │           │       │---│-------│-----│
-/// ┌─────────┐ ─▶ │ 4 │ 1     │ 8.0 │           ▼       │ 1 │ 1     │ 1.0 │
-/// │ 3 │ 4.0 │    └─────────────────┘     Streaming  ─▶ │ 2 │ 1     │ 2.0 │
-/// │ 4 │ 8.0 │    ┌─────────────────┐     merge sort    └─────────────────┘
-/// └─────────┘    │ a │    AVG(b)   │            ▲      ┌─────────────────┐
-/// ┌─────────┐    │---│-------│-----│            │      │ a │    AVG(b)   │
-/// │ 1 │ 1.0 │ ─▶ │ 1 │ 1     │ 1.0 │ ─▶ memory ─┘      │ 3 │ 3     │ 9.0 │
-/// │ 3 │ 2.0 │    │ 3 │ 1     │ 2.0 │                   │ 4 │ 1     │ 8.0 │
-/// └─────────┘    └─────────────────┘                   └─────────────────┘
+///  INPUTS        PARTIALLY AGGREGATED (UPDATE BATCH)
+/// ┌─────────┐    ┌─────────────────┐
+/// │ a │ b   │    │ a │    AVG(b)   │
+/// │---│-----│    │   │[count]│[sum]│
+/// │ 3 │ 3.0 │ ─▶ │---│-------│-----│
+/// │ 2 │ 2.0 │    │ 2 │ 1     │ 2.0 │ ─▶ output
+/// └─────────┘    │ 3 │ 2     │ 7.0 │
+/// ┌─────────┐ ─▶ │ 4 │ 1     │ 8.0 │
+/// │ 3 │ 4.0 │    └─────────────────┘
+/// │ 4 │ 8.0 │    ┌─────────────────┐
+/// └─────────┘    │ a │    AVG(b)   │
+/// ┌─────────┐    │---│-------│-----│
+/// │ 1 │ 1.0 │ ─▶ │ 1 │ 1     │ 1.0 │ ─▶ output
+/// │ 3 │ 2.0 │    │ 3 │ 1     │ 2.0 │
+/// └─────────┘    └─────────────────┘
 ///   
 ///
 /// Final Aggregation [batch_size = 2] (max memory = 3 rows)
@@ -443,6 +443,9 @@ impl Stream for GroupedHashAggregateStream {
                                 let batch = extract_ok!(self.emit(to_emit, false));
                                 self.exec_state = ExecutionState::ProducingOutput(batch);
                             }
+
+                            extract_ok!(self.emit_early_if_necessary());
+
                             timer.done();
                         }
                         Some(Err(e)) => {
@@ -649,7 +652,7 @@ impl GroupedHashAggregateStream {
         for acc in self.accumulators.iter_mut() {
             match self.mode {
                 AggregateMode::Partial => output.extend(acc.state(emit_to)?),
-                AggregateMode::Final | AggregateMode::FinalPartitioned if spilling => {
+                _ if spilling => {
                     // If spilling, output partial state because the spilled data will be
                     // merged and re-evaluated later.
                     output.extend(acc.state(emit_to)?)
@@ -672,20 +675,18 @@ impl GroupedHashAggregateStream {
     fn spill_previous_if_necessary(&mut self, batch: &RecordBatch) -> Result<()> {
         // TODO: support group_ordering for spilling
         if self.reservation.size() > 0
+            && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
+            && !matches!(self.mode, AggregateMode::Partial)
+            && (self.update_memory_reservation().is_err() || self.spill_state.force_spill)
         {
-            if self.update_memory_reservation().is_err() || self.spill_state.force_spill {
-                // If mode is Final, use input batch (Partial mode) schema for spilling because
-                // the spilled data will be merged and re-evaluated later.
-                if let AggregateMode::Final | AggregateMode::FinalPartitioned = self.mode
-                {
-                    self.spill_state.spill_schema = batch.schema();
-                }
-                self.spill()?;
-                self.clear_shrink(batch);
+            // Use input batch (Partial mode) schema for spilling because
+            // the spilled data will be merged and re-evaluated later.
+            self.spill_state.spill_schema = batch.schema();
+            self.spill()?;
+            self.clear_shrink(batch);
 
-                return self.update_memory_reservation();
-            }
+            return self.update_memory_reservation();
         }
         Ok(())
     }
@@ -708,6 +709,23 @@ impl GroupedHashAggregateStream {
         self.group_values.clear_shrink(batch);
         self.current_group_indices.clear();
         self.current_group_indices.shrink_to(batch.num_rows());
+    }
+
+    /// Emit if the used memory exceeds the target for partial aggregation.
+    /// Currently only [`GroupOrdering::None`] is supported for spilling.
+    /// TODO: support group_ordering for spilling
+    fn emit_early_if_necessary(&mut self) -> Result<()> {
+        if self.reservation.size() > 0
+            && matches!(self.group_ordering, GroupOrdering::None)
+            && matches!(self.mode, AggregateMode::Partial)
+            && (self.update_memory_reservation().is_err() || self.spill_state.force_spill)
+        {
+            let batch = self.emit(EmitTo::All, false)?;
+            if batch.num_rows() > 0 {
+                self.exec_state = ExecutionState::ProducingOutput(batch);
+            }
+        }
+        Ok(())
     }
 
     /// At this point, all the inputs are read and there are some spills.

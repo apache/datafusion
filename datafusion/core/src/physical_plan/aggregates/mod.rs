@@ -1569,15 +1569,30 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = [
-            "+---+---------------+-------------+",
-            "| a | AVG(b)[count] | AVG(b)[sum] |",
-            "+---+---------------+-------------+",
-            "| 2 | 2             | 2.0         |",
-            "| 3 | 3             | 7.0         |",
-            "| 4 | 3             | 11.0        |",
-            "+---+---------------+-------------+",
-        ];
+        let expected = if spill {
+            vec![
+                "+---+---------------+-------------+",
+                "| a | AVG(b)[count] | AVG(b)[sum] |",
+                "+---+---------------+-------------+",
+                "| 2 | 1             | 1.0         |",
+                "| 2 | 1             | 1.0         |",
+                "| 3 | 1             | 2.0         |",
+                "| 3 | 2             | 5.0         |",
+                "| 4 | 1             | 4.0         |",
+                "| 4 | 2             | 7.0         |",
+                "+---+---------------+-------------+",
+            ]
+        } else {
+            vec![
+                "+---+---------------+-------------+",
+                "| a | AVG(b)[count] | AVG(b)[sum] |",
+                "+---+---------------+-------------+",
+                "| 2 | 2             | 2.0         |",
+                "| 3 | 3             | 7.0         |",
+                "| 4 | 3             | 11.0        |",
+                "+---+---------------+-------------+",
+            ]
+        };
         assert_batches_sorted_eq!(expected, &result);
 
         let merge = Arc::new(CoalescePartitionsExec::new(partial_aggregate));
@@ -1621,7 +1636,13 @@ mod tests {
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
-        assert_eq!(3, output_rows);
+        if spill {
+            // When spilling, the output rows metrics become partial output size + final output size
+            // This is due to the AtomicUsize behavior
+            assert_eq!(9, output_rows);
+        } else {
+            assert_eq!(3, output_rows);
+        }
 
         Ok(())
     }

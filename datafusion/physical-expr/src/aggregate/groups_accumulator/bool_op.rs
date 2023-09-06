@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use arrow::array::AsArray;
-
 use arrow_array::{ArrayRef, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use datafusion_common::Result;

@@ -21,7 +21,6 @@ use arrow::array::{AsArray, PrimitiveBuilder};
 use log::debug;
 
 use std::any::Any;
-
 use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::accumulate::NullState;
