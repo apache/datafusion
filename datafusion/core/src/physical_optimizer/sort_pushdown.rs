@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::utils::{add_sort_above, is_limit, is_union, is_window};
+use crate::physical_optimizer::utils::{
+    add_sort_above, is_limit, is_sort_preserving_merge, is_union, is_window,
+};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::{calculate_join_output_ordering, JoinSide};
 use crate::physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
@@ -35,7 +37,6 @@ use datafusion_physical_expr::utils::{
 };
 use datafusion_physical_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use itertools::izip;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
@@ -261,25 +262,21 @@ fn pushdown_requirement_to_children(
         || plan.as_any().is::<ProjectionExec>()
         || is_limit(plan)
         || plan.as_any().is::<HashJoinExec>()
+        // Do not push-down through SortPreservingMergeExec when
+        // ordering requirement invalidates requirement of sort preserving merge exec.
+        || (is_sort_preserving_merge(plan) && !ordering_satisfy(
+        parent_required
+            .map(|req| PhysicalSortRequirement::to_sort_exprs(req.to_vec()))
+            .as_deref(),
+        plan.output_ordering(),
+        || plan.equivalence_properties(),
+        || plan.ordering_equivalence_properties(),
+            )
+        )
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // Pushing down is not beneficial
-        Ok(None)
-    } else if plan.as_any().is::<SortPreservingMergeExec>()
-        && !ordering_satisfy(
-            parent_required
-                .map(|req| PhysicalSortRequirement::to_sort_exprs(req.to_vec()))
-                .as_deref(),
-            plan.output_ordering(),
-            || plan.equivalence_properties(),
-            || plan.ordering_equivalence_properties(),
-        )
-    {
-        println!("parent_required: {:?}", parent_required);
-        println!("plan.output_ordering(): {:?}", plan.output_ordering());
-        // Do not pushdown through SortPreservingMergeExec when
-        // ordering requirement invalidates requirement of sort preserving merge exec.
         Ok(None)
     } else {
         Ok(Some(

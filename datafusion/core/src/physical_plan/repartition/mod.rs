@@ -637,7 +637,7 @@ impl RepartitionExec {
 
     /// Set Order preserving flag
     pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
-        // set preserve order mode, only if executor cannot maintain order currently
+        // Set "preserve order" mode only if the operator cannot maintain the order:
         self.preserve_order = preserve_order && !self.maintains_input_order()[0];
         self
     }

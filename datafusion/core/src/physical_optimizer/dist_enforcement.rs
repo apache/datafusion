@@ -57,6 +57,7 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 
+use datafusion_common::internal_err;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -927,12 +928,21 @@ fn new_join_conditions(
     new_join_on
 }
 
-// Updates distribution onward such that
-// it keeps track new executor added to the top
+/// Updates `dist_onward` such that, to keep track of
+/// `input` in the `exec_tree`.
+///
+/// # Arguments
+///
+/// * `input`: Current execution plan
+/// * `dist_onward`: It keeps track of executors starting from a distribution
+///    changing operator (e.g Repartition, SortPreservingMergeExec, etc.)
+///    until child of `input` (`input` should have single child).
+/// * `input_idx`: index of the `input`, for its parent.
+///
 fn update_distribution_onward(
-    plan: Arc<dyn ExecutionPlan>,
+    input: Arc<dyn ExecutionPlan>,
     dist_onward: &mut Option<ExecTree>,
-    plan_idx: usize,
+    input_idx: usize,
 ) {
     // Update the onward tree if there is an active branch
     if let Some(exec_tree) = dist_onward {
@@ -941,13 +951,28 @@ fn update_distribution_onward(
         // in this case, we need to update exec tree idx such that exec tree is now child of these
         // operators (change the 0, since all of the operators have single child).
         exec_tree.idx = 0;
-        *exec_tree = ExecTree::new(plan, plan_idx, vec![exec_tree.clone()]);
+        *exec_tree = ExecTree::new(input, input_idx, vec![exec_tree.clone()]);
     } else {
-        *dist_onward = Some(ExecTree::new(plan, plan_idx, vec![]));
+        *dist_onward = Some(ExecTree::new(input, input_idx, vec![]));
     }
 }
 
-/// Adds RoundRobin repartition operator to increase parallelism.
+/// Adds RoundRobin repartition operator to the plan increase parallelism.
+///
+/// # Arguments
+///
+/// * `input`: Current execution plan
+/// * `n_target`: desired target partition number, if partition number of the
+///    current executor is less than this value. Partition number will be increased.
+/// * `dist_onward`: It keeps track of executors starting from a distribution
+///    changing operator (e.g Repartition, SortPreservingMergeExec, etc.)
+///    until `input` plan.
+/// * `input_idx`: index of the `input`, for its parent.
+///
+/// # Returns
+///
+/// A [Result] object that contains new execution plan, where desired partition number
+/// is achieved by adding RoundRobin Repartition.
 fn add_roundrobin_on_top(
     input: Arc<dyn ExecutionPlan>,
     n_target: usize,
@@ -969,10 +994,10 @@ fn add_roundrobin_on_top(
                 .with_preserve_order(should_preserve_ordering),
         ) as Arc<dyn ExecutionPlan>;
         if let Some(exec_tree) = dist_onward {
-            return Err(DataFusionError::Internal(format!(
-                "ExecTree should have been empty, but got:{:?} ",
+            return internal_err!(
+                "ExecTree should have been empty, but got:{:?}",
                 exec_tree
-            )));
+            );
         }
 
         // update distribution onward with new operator
@@ -988,6 +1013,22 @@ fn add_roundrobin_on_top(
 /// - to increase parallelism, and/or
 /// - to satisfy requirements of the subsequent operators.
 /// Repartition(Hash) is added on top of operator `input`.
+///
+/// # Arguments
+///
+/// * `input`: Current execution plan
+/// * `hash_exprs`: Stores Physical Exprs that are used during hashing.
+/// * `n_target`: desired target partition number, if partition number of the
+///    current executor is less than this value. Partition number will be increased.
+/// * `dist_onward`: It keeps track of executors starting from a distribution
+///    changing operator (e.g Repartition, SortPreservingMergeExec, etc.)
+///    until `input` plan.
+/// * `input_idx`: index of the `input`, for its parent.
+///
+/// # Returns
+///
+/// A [Result] object that contains new execution plan, where desired distribution is
+/// satisfied by adding Hash Repartition.
 fn add_hash_on_top(
     input: Arc<dyn ExecutionPlan>,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
@@ -1020,7 +1061,21 @@ fn add_hash_on_top(
     Ok(new_plan)
 }
 
-/// Add SortPreservingMergeExec operator on top of input executor
+/// Adds a `SortPreservingMergeExec` operator on top of input executor:
+/// - to satisfy single distribution requirement.
+///
+/// # Arguments
+///
+/// * `input`: Current execution plan
+/// * `dist_onward`: It keeps track of executors starting from a distribution
+///    changing operator (e.g Repartition, SortPreservingMergeExec, etc.)
+///    until `input` plan.
+/// * `input_idx`: index of the `input`, for its parent.
+///
+/// # Returns
+///
+/// New execution plan, where desired single
+/// distribution is satisfied by adding `SortPreservingMergeExec`.
 fn add_spm_on_top(
     input: Arc<dyn ExecutionPlan>,
     dist_onward: &mut Option<ExecTree>,
@@ -1308,11 +1363,11 @@ fn ensure_distribution(
                     Distribution::UnspecifiedDistribution => {}
                 };
             }
-            // there is an ordering requirement of the operator
+            // There is an ordering requirement of the operator:
             if let Some(required_input_ordering) = required_input_ordering {
                 let existing_ordering = child.output_ordering().unwrap_or(&[]);
-                // Either
-                // - Ordering requirement cannot be satisfied by preserving ordering through repartitions
+                // Either:
+                // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
                 // - using order preserving variant is not desirable.
                 if !ordering_satisfy_requirement_concrete(
                     existing_ordering,
@@ -1335,11 +1390,11 @@ fn ensure_distribution(
                 match requirement {
                     // Operator requires specific distribution.
                     Distribution::SinglePartition | Distribution::HashPartitioned(_) => {
-                        // Since no ordering requirement, preserving ordering is useless
+                        // Since there is no ordering requirement, preserving ordering is pointless
                         replace_order_preserving_variants(&mut child, dist_onward)?;
                     }
                     Distribution::UnspecifiedDistribution => {
-                        // Since ordering is not maintained preserving ordering is useless
+                        // Since ordering is lost, trying to preserve ordering is pointless
                         if !maintains {
                             replace_order_preserving_variants(&mut child, dist_onward)?;
                         }
@@ -1386,7 +1441,7 @@ fn ensure_distribution(
 }
 
 /// A struct to keep track of distribution changing executors
-/// (RepartitionExec, SortPreservingMergeExec, CoalescePartitionsExec),
+/// (`RepartitionExec`, `SortPreservingMergeExec`, `CoalescePartitionsExec`),
 /// and their associated parents inside `plan`. Using this information,
 /// we can optimize distribution of the plan if/when necessary.
 #[derive(Debug, Clone)]
