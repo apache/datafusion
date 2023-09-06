@@ -31,7 +31,6 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::expr_rewriter::rewrite_preserving_name;
-use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };
@@ -105,11 +104,7 @@ impl OptimizerRule for UnwrapCastInComparison {
             .collect::<Result<Vec<_>>>()?;
 
         let inputs: Vec<LogicalPlan> = plan.inputs().into_iter().cloned().collect();
-        Ok(Some(from_plan(
-            plan,
-            new_exprs.as_slice(),
-            inputs.as_slice(),
-        )?))
+        Ok(Some(plan.with_new_exprs(new_exprs, inputs.as_slice())?))
     }
 
     fn name(&self) -> &str {
