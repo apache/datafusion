@@ -1160,6 +1160,23 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
+        let input = parquet_exec_multiple_sorted();
+        let physical_plan = filter_exec(input);
+
+        let expected = &[
+            "FilterExec: c1@0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[c1], output_ordering=[c1@0 ASC]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true, 10, false, 10);
+        assert_optimized!(expected, physical_plan, false, 10, false, 10);
+
+        Ok(())
+    }
+
     /// Models operators like BoundedWindowExec that require an input
     /// ordering but is easy to construct
     #[derive(Debug)]

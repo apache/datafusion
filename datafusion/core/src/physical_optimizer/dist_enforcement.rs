@@ -28,7 +28,7 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::{DataFusionError, Result};
-use crate::physical_optimizer::sort_enforcement::ExecTree;
+use crate::physical_optimizer::sort_enforcement::{unbounded_output, ExecTree};
 use crate::physical_optimizer::utils::{add_sort_above, get_plan_string};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -192,14 +192,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.execution.target_partitions;
-        // When `false`, round robin repartition will not be added to increase parallelism
-        let enable_roundrobin = config.optimizer.enable_round_robin_repartition;
-        let repartition_file_scans = config.optimizer.repartition_file_scans;
-        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
-        let bounded_order_preserving_variants =
-            config.optimizer.bounded_order_preserving_variants;
 
         let adjusted = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
@@ -216,19 +209,13 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 
         let distribution_context = DistributionContext::new(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
-        let updated_plan =
+        let distribution_context =
             distribution_context.transform_up(&|distribution_context| {
-                ensure_distribution(
-                    distribution_context,
-                    target_partitions,
-                    enable_roundrobin,
-                    repartition_file_scans,
-                    repartition_file_min_size,
-                    bounded_order_preserving_variants,
-                )
+                ensure_distribution(distribution_context, config)
             })?;
 
-        Ok(updated_plan.plan)
+        // If output ordering is not necessary, removes it
+        update_plan_to_remove_unnecessary_final_order(distribution_context)
     }
 
     fn name(&self) -> &str {
@@ -1116,6 +1103,29 @@ fn remove_unnecessary_repartition(
     })
 }
 
+/// Changes each child of the `dist_context.plan` such that they no longer
+/// use order preserving variants, if no ordering is required at the output
+/// of the physical plan (there is no global ordering requirement by the query).
+fn update_plan_to_remove_unnecessary_final_order(
+    dist_context: DistributionContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let DistributionContext {
+        plan,
+        distribution_onwards,
+    } = dist_context;
+    let new_children = izip!(plan.children(), distribution_onwards)
+        .map(|(mut child, mut dist_onward)| {
+            replace_order_preserving_variants(&mut child, &mut dist_onward)?;
+            Ok(child)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !new_children.is_empty() {
+        plan.with_new_children(new_children)
+    } else {
+        Ok(plan)
+    }
+}
+
 /// Updates the physical plan `input` by using `dist_onward` replace order preserving operator variants
 /// with their corresponding operators that do not preserve order. It is a wrapper for `replace_order_preserving_variants_helper`
 fn replace_order_preserving_variants(
@@ -1182,12 +1192,20 @@ fn replace_order_preserving_variants_helper(
 /// exchange operators in other places.
 fn ensure_distribution(
     dist_context: DistributionContext,
-    target_partitions: usize,
-    enable_round_robin: bool,
-    repartition_file_scans: bool,
-    repartition_file_min_size: usize,
-    bounded_order_preserving_variants: bool,
+    config: &ConfigOptions,
 ) -> Result<Transformed<DistributionContext>> {
+    let target_partitions = config.execution.target_partitions;
+    // When `false`, round robin repartition will not be added to increase parallelism
+    let enable_round_robin = config.optimizer.enable_round_robin_repartition;
+    let repartition_file_scans = config.optimizer.repartition_file_scans;
+    let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+    let is_unbounded = unbounded_output(&dist_context.plan);
+    // Use order preserving variants either of the conditions true
+    // - it is desired according to config
+    // - when plan is unbounded
+    let order_preserving_variants_desirable =
+        is_unbounded || config.optimizer.bounded_order_preserving_variants;
+
     if dist_context.plan.children().is_empty() {
         return Ok(Transformed::No(dist_context));
     }
@@ -1301,15 +1319,17 @@ fn ensure_distribution(
                     required_input_ordering,
                     || child.equivalence_properties(),
                     || child.ordering_equivalence_properties(),
-                ) || !bounded_order_preserving_variants
+                ) || !order_preserving_variants_desirable
                 {
                     replace_order_preserving_variants(&mut child, dist_onward)?;
+                    let sort_expr = PhysicalSortRequirement::to_sort_exprs(
+                        required_input_ordering.clone(),
+                    );
+                    // Make sure to satisfy ordering requirement
+                    add_sort_above(&mut child, sort_expr, None)?;
                 }
-                let sort_expr = PhysicalSortRequirement::to_sort_exprs(
-                    required_input_ordering.clone(),
-                );
-                // Make sure to satisfy ordering requirement
-                add_sort_above(&mut child, sort_expr, None)?;
+                // Stop tracking distribution changing operators
+                *dist_onward = None;
             } else {
                 // no ordering requirement
                 match requirement {
@@ -1807,15 +1827,14 @@ mod tests {
         bounded_order_preserving_variants: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let distribution_context = DistributionContext::new(plan);
-        ensure_distribution(
-            distribution_context,
-            target_partitions,
-            false,
-            false,
-            1024,
-            bounded_order_preserving_variants,
-        )
-        .map(|item| item.into().plan)
+        let mut config = ConfigOptions::new();
+        config.execution.target_partitions = target_partitions;
+        config.optimizer.enable_round_robin_repartition = false;
+        config.optimizer.repartition_file_scans = false;
+        config.optimizer.repartition_file_min_size = 1024;
+        config.optimizer.bounded_order_preserving_variants =
+            bounded_order_preserving_variants;
+        ensure_distribution(distribution_context, &config).map(|item| item.into().plan)
     }
 
     /// Runs the repartition optimizer and asserts the plan against the expected
