@@ -248,7 +248,8 @@ impl OrderingEquivalenceProperties {
         if let Some(oeq_class) = &self.oeq_class {
             for item in oeq_class.others() {
                 let item = PhysicalSortRequirement::from_sort_exprs(item);
-                let ranges = get_compatible_ranges(&normalized_sort_reqs, &item, is_aggressive);
+                let ranges =
+                    get_compatible_ranges(&normalized_sort_reqs, &item, is_aggressive);
                 let mut offset: i64 = 0;
                 for Range { start, end } in ranges {
                     let mut head = oeq_class
@@ -691,15 +692,19 @@ fn get_compatible_ranges(
     is_aggressive: bool,
 ) -> Vec<Range<usize>> {
     if is_aggressive {
+        println!("given: {:?}", given);
+        println!("section: {:?}", section);
         let mut res = vec![];
-        for i in 0..section.len(){
+        for i in 0..given.len() {
             let mut count = 0;
-            let mut j = 0;
-            while given[j] == section[i+j] && j < given.len() && i+j < section.len(){
+            while i + count < given.len() && count < section.len() && given[i + count] == section[count] {
                 count += 1;
             }
-            if count > 0{
-                res.push(Range{start:i, end:i+count})
+            if count > 0 {
+                res.push(Range {
+                    start: i,
+                    end: i + count,
+                })
             }
         }
         res
@@ -879,7 +884,10 @@ mod tests {
                 .into_iter()
                 .map(|(start, end)| Range { start, end })
                 .collect::<Vec<_>>();
-            assert_eq!(get_compatible_ranges(&searched, &to_search, false), expected);
+            assert_eq!(
+                get_compatible_ranges(&searched, &to_search, false),
+                expected
+            );
         }
         Ok(())
     }
