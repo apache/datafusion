@@ -577,6 +577,7 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dataframe::DataFrameWriteOptions;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
@@ -1071,7 +1072,7 @@ mod tests {
 
         let out_dir_url = "file://local/out";
         let e = df
-            .write_csv(out_dir_url)
+            .write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -1106,7 +1107,8 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_csv(out_dir_url).await?;
+        df.write_csv(out_dir_url, DataFrameWriteOptions::new(), None)
+            .await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
         let ctx = SessionContext::new();

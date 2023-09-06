@@ -756,13 +756,13 @@ pub fn from_plan(
             output_url,
             file_format,
             single_file_output,
-            statement_options,
+            copy_options,
         }) => Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(inputs[0].clone()),
             output_url: output_url.clone(),
             file_format: file_format.clone(),
             single_file_output: *single_file_output,
-            statement_options: statement_options.clone(),
+            copy_options: copy_options.clone(),
         })),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
