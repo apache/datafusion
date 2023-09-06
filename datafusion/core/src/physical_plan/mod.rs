@@ -23,7 +23,6 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use crate::datasource::physical_plan::FileScanConfig;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use datafusion_common::Result;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
@@ -190,9 +189,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns the global output statistics for this `ExecutionPlan` node.
     fn statistics(&self) -> Statistics;
 
-    /// Returns the [`FileScanConfig`] in case this is a data source scanning execution plan or `None` otherwise.
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        None
+    /// Reports some metadata to the provided _metadata_collector_ if its type is recognized.
+    /// Returns whether or not that has been the case.
+    ///
+    /// Used to implement [`crate::datasource::physical_plan::get_scan_files`]
+    /// in a way that doesn't make this trait depend on the [`crate::datasource`] module.
+    #[allow(unused_variables)]
+    fn report_metadata(&self, metadata_collector: &mut dyn Any) -> bool {
+        false
     }
 }
 

@@ -72,6 +72,8 @@ mod row_groups;
 
 pub use metrics::ParquetFileMetrics;
 
+use super::file_scan_config::ScanFiles;
+
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
@@ -391,8 +393,12 @@ impl ExecutionPlan for ParquetExec {
         self.projected_statistics.clone()
     }
 
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        Some(&self.base_config)
+    fn report_metadata(&self, metadata_collector: &mut dyn Any) -> bool {
+        if let Some(scan_files) = metadata_collector.downcast_mut::<ScanFiles>() {
+            scan_files.add(&self.base_config);
+            return true;
+        }
+        false
     }
 }
 

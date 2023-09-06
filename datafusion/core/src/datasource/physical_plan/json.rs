@@ -48,6 +48,7 @@ use std::task::Poll;
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
+use super::file_scan_config::ScanFiles;
 use super::FileScanConfig;
 
 /// Execution plan for scanning NdJson data source
@@ -171,8 +172,12 @@ impl ExecutionPlan for NdJsonExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        Some(&self.base_config)
+    fn report_metadata(&self, metadata_collector: &mut dyn Any) -> bool {
+        if let Some(scan_files) = metadata_collector.downcast_mut::<ScanFiles>() {
+            scan_files.add(&self.base_config);
+            return true;
+        }
+        false
     }
 }
 

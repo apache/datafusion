@@ -72,20 +72,30 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
 }
 
+#[derive(Default)]
+pub(crate) struct ScanFiles {
+    scan_files: Vec<Vec<Vec<PartitionedFile>>>,
+}
+
+impl ScanFiles {
+    pub(crate) fn add(&mut self, config: &FileScanConfig) {
+        self.scan_files.push(config.file_groups.clone());
+    }
+}
+
 /// Get all of the [`PartitionedFile`] to be scanned for an [`ExecutionPlan`]
 pub fn get_scan_files(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
-    let mut collector: Vec<Vec<Vec<PartitionedFile>>> = vec![];
+    let mut collector = ScanFiles::default();
     plan.apply(&mut |plan| {
-        if let Some(file_scan_config) = plan.file_scan_config() {
-            collector.push(file_scan_config.file_groups.clone());
+        if plan.report_metadata(&mut collector) {
             Ok(VisitRecursion::Skip)
         } else {
             Ok(VisitRecursion::Continue)
         }
     })?;
-    Ok(collector)
+    Ok(collector.scan_files)
 }
 
 /// The base configurations to provide when creating a physical plan for
