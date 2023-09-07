@@ -1172,11 +1172,14 @@ mod tests {
 
         let right = ScalarValue::Decimal128(Some(124), 10, 3);
         let result = max(&left, &right);
-        let expect = DataFusionError::Internal(format!(
+        let err_msg = format!(
             "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
             (Decimal128(Some(123), 10, 2), Decimal128(Some(124), 10, 3))
-        ));
-        assert_eq!(expect.to_string(), result.unwrap_err().to_string());
+        );
+        let expect = DataFusionError::Internal(err_msg);
+        assert!(expect
+            .strip_backtrace()
+            .starts_with(&result.unwrap_err().strip_backtrace()));
 
         // max batch
         let array: ArrayRef = Arc::new(

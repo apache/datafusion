@@ -2597,14 +2597,11 @@ digraph {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.visit(&mut visitor);
-
-        if let Err(DataFusionError::NotImplemented(e)) = res {
-            assert_eq!("Error in pre_visit", e);
-        } else {
-            panic!("Expected an error");
-        }
-
+        let res = plan.visit(&mut visitor).unwrap_err();
+        assert_eq!(
+            "This feature is not implemented: Error in pre_visit",
+            res.strip_backtrace()
+        );
         assert_eq!(
             visitor.inner.strings,
             vec!["pre_visit Projection", "pre_visit Filter"]
@@ -2618,13 +2615,11 @@ digraph {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.visit(&mut visitor);
-        if let Err(DataFusionError::NotImplemented(e)) = res {
-            assert_eq!("Error in post_visit", e);
-        } else {
-            panic!("Expected an error");
-        }
-
+        let res = plan.visit(&mut visitor).unwrap_err();
+        assert_eq!(
+            "This feature is not implemented: Error in post_visit",
+            res.strip_backtrace()
+        );
         assert_eq!(
             visitor.inner.strings,
             vec![
@@ -2647,7 +2642,7 @@ digraph {
             })),
             empty_schema,
         );
-        assert_eq!("Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)", format!("{}", p.err().unwrap()));
+        assert_eq!(p.err().unwrap().strip_backtrace(), "Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");
         Ok(())
     }
 

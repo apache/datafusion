@@ -220,7 +220,7 @@ mod tests {
         let manager = DiskManager::try_new(config).unwrap();
         assert!(!manager.tmp_files_enabled());
         assert_eq!(
-            manager.create_tmp_file("Testing").unwrap_err().to_string(),
+            manager.create_tmp_file("Testing").unwrap_err().strip_backtrace(),
             "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)",
         )
     }
