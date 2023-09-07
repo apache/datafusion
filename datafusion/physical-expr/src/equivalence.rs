@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::expressions::{CastExpr, Column};
-use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
+use crate::{
+    LexOrdering, LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
@@ -239,7 +241,7 @@ impl OrderingEquivalenceProperties {
 
     pub fn add_constants(&mut self, constants: Vec<Arc<dyn PhysicalExpr>>) {
         for constant in constants {
-            if !exprs_contains(&self.constants, &constant){
+            if !exprs_contains(&self.constants, &constant) {
                 self.constants.push(constant);
             }
         }
@@ -254,7 +256,9 @@ impl OrderingEquivalenceProperties {
         sort_reqs: &[PhysicalSortRequirement],
         is_aggressive: bool,
     ) -> Vec<PhysicalSortRequirement> {
-        let mut normalized_sort_reqs = prune_sort_reqs_with_constants(sort_reqs, &self.constants);
+        let normalized_sort_reqs =
+            prune_sort_reqs_with_constants(sort_reqs, &self.constants);
+        let mut normalized_sort_reqs = collapse_sort_reqs(normalized_sort_reqs);
         if let Some(oeq_class) = &self.oeq_class {
             for item in oeq_class.others() {
                 let item = PhysicalSortRequirement::from_sort_exprs(item);
@@ -280,8 +284,9 @@ impl OrderingEquivalenceProperties {
                     normalized_sort_reqs.splice(updated_start..updated_end, head);
                 }
             }
+            normalized_sort_reqs = simplify_sort_reqs(normalized_sort_reqs, oeq_class);
         }
-        collapse_vec(normalized_sort_reqs)
+        collapse_sort_reqs(normalized_sort_reqs)
     }
 }
 
@@ -690,6 +695,55 @@ fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
     output
 }
 
+/// This function constructs a duplicate-free vector by filtering out duplicate
+/// entries inside the given vector `input`.
+fn collapse_sort_reqs(input: LexOrderingReq) -> LexOrderingReq {
+    let mut output = vec![];
+    for item in input {
+        if !sort_reqs_contains(&output, &item) {
+            output.push(item);
+        }
+    }
+    output
+}
+
+fn is_global_req(
+    req: &PhysicalSortRequirement,
+    oeq_class: &OrderingEquivalentClass,
+) -> bool {
+    for ordering in std::iter::once(oeq_class.head()).chain(oeq_class.others().iter()) {
+        let PhysicalSortRequirement { expr, options } = req;
+        let global_ordering = &ordering[0];
+        if let Some(options) = options {
+            if options == &global_ordering.options && expr.eq(&global_ordering.expr) {
+                return true;
+            }
+        } else {
+            if expr.eq(&global_ordering.expr) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// This function constructs a duplicate-free vector by filtering out duplicate
+/// entries inside the given vector `input`.
+fn simplify_sort_reqs(
+    input: LexOrderingReq,
+    oeq_class: &OrderingEquivalentClass,
+) -> LexOrderingReq {
+    let mut last_idx = input.len();
+    while last_idx > 0 {
+        if is_global_req(&input[last_idx - 1], oeq_class) {
+            last_idx -= 1;
+        } else {
+            break;
+        }
+    }
+    input[0..last_idx].to_vec()
+}
+
 /// This function searches for the slice `section` inside the slice `given`.
 /// It returns each range where `section` is compatible with the corresponding
 /// slice in `given`.
@@ -698,7 +752,7 @@ fn get_compatible_ranges(
     section: &[PhysicalSortRequirement],
     is_aggressive: bool,
 ) -> Vec<Range<usize>> {
-    if is_aggressive {
+    if is_aggressive && false {
         // println!("given: {:?}", given);
         // println!("section: {:?}", section);
         let mut res = vec![];
@@ -710,7 +764,7 @@ fn get_compatible_ranges(
             {
                 count += 1;
             }
-            if count > 0 {
+            if count > 0 && (i + count == given.len() || count == section.len()) {
                 res.push(Range {
                     start: i,
                     end: i + count,
@@ -738,19 +792,37 @@ fn get_compatible_ranges(
     }
 }
 
-fn exprs_contains(constants: &[Arc<dyn PhysicalExpr>], expr: &Arc<dyn PhysicalExpr>) -> bool {
-    for constant in constants{
-        if constant.eq(expr){
+fn exprs_contains(
+    constants: &[Arc<dyn PhysicalExpr>],
+    expr: &Arc<dyn PhysicalExpr>,
+) -> bool {
+    for constant in constants {
+        if constant.eq(expr) {
             return true;
         }
     }
     false
 }
 
-fn prune_sort_reqs_with_constants(ordering: &[PhysicalSortRequirement], constants: &[Arc<dyn PhysicalExpr>]) -> Vec<PhysicalSortRequirement> {
+fn sort_reqs_contains(
+    sort_reqs: &[PhysicalSortRequirement],
+    sort_req: &PhysicalSortRequirement,
+) -> bool {
+    for constant in sort_reqs {
+        if constant.expr.eq(&sort_req.expr) {
+            return true;
+        }
+    }
+    false
+}
+
+fn prune_sort_reqs_with_constants(
+    ordering: &[PhysicalSortRequirement],
+    constants: &[Arc<dyn PhysicalExpr>],
+) -> Vec<PhysicalSortRequirement> {
     let mut new_ordering = vec![];
-    for order in ordering{
-        if !exprs_contains(constants, &order.expr){
+    for order in ordering {
+        if !exprs_contains(constants, &order.expr) {
             new_ordering.push(order.clone())
         }
     }

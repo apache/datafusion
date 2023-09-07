@@ -2860,7 +2860,6 @@ mod tests {
     }
 }
 
-
 mod tmp_tests {
     use crate::assert_batches_eq;
     use crate::physical_plan::{collect, displayable, ExecutionPlan};
@@ -2895,8 +2894,7 @@ mod tmp_tests {
             WITH ORDER (a ASC, b ASC, c ASC)
             LOCATION 'tests/data/window_2.csv'",
         )
-            .await?;
-
+        .await?;
 
         let sql = "SELECT *
             FROM annotated_data_finite2
@@ -2930,8 +2928,7 @@ mod tmp_tests {
             WITH ORDER (a ASC, b ASC, c ASC)
             LOCATION 'tests/data/window_2.csv'",
         )
-            .await?;
-
+        .await?;
 
         let sql = "SELECT *
             FROM annotated_data_finite2
@@ -2946,5 +2943,4 @@ mod tmp_tests {
         print_batches(&actual)?;
         Ok(())
     }
-
 }

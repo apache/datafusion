@@ -385,8 +385,11 @@ fn is_column(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any().is::<Column>()
 }
 
-fn get_constant_expr_helper(expr: &Arc<dyn PhysicalExpr>, mut res: Vec<Arc<dyn PhysicalExpr>>) -> Vec<Arc<dyn PhysicalExpr>>{
-    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>(){
+fn get_constant_expr_helper(
+    expr: &Arc<dyn PhysicalExpr>,
+    mut res: Vec<Arc<dyn PhysicalExpr>>,
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
         if binary.op() == &Operator::Eq
             && is_literal(binary.left())
             && is_column(binary.right())
