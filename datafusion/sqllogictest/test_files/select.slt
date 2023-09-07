@@ -224,6 +224,12 @@ select
 ----
 false true false true true false false true false true true false true true false false true
 
+# select NaNs
+query BBBB
+select (isnan('NaN'::double) AND 'NaN'::double > 0) a, (isnan('-NaN'::double) AND '-NaN'::double < 0) b, (isnan('NaN'::float) AND 'NaN'::float > 0) c, (isnan('-NaN'::float) AND '-NaN'::float < 0) d
+----
+true true true true
+
 # select limit clause
 query I
 select * from (select 1 a union all select 2) b order by a limit 1;
