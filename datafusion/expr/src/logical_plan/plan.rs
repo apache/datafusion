@@ -1956,6 +1956,27 @@ pub struct Prepare {
 }
 
 /// Describe the schema of table
+///
+/// # Example output:
+///
+/// ```sql
+/// ❯ describe traces;
+/// +--------------------+-----------------------------+-------------+
+/// | column_name        | data_type                   | is_nullable |
+/// +--------------------+-----------------------------+-------------+
+/// | attributes         | Utf8                        | YES         |
+/// | duration_nano      | Int64                       | YES         |
+/// | end_time_unix_nano | Int64                       | YES         |
+/// | service.name       | Dictionary(Int32, Utf8)     | YES         |
+/// | span.kind          | Utf8                        | YES         |
+/// | span.name          | Utf8                        | YES         |
+/// | span_id            | Dictionary(Int32, Utf8)     | YES         |
+/// | time               | Timestamp(Nanosecond, None) | NO          |
+/// | trace_id           | Dictionary(Int32, Utf8)     | YES         |
+/// | otel.status_code   | Utf8                        | YES         |
+/// | parent_span_id     | Utf8                        | YES         |
+/// +--------------------+-----------------------------+-------------+
+/// ```
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DescribeTable {
     /// Table schema

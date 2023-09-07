@@ -1996,7 +1996,7 @@ impl DefaultPhysicalPlanner {
         Ok(new_plan)
     }
 
-    // return an record_batch which describes table
+    // return an record_batch which describes a table's schema.
     fn plan_describe(
         &self,
         table_schema: Arc<Schema>,
