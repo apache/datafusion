@@ -40,7 +40,6 @@ use crate::logical_expr::{
 use crate::physical_plan::memory::MemoryExec;
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::FileType;
@@ -1264,8 +1263,9 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Statement({name})"
                     )
                 }
-                LogicalPlan::DescribeTable(DescribeTable { schema, ..}) => {
-                    self.plan_describe(schema.clone())
+                LogicalPlan::DescribeTable(DescribeTable { schema, output_schema}) => {
+                    let output_schema: Schema = output_schema.as_ref().into();
+                    self.plan_describe(schema.clone(), Arc::new(output_schema))
                 }
                 LogicalPlan::Explain(_) => internal_err!(
                     "Unsupported logical plan: Explain must be root of the plan"
@@ -1997,17 +1997,15 @@ impl DefaultPhysicalPlanner {
     }
 
     // return an record_batch which describes table
-    fn plan_describe(&self, schema: Arc<Schema>) -> Result<Arc<dyn ExecutionPlan>> {
-        let record_batch_schema = Arc::new(Schema::new(vec![
-            Field::new("column_name", DataType::Utf8, false),
-            Field::new("data_type", DataType::Utf8, false),
-            Field::new("is_nullable", DataType::Utf8, false),
-        ]));
-
+    fn plan_describe(
+        &self,
+        table_schema: Arc<Schema>,
+        output_schema: Arc<Schema>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut column_names = StringBuilder::new();
         let mut data_types = StringBuilder::new();
         let mut is_nullables = StringBuilder::new();
-        for (_, field) in schema.fields().iter().enumerate() {
+        for (_, field) in table_schema.fields().iter().enumerate() {
             column_names.append_value(field.name());
 
             // "System supplied type" --> Use debug format of the datatype
@@ -2020,7 +2018,7 @@ impl DefaultPhysicalPlanner {
         }
 
         let record_batch = RecordBatch::try_new(
-            record_batch_schema,
+            output_schema,
             vec![
                 Arc::new(column_names.finish()),
                 Arc::new(data_types.finish()),

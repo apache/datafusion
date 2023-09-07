@@ -181,8 +181,8 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
-                dummy_schema
+            LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => {
+                output_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
             LogicalPlan::Copy(CopyTo { input, .. }) => input.schema(),
@@ -261,6 +261,15 @@ impl LogicalPlan {
             Field::new("plan_type", DataType::Utf8, false),
             Field::new("plan", DataType::Utf8, false),
         ]))
+    }
+
+    /// Returns the (fixed) output schema for `DESCRIBE` plans
+    pub fn describe_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("column_name", DataType::Utf8, false),
+            Field::new("data_type", DataType::Utf8, false),
+            Field::new("is_nullable", DataType::Utf8, false),
+        ])
     }
 
     /// returns all expressions (non-recursively) in the current
@@ -1951,8 +1960,8 @@ pub struct Prepare {
 pub struct DescribeTable {
     /// Table schema
     pub schema: Arc<Schema>,
-    /// Dummy schema
-    pub dummy_schema: DFSchemaRef,
+    /// schema of describe table output
+    pub output_schema: DFSchemaRef,
 }
 
 /// Produces a relation with string representations of
