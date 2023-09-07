@@ -934,8 +934,11 @@ pub fn get_indices_of_matching_sort_exprs_with_order_eq(
 ///
 /// * `expr` - A slice of tuples containing expressions and their corresponding aliases.
 ///
-/// * `input` - A reference to an execution plan that provides output ordering and equivalence
-/// properties.
+/// * `input_output_ordering` - Output ordering of the input plan.
+///
+/// * `input_equal_properties` - Equivalence properties of the columns in the input plan.
+///
+/// * `input_ordering_equal_properties` - Ordering equivalence properties of the columns in the input plan.
 ///
 /// # Returns
 ///
@@ -951,7 +954,7 @@ pub fn find_orderings_of_exprs(
 ) -> Result<Vec<Option<PhysicalSortExpr>>> {
     let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
     if let Some(leading_ordering) =
-        input_output_ordering.map(|output_ordering| &output_ordering[0])
+        input_output_ordering.and_then(|output_ordering| output_ordering.first())
     {
         for (index, (expression, name)) in expr.iter().enumerate() {
             let initial_expr = ExprOrdering::new(expression.clone());
@@ -972,6 +975,8 @@ pub fn find_orderings_of_exprs(
                 orderings.push(None);
             }
         }
+    } else {
+        orderings.extend(expr.iter().map(|_| None));
     }
     Ok(orderings)
 }
@@ -1969,6 +1974,57 @@ mod tests {
         .iter()
         .zip(expected_oeq.classes())
         .any(|(a, b)| a.head().ne(b.head()) || a.others().ne(b.others())));
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_empty_output_ordering() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let orderings = find_orderings_of_exprs(
+            &[
+                (Arc::new(Column::new("b", 1)), "b_new".to_string()),
+                (Arc::new(Column::new("a", 0)), "a_new".to_string()),
+            ],
+            Some(&[PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            }]),
+            EquivalenceProperties::new(Arc::new(schema.clone())),
+            OrderingEquivalenceProperties::new(Arc::new(schema.clone())),
+        )?;
+
+        assert_eq!(
+            vec![
+                Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new("b_new", 0)),
+                    options: SortOptions::default(),
+                }),
+                None,
+            ],
+            orderings
+        );
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let orderings = find_orderings_of_exprs(
+            &[
+                (Arc::new(Column::new("c", 2)), "c_new".to_string()),
+                (Arc::new(Column::new("b", 1)), "b_new".to_string()),
+            ],
+            Some(&[]),
+            EquivalenceProperties::new(Arc::new(schema.clone())),
+            OrderingEquivalenceProperties::new(Arc::new(schema)),
+        )?;
+
+        assert_eq!(vec![None, None], orderings);
 
         Ok(())
     }

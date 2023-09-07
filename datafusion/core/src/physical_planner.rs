@@ -44,7 +44,7 @@ use arrow_schema::{DataType, Field};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::FileType;
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -561,7 +561,7 @@ impl DefaultPhysicalPlanner {
                     output_url,
                     file_format,
                     single_file_output,
-                    statement_options,
+                    copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
 
@@ -573,10 +573,15 @@ impl DefaultPhysicalPlanner {
 
                     let schema: Schema = (**input.schema()).clone().into();
 
-                    let file_type_writer_options = FileTypeWriterOptions::build(
-                        file_format,
-                        session_state.config_options(),
-                        statement_options)?;
+                    let file_type_writer_options = match copy_options{
+                        CopyOptions::SQLOptions(statement_options) => {
+                            FileTypeWriterOptions::build(
+                                file_format,
+                                session_state.config_options(),
+                                statement_options)?
+                        },
+                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
+                    };
 
                     // Set file sink related options
                     let config = FileSinkConfig {

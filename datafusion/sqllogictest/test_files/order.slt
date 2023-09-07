@@ -445,3 +445,136 @@ SortPreservingMergeExec: [result@0 ASC NULLS LAST]
 
 statement ok
 drop table multiple_ordered_table;
+
+# Create tables having some ordered columns. In the next step, we will expect to observe that scalar
+# functions, such as mathematical functions like atan(), ceil(), sqrt(), or date_time functions 
+# like date_bin() and date_trunc(), will maintain the order of its argument columns.
+statement ok
+CREATE EXTERNAL TABLE csv_with_timestamps (
+  name VARCHAR,
+  ts TIMESTAMP
+)
+STORED AS CSV
+WITH ORDER (ts ASC NULLS LAST)
+LOCATION '../core/tests/data/timestamps.csv';
+
+query TT
+EXPLAIN SELECT DATE_BIN(INTERVAL '15 minutes', ts, TIMESTAMP '2022-08-03 14:40:00Z') as db15
+FROM csv_with_timestamps
+ORDER BY db15;
+----
+logical_plan
+Sort: db15 ASC NULLS LAST
+--Projection: date_bin(IntervalMonthDayNano("900000000000"), csv_with_timestamps.ts, TimestampNanosecond(1659537600000000000, None)) AS db15
+----TableScan: csv_with_timestamps projection=[ts]
+physical_plan
+SortPreservingMergeExec: [db15@0 ASC NULLS LAST]
+--ProjectionExec: expr=[date_bin(900000000000, ts@0, 1659537600000000000) as db15]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
+
+query TT
+EXPLAIN SELECT DATE_TRUNC('DAY', ts) as dt_day
+FROM csv_with_timestamps
+ORDER BY dt_day;
+----
+logical_plan
+Sort: dt_day ASC NULLS LAST
+--Projection: date_trunc(Utf8("DAY"), csv_with_timestamps.ts) AS dt_day
+----TableScan: csv_with_timestamps projection=[ts]
+physical_plan
+SortPreservingMergeExec: [dt_day@0 ASC NULLS LAST]
+--ProjectionExec: expr=[date_trunc(DAY, ts@0) as dt_day]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], has_header=false
+
+statement ok
+drop table csv_with_timestamps;
+
+statement ok
+drop table aggregate_test_100;
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER(c11)
+WITH ORDER(c12 DESC)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+query TT
+EXPLAIN SELECT ATAN(c11) as atan_c11
+FROM aggregate_test_100
+ORDER BY atan_c11;
+----
+logical_plan
+Sort: atan_c11 ASC NULLS LAST
+--Projection: atan(aggregate_test_100.c11) AS atan_c11
+----TableScan: aggregate_test_100 projection=[c11]
+physical_plan
+SortPreservingMergeExec: [atan_c11@0 ASC NULLS LAST]
+--ProjectionExec: expr=[atan(c11@0) as atan_c11]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+
+query TT
+EXPLAIN SELECT CEIL(c11) as ceil_c11
+FROM aggregate_test_100
+ORDER BY ceil_c11;
+----
+logical_plan
+Sort: ceil_c11 ASC NULLS LAST
+--Projection: ceil(aggregate_test_100.c11) AS ceil_c11
+----TableScan: aggregate_test_100 projection=[c11]
+physical_plan
+SortPreservingMergeExec: [ceil_c11@0 ASC NULLS LAST]
+--ProjectionExec: expr=[ceil(c11@0) as ceil_c11]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+
+query TT
+  EXPLAIN SELECT LOG(c11, c12) as log_c11_base_c12
+  FROM aggregate_test_100
+  ORDER BY log_c11_base_c12;
+----
+logical_plan
+Sort: log_c11_base_c12 ASC NULLS LAST
+--Projection: log(CAST(aggregate_test_100.c11 AS Float64), aggregate_test_100.c12) AS log_c11_base_c12
+----TableScan: aggregate_test_100 projection=[c11, c12]
+physical_plan
+SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
+--ProjectionExec: expr=[log(CAST(c11@0 AS Float64), c12@1) as log_c11_base_c12]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+
+query TT
+EXPLAIN SELECT LOG(c12, c11) as log_c12_base_c11
+FROM aggregate_test_100
+ORDER BY log_c12_base_c11 DESC;
+----
+logical_plan
+Sort: log_c12_base_c11 DESC NULLS FIRST
+--Projection: log(aggregate_test_100.c12, CAST(aggregate_test_100.c11 AS Float64)) AS log_c12_base_c11
+----TableScan: aggregate_test_100 projection=[c11, c12]
+physical_plan
+SortPreservingMergeExec: [log_c12_base_c11@0 DESC]
+--ProjectionExec: expr=[log(c12@1, CAST(c11@0 AS Float64)) as log_c12_base_c11]
+----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_ordering=[c11@0 ASC NULLS LAST], has_header=true
+
+statement ok
+drop table aggregate_test_100;

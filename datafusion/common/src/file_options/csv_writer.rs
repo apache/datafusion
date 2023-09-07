@@ -46,6 +46,19 @@ pub struct CsvWriterOptions {
     // https://github.com/apache/arrow-rs/issues/4735
 }
 
+impl CsvWriterOptions {
+    pub fn new(
+        writer_options: WriterBuilder,
+        compression: CompressionTypeVariant,
+    ) -> Self {
+        Self {
+            writer_options,
+            compression,
+            has_header: true,
+        }
+    }
+}
+
 impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
     type Error = DataFusionError;
 

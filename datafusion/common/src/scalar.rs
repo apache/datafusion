@@ -1321,7 +1321,34 @@ impl ScalarValue {
         self.to_array_of_size(1)
     }
 
-    /// Converts a scalar into an arrow [`Scalar`]
+    /// Converts a scalar into an arrow [`Scalar`] (which implements
+    /// the [`Datum`] interface).
+    ///
+    /// This can be used to call arrow compute kernels such as `lt`
+    ///
+    /// # Example
+    /// ```
+    /// use datafusion_common::ScalarValue;
+    /// use arrow::array::{BooleanArray, Int32Array};
+    ///
+    /// let arr = Int32Array::from(vec![Some(1), None, Some(10)]);
+    /// let five = ScalarValue::Int32(Some(5));
+    ///
+    /// let result = arrow::compute::kernels::cmp::lt(
+    ///   &arr,
+    ///   &five.to_scalar(),
+    /// ).unwrap();
+    ///
+    /// let expected = BooleanArray::from(vec![
+    ///     Some(true),
+    ///     None,
+    ///     Some(false)
+    ///   ]
+    /// );
+    ///
+    /// assert_eq!(&result, &expected);
+    /// ```
+    /// [`Datum`]: arrow_array::Datum
     pub fn to_scalar(&self) -> Scalar<ArrayRef> {
         Scalar::new(self.to_array_of_size(1))
     }
@@ -1332,7 +1359,7 @@ impl ScalarValue {
     /// Returns an error if the iterator is empty or if the
     /// [`ScalarValue`]s are not all the same type
     ///
-    /// Example
+    /// # Example
     /// ```
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::{ArrayRef, BooleanArray};
@@ -3238,7 +3265,10 @@ mod tests {
     fn scalar_sub_trait_int32_overflow_test() {
         let int_value = ScalarValue::Int32(Some(i32::MAX));
         let int_value_2 = ScalarValue::Int32(Some(i32::MIN));
-        let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
+        let err = int_value
+            .sub_checked(&int_value_2)
+            .unwrap_err()
+            .strip_backtrace();
         assert_eq!(
             err,
             "Arrow error: Compute error: Overflow happened on: 2147483647 - -2147483648"
@@ -3258,7 +3288,10 @@ mod tests {
     fn scalar_sub_trait_int64_overflow_test() {
         let int_value = ScalarValue::Int64(Some(i64::MAX));
         let int_value_2 = ScalarValue::Int64(Some(i64::MIN));
-        let err = int_value.sub_checked(&int_value_2).unwrap_err().to_string();
+        let err = int_value
+            .sub_checked(&int_value_2)
+            .unwrap_err()
+            .strip_backtrace();
         assert_eq!(err, "Arrow error: Compute error: Overflow happened on: 9223372036854775807 - -9223372036854775808")
     }
 

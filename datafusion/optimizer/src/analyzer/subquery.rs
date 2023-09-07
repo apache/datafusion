@@ -225,6 +225,7 @@ fn check_inner_plan(
                 Ok(())
             }
         },
+        LogicalPlan::Extension(_) => Ok(()),
         _ => plan_err!("Unsupported operator in the subquery plan."),
     }
 }
@@ -336,5 +337,59 @@ fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
         )
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use datafusion_common::{DFSchema, DFSchemaRef};
+    use datafusion_expr::{Extension, UserDefinedLogicalNodeCore};
+
+    use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockUserDefinedLogicalPlan {
+        empty_schema: DFSchemaRef,
+    }
+
+    impl UserDefinedLogicalNodeCore for MockUserDefinedLogicalPlan {
+        fn name(&self) -> &str {
+            "MockUserDefinedLogicalPlan"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![]
+        }
+
+        fn schema(&self) -> &datafusion_common::DFSchemaRef {
+            &self.empty_schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![]
+        }
+
+        fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "MockUserDefinedLogicalPlan")
+        }
+
+        fn from_template(&self, _exprs: &[Expr], _inputs: &[LogicalPlan]) -> Self {
+            Self {
+                empty_schema: self.empty_schema.clone(),
+            }
+        }
+    }
+
+    #[test]
+    fn wont_fail_extension_plan() {
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(MockUserDefinedLogicalPlan {
+                empty_schema: DFSchemaRef::new(DFSchema::empty()),
+            }),
+        });
+
+        check_inner_plan(&plan, false, false, true).unwrap();
     }
 }

@@ -345,7 +345,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
 
     // hard code the return value of now()
     let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
-    let now_time = DateTime::<Utc>::from_utc(ts, Utc);
+    let now_time = DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc);
     let config = OptimizerContext::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);

@@ -466,7 +466,7 @@ fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
     let secs = nanos / 1_000_000_000;
     let nsec = (nanos % 1_000_000_000) as u32;
     let date = NaiveDateTime::from_timestamp_opt(secs, nsec).unwrap();
-    DateTime::<Utc>::from_utc(date, Utc)
+    DateTime::<Utc>::from_naive_utc_and_offset(date, Utc)
 }
 
 /// DATE_BIN sql function
@@ -1061,7 +1061,7 @@ mod tests {
         let res =
             date_bin(&[ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1)))]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expected two or three arguments"
         );
 
@@ -1072,7 +1072,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expects stride argument to be an INTERVAL but got Interval(YearMonth)"
         );
 
@@ -1083,7 +1083,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride must be non-zero"
         );
 
@@ -1094,7 +1094,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride argument is too large"
         );
 
@@ -1105,7 +1105,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride argument is too large"
         );
 
@@ -1116,7 +1116,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN stride does not support combination of month, day and nanosecond intervals"
         );
 
@@ -1127,7 +1127,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
         ]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosececond precision but got Timestamp(Microsecond, None)"
         );
 
@@ -1146,7 +1146,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the stride argument, not arrays"
         );
 
@@ -1158,7 +1158,7 @@ mod tests {
             ColumnarValue::Array(timestamps),
         ]);
         assert_eq!(
-            res.err().unwrap().to_string(),
+            res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
         );
     }

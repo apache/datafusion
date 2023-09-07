@@ -617,38 +617,6 @@ pub fn cardinality_ratio(
     Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
 }
 
-/// Indicates whether interval arithmetic is supported for the given operator.
-pub fn is_operator_supported(op: &Operator) -> bool {
-    matches!(
-        op,
-        &Operator::Plus
-            | &Operator::Minus
-            | &Operator::And
-            | &Operator::Gt
-            | &Operator::GtEq
-            | &Operator::Lt
-            | &Operator::LtEq
-            | &Operator::Eq
-    )
-}
-
-/// Indicates whether interval arithmetic is supported for the given data type.
-pub fn is_datatype_supported(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        &DataType::Int64
-            | &DataType::Int32
-            | &DataType::Int16
-            | &DataType::Int8
-            | &DataType::UInt64
-            | &DataType::UInt32
-            | &DataType::UInt16
-            | &DataType::UInt8
-            | &DataType::Float64
-            | &DataType::Float32
-    )
-}
-
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {
         Operator::Eq => Ok(lhs.equal(rhs)),

@@ -29,6 +29,9 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::utils::expr_list_eq_any_order;
 use crate::PhysicalExpr;
 use arrow::array::*;
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::kernels::boolean::{not, or_kleene};
+use arrow::compute::kernels::cmp::eq;
 use arrow::compute::take;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
@@ -326,12 +329,26 @@ impl PhysicalExpr for InListExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let value = self.expr.evaluate(batch)?.into_array(1);
+        let value = self.expr.evaluate(batch)?;
         let r = match &self.static_filter {
-            Some(f) => f.contains(value.as_ref(), self.negated)?,
+            Some(f) => f.contains(value.into_array(1).as_ref(), self.negated)?,
             None => {
-                let list = evaluate_list(&self.list, batch)?;
-                make_set(list.as_ref())?.contains(value.as_ref(), self.negated)?
+                let value = value.into_array(batch.num_rows());
+                let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
+                    BooleanArray::new(BooleanBuffer::new_unset(batch.num_rows()), None),
+                    |result, expr| -> Result<BooleanArray> {
+                        Ok(or_kleene(
+                            &result,
+                            &eq(&value, &expr?.into_array(batch.num_rows()))?,
+                        )?)
+                    },
+                )?;
+
+                if self.negated {
+                    not(&found)?
+                } else {
+                    found
+                }
             }
         };
         Ok(ColumnarValue::Array(Arc::new(r)))
@@ -1126,6 +1143,64 @@ mod tests {
             col_a.clone(),
             &schema
         );
+        Ok(())
+    }
+
+    #[test]
+    fn in_expr_with_multiple_element_in_list() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Float64, true),
+            Field::new("c", DataType::Float64, true),
+        ]);
+        let a = Float64Array::from(vec![
+            Some(0.0),
+            Some(1.0),
+            Some(2.0),
+            Some(f64::NAN),
+            Some(-f64::NAN),
+        ]);
+        let b = Float64Array::from(vec![
+            Some(8.0),
+            Some(1.0),
+            Some(5.0),
+            Some(f64::NAN),
+            Some(3.0),
+        ]);
+        let c = Float64Array::from(vec![
+            Some(6.0),
+            Some(7.0),
+            None,
+            Some(5.0),
+            Some(-f64::NAN),
+        ]);
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )?;
+
+        let list = vec![col_b.clone(), col_c.clone()];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(false), Some(true), None, Some(true), Some(true)],
+            col_a.clone(),
+            &schema
+        );
+
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(true), Some(false), None, Some(false), Some(false)],
+            col_a.clone(),
+            &schema
+        );
+
         Ok(())
     }
 }

@@ -374,7 +374,7 @@ mod test {
         let error =
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
                 .unwrap_err()
-                .to_string();
+                .strip_backtrace();
         assert_eq!(
             error,
             r#"Schema error: No field named b. Valid fields are "tableA".a."#
