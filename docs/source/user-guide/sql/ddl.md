@@ -77,7 +77,7 @@ LOCATION <literal>
 <key_value_list> := (<literal> <literal, <literal> <literal>, ...)
 ```
 
-`file_type` is one of `CSV`, `PARQUET`, `AVRO` or `JSON`
+`file_type` is one of `CSV`, `ARROW`, `PARQUET`, `AVRO` or `JSON`
 
 `LOCATION <literal>` specifies the location to find the data. It can be
 a path to a file or directory of partitioned files locally or on an
@@ -100,6 +100,16 @@ CREATE EXTERNAL TABLE test
 STORED AS CSV
 WITH HEADER ROW
 LOCATION '/path/to/aggregate_simple.csv';
+```
+
+It is also possible to use compressed files, such as `.csv.gz`:
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS CSV
+COMPRESSION TYPE GZIP
+WITH HEADER ROW
+LOCATION '/path/to/aggregate_simple.csv.gz';
 ```
 
 It is also possible to specify the schema manually.
