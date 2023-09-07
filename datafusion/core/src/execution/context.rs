@@ -2223,7 +2223,7 @@ mod tests {
     use crate::variable::VarType;
     use arrow::array::ArrayRef;
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::{Schema, Field};
+    use arrow_schema::{Field, Schema};
     use async_trait::async_trait;
     use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
