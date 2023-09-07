@@ -1072,8 +1072,8 @@ impl ScalarValue {
         })
     }
 
-    /// Getter for the `DataType` of the value
-    pub fn get_datatype(&self) -> DataType {
+    /// return the [`DataType`] of this `ScalarValue`
+    pub fn data_type(&self) -> DataType {
         match self {
             ScalarValue::Boolean(_) => DataType::Boolean,
             ScalarValue::UInt8(_) => DataType::UInt8,
@@ -1147,6 +1147,13 @@ impl ScalarValue {
             }
             ScalarValue::Null => DataType::Null,
         }
+    }
+
+    /// Getter for the `DataType` of the value.
+    ///
+    /// Suggest using  [`Self::data_type`] as a more standard API
+    pub fn get_datatype(&self) -> DataType {
+        self.data_type()
     }
 
     /// Calculate arithmetic negation for a scalar value
