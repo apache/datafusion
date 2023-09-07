@@ -17,14 +17,20 @@
 
 use crate::equivalence::{EquivalenceProperties, OrderingEquivalenceProperties};
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
+use crate::sort_properties::{ExprOrdering, SortProperties};
+use crate::{update_ordering, EquivalentClass, OrderingEquivalentClass};
+use crate::{
+    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
 use arrow::datatypes::SchemaRef;
+use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
+use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
@@ -145,6 +151,83 @@ fn normalize_sort_exprs(
         ordering_eq_properties,
     );
     PhysicalSortRequirement::to_sort_exprs(normalized_exprs)
+}
+
+pub fn normalize_expr_with_equivalence_properties(
+    expr: Arc<dyn PhysicalExpr>,
+    eq_properties: &[EquivalentClass],
+) -> Arc<dyn PhysicalExpr> {
+    expr.clone()
+        .transform(&|expr| {
+            let normalized_form =
+                expr.as_any().downcast_ref::<Column>().and_then(|column| {
+                    for class in eq_properties {
+                        if class.contains(column) {
+                            return Some(Arc::new(class.head().clone()) as _);
+                        }
+                    }
+                    None
+                });
+            Ok(if let Some(normalized_form) = normalized_form {
+                Transformed::Yes(normalized_form)
+            } else {
+                Transformed::No(expr)
+            })
+        })
+        .unwrap_or(expr)
+}
+
+/// This function normalizes `sort_expr` according to `eq_properties`. If the
+/// given sort expression doesn't belong to equivalence set `eq_properties`,
+/// it returns `sort_expr` as is.
+fn normalize_sort_expr_with_equivalence_properties(
+    mut sort_expr: PhysicalSortExpr,
+    eq_properties: &[EquivalentClass],
+) -> PhysicalSortExpr {
+    sort_expr.expr =
+        normalize_expr_with_equivalence_properties(sort_expr.expr, eq_properties);
+    sort_expr
+}
+
+/// This function applies the [`normalize_sort_expr_with_equivalence_properties`]
+/// function for all sort expressions in `sort_exprs` and returns a vector of
+/// normalized sort expressions.
+pub fn normalize_sort_exprs_with_equivalence_properties(
+    sort_exprs: LexOrderingRef,
+    eq_properties: &EquivalenceProperties,
+) -> LexOrdering {
+    sort_exprs
+        .iter()
+        .map(|expr| {
+            normalize_sort_expr_with_equivalence_properties(
+                expr.clone(),
+                eq_properties.classes(),
+            )
+        })
+        .collect()
+}
+
+/// This function normalizes `oeq_classes` expressions according to `eq_properties`.
+/// More explicitly, it makes sure that expressions in `oeq_classes` are head entries
+/// in `eq_properties`, replacing any non-head entries with head entries if necessary.
+pub fn normalize_ordering_equivalence_classes(
+    oeq_class: Option<&OrderingEquivalentClass>,
+    eq_properties: &EquivalenceProperties,
+) -> Option<OrderingEquivalentClass> {
+    oeq_class.map(|class| {
+        let head =
+            normalize_sort_exprs_with_equivalence_properties(class.head(), eq_properties);
+
+        let others = class
+            .others()
+            .iter()
+            .map(|other| {
+                normalize_sort_exprs_with_equivalence_properties(other, eq_properties)
+            })
+            .collect();
+
+        EquivalentClass::new(head, others)
+    })
 }
 
 /// Transform `sort_reqs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
@@ -369,7 +452,7 @@ pub fn get_indices_of_matching_exprs<F: FnOnce() -> EquivalenceProperties>(
 
 /// This function finds the indices of `targets` within `items` using strict
 /// equality.
-fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
+pub fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
     targets: impl IntoIterator<Item = T>,
     items: &[Arc<dyn PhysicalExpr>],
 ) -> Vec<usize> {
@@ -631,21 +714,177 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
     Ok(make_array(data))
 }
 
+/// Return indices of each item in `required_exprs` inside `provided_exprs`.
+/// All the items should be found inside `provided_exprs`. Found indices will
+/// be a permutation of the range 0, 1, ..., N. For example, \[2,1,0\] is valid
+/// (\[0,1,2\] is consecutive), but \[3,1,0\] is not valid (\[0,1,3\] is not
+/// consecutive).
+fn get_lexicographical_match_indices(
+    required_exprs: &[Arc<dyn PhysicalExpr>],
+    provided_exprs: &[Arc<dyn PhysicalExpr>],
+) -> Option<Vec<usize>> {
+    let indices_of_equality = get_indices_of_exprs_strict(required_exprs, provided_exprs);
+    let mut ordered_indices = indices_of_equality.clone();
+    ordered_indices.sort();
+    let n_match = indices_of_equality.len();
+    let first_n = longest_consecutive_prefix(ordered_indices);
+    (n_match == required_exprs.len() && first_n == n_match && n_match > 0)
+        .then_some(indices_of_equality)
+}
+
+/// Attempts to find a full match between the required columns to be ordered (lexicographically), and
+/// the provided sort options (lexicographically), while considering equivalence properties.
+///
+/// It starts by normalizing members of both the required columns and the provided sort options.
+/// If a full match is found, returns the sort options and indices of the matches. If no full match is found,
+/// the function proceeds to check against ordering equivalence properties. If still no full match is found,
+/// the function returns `None`.
+pub fn get_indices_of_matching_sort_exprs_with_order_eq(
+    provided_sorts: &[PhysicalSortExpr],
+    required_columns: &[Column],
+    eq_properties: &EquivalenceProperties,
+    order_eq_properties: &OrderingEquivalenceProperties,
+) -> Option<(Vec<SortOptions>, Vec<usize>)> {
+    // Create a vector of `PhysicalSortRequirement`s from the required columns:
+    let sort_requirement_on_requirements = required_columns
+        .iter()
+        .map(|required_column| PhysicalSortRequirement {
+            expr: Arc::new(required_column.clone()) as _,
+            options: None,
+        })
+        .collect::<Vec<_>>();
+
+    let normalized_required = normalize_sort_requirements(
+        &sort_requirement_on_requirements,
+        eq_properties,
+        &OrderingEquivalenceProperties::new(order_eq_properties.schema()),
+    );
+    let normalized_provided = normalize_sort_requirements(
+        &PhysicalSortRequirement::from_sort_exprs(provided_sorts.iter()),
+        eq_properties,
+        &OrderingEquivalenceProperties::new(order_eq_properties.schema()),
+    );
+
+    let provided_sorts = normalized_provided
+        .iter()
+        .map(|req| req.expr.clone())
+        .collect::<Vec<_>>();
+
+    let normalized_required_expr = normalized_required
+        .iter()
+        .map(|req| req.expr.clone())
+        .collect::<Vec<_>>();
+
+    if let Some(indices_of_equality) =
+        get_lexicographical_match_indices(&normalized_required_expr, &provided_sorts)
+    {
+        return Some((
+            indices_of_equality
+                .iter()
+                .filter_map(|index| normalized_provided[*index].options)
+                .collect(),
+            indices_of_equality,
+        ));
+    }
+
+    // We did not find all the expressions, consult ordering equivalence properties:
+    if let Some(oeq_class) = order_eq_properties.oeq_class() {
+        let head = oeq_class.head();
+        for ordering in oeq_class.others().iter().chain(std::iter::once(head)) {
+            let order_eq_class_exprs = convert_to_expr(ordering);
+            if let Some(indices_of_equality) = get_lexicographical_match_indices(
+                &normalized_required_expr,
+                &order_eq_class_exprs,
+            ) {
+                return Some((
+                    indices_of_equality
+                        .iter()
+                        .map(|index| ordering[*index].options)
+                        .collect(),
+                    indices_of_equality,
+                ));
+            }
+        }
+    }
+    // If no match found, return `None`:
+    None
+}
+
+/// Calculates the output orderings for a set of expressions within the context of a given
+/// execution plan. The resulting orderings are all in the type of [`Column`], since these
+/// expressions become [`Column`] after the projection step. The expressions having an alias
+/// are renamed with those aliases in the returned [`PhysicalSortExpr`]'s. If an expression
+/// is found to be unordered, the corresponding entry in the output vector is `None`.
+///
+/// # Arguments
+///
+/// * `expr` - A slice of tuples containing expressions and their corresponding aliases.
+///
+/// * `input_output_ordering` - Output ordering of the input plan.
+///
+/// * `input_equal_properties` - Equivalence properties of the columns in the input plan.
+///
+/// * `input_ordering_equal_properties` - Ordering equivalence properties of the columns in the input plan.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of optional [`PhysicalSortExpr`]'s. Each element of the
+/// vector corresponds to an expression from the input slice. If an expression can be ordered,
+/// the corresponding entry is `Some(PhysicalSortExpr)`. If an expression cannot be ordered,
+/// the entry is `None`.
+pub fn find_orderings_of_exprs(
+    expr: &[(Arc<dyn PhysicalExpr>, String)],
+    input_output_ordering: Option<&[PhysicalSortExpr]>,
+    input_equal_properties: EquivalenceProperties,
+    input_ordering_equal_properties: OrderingEquivalenceProperties,
+) -> Result<Vec<Option<PhysicalSortExpr>>> {
+    let mut orderings: Vec<Option<PhysicalSortExpr>> = vec![];
+    if let Some(leading_ordering) =
+        input_output_ordering.and_then(|output_ordering| output_ordering.first())
+    {
+        for (index, (expression, name)) in expr.iter().enumerate() {
+            let initial_expr = ExprOrdering::new(expression.clone());
+            let transformed = initial_expr.transform_up(&|expr| {
+                update_ordering(
+                    expr,
+                    leading_ordering,
+                    &input_equal_properties,
+                    &input_ordering_equal_properties,
+                )
+            })?;
+            if let Some(SortProperties::Ordered(sort_options)) = transformed.state {
+                orderings.push(Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new(name, index)),
+                    options: sort_options,
+                }));
+            } else {
+                orderings.push(None);
+            }
+        }
+    } else {
+        orderings.extend(expr.iter().map(|_| None));
+    }
+    Ok(orderings)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fmt::{Display, Formatter};
+    use std::ops::Not;
+    use std::sync::Arc;
+
     use super::*;
+    use crate::equivalence::OrderingEquivalenceProperties;
     use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
     use crate::PhysicalSortExpr;
+
     use arrow::compute::SortOptions;
     use arrow_array::Int32Array;
+    use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::cast::{as_boolean_array, as_int32_array};
     use datafusion_common::{Result, ScalarValue};
-    use std::fmt::{Display, Formatter};
 
-    use crate::equivalence::OrderingEquivalenceProperties;
-    use arrow_schema::{DataType, Field, Schema};
     use petgraph::visit::Bfs;
-    use std::sync::Arc;
 
     #[derive(Clone)]
     struct DummyProperty {
@@ -1440,6 +1679,222 @@ mod tests {
         let result = as_boolean_array(&result)?;
 
         assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_indices_of_matching_sort_exprs_with_order_eq() -> Result<()> {
+        let sort_options = SortOptions::default();
+        let sort_options_not = SortOptions::default().not();
+
+        let provided_sorts = [
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: sort_options_not,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: sort_options,
+            },
+        ];
+        let required_columns = [Column::new("b", 1), Column::new("a", 0)];
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let equal_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
+        let ordering_equal_properties =
+            OrderingEquivalenceProperties::new(Arc::new(schema));
+        assert_eq!(
+            get_indices_of_matching_sort_exprs_with_order_eq(
+                &provided_sorts,
+                &required_columns,
+                &equal_properties,
+                &ordering_equal_properties,
+            ),
+            Some((vec![sort_options_not, sort_options], vec![0, 1]))
+        );
+
+        // required columns are provided in the equivalence classes
+        let provided_sorts = [PhysicalSortExpr {
+            expr: Arc::new(Column::new("c", 2)),
+            options: sort_options,
+        }];
+        let required_columns = [Column::new("b", 1), Column::new("a", 0)];
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let equal_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
+        let mut ordering_equal_properties =
+            OrderingEquivalenceProperties::new(Arc::new(schema));
+        ordering_equal_properties.add_equal_conditions((
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: sort_options,
+            }],
+            &vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("b", 1)),
+                    options: sort_options_not,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    options: sort_options,
+                },
+            ],
+        ));
+        assert_eq!(
+            get_indices_of_matching_sort_exprs_with_order_eq(
+                &provided_sorts,
+                &required_columns,
+                &equal_properties,
+                &ordering_equal_properties,
+            ),
+            Some((vec![sort_options_not, sort_options], vec![0, 1]))
+        );
+
+        // not satisfied orders
+        let provided_sorts = [
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: sort_options_not,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: sort_options,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: sort_options,
+            },
+        ];
+        let required_columns = [Column::new("b", 1), Column::new("a", 0)];
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let equal_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
+        let ordering_equal_properties =
+            OrderingEquivalenceProperties::new(Arc::new(schema));
+        assert_eq!(
+            get_indices_of_matching_sort_exprs_with_order_eq(
+                &provided_sorts,
+                &required_columns,
+                &equal_properties,
+                &ordering_equal_properties,
+            ),
+            None
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_ordering_equivalence_classes() -> Result<()> {
+        let sort_options = SortOptions::default();
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let mut equal_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
+        let mut ordering_equal_properties =
+            OrderingEquivalenceProperties::new(Arc::new(schema.clone()));
+        let mut expected_oeq = OrderingEquivalenceProperties::new(Arc::new(schema));
+
+        equal_properties
+            .add_equal_conditions((&Column::new("a", 0), &Column::new("c", 2)));
+        ordering_equal_properties.add_equal_conditions((
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: sort_options,
+            }],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: sort_options,
+            }],
+        ));
+        expected_oeq.add_equal_conditions((
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: sort_options,
+            }],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                options: sort_options,
+            }],
+        ));
+
+        let normalized_class = normalize_ordering_equivalence_classes(
+            ordering_equal_properties.oeq_class(),
+            &equal_properties,
+        );
+        let expected = expected_oeq.oeq_class();
+        match (normalized_class, expected) {
+            (Some(normalized), Some(expected)) => {
+                assert!(
+                    normalized.head().eq(expected.head())
+                        && normalized.others().eq(expected.others())
+                )
+            }
+            (_, _) => assert!(false),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_empty_output_ordering() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let orderings = find_orderings_of_exprs(
+            &[
+                (Arc::new(Column::new("b", 1)), "b_new".to_string()),
+                (Arc::new(Column::new("a", 0)), "a_new".to_string()),
+            ],
+            Some(&[PhysicalSortExpr {
+                expr: Arc::new(Column::new("b", 1)),
+                options: SortOptions::default(),
+            }]),
+            EquivalenceProperties::new(Arc::new(schema.clone())),
+            OrderingEquivalenceProperties::new(Arc::new(schema.clone())),
+        )?;
+
+        assert_eq!(
+            vec![
+                Some(PhysicalSortExpr {
+                    expr: Arc::new(Column::new("b_new", 0)),
+                    options: SortOptions::default(),
+                }),
+                None,
+            ],
+            orderings
+        );
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+        let orderings = find_orderings_of_exprs(
+            &[
+                (Arc::new(Column::new("c", 2)), "c_new".to_string()),
+                (Arc::new(Column::new("b", 1)), "b_new".to_string()),
+            ],
+            Some(&[]),
+            EquivalenceProperties::new(Arc::new(schema.clone())),
+            OrderingEquivalenceProperties::new(Arc::new(schema)),
+        )?;
+
+        assert_eq!(vec![None, None], orderings);
+
         Ok(())
     }
 }

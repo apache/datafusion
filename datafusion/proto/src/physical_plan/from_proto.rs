@@ -39,7 +39,7 @@ use datafusion::physical_plan::{
     functions, Partitioning,
 };
 use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{not_impl_err, DataFusionError, Result};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::convert::{TryFrom, TryInto};
@@ -124,19 +124,17 @@ pub fn parse_physical_expr(
             )?,
         )),
         ExprType::AggregateExpr(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert aggregate expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!(
+                "Cannot convert aggregate expr node to physical expression"
+            );
         }
         ExprType::WindowExpr(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert window expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!(
+                "Cannot convert window expr node to physical expression"
+            );
         }
         ExprType::Sort(_) => {
-            return Err(DataFusionError::NotImplemented(
-                "Cannot convert sort expr node to physical expression".to_owned(),
-            ));
+            return not_impl_err!("Cannot convert sort expr node to physical expression");
         }
         ExprType::IsNullExpr(e) => {
             Arc::new(IsNullExpr::new(parse_required_physical_expr(
@@ -257,6 +255,7 @@ pub fn parse_physical_expr(
                 fun_expr,
                 args,
                 &convert_required!(e.return_type)?,
+                None,
             ))
         }
         ExprType::ScalarUdf(e) => {
@@ -273,6 +272,7 @@ pub fn parse_physical_expr(
                 scalar_fun,
                 args,
                 &convert_required!(e.return_type)?,
+                None,
             ))
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(

@@ -18,6 +18,7 @@
 use std::{path::PathBuf, time::Instant};
 
 use datafusion::{
+    common::exec_err,
     error::{DataFusionError, Result},
     prelude::SessionContext,
 };
@@ -123,9 +124,9 @@ impl RunOpt {
     /// Returns the text of query `query_id`
     fn get_query(&self, query_id: usize) -> Result<String> {
         if query_id > CLICKBENCH_QUERY_END_ID {
-            return Err(DataFusionError::Execution(format!(
+            return exec_err!(
                 "Invalid query id {query_id}. Must be between {CLICKBENCH_QUERY_START_ID} and {CLICKBENCH_QUERY_END_ID}"
-            )));
+            );
         }
 
         let path = self.queries_path.as_path();

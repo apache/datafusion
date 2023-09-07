@@ -736,6 +736,7 @@ mod tests {
     // See also `parquet_exec` integration test
 
     use super::*;
+    use crate::dataframe::DataFrameWriteOptions;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
@@ -932,7 +933,7 @@ mod tests {
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let out_dir_url = "file://local/out";
         let e = df
-            .write_parquet(out_dir_url, None)
+            .write_parquet(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -1002,7 +1003,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
             "+-----+----+----+",
@@ -1037,7 +1038,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+-----+----+----+",
             "| c1  | c3 | c2 |",
             "+-----+----+----+",
@@ -1075,7 +1076,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+-----+----+----+",
             "| c1  | c3 | c2 |",
             "+-----+----+----+",
@@ -1114,7 +1115,7 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        let expected = vec![
+        let expected = [
             "+----+----+----+",
             "| c1 | c3 | c2 |",
             "+----+----+----+",
@@ -1156,7 +1157,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+-----+-----+",
             "| c1  | c4  |",
             "+-----+-----+",
@@ -1230,7 +1231,7 @@ mod tests {
         // a null array, then the pruning predicate (currently) can not be applied.
         // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `ParquetExec`,
         // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
-        let expected = vec![
+        let expected = [
             "+-----+----+",
             "| c1  | c2 |",
             "+-----+----+",
@@ -1267,7 +1268,7 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        let expected = vec![
+        let expected = [
             "+----+----+",
             "| c1 | c2 |",
             "+----+----+",
@@ -1374,7 +1375,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = vec![
+        let expected = [
             "+-----+----+",
             "| c1  | c2 |",
             "+-----+----+",
@@ -1405,7 +1406,7 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = vec![
+        let expected = [
             "+-----+----+",
             "| c1  | c2 |",
             "+-----+----+",
@@ -1651,7 +1652,7 @@ mod tests {
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
         assert_eq!(batch.schema().as_ref(), &expected_schema);
-        let expected = vec![
+        let expected = [
             "+----+----------+-------------+-------+-----+",
             "| id | bool_col | tinyint_col | month | day |",
             "+----+----------+-------------+-------+-----+",
@@ -1742,14 +1743,12 @@ mod tests {
 
         // assert the batches and some metrics
         #[rustfmt::skip]
-        let expected = vec![
-            "+-----+",
+        let expected = ["+-----+",
             "| int |",
             "+-----+",
             "| 4   |",
             "| 5   |",
-            "+-----+",
-        ];
+            "+-----+"];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
         assert!(
@@ -1786,7 +1785,7 @@ mod tests {
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // assert the batches and some metrics
-        let expected = vec![
+        let expected = [
             "+-----+", "| c1  |", "+-----+", "| Foo |", "| zzz |", "+-----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
@@ -1953,7 +1952,8 @@ mod tests {
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_parquet(out_dir_url, None).await?;
+        df.write_parquet(out_dir_url, DataFrameWriteOptions::new(), None)
+            .await?;
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned parquet file

@@ -31,6 +31,7 @@
 //! argument is automatically is coerced to f64.
 
 use crate::execution_props::ExecutionProps;
+use crate::sort_properties::SortProperties;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
     expressions::{cast_column, nullif_func},
@@ -47,6 +48,7 @@ use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
+use std::ops::Neg;
 use std::sync::Arc;
 
 /// Create a physical (function) expression.
@@ -173,11 +175,14 @@ pub fn create_physical_expr(
         _ => create_physical_fun(fun, execution_props)?,
     };
 
+    let monotonicity = get_func_monotonicity(fun);
+
     Ok(Arc::new(ScalarFunctionExpr::new(
         &format!("{fun}"),
         fun_expr,
         input_phy_exprs.to_vec(),
         &data_type,
+        monotonicity,
     )))
 }
 
@@ -425,6 +430,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayConcat => {
             Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
         }
+        BuiltinScalarFunction::ArrayEmpty => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_empty)(args))
+        }
         BuiltinScalarFunction::ArrayHasAll => {
             Arc::new(|args| make_scalar_function(array_expressions::array_has_all)(args))
         }
@@ -446,9 +454,11 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Flatten => {
             Arc::new(|args| make_scalar_function(array_expressions::flatten)(args))
         }
-
         BuiltinScalarFunction::ArrayNdims => {
             Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
+        }
+        BuiltinScalarFunction::ArrayPopBack => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_pop_back)(args))
         }
         BuiltinScalarFunction::ArrayPosition => {
             Arc::new(|args| make_scalar_function(array_expressions::array_position)(args))
@@ -874,6 +884,108 @@ pub fn create_physical_fun(
     })
 }
 
+/// Monotonicity of the `ScalarFunctionExpr` with respect to its arguments.
+/// Each element of this vector corresponds to an argument and indicates whether
+/// the function's behavior is monotonic, or non-monotonic/unknown for that argument, namely:
+/// - `None` signifies unknown monotonicity or non-monotonicity.
+/// - `Some(true)` indicates that the function is monotonically increasing w.r.t. the argument in question.
+/// - Some(false) indicates that the function is monotonically decreasing w.r.t. the argument in question.
+pub type FuncMonotonicity = Vec<Option<bool>>;
+
+/// Determines a [`ScalarFunctionExpr`]'s monotonicity for the given arguments
+/// and the function's behavior depending on its arguments.
+pub fn out_ordering(
+    func: &FuncMonotonicity,
+    arg_orderings: &[SortProperties],
+) -> SortProperties {
+    func.iter().zip(arg_orderings).fold(
+        SortProperties::Singleton,
+        |prev_sort, (item, arg)| {
+            let current_sort = func_order_in_one_dimension(item, arg);
+
+            match (prev_sort, current_sort) {
+                (_, SortProperties::Unordered) => SortProperties::Unordered,
+                (SortProperties::Singleton, SortProperties::Ordered(_)) => current_sort,
+                (SortProperties::Ordered(prev), SortProperties::Ordered(current))
+                    if prev.descending != current.descending =>
+                {
+                    SortProperties::Unordered
+                }
+                _ => prev_sort,
+            }
+        },
+    )
+}
+
+/// This function decides the monotonicity property of a [`ScalarFunctionExpr`] for a single argument (i.e. across a single dimension), given that argument's sort properties.
+fn func_order_in_one_dimension(
+    func_monotonicity: &Option<bool>,
+    arg: &SortProperties,
+) -> SortProperties {
+    if *arg == SortProperties::Singleton {
+        SortProperties::Singleton
+    } else {
+        match func_monotonicity {
+            None => SortProperties::Unordered,
+            Some(false) => {
+                if let SortProperties::Ordered(_) = arg {
+                    arg.neg()
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+            Some(true) => {
+                if let SortProperties::Ordered(_) = arg {
+                    *arg
+                } else {
+                    SortProperties::Unordered
+                }
+            }
+        }
+    }
+}
+
+/// This function specifies monotonicity behaviors for built-in scalar functions.
+/// The list can be extended, only mathematical and datetime functions are
+/// considered for the initial implementation of this feature.
+pub fn get_func_monotonicity(fun: &BuiltinScalarFunction) -> Option<FuncMonotonicity> {
+    if matches!(
+        fun,
+        BuiltinScalarFunction::Atan
+            | BuiltinScalarFunction::Acosh
+            | BuiltinScalarFunction::Asinh
+            | BuiltinScalarFunction::Atanh
+            | BuiltinScalarFunction::Ceil
+            | BuiltinScalarFunction::Degrees
+            | BuiltinScalarFunction::Exp
+            | BuiltinScalarFunction::Factorial
+            | BuiltinScalarFunction::Floor
+            | BuiltinScalarFunction::Ln
+            | BuiltinScalarFunction::Log10
+            | BuiltinScalarFunction::Log2
+            | BuiltinScalarFunction::Radians
+            | BuiltinScalarFunction::Round
+            | BuiltinScalarFunction::Signum
+            | BuiltinScalarFunction::Sinh
+            | BuiltinScalarFunction::Sqrt
+            | BuiltinScalarFunction::Cbrt
+            | BuiltinScalarFunction::Tanh
+            | BuiltinScalarFunction::Trunc
+            | BuiltinScalarFunction::Pi
+    ) {
+        Some(vec![Some(true)])
+    } else if matches!(
+        fun,
+        BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin
+    ) {
+        Some(vec![None, Some(true)])
+    } else if *fun == BuiltinScalarFunction::Log {
+        Some(vec![Some(true), Some(false)])
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,7 +1000,7 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_common::cast::as_uint64_array;
-    use datafusion_common::plan_err;
+    use datafusion_common::{exec_err, plan_err};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::type_coercion::functions::data_types;
     use datafusion_expr::Signature;
@@ -1092,9 +1204,9 @@ mod tests {
         test_function!(
             CharacterLength,
             &[lit("josé")],
-            Err(DataFusionError::Internal(
-                "function character_length requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function character_length requires compilation with feature flag: unicode_expressions."
+            ),
             i32,
             Int32,
             Int32Array
@@ -1142,9 +1254,7 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(0)))],
-            Err(DataFusionError::Execution(
-                "null character not permitted.".to_string(),
-            )),
+            exec_err!("null character not permitted."),
             &str,
             Utf8,
             StringArray
@@ -1152,9 +1262,7 @@ mod tests {
         test_function!(
             Chr,
             &[lit(ScalarValue::Int64(Some(i64::MAX)))],
-            Err(DataFusionError::Execution(
-                "requested character too large for encoding.".to_string(),
-            )),
+            exec_err!("requested character too large for encoding."),
             &str,
             Utf8,
             StringArray
@@ -1369,9 +1477,9 @@ mod tests {
                 lit("abcde"),
                 lit(ScalarValue::Int8(Some(2))),
             ],
-            Err(DataFusionError::Internal(
-                "function left requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function left requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1520,9 +1628,9 @@ mod tests {
                 lit("josé"),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            Err(DataFusionError::Internal(
-                "function lpad requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function lpad requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1606,9 +1714,9 @@ mod tests {
         test_function!(
             MD5,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function md5 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function md5 requires compilation with feature flag: crypto_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1756,9 +1864,9 @@ mod tests {
                 lit("b.."),
                 lit("X"),
             ],
-            Err(DataFusionError::Internal(
-                "function regexp_replace requires compilation with feature flag: regex_expressions.".to_string()
-            )),
+            internal_err!(
+                "function regexp_replace requires compilation with feature flag: regex_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1830,9 +1938,9 @@ mod tests {
         test_function!(
             Reverse,
             &[lit("abcde")],
-            Err(DataFusionError::Internal(
-                "function reverse requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function reverse requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -1928,9 +2036,9 @@ mod tests {
                 lit("abcde"),
                 lit(ScalarValue::Int8(Some(2))),
             ],
-            Err(DataFusionError::Internal(
-                "function right requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function right requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2079,9 +2187,9 @@ mod tests {
                 lit("josé"),
                 lit(ScalarValue::Int64(Some(5))),
             ],
-            Err(DataFusionError::Internal(
-                "function rpad requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function rpad requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2173,9 +2281,9 @@ mod tests {
         test_function!(
             SHA224,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha224 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha224 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2219,9 +2327,9 @@ mod tests {
         test_function!(
             SHA256,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha256 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha256 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2269,9 +2377,9 @@ mod tests {
         test_function!(
             SHA384,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha384 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha384 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2321,9 +2429,9 @@ mod tests {
         test_function!(
             SHA512,
             &[lit("tom")],
-            Err(DataFusionError::Internal(
-                "function sha512 requires compilation with feature flag: crypto_expressions.".to_string()
-            )),
+            internal_err!(
+                "function sha512 requires compilation with feature flag: crypto_expressions."
+            ),
             &[u8],
             Binary,
             BinaryArray
@@ -2359,9 +2467,7 @@ mod tests {
                 lit("~@~"),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            Err(DataFusionError::Execution(
-                "field position must be greater than zero".to_string(),
-            )),
+            exec_err!("field position must be greater than zero"),
             &str,
             Utf8,
             StringArray
@@ -2459,9 +2565,9 @@ mod tests {
                 lit("joséésoj"),
                 lit(ScalarValue::Utf8(None)),
             ],
-            Err(DataFusionError::Internal(
-                "function strpos requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function strpos requires compilation with feature flag: unicode_expressions."
+            ),
             i32,
             Int32,
             Int32Array
@@ -2662,9 +2768,7 @@ mod tests {
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(-1))),
             ],
-            Err(DataFusionError::Execution(
-                "negative substring length not allowed: substr(<str>, 1, -1)".to_string(),
-            )),
+            exec_err!("negative substring length not allowed: substr(<str>, 1, -1)"),
             &str,
             Utf8,
             StringArray
@@ -2689,9 +2793,9 @@ mod tests {
                 lit("alphabet"),
                 lit(ScalarValue::Int64(Some(0))),
             ],
-            Err(DataFusionError::Internal(
-                "function substr requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function substr requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -2749,9 +2853,9 @@ mod tests {
                 lit("143"),
                 lit("ax"),
             ],
-            Err(DataFusionError::Internal(
-                "function translate requires compilation with feature flag: unicode_expressions.".to_string()
-            )),
+            internal_err!(
+                "function translate requires compilation with feature flag: unicode_expressions."
+            ),
             &str,
             Utf8,
             StringArray
@@ -3004,9 +3108,7 @@ mod tests {
         if let ColumnarValue::Array(array) = col? {
             Ok(as_uint64_array(&array)?.values().to_vec())
         } else {
-            Err(DataFusionError::Internal(
-                "Unexpected scalar created by a test function".to_string(),
-            ))
+            internal_err!("Unexpected scalar created by a test function")
         }
     }
 

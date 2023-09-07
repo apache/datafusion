@@ -29,7 +29,7 @@ use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::{DFSchemaRef, DataFusionError};
+use datafusion_common::{exec_err, internal_err, DFSchemaRef, DataFusionError};
 use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
@@ -257,9 +257,7 @@ impl ExecutionPlan for UnionExec {
 
         warn!("Error in Union: Partition {} not found", partition);
 
-        Err(DataFusionError::Execution(format!(
-            "Partition {partition} not found in Union"
-        )))
+        exec_err!("Partition {partition} not found in Union")
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -327,9 +325,9 @@ impl InterleaveExec {
         let schema = union_schema(&inputs);
 
         if !can_interleave(&inputs) {
-            return Err(DataFusionError::Internal(String::from(
-                "Not all InterleaveExec children have a consistent hash partitioning",
-            )));
+            return internal_err!(
+                "Not all InterleaveExec children have a consistent hash partitioning"
+            );
         }
 
         Ok(InterleaveExec {
@@ -433,9 +431,7 @@ impl ExecutionPlan for InterleaveExec {
 
         warn!("Error in InterleaveExec: Partition {} not found", partition);
 
-        Err(DataFusionError::Execution(format!(
-            "Partition {partition} not found in InterleaveExec"
-        )))
+        exec_err!("Partition {partition} not found in InterleaveExec")
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

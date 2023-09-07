@@ -30,12 +30,12 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
-    expressions::{Avg, CastExpr, Column, Sum},
+    expressions::Column,
     normalize_out_expr_with_columns_map, reverse_order_bys,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
@@ -448,9 +448,9 @@ fn get_finest_requirement<
             // If neither of the requirements satisfy the other, this means
             // requirements are conflicting. Currently, we do not support
             // conflicting requirements.
-            return Err(DataFusionError::NotImplemented(
-                "Conflicting ordering requirements in aggregate functions is not supported".to_string(),
-            ));
+            return not_impl_err!(
+                "Conflicting ordering requirements in aggregate functions is not supported"
+            );
         } else {
             finest_req = Some(fn_req.clone());
         }
@@ -591,7 +591,7 @@ impl AggregateExec {
         // Reset ordering requirement to `None` if aggregator is not order-sensitive
         order_by_expr = aggr_expr
             .iter()
-            .zip(order_by_expr.into_iter())
+            .zip(order_by_expr)
             .map(|(aggr_expr, fn_reqs)| {
                 // If the aggregation function is order-sensitive and we are
                 // performing a "first stage" calculation, keep the ordering
@@ -1010,40 +1010,7 @@ fn aggregate_expressions(
         | AggregateMode::SinglePartitioned => Ok(aggr_expr
             .iter()
             .map(|agg| {
-                let pre_cast_type = if let Some(Sum {
-                    data_type,
-                    pre_cast_to_sum_type,
-                    ..
-                }) = agg.as_any().downcast_ref::<Sum>()
-                {
-                    if *pre_cast_to_sum_type {
-                        Some(data_type.clone())
-                    } else {
-                        None
-                    }
-                } else if let Some(Avg {
-                    sum_data_type,
-                    pre_cast_to_sum_type,
-                    ..
-                }) = agg.as_any().downcast_ref::<Avg>()
-                {
-                    if *pre_cast_to_sum_type {
-                        Some(sum_data_type.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let mut result = agg
-                    .expressions()
-                    .into_iter()
-                    .map(|expr| {
-                        pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
-                            Arc::new(CastExpr::new(expr, cast_type, None))
-                        })
-                    })
-                    .collect::<Vec<_>>();
+                let mut result = agg.expressions().clone();
                 // In partial mode, append ordering requirements to expressions' results.
                 // Ordering requirements are used by subsequent executors to satisfy the required
                 // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.
@@ -1568,7 +1535,7 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = vec![
+        let expected = [
             "+---+---------------+-------------+",
             "| a | AVG(b)[count] | AVG(b)[sum] |",
             "+---+---------------+-------------+",
@@ -2030,7 +1997,7 @@ mod tests {
 
         let result = crate::physical_plan::collect(aggregate_final, task_ctx).await?;
         if is_first_acc {
-            let expected = vec![
+            let expected = [
                 "+---+----------------+",
                 "| a | FIRST_VALUE(b) |",
                 "+---+----------------+",
@@ -2041,7 +2008,7 @@ mod tests {
             ];
             assert_batches_eq!(expected, &result);
         } else {
-            let expected = vec![
+            let expected = [
                 "+---+---------------+",
                 "| a | LAST_VALUE(b) |",
                 "+---+---------------+",

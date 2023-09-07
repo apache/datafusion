@@ -18,8 +18,7 @@
 //! Partition evaluation module
 
 use arrow::array::ArrayRef;
-use datafusion_common::Result;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use std::fmt::Debug;
 use std::ops::Range;
 
@@ -110,9 +109,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// etc)
     fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
         if self.uses_window_frame() {
-            Err(DataFusionError::Execution(
-                "Range should be calculated from window frame".to_string(),
-            ))
+            exec_err!("Range should be calculated from window frame")
         } else {
             Ok(Range {
                 start: idx,
@@ -166,11 +163,9 @@ pub trait PartitionEvaluator: Debug + Send {
             let res = (0..num_rows)
                 .map(|idx| self.evaluate(values, &self.get_range(idx, num_rows)?))
                 .collect::<Result<Vec<_>>>()?;
-            ScalarValue::iter_to_array(res.into_iter())
+            ScalarValue::iter_to_array(res)
         } else {
-            Err(DataFusionError::NotImplemented(
-                "evaluate_all is not implemented by default".into(),
-            ))
+            not_impl_err!("evaluate_all is not implemented by default")
         }
     }
 
@@ -193,9 +188,7 @@ pub trait PartitionEvaluator: Debug + Send {
         _values: &[ArrayRef],
         _range: &Range<usize>,
     ) -> Result<ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate is not implemented by default".into(),
-        ))
+        not_impl_err!("evaluate is not implemented by default")
     }
 
     /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
@@ -230,9 +223,7 @@ pub trait PartitionEvaluator: Debug + Send {
         _num_rows: usize,
         _ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_partition_with_rank is not implemented by default".into(),
-        ))
+        not_impl_err!("evaluate_partition_with_rank is not implemented by default")
     }
 
     /// Can the window function be incrementally computed using

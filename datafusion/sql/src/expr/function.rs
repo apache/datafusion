@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::plan_err;
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::window_frame::regularize;
@@ -213,9 +212,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
             FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported qualified wildcard argument: {sql:?}"
-            ))),
+            _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }
 

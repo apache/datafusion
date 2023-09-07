@@ -60,14 +60,14 @@ async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zst
 async-trait = "0.1.41"
 bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
-chrono = { version = "0.4.23", default-features = false }
+chrono = { version = "0.4.27", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "29.0.0", features = ["parquet", "object_store"] }
-datafusion-execution = { path = "../execution", version = "29.0.0" }
-datafusion-expr = { path = "../expr", version = "29.0.0" }
-datafusion-optimizer = { path = "../optimizer", version = "29.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "29.0.0", default-features = false }
-datafusion-sql = { path = "../sql", version = "29.0.0" }
+datafusion-common = { path = "../common", version = "30.0.0", features = ["parquet", "object_store"] }
+datafusion-execution = { path = "../execution", version = "30.0.0" }
+datafusion-expr = { path = "../expr", version = "30.0.0" }
+datafusion-optimizer = { path = "../optimizer", version = "30.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "30.0.0", default-features = false }
+datafusion-sql = { path = "../sql", version = "30.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
@@ -75,20 +75,18 @@ half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = "2.0.0"
 itertools = "0.11"
-lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
-object_store = "0.6.1"
+object_store = "0.7.0"
 parking_lot = "0.12"
 parquet = { workspace = true }
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
-smallvec = { version = "1.6", features = ["union"] }
 sqlparser = { workspace = true }
 tempfile = "3"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
+tokio = { version = "1.28", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }

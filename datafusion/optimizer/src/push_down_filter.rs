@@ -18,15 +18,13 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{Column, DFSchema, DataFusionError, Result};
+use datafusion_common::{internal_err, Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
     and,
     expr_rewriter::replace_col,
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
-    or,
-    utils::from_plan,
-    BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
+    or, BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
 };
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -94,9 +92,7 @@ fn lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::RightSemi | JoinType::RightAnti => Ok((false, true)),
         },
         LogicalPlan::CrossJoin(_) => Ok((true, true)),
-        _ => Err(DataFusionError::Internal(
-            "lr_is_preserved only valid for JOIN nodes".to_string(),
-        )),
+        _ => internal_err!("lr_is_preserved only valid for JOIN nodes"),
     }
 }
 
@@ -114,12 +110,10 @@ fn on_lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
             JoinType::LeftAnti => Ok((false, true)),
             JoinType::RightAnti => Ok((true, false)),
         },
-        LogicalPlan::CrossJoin(_) => Err(DataFusionError::Internal(
-            "on_lr_is_preserved cannot be applied to CROSSJOIN nodes".to_string(),
-        )),
-        _ => Err(DataFusionError::Internal(
-            "on_lr_is_preserved only valid for JOIN nodes".to_string(),
-        )),
+        LogicalPlan::CrossJoin(_) => {
+            internal_err!("on_lr_is_preserved cannot be applied to CROSSJOIN nodes")
+        }
+        _ => internal_err!("on_lr_is_preserved only valid for JOIN nodes"),
     }
 }
 
@@ -192,9 +186,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::AggregateUDF { .. }
         | Expr::Wildcard
         | Expr::QualifiedWildcard { .. }
-        | Expr::GroupingSet(_) => Err(DataFusionError::Internal(
-            "Unsupported predicate type".to_string(),
-        )),
+        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
     })?;
     Ok(is_evaluate)
 }
@@ -463,7 +455,7 @@ fn push_down_all_join(
     if !join_conditions.is_empty() {
         new_exprs.push(join_conditions.into_iter().reduce(Expr::and).unwrap());
     }
-    let plan = from_plan(join_plan, &new_exprs, &[left, right])?;
+    let plan = join_plan.with_new_exprs(new_exprs, &[left, right])?;
 
     if keep_predicates.is_empty() {
         Ok(plan)
@@ -780,7 +772,7 @@ impl OptimizerRule for PushDownFilter {
                 let results = scan
                     .source
                     .supports_filters_pushdown(filter_predicates.as_slice())?;
-                let zip = filter_predicates.iter().zip(results.into_iter());
+                let zip = filter_predicates.iter().zip(results);
 
                 let new_scan_filters = zip
                     .clone()

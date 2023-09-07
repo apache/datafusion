@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::datasource::file_format::file_type::{FileType, GetExt};
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_common::{FileType, GetExt};
 
 use object_store::aws::AmazonS3Builder;
 use std::env;
@@ -61,15 +62,20 @@ async fn main() -> Result<()> {
     let df = ctx.sql("SELECT * from test").await?;
 
     let out_path = format!("s3://{bucket_name}/test_write/");
-    df.clone().write_parquet(&out_path, None).await?;
+    df.clone()
+        .write_parquet(&out_path, DataFrameWriteOptions::new(), None)
+        .await?;
 
     //write as JSON to s3
     let json_out = format!("s3://{bucket_name}/json_out");
-    df.clone().write_json(&json_out).await?;
+    df.clone()
+        .write_json(&json_out, DataFrameWriteOptions::new())
+        .await?;
 
     //write as csv to s3
     let csv_out = format!("s3://{bucket_name}/csv_out");
-    df.write_csv(&csv_out).await?;
+    df.write_csv(&csv_out, DataFrameWriteOptions::new(), None)
+        .await?;
 
     let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
     let listing_options = ListingOptions::new(Arc::new(file_format))

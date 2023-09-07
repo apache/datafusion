@@ -96,7 +96,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     let task_ctx = session_ctx.task_ctx();
     let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
 
-    let expected = vec![
+    let expected = [
         "+-----+----+----+",
         "| c1  | c2 | c3 |",
         "+-----+----+----+",

@@ -830,7 +830,7 @@ fn ensure_distribution(
     // Add RepartitionExec to guarantee output partitioning
     let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
         .into_iter()
-        .zip(required_input_distributions.into_iter())
+        .zip(required_input_distributions)
         .map(|(child, required)| {
             if child
                 .output_partitioning()
@@ -886,7 +886,7 @@ impl PlanWithKeyRequirements {
         assert_eq!(plan_children.len(), self.request_key_ordering.len());
         plan_children
             .into_iter()
-            .zip(self.request_key_ordering.clone().into_iter())
+            .zip(self.request_key_ordering.clone())
             .map(|(child, required)| {
                 let from_parent = required.unwrap_or_default();
                 let length = child.children().len();

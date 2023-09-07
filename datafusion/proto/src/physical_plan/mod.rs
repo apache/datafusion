@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::datasource::file_format::file_type::FileCompressionType;
 use datafusion::datasource::physical_plan::{AvroExec, CsvExec, ParquetExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
@@ -47,7 +46,8 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::FileCompressionType;
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -249,9 +249,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             ),
                         )?))
                     }
-                    _ => Err(DataFusionError::Internal(
-                        "Invalid partitioning scheme".to_owned(),
-                    )),
+                    _ => internal_err!("Invalid partitioning scheme"),
                 }
             }
             PhysicalPlanType::GlobalLimit(limit) => {
@@ -331,9 +329,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     &physical_schema,
                                 )?)
                             }
-                            _ => Err(DataFusionError::Internal(
-                                "Invalid expression for WindowAggrExec".to_string(),
-                            )),
+                            _ => internal_err!("Invalid expression for WindowAggrExec"),
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -485,10 +481,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     proto_error("Invalid AggregateExpr, missing aggregate_function")
                                 })
                             }
-                            _ => Err(DataFusionError::Internal(
+                            _ => internal_err!(
                                 "Invalid aggregate expression for AggregateExec"
-                                    .to_string(),
-                            )),
+                            ),
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1354,9 +1349,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::NotImplemented(
-            "PhysicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 
     fn try_encode(
@@ -1364,9 +1357,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "PhysicalExtensionCodec is not provided".to_string(),
-        ))
+        not_impl_err!("PhysicalExtensionCodec is not provided")
     }
 }
 
@@ -1396,8 +1387,8 @@ mod roundtrip_tests {
     use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_expr::create_udf;
     use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
-    use datafusion::physical_expr::expressions::in_list;
     use datafusion::physical_expr::expressions::GetFieldAccessExpr;
+    use datafusion::physical_expr::expressions::{cast, in_list};
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
     use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
@@ -1593,14 +1584,11 @@ mod roundtrip_tests {
         let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
             vec![(col("a", &schema)?, "unused".to_string())];
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> =
-            vec![Arc::new(Avg::new_with_pre_cast(
-                col("b", &schema)?,
-                "AVG(b)".to_string(),
-                DataType::Float64,
-                DataType::Float64,
-                true,
-            ))];
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+            cast(col("b", &schema)?, &schema, DataType::Float64)?,
+            "AVG(b)".to_string(),
+            DataType::Float64,
+        ))];
 
         roundtrip_test(Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
@@ -1825,6 +1813,7 @@ mod roundtrip_tests {
             fun_expr,
             vec![col("a", &schema)?],
             &DataType::Int64,
+            None,
         );
 
         let project =
@@ -1858,6 +1847,7 @@ mod roundtrip_tests {
             scalar_fn,
             vec![col("a", &schema)?],
             &DataType::Int64,
+            None,
         );
 
         let project =

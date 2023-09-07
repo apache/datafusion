@@ -27,7 +27,7 @@ use arrow::{
 };
 use datafusion_common::{
     cast::{as_generic_string_array, as_int64_array},
-    internal_err, DataFusionError, Result,
+    exec_err, internal_err, DataFusionError, Result,
 };
 use hashbrown::HashMap;
 use std::cmp::{max, Ordering};
@@ -102,9 +102,9 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(|(string, length)| match (string, length) {
                     (Some(string), Some(length)) => {
                         if length > i32::MAX as i64 {
-                            return Err(DataFusionError::Execution(format!(
+                            return exec_err!(
                                 "lpad requested length {length} too large"
-                            )));
+                            );
                         }
 
                         let length = if length < 0 { 0 } else { length as usize };
@@ -139,9 +139,9 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(|((string, length), fill)| match (string, length, fill) {
                     (Some(string), Some(length), Some(fill)) => {
                         if length > i32::MAX as i64 {
-                            return Err(DataFusionError::Execution(format!(
+                            return exec_err!(
                                 "lpad requested length {length} too large"
-                            )));
+                            );
                         }
 
                         let length = if length < 0 { 0 } else { length as usize };
@@ -178,9 +178,9 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             Ok(Arc::new(result) as ArrayRef)
         }
-        other => Err(DataFusionError::Execution(format!(
+        other => exec_err!(
             "lpad was called with {other} arguments. It requires at least 2 and at most 3."
-        ))),
+        ),
     }
 }
 
@@ -245,9 +245,9 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(|(string, length)| match (string, length) {
                     (Some(string), Some(length)) => {
                         if length > i32::MAX as i64 {
-                            return Err(DataFusionError::Execution(format!(
+                            return exec_err!(
                                 "rpad requested length {length} too large"
-                            )));
+                            );
                         }
 
                         let length = if length < 0 { 0 } else { length as usize };
@@ -281,9 +281,9 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(|((string, length), fill)| match (string, length, fill) {
                     (Some(string), Some(length), Some(fill)) => {
                         if length > i32::MAX as i64 {
-                            return Err(DataFusionError::Execution(format!(
+                            return exec_err!(
                                 "rpad requested length {length} too large"
-                            )));
+                            );
                         }
 
                         let length = if length < 0 { 0 } else { length as usize };
@@ -391,9 +391,9 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(|((string, start), count)| match (string, start, count) {
                     (Some(string), Some(start), Some(count)) => {
                         if count < 0 {
-                            Err(DataFusionError::Execution(format!(
+                            exec_err!(
                                 "negative substring length not allowed: substr(<str>, {start}, {count})"
-                            )))
+                            )
                         } else {
                             let skip = max(0, start - 1);
                             let count = max(0, count + (if start < 1 {start - 1} else {0}));

@@ -24,7 +24,7 @@ use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::cmp::min;
@@ -233,9 +233,7 @@ fn get_default_value(
         if let ScalarValue::Int64(Some(val)) = value {
             ScalarValue::try_from_string(val.to_string(), dtype)
         } else {
-            Err(DataFusionError::Internal(
-                "Expects default value to have Int64 type".to_string(),
-            ))
+            internal_err!("Expects default value to have Int64 type")
         }
     } else {
         Ok(ScalarValue::try_from(dtype)?)
@@ -275,7 +273,7 @@ mod tests {
                 None,
                 None,
             ),
-            vec![
+            [
                 Some(-2),
                 Some(3),
                 Some(-4),
@@ -297,7 +295,7 @@ mod tests {
                 None,
                 None,
             ),
-            vec![
+            [
                 None,
                 Some(1),
                 Some(-2),
@@ -319,7 +317,7 @@ mod tests {
                 None,
                 Some(ScalarValue::Int32(Some(100))),
             ),
-            vec![
+            [
                 Some(100),
                 Some(1),
                 Some(-2),

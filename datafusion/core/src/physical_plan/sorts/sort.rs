@@ -35,7 +35,7 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
 };
@@ -328,6 +328,12 @@ impl ExternalSorter {
             }
 
             for spill in self.spills.drain(..) {
+                if !spill.path().exists() {
+                    return Err(DataFusionError::Internal(format!(
+                        "Spill file {:?} does not exist",
+                        spill.path()
+                    )));
+                }
                 let stream = read_spill_as_stream(spill, self.schema.clone())?;
                 streams.push(stream);
             }
@@ -598,9 +604,7 @@ async fn spill_sorted_batches(
     let handle = task::spawn_blocking(move || write_sorted(batches, path, schema));
     match handle.await {
         Ok(r) => r,
-        Err(e) => Err(DataFusionError::Execution(format!(
-            "Error occurred while spilling {e}"
-        ))),
+        Err(e) => exec_err!("Error occurred while spilling {e}"),
     }
 }
 

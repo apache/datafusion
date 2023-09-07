@@ -38,8 +38,9 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
-use datafusion_expr::dml::{CopyTo, OutputFileFormat};
-use url::Url;
+use datafusion_common::file_options::FileTypeWriterOptions;
+use datafusion_common::FileType;
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -73,7 +74,9 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion_common::{internal_err, plan_err, DFSchema, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, plan_err, DFSchema, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Cast,
     GetFieldAccess, GetIndexedField, GroupingSet, InList, Like, ScalarUDF, TryCast,
@@ -91,7 +94,6 @@ use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::fs;
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -234,14 +236,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }) => {
             // TODO: Add support for filter and order by in AggregateUDF
             if filter.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with filter is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with filter is not supported");
             }
             if order_by.is_some() {
-                return Err(DataFusionError::Execution(
-                    "aggregate expression with order_by is not supported".to_string(),
-                ));
+                return exec_err!("aggregate expression with order_by is not supported");
             }
             let mut names = Vec::with_capacity(args.len());
             for e in args {
@@ -293,15 +291,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{expr} IN ({list:?})"))
             }
         }
-        Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
-            "EXISTS is not yet supported in the physical plan".to_string(),
-        )),
-        Expr::InSubquery(_) => Err(DataFusionError::NotImplemented(
-            "IN subquery is not yet supported in the physical plan".to_string(),
-        )),
-        Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
-            "Scalar subqueries are not yet supported in the physical plan".to_string(),
-        )),
+        Expr::Exists { .. } => {
+            not_impl_err!("EXISTS is not yet supported in the physical plan")
+        }
+        Expr::InSubquery(_) => {
+            not_impl_err!("IN subquery is not yet supported in the physical plan")
+        }
+        Expr::ScalarSubquery(_) => {
+            not_impl_err!("Scalar subqueries are not yet supported in the physical plan")
+        }
         Expr::Between(Between {
             expr,
             negated,
@@ -358,21 +356,19 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{expr} SIMILAR TO {pattern}{escape}"))
             }
         }
-        Expr::Sort { .. } => Err(DataFusionError::Internal(
-            "Create physical name does not support sort expression".to_string(),
-        )),
-        Expr::Wildcard => Err(DataFusionError::Internal(
-            "Create physical name does not support wildcard".to_string(),
-        )),
-        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
-            "Create physical name does not support qualified wildcard".to_string(),
-        )),
-        Expr::Placeholder(_) => Err(DataFusionError::Internal(
-            "Create physical name does not support placeholder".to_string(),
-        )),
-        Expr::OuterReferenceColumn(_, _) => Err(DataFusionError::Internal(
-            "Create physical name does not support OuterReferenceColumn".to_string(),
-        )),
+        Expr::Sort { .. } => {
+            internal_err!("Create physical name does not support sort expression")
+        }
+        Expr::Wildcard => internal_err!("Create physical name does not support wildcard"),
+        Expr::QualifiedWildcard { .. } => {
+            internal_err!("Create physical name does not support qualified wildcard")
+        }
+        Expr::Placeholder(_) => {
+            internal_err!("Create physical name does not support placeholder")
+        }
+        Expr::OuterReferenceColumn(_, _) => {
+            internal_err!("Create physical name does not support OuterReferenceColumn")
+        }
     }
 }
 
@@ -560,38 +556,28 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                    per_thread_output,
-                    options: _,
+                    single_file_output,
+                    copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
-
-                    // Get object store for specified output_url
-                    // if user did not pass in a url, we assume it is a local file path
-                    // this requires some special handling as copy can create non
-                    // existing file paths
-                    let is_valid_url = Url::parse(output_url).is_ok();
 
                     // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
                     // TODO: add additional configurable options for if existing files should be overwritten or
                     // appended to
-                    let parsed_url = match is_valid_url {
-                        true => ListingTableUrl::parse(output_url),
-                        false => {
-                            let path = std::path::PathBuf::from(output_url);
-                            if !path.exists(){
-                                if *per_thread_output{
-                                    fs::create_dir_all(path)?;
-                                } else{
-                                    fs::File::create(path)?;
-                                }
-                            }
-                            ListingTableUrl::parse(output_url)
-                        }
-                    }?;
-
+                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, !*single_file_output)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
+
+                    let file_type_writer_options = match copy_options{
+                        CopyOptions::SQLOptions(statement_options) => {
+                            FileTypeWriterOptions::build(
+                                file_format,
+                                session_state.config_options(),
+                                statement_options)?
+                        },
+                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
+                    };
 
                     // Set file sink related options
                     let config = FileSinkConfig {
@@ -601,18 +587,17 @@ impl DefaultPhysicalPlanner {
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
                         writer_mode: FileWriterMode::PutMultipart,
-                        per_thread_output: *per_thread_output,
+                        single_file_output: *single_file_output,
                         overwrite: false,
+                        file_type_writer_options
                     };
 
-                    // TODO: implement statement level overrides for each file type
-                    // E.g. CsvFormat::from_options(options)
                     let sink_format: Arc<dyn FileFormat> = match file_format {
-                        OutputFileFormat::CSV => Arc::new(CsvFormat::default()),
-                        OutputFileFormat::PARQUET => Arc::new(ParquetFormat::default()),
-                        OutputFileFormat::JSON => Arc::new(JsonFormat::default()),
-                        OutputFileFormat::AVRO => Arc::new(AvroFormat {} ),
-                        OutputFileFormat::ARROW => Arc::new(ArrowFormat {}),
+                        FileType::CSV => Arc::new(CsvFormat::default()),
+                        FileType::PARQUET => Arc::new(ParquetFormat::default()),
+                        FileType::JSON => Arc::new(JsonFormat::default()),
+                        FileType::AVRO => Arc::new(AvroFormat {} ),
+                        FileType::ARROW => Arc::new(ArrowFormat {}),
                     };
 
                     sink_format.create_writer_physical_plan(input_exec, session_state, config).await
@@ -629,9 +614,9 @@ impl DefaultPhysicalPlanner {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, false).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
                     }
                 }
                 LogicalPlan::Dml(DmlStatement {
@@ -646,9 +631,9 @@ impl DefaultPhysicalPlanner {
                         let input_exec = self.create_initial_plan(input, session_state).await?;
                         provider.insert_into(session_state, input_exec, true).await
                     } else {
-                        return Err(DataFusionError::Execution(format!(
+                        return exec_err!(
                             "Table '{table_name}' does not exist"
-                        )));
+                        );
                     }
                 }
                 LogicalPlan::Values(Values {
@@ -679,9 +664,9 @@ impl DefaultPhysicalPlanner {
                     input, window_expr, ..
                 }) => {
                     if window_expr.is_empty() {
-                        return Err(DataFusionError::Internal(
-                            "Impossibly got empty window expression".to_owned(),
-                        ));
+                        return internal_err!(
+                            "Impossibly got empty window expression"
+                        );
                     }
 
                     let input_exec = self.create_initial_plan(input, session_state).await?;
@@ -804,7 +789,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter.into_iter());
+                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
@@ -964,7 +949,7 @@ impl DefaultPhysicalPlanner {
                             Partitioning::Hash(runtime_expr, *n)
                         }
                         LogicalPartitioning::DistributeBy(_) => {
-                            return Err(DataFusionError::NotImplemented("Physical plan does not support DistributeBy partitioning".to_string()));
+                            return not_impl_err!("Physical plan does not support DistributeBy partitioning");
                         }
                     };
                     Ok(Arc::new(RepartitionExec::try_new(
@@ -1160,7 +1145,7 @@ impl DefaultPhysicalPlanner {
                         // Sort-Merge join support currently is experimental
                         if join_filter.is_some() {
                             // TODO SortMergeJoinExec need to support join filter
-                            Err(DataFusionError::NotImplemented("SortMergeJoinExec does not support join_filter now.".to_string()))
+                            not_impl_err!("SortMergeJoinExec does not support join_filter now.")
                         } else {
                             let join_on_len = join_on.len();
                             Ok(Arc::new(SortMergeJoinExec::try_new(
@@ -1250,47 +1235,47 @@ impl DefaultPhysicalPlanner {
                     // the appropriate table can be registered with
                     // the context)
                     let name = ddl.name();
-                    Err(DataFusionError::NotImplemented(
-                        format!("Unsupported logical plan: {name}")
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: {name}"
+                    )
                 }
                 LogicalPlan::Prepare(_) => {
                     // There is no default plan for "PREPARE" -- it must be
                     // handled at a higher level (so that the appropriate
                     // statement can be prepared)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: Prepare".to_string(),
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Prepare"
+                    )
                 }
                 LogicalPlan::Dml(_) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: Dml".to_string(),
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Dml"
+                    )
                 }
                 LogicalPlan::Statement(statement) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                     let name = statement.name();
-                    Err(DataFusionError::NotImplemented(
-                        format!("Unsupported logical plan: Statement({name})")
-                    ))
+                    not_impl_err!(
+                        "Unsupported logical plan: Statement({name})"
+                    )
                 }
                 LogicalPlan::DescribeTable(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
-                    ))
+                    internal_err!(
+                        "Unsupported logical plan: DescribeTable must be root of the plan"
+                    )
                 }
-                LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
-                    "Unsupported logical plan: Explain must be root of the plan".to_string(),
-                )),
+                LogicalPlan::Explain(_) => internal_err!(
+                    "Unsupported logical plan: Explain must be root of the plan"
+                ),
                 LogicalPlan::Distinct(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: Distinct should be replaced to Aggregate".to_string(),
-                    ))
+                    internal_err!(
+                        "Unsupported logical plan: Distinct should be replaced to Aggregate"
+                    )
                 }
-                LogicalPlan::Analyze(_) => Err(DataFusionError::Internal(
-                    "Unsupported logical plan: Analyze must be root of the plan".to_string(),
-                )),
+                LogicalPlan::Analyze(_) => internal_err!(
+                    "Unsupported logical plan: Analyze must be root of the plan"
+                ),
                 LogicalPlan::Extension(e) => {
                     let physical_inputs = self.create_initial_plan_multi(e.node.inputs(), session_state).await?;
 
@@ -1871,9 +1856,7 @@ pub fn create_physical_sort_expr(
             },
         })
     } else {
-        Err(DataFusionError::Internal(
-            "Expects a sort expression".to_string(),
-        ))
+        internal_err!("Expects a sort expression")
     }
 }
 
@@ -2533,7 +2516,7 @@ mod tests {
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-            Err(DataFusionError::Internal("BOOM".to_string()))
+            internal_err!("BOOM")
         }
     }
     /// An example extension node that doesn't do anything
@@ -2717,7 +2700,7 @@ mod tests {
 
         let plan = plan(&logical_plan).await.unwrap();
 
-        let expected_graph = r###"
+        let expected_graph = r#"
 // Begin DataFusion GraphViz Plan,
 // display it online here: https://dreampuf.github.io/GraphvizOnline
 
@@ -2727,7 +2710,7 @@ digraph {
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan
-"###;
+"#;
 
         let generated_graph = format!("{}", displayable(&*plan).graphviz());
 

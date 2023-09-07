@@ -19,6 +19,9 @@
 
 # DDL
 
+DDL stands for "Data Definition Language" and relates to creating and
+modifying catalog objects such as Tables.
+
 ## CREATE DATABASE
 
 Create catalog with specified name.
@@ -76,7 +79,7 @@ LOCATION <literal>
 
 `file_type` is one of `CSV`, `PARQUET`, `AVRO` or `JSON`
 
-`LOCATION <literal>` specfies the location to find the data. It can be
+`LOCATION <literal>` specifies the location to find the data. It can be
 a path to a file or directory of partitioned files locally or on an
 object store.
 

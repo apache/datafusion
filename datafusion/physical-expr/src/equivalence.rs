@@ -16,15 +16,17 @@
 // under the License.
 
 use crate::expressions::{CastExpr, Column};
+use crate::utils::collect_columns;
 use crate::{
-    LexOrdering, LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Fields;
 
-use crate::utils::collect_columns;
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::Result;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::ops::Range;
@@ -210,6 +212,44 @@ impl OrderingEquivalenceProperties {
     }
 }
 
+/// Adds the `offset` value to `Column` indices inside `expr`. This function is
+/// generally used during the update of the right table schema in join operations.
+pub(crate) fn add_offset_to_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
+            col.name(),
+            offset + col.index(),
+        )))),
+        None => Ok(Transformed::No(e)),
+    })
+}
+
+/// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
+pub(crate) fn add_offset_to_sort_expr(
+    sort_expr: &PhysicalSortExpr,
+    offset: usize,
+) -> Result<PhysicalSortExpr> {
+    Ok(PhysicalSortExpr {
+        expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
+        options: sort_expr.options,
+    })
+}
+
+/// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
+/// inside `sort_exprs`.
+pub fn add_offset_to_lex_ordering(
+    sort_exprs: LexOrderingRef,
+    offset: usize,
+) -> Result<LexOrdering> {
+    sort_exprs
+        .iter()
+        .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
+        .collect()
+}
+
 impl OrderingEquivalenceProperties {
     pub fn extend(&mut self, other: Option<OrderingEquivalentClass>) {
         if let Some(other) = other {
@@ -237,6 +277,18 @@ impl OrderingEquivalenceProperties {
             let others = vec![new_conditions.1.clone()];
             self.oeq_class = Some(OrderingEquivalentClass::new(head, others))
         }
+    }
+
+    pub fn add_offset(&mut self, offset: usize) -> Result<()> {
+        if let Some(oeq_class) = &mut self.oeq_class {
+            oeq_class.head = add_offset_to_lex_ordering(oeq_class.head(), offset)?;
+            oeq_class.others = oeq_class
+                .others()
+                .iter()
+                .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
+                .collect::<Result<HashSet<_>>>()?;
+        }
+        Ok(())
     }
 
     pub fn add_constants(&mut self, constants: Vec<Arc<dyn PhysicalExpr>>) {
@@ -285,6 +337,34 @@ impl OrderingEquivalenceProperties {
             normalized_sort_reqs = simplify_sort_reqs(normalized_sort_reqs, oeq_class);
         }
         collapse_sort_reqs(normalized_sort_reqs)
+    }
+
+    pub fn normalize_with_equivalence_properties(
+        &mut self,
+        eq_properties: &EquivalenceProperties,
+    ) {
+    }
+}
+
+impl OrderingEquivalenceProperties {
+    /// Checks whether `leading_ordering` is contained in any of the ordering
+    /// equivalence classes.
+    pub fn satisfies_leading_ordering(
+        &self,
+        leading_ordering: &PhysicalSortExpr,
+    ) -> bool {
+        if let Some(oeq_class) = &self.oeq_class {
+            for ordering in oeq_class
+                .others
+                .iter()
+                .chain(std::iter::once(&oeq_class.head))
+            {
+                if ordering[0].eq(leading_ordering) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -566,7 +646,13 @@ pub fn project_equivalence_properties(
             class.remove(&column);
         }
     }
-    eq_classes.retain(|props| props.len() > 1);
+
+    eq_classes.retain(|props| {
+        props.len() > 1
+            &&
+            // A column should not give an equivalence with itself.
+             !(props.len() == 2 && props.head.eq(props.others().iter().next().unwrap()))
+    });
 
     output_eq.extend(eq_classes);
 }
