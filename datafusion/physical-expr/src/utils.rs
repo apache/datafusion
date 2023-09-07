@@ -133,7 +133,7 @@ pub fn normalize_out_expr_with_columns_map(
 /// This function converts `sort_exprs` `vec![b ASC, c ASC]` to first `vec![a ASC, c ASC]` after considering `eq_properties`
 /// Then converts `vec![a ASC, c ASC]` to `vec![d ASC]` after considering `ordering_eq_properties`.
 /// Standardized version `vec![d ASC]` is used in subsequent operations.
-pub fn normalize_sort_exprs(
+fn normalize_sort_exprs(
     sort_exprs: &[PhysicalSortExpr],
     eq_properties: &EquivalenceProperties,
     ordering_eq_properties: &OrderingEquivalenceProperties,
@@ -155,7 +155,7 @@ pub fn normalize_sort_exprs(
 /// This function converts `sort_exprs` `vec![b Some(ASC), c None]` to first `vec![a Some(ASC), c None]` after considering `eq_properties`
 /// Then converts `vec![a Some(ASC), c None]` to `vec![d Some(ASC)]` after considering `ordering_eq_properties`.
 /// Standardized version `vec![d Some(ASC)]` is used in subsequent operations.
-pub fn normalize_sort_requirements(
+fn normalize_sort_requirements(
     sort_reqs: &[PhysicalSortRequirement],
     eq_properties: &EquivalenceProperties,
     ordering_eq_properties: &OrderingEquivalenceProperties,
