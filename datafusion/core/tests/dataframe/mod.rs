@@ -482,7 +482,7 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
         .distinct()?
         .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
         .unwrap_err();
-    assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
+    assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
     Ok(())
 }
 
@@ -501,7 +501,7 @@ async fn sort_on_ambiguous_column() -> Result<()> {
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
     Ok(())
 }
 
@@ -520,7 +520,7 @@ async fn group_by_ambiguous_column() -> Result<()> {
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
     Ok(())
 }
 
@@ -539,7 +539,7 @@ async fn filter_on_ambiguous_column() -> Result<()> {
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
     Ok(())
 }
 
@@ -558,7 +558,7 @@ async fn select_ambiguous_column() -> Result<()> {
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
     Ok(())
 }
 

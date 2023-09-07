@@ -873,8 +873,8 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed."))"#,
-            &format!("{err:?}")
+            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.",
+            err.strip_backtrace()
         );
         Ok(())
     }
@@ -943,8 +943,8 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed."))"#,
-            &format!("{err:?}")
+            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
+            err.strip_backtrace()
         );
         Ok(())
     }
@@ -1456,7 +1456,7 @@ mod test {
         };
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: \
             Failed to coerce case (Interval(MonthDayNano)) and \
             when ([Float32, Binary, Utf8]) to common types in \
@@ -1474,7 +1474,7 @@ mod test {
         };
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: \
             Failed to coerce then ([Date32, Float32, Binary]) and \
             else (Some(Timestamp(Nanosecond, None))) to common types \

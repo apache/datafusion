@@ -3213,7 +3213,7 @@ mod tests {
 
         let array = array_append(&args);
 
-        assert_eq!(array.unwrap_err().to_string(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
+        assert_eq!(array.unwrap_err().strip_backtrace(), "Error during planning: array_append received incompatible types: '[Int64, Utf8]'.");
     }
 
     fn return_array() -> ColumnarValue {
