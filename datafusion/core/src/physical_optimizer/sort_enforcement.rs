@@ -550,10 +550,10 @@ fn analyze_immediate_sort_removal(
 ) -> Option<PlanWithCorrespondingSort> {
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input().clone();
-        println!("sort_input.output_ordering(): {:?}", sort_input.output_ordering());
-        println!("sort_exec.output_ordering(): {:?}", sort_exec.output_ordering());
-        println!("sort_input.equivalence_properties().classes(): {:?}", sort_input.equivalence_properties().classes());
-        println!("sort_input.ordering_equivalence_properties().oeq_class(): {:?}", sort_input.ordering_equivalence_properties().oeq_class());
+        // println!("sort_input.output_ordering(): {:?}", sort_input.output_ordering());
+        // println!("sort_exec.output_ordering(): {:?}", sort_exec.output_ordering());
+        // println!("sort_input.equivalence_properties().classes(): {:?}", sort_input.equivalence_properties().classes());
+        // println!("sort_input.ordering_equivalence_properties().oeq_class(): {:?}", sort_input.ordering_equivalence_properties().oeq_class());
         // If this sort is unnecessary, we should remove it:
         if ordering_satisfy(
             sort_input.output_ordering(),
@@ -2913,39 +2913,38 @@ mod tmp_tests {
     }
 
     #[tokio::test]
-    async fn test_subquery() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(2);
+    async fn test_first_value2() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::with_config(config);
+
         ctx.sql(
-            "CREATE TABLE sales_global (zip_code INT,
-          country VARCHAR(3),
-          sn INT,
-          ts TIMESTAMP,
-          currency VARCHAR(3),
-          amount FLOAT
-        ) as VALUES
-          (0, 'GRC', 0, '2022-01-01 06:00:00'::timestamp, 'EUR', 30.0),
-          (1, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.0),
-          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
-          (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
-          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
-          (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)",
+            "CREATE EXTERNAL TABLE annotated_data_finite2 (
+              a0 INTEGER,
+              a INTEGER,
+              b INTEGER,
+              c INTEGER,
+              d INTEGER
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (a ASC, b ASC, c ASC)
+            LOCATION 'tests/data/window_2.csv'",
         )
             .await?;
 
-        let sql = "SELECT country, ARRAY_AGG(amount ORDER BY ts DESC) AS amounts,
-          FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
-          LAST_VALUE(amount ORDER BY ts DESC) AS fv2
-          FROM sales_global
-          GROUP BY country";
+
+        let sql = "SELECT *
+            FROM annotated_data_finite2
+            WHERE a=0 and b=0
+            ORDER BY c";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         print_plan(&physical_plan)?;
-        let batches = collect(physical_plan, ctx.task_ctx()).await?;
-        print_batches(&batches)?;
-        assert_eq!(0, 1);
+        let actual = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&actual)?;
         Ok(())
     }
+
 }

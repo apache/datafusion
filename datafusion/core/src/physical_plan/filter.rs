@@ -155,7 +155,6 @@ impl ExecutionPlan for FilterExec {
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let mut res = self.input.ordering_equivalence_properties();
         let constants = collect_constants_from_predicate(self.predicate());
-        println!("constants: {:?}", constants);
         res.add_constants(constants);
         res
     }
@@ -386,32 +385,30 @@ fn is_column(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any().is::<Column>()
 }
 
-fn get_constant_expr(binary: &BinaryExpr) -> Option<Arc<dyn PhysicalExpr>> {
-    if binary.op() == &Operator::Eq
-        && is_literal(binary.left())
-        && is_column(binary.right())
-    {
-        Some(binary.right().clone())
-    } else if binary.op() == &Operator::Eq
-        && is_literal(binary.right())
-        && is_column(binary.left())
-    {
-        Some(binary.left().clone())
-    } else {
-        None
+fn get_constant_expr_helper(expr: &Arc<dyn PhysicalExpr>, mut res: Vec<Arc<dyn PhysicalExpr>>) -> Vec<Arc<dyn PhysicalExpr>>{
+    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>(){
+        if binary.op() == &Operator::Eq
+            && is_literal(binary.left())
+            && is_column(binary.right())
+        {
+            res.push(binary.right().clone())
+        } else if binary.op() == &Operator::Eq
+            && is_literal(binary.right())
+            && is_column(binary.left())
+        {
+            res.push(binary.left().clone())
+        } else if binary.op() == &Operator::And {
+            res = get_constant_expr_helper(binary.left(), res);
+            res = get_constant_expr_helper(binary.right(), res);
+        }
     }
+    res
 }
 
 fn collect_constants_from_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Vec<Arc<dyn PhysicalExpr>> {
-    let mut res = vec![];
-    if let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() {
-        if let Some(expr) = get_constant_expr(binary) {
-            res.push(expr);
-        }
-    }
-    res
+    get_constant_expr_helper(predicate, vec![])
 }
 
 #[cfg(test)]

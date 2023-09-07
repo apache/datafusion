@@ -239,8 +239,9 @@ impl OrderingEquivalenceProperties {
 
     pub fn add_constants(&mut self, constants: Vec<Arc<dyn PhysicalExpr>>) {
         for constant in constants {
-            // TODO: Add already inserted check
-            self.constants.push(constant);
+            if !exprs_contains(&self.constants, &constant){
+                self.constants.push(constant);
+            }
         }
     }
 
@@ -253,28 +254,17 @@ impl OrderingEquivalenceProperties {
         sort_reqs: &[PhysicalSortRequirement],
         is_aggressive: bool,
     ) -> Vec<PhysicalSortRequirement> {
-        let mut normalized_sort_reqs = sort_reqs.to_vec();
+        let mut normalized_sort_reqs = prune_sort_reqs_with_constants(sort_reqs, &self.constants);
         if let Some(oeq_class) = &self.oeq_class {
             for item in oeq_class.others() {
-                // // println!("item bef: {:?}", item);
-                // let item2 = prune_constants(item, &self.constants);
-                // // println!("item aft: {:?}", item2);
-                // if &item2 != item{
-                //     println!("item bef: {:?}", item);
-                //     println!("item aft: {:?}", item2);
-                // }
                 let item = PhysicalSortRequirement::from_sort_exprs(item);
-                let item = prune_constants(&item, &self.constants);
+                let item = prune_sort_reqs_with_constants(&item, &self.constants);
                 let ranges =
                     get_compatible_ranges(&normalized_sort_reqs, &item, is_aggressive);
                 let mut offset: i64 = 0;
                 for Range { start, end } in ranges {
-                    let mut head = oeq_class
-                        .head()
-                        .clone()
-                        .into_iter()
-                        .map(|elem| elem.into())
-                        .collect::<Vec<PhysicalSortRequirement>>();
+                    let head = PhysicalSortRequirement::from_sort_exprs(oeq_class.head());
+                    let mut head = prune_sort_reqs_with_constants(&head, &self.constants);
                     let updated_start = (start as i64 + offset) as usize;
                     let updated_end = (end as i64 + offset) as usize;
                     let range = end - start;
@@ -291,8 +281,7 @@ impl OrderingEquivalenceProperties {
                 }
             }
         }
-        let res = collapse_vec(normalized_sort_reqs);
-        prune_constants(&res, &self.constants)
+        collapse_vec(normalized_sort_reqs)
     }
 }
 
@@ -749,7 +738,7 @@ fn get_compatible_ranges(
     }
 }
 
-fn expr_contains(constants: &[Arc<dyn PhysicalExpr>], expr: &Arc<dyn PhysicalExpr>) -> bool {
+fn exprs_contains(constants: &[Arc<dyn PhysicalExpr>], expr: &Arc<dyn PhysicalExpr>) -> bool {
     for constant in constants{
         if constant.eq(expr){
             return true;
@@ -758,10 +747,10 @@ fn expr_contains(constants: &[Arc<dyn PhysicalExpr>], expr: &Arc<dyn PhysicalExp
     false
 }
 
-fn prune_constants(ordering: &[PhysicalSortRequirement], constants: &[Arc<dyn PhysicalExpr>]) -> Vec<PhysicalSortRequirement> {
+fn prune_sort_reqs_with_constants(ordering: &[PhysicalSortRequirement], constants: &[Arc<dyn PhysicalExpr>]) -> Vec<PhysicalSortRequirement> {
     let mut new_ordering = vec![];
     for order in ordering{
-        if !expr_contains(constants, &order.expr){
+        if !exprs_contains(constants, &order.expr){
             new_ordering.push(order.clone())
         }
     }
