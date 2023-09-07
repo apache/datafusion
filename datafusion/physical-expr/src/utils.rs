@@ -137,14 +137,12 @@ pub fn normalize_sort_exprs(
     sort_exprs: &[PhysicalSortExpr],
     eq_properties: &EquivalenceProperties,
     ordering_eq_properties: &OrderingEquivalenceProperties,
-    is_aggressive: bool,
 ) -> Vec<PhysicalSortExpr> {
     let sort_requirements = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
     let normalized_exprs = normalize_sort_requirements(
         &sort_requirements,
         eq_properties,
         ordering_eq_properties,
-        is_aggressive,
     );
     PhysicalSortRequirement::to_sort_exprs(normalized_exprs)
 }
@@ -161,14 +159,9 @@ pub fn normalize_sort_requirements(
     sort_reqs: &[PhysicalSortRequirement],
     eq_properties: &EquivalenceProperties,
     ordering_eq_properties: &OrderingEquivalenceProperties,
-    is_aggressive: bool,
 ) -> Vec<PhysicalSortRequirement> {
-    // println!("sort_reqs at the start:{:?}", sort_reqs);
     let normalized_sort_reqs = eq_properties.normalize_sort_requirements(sort_reqs);
-    // println!("normalized_sort_reqs after eq:{:?}", normalized_sort_reqs);
-    let res = ordering_eq_properties
-        .normalize_sort_requirements(&normalized_sort_reqs, is_aggressive);
-    // println!("normalized_sort_reqs after oeq:{:?}", res);
+    let res = ordering_eq_properties.normalize_sort_requirements(&normalized_sort_reqs);
     res
 }
 
@@ -208,14 +201,12 @@ pub fn ordering_satisfy_concrete<
     let oeq_properties = ordering_equal_properties();
     let eq_properties = equal_properties();
     let required_normalized =
-        normalize_sort_exprs(required, &eq_properties, &oeq_properties, true);
+        normalize_sort_exprs(required, &eq_properties, &oeq_properties);
     let provided_normalized =
-        normalize_sort_exprs(provided, &eq_properties, &oeq_properties, false);
+        normalize_sort_exprs(provided, &eq_properties, &oeq_properties);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
-    // println!("required_normalized: {:?}", required_normalized);
-    // println!("provided_normalized: {:?}", provided_normalized);
     required_normalized
         .into_iter()
         .zip(provided_normalized)
@@ -259,9 +250,9 @@ pub fn ordering_satisfy_requirement_concrete<
     let oeq_properties = ordering_equal_properties();
     let eq_properties = equal_properties();
     let required_normalized =
-        normalize_sort_requirements(required, &eq_properties, &oeq_properties, false);
+        normalize_sort_requirements(required, &eq_properties, &oeq_properties);
     let provided_normalized =
-        normalize_sort_exprs(provided, &eq_properties, &oeq_properties, false);
+        normalize_sort_exprs(provided, &eq_properties, &oeq_properties);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -309,9 +300,9 @@ fn requirements_compatible_concrete<
     let eq_properties = equal_properties();
 
     let required_normalized =
-        normalize_sort_requirements(required, &eq_properties, &oeq_properties, false);
+        normalize_sort_requirements(required, &eq_properties, &oeq_properties);
     let provided_normalized =
-        normalize_sort_requirements(provided, &eq_properties, &oeq_properties, false);
+        normalize_sort_requirements(provided, &eq_properties, &oeq_properties);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -1154,7 +1145,6 @@ mod tests {
                     &req,
                     &eq_properties,
                     &ordering_eq_properties,
-                    false
                 ),
                 expected_normalized
             );

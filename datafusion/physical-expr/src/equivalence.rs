@@ -254,7 +254,6 @@ impl OrderingEquivalenceProperties {
     pub fn normalize_sort_requirements(
         &self,
         sort_reqs: &[PhysicalSortRequirement],
-        is_aggressive: bool,
     ) -> Vec<PhysicalSortRequirement> {
         let normalized_sort_reqs =
             prune_sort_reqs_with_constants(sort_reqs, &self.constants);
@@ -263,8 +262,7 @@ impl OrderingEquivalenceProperties {
             for item in oeq_class.others() {
                 let item = PhysicalSortRequirement::from_sort_exprs(item);
                 let item = prune_sort_reqs_with_constants(&item, &self.constants);
-                let ranges =
-                    get_compatible_ranges(&normalized_sort_reqs, &item, is_aggressive);
+                let ranges = get_compatible_ranges(&normalized_sort_reqs, &item);
                 let mut offset: i64 = 0;
                 for Range { start, end } in ranges {
                     let head = PhysicalSortRequirement::from_sort_exprs(oeq_class.head());
@@ -750,46 +748,23 @@ fn simplify_sort_reqs(
 fn get_compatible_ranges(
     given: &[PhysicalSortRequirement],
     section: &[PhysicalSortRequirement],
-    is_aggressive: bool,
 ) -> Vec<Range<usize>> {
-    if is_aggressive && false {
-        // println!("given: {:?}", given);
-        // println!("section: {:?}", section);
-        let mut res = vec![];
-        for i in 0..given.len() {
-            let mut count = 0;
-            while i + count < given.len()
-                && count < section.len()
-                && given[i + count] == section[count]
-            {
-                count += 1;
-            }
-            if count > 0 && (i + count == given.len() || count == section.len()) {
-                res.push(Range {
-                    start: i,
-                    end: i + count,
-                })
-            }
-        }
-        res
+    let n_section = section.len();
+    let n_end = if given.len() >= n_section {
+        given.len() - n_section + 1
     } else {
-        let n_section = section.len();
-        let n_end = if given.len() >= n_section {
-            given.len() - n_section + 1
-        } else {
-            0
-        };
-        (0..n_end)
-            .filter_map(|idx| {
-                let end = idx + n_section;
-                given[idx..end]
-                    .iter()
-                    .zip(section)
-                    .all(|(req, given)| given.compatible(req))
-                    .then_some(Range { start: idx, end })
-            })
-            .collect()
-    }
+        0
+    };
+    (0..n_end)
+        .filter_map(|idx| {
+            let end = idx + n_section;
+            given[idx..end]
+                .iter()
+                .zip(section)
+                .all(|(req, given)| given.compatible(req))
+                .then_some(Range { start: idx, end })
+        })
+        .collect()
 }
 
 fn exprs_contains(
@@ -985,10 +960,7 @@ mod tests {
                 .into_iter()
                 .map(|(start, end)| Range { start, end })
                 .collect::<Vec<_>>();
-            assert_eq!(
-                get_compatible_ranges(&searched, &to_search, false),
-                expected
-            );
+            assert_eq!(get_compatible_ranges(&searched, &to_search), expected);
         }
         Ok(())
     }
