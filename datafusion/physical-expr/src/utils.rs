@@ -244,8 +244,7 @@ fn normalize_sort_requirements(
     ordering_eq_properties: &OrderingEquivalenceProperties,
 ) -> Vec<PhysicalSortRequirement> {
     let normalized_sort_reqs = eq_properties.normalize_sort_requirements(sort_reqs);
-    let res = ordering_eq_properties.normalize_sort_requirements(&normalized_sort_reqs);
-    res
+    ordering_eq_properties.normalize_sort_requirements(&normalized_sort_reqs)
 }
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
@@ -1832,17 +1831,13 @@ mod tests {
         let normalized_class = normalize_ordering_equivalence_classes(
             ordering_equal_properties.oeq_class(),
             &equal_properties,
+        )
+        .unwrap();
+        let expected = expected_oeq.oeq_class().unwrap();
+        assert!(
+            normalized_class.head().eq(expected.head())
+                && normalized_class.others().eq(expected.others())
         );
-        let expected = expected_oeq.oeq_class();
-        match (normalized_class, expected) {
-            (Some(normalized), Some(expected)) => {
-                assert!(
-                    normalized.head().eq(expected.head())
-                        && normalized.others().eq(expected.others())
-                )
-            }
-            (_, _) => assert!(false),
-        }
 
         Ok(())
     }

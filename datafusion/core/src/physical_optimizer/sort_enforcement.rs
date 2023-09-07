@@ -550,10 +550,6 @@ fn analyze_immediate_sort_removal(
 ) -> Option<PlanWithCorrespondingSort> {
     if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input().clone();
-        // println!("sort_input.output_ordering(): {:?}", sort_input.output_ordering());
-        // println!("sort_exec.output_ordering(): {:?}", sort_exec.output_ordering());
-        // println!("sort_input.equivalence_properties().classes(): {:?}", sort_input.equivalence_properties().classes());
-        // println!("sort_input.ordering_equivalence_properties().oeq_class(): {:?}", sort_input.ordering_equivalence_properties().oeq_class());
         // If this sort is unnecessary, we should remove it:
         if ordering_satisfy(
             sort_input.output_ordering(),
@@ -2766,91 +2762,6 @@ mod tests {
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
-        Ok(())
-    }
-}
-
-mod tmp_tests {
-    use crate::assert_batches_eq;
-    use crate::physical_plan::{collect, displayable, ExecutionPlan};
-    use crate::prelude::SessionContext;
-    use arrow::util::pretty::print_batches;
-    use datafusion_common::Result;
-    use datafusion_execution::config::SessionConfig;
-    use std::sync::Arc;
-
-    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
-        let formatted = displayable(plan.as_ref()).indent(true).to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        println!("{:#?}", actual);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_first_value() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        let ctx = SessionContext::with_config(config);
-
-        ctx.sql(
-            "CREATE EXTERNAL TABLE annotated_data_finite2 (
-              a0 INTEGER,
-              a INTEGER,
-              b INTEGER,
-              c INTEGER,
-              d INTEGER
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            WITH ORDER (a ASC, b ASC, c ASC)
-            LOCATION 'tests/data/window_2.csv'",
-        )
-        .await?;
-
-        let sql = "SELECT *
-            FROM annotated_data_finite2
-            WHERE a=0
-            ORDER BY b, c";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-        let actual = collect(physical_plan, ctx.task_ctx()).await?;
-        print_batches(&actual)?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_first_value2() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        let ctx = SessionContext::with_config(config);
-
-        ctx.sql(
-            "CREATE EXTERNAL TABLE annotated_data_finite2 (
-              a0 INTEGER,
-              a INTEGER,
-              b INTEGER,
-              c INTEGER,
-              d INTEGER
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            WITH ORDER (a ASC, b ASC, c ASC)
-            LOCATION 'tests/data/window_2.csv'",
-        )
-        .await?;
-
-        let sql = "SELECT *
-            FROM annotated_data_finite2
-            WHERE a=0 and b=0
-            ORDER BY c";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        print_plan(&physical_plan)?;
-        let actual = collect(physical_plan, ctx.task_ctx()).await?;
-        print_batches(&actual)?;
         Ok(())
     }
 }

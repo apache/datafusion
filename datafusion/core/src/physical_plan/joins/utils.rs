@@ -457,7 +457,6 @@ pub fn combine_join_ordering_equivalence_properties(
                 && left.output_ordering().is_some()
                 && *join_type == JoinType::Inner
             {
-                let left_oeq_classes = left_oeq_properties.oeq_class();
                 let right_output_ordering = right.output_ordering().unwrap_or(&[]);
                 let right_output_ordering =
                     add_offset_to_lex_ordering(right_output_ordering, left_columns_len)?;
@@ -482,59 +481,6 @@ pub fn combine_join_ordering_equivalence_properties(
     }
     Ok(new_properties)
 }
-
-// /// Adds the `offset` value to `Column` indices inside `expr`. This function is
-// /// generally used during the update of the right table schema in join operations.
-// pub(crate) fn add_offset_to_expr(
-//     expr: Arc<dyn PhysicalExpr>,
-//     offset: usize,
-// ) -> Result<Arc<dyn PhysicalExpr>> {
-//     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-//         Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
-//             col.name(),
-//             offset + col.index(),
-//         )))),
-//         None => Ok(Transformed::No(e)),
-//     })
-// }
-//
-// /// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
-// pub(crate) fn add_offset_to_sort_expr(
-//     sort_expr: &PhysicalSortExpr,
-//     offset: usize,
-// ) -> Result<PhysicalSortExpr> {
-//     Ok(PhysicalSortExpr {
-//         expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
-//         options: sort_expr.options,
-//     })
-// }
-
-// /// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
-// /// inside `sort_exprs`.
-// pub(crate) fn add_offset_to_lex_ordering(
-//     sort_exprs: LexOrderingRef,
-//     offset: usize,
-// ) -> Result<LexOrdering> {
-//     sort_exprs
-//         .iter()
-//         .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
-//         .collect()
-// }
-
-// /// Adds the `offset` value to `Column` indices for all expressions inside the
-// /// given `OrderingEquivalentClass`es.
-// pub(crate) fn add_offset_to_ordering_equivalence_classes(
-//     oeq_classes: &OrderingEquivalentClass,
-//     offset: usize,
-// ) -> Result<OrderingEquivalentClass> {
-//     let new_head = add_offset_to_lex_ordering(oeq_classes.head(), offset)?;
-//     let new_others = oeq_classes
-//         .others()
-//         .iter()
-//         .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
-//         .collect::<Result<Vec<_>>>()?;
-//     Ok(OrderingEquivalentClass::new(new_head, new_others))
-// }
 
 impl Display for JoinSide {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

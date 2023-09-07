@@ -338,12 +338,6 @@ impl OrderingEquivalenceProperties {
         }
         collapse_sort_reqs(normalized_sort_reqs)
     }
-
-    pub fn normalize_with_equivalence_properties(
-        &mut self,
-        eq_properties: &EquivalenceProperties,
-    ) {
-    }
 }
 
 impl OrderingEquivalenceProperties {
@@ -802,10 +796,8 @@ fn is_global_req(
             if options == &global_ordering.options && expr.eq(&global_ordering.expr) {
                 return true;
             }
-        } else {
-            if expr.eq(&global_ordering.expr) {
-                return true;
-            }
+        } else if expr.eq(&global_ordering.expr) {
+            return true;
         }
     }
     false
