@@ -137,7 +137,11 @@ pub(crate) mod tests {
         }};
     }
 
-    /// macro to perform an aggregation using [`GroupsAccumulator`] and verify the result.
+    /// macro to perform an aggregation using [`crate::GroupsAccumulator`] and verify the result.
+    ///
+    /// The difference between this and the above `generic_test_op` is that the former checks
+    /// the old slow-path [`datafusion_expr::Accumulator`] implementation, while this checks
+    /// the new [`crate::GroupsAccumulator`] implementation.
     #[macro_export]
     macro_rules! generic_test_op_new {
         ($ARRAY:expr, $DATATYPE:expr, $OP:ident, $EXPECTED:expr) => {
