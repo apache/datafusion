@@ -1247,6 +1247,7 @@ mod tests {
     use std::sync::Arc;
     use std::task::{Context, Poll};
 
+    use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -1445,7 +1446,10 @@ mod tests {
             DataType::Int64,
         ))];
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let session_config = SessionConfig::new().with_batch_size(4);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
+        // let task_ctx = Arc::new(TaskContext::default());
 
         let partial_aggregate = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Partial,
@@ -1461,24 +1465,53 @@ mod tests {
         let result =
             common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
-        let expected = vec![
-            "+---+-----+-----------------+",
-            "| a | b   | COUNT(1)[count] |",
-            "+---+-----+-----------------+",
-            "|   | 1.0 | 2               |",
-            "|   | 2.0 | 2               |",
-            "|   | 3.0 | 2               |",
-            "|   | 4.0 | 2               |",
-            "| 2 |     | 2               |",
-            "| 2 | 1.0 | 2               |",
-            "| 3 |     | 3               |",
-            "| 3 | 2.0 | 2               |",
-            "| 3 | 3.0 | 1               |",
-            "| 4 |     | 3               |",
-            "| 4 | 3.0 | 1               |",
-            "| 4 | 4.0 | 2               |",
-            "+---+-----+-----------------+",
-        ];
+        let expected = if spill {
+            vec![
+                "+---+-----+-----------------+",
+                "| a | b   | COUNT(1)[count] |",
+                "+---+-----+-----------------+",
+                "|   | 1.0 | 1               |",
+                "|   | 1.0 | 1               |",
+                "|   | 2.0 | 1               |",
+                "|   | 2.0 | 1               |",
+                "|   | 3.0 | 1               |",
+                "|   | 3.0 | 1               |",
+                "|   | 4.0 | 1               |",
+                "|   | 4.0 | 1               |",
+                "| 2 |     | 1               |",
+                "| 2 |     | 1               |",
+                "| 2 | 1.0 | 1               |",
+                "| 2 | 1.0 | 1               |",
+                "| 3 |     | 1               |",
+                "| 3 |     | 2               |",
+                "| 3 | 2.0 | 2               |",
+                "| 3 | 3.0 | 1               |",
+                "| 4 |     | 1               |",
+                "| 4 |     | 2               |",
+                "| 4 | 3.0 | 1               |",
+                "| 4 | 4.0 | 2               |",
+                "+---+-----+-----------------+",
+            ]
+        } else {
+            vec![
+                "+---+-----+-----------------+",
+                "| a | b   | COUNT(1)[count] |",
+                "+---+-----+-----------------+",
+                "|   | 1.0 | 2               |",
+                "|   | 2.0 | 2               |",
+                "|   | 3.0 | 2               |",
+                "|   | 4.0 | 2               |",
+                "| 2 |     | 2               |",
+                "| 2 | 1.0 | 2               |",
+                "| 3 |     | 3               |",
+                "| 3 | 2.0 | 2               |",
+                "| 3 | 3.0 | 1               |",
+                "| 4 |     | 3               |",
+                "| 4 | 3.0 | 1               |",
+                "| 4 | 4.0 | 2               |",
+                "+---+-----+-----------------+",
+            ]
+        };
         assert_batches_sorted_eq!(expected, &result);
 
         let groups = partial_aggregate.group_expr().expr().to_vec();
@@ -1507,7 +1540,11 @@ mod tests {
             common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 3);
-        assert_eq!(batch.num_rows(), 12);
+        if spill {
+            assert_eq!(batch.num_rows(), 16);
+        } else {
+            assert_eq!(batch.num_rows(), 12);
+        }
 
         let expected = vec![
             "+---+-----+----------+",
@@ -1532,7 +1569,13 @@ mod tests {
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
-        assert_eq!(12, output_rows);
+        if spill {
+            // When spilling, the output rows metrics includes numbers from partial early emitting.
+            // This is due to the AtomicUsize behavior
+            assert_eq!(26, output_rows);
+        } else {
+            assert_eq!(12, output_rows);
+        }
 
         Ok(())
     }
@@ -1553,7 +1596,10 @@ mod tests {
             DataType::Float64,
         ))];
 
-        let task_ctx = Arc::new(TaskContext::default());
+        let session_config = SessionConfig::new().with_batch_size(2);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
+        // let task_ctx = Arc::new(TaskContext::default());
 
         let partial_aggregate = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Partial,
@@ -1578,8 +1624,7 @@ mod tests {
                 "| 2 | 1             | 1.0         |",
                 "| 3 | 1             | 2.0         |",
                 "| 3 | 2             | 5.0         |",
-                "| 4 | 1             | 4.0         |",
-                "| 4 | 2             | 7.0         |",
+                "| 4 | 3             | 11.0        |",
                 "+---+---------------+-------------+",
             ]
         } else {
@@ -1637,9 +1682,9 @@ mod tests {
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
         if spill {
-            // When spilling, the output rows metrics become partial output size + final output size
+            // When spilling, the output rows metrics includes numbers from partial early emitting.
             // This is due to the AtomicUsize behavior
-            assert_eq!(9, output_rows);
+            assert_eq!(8, output_rows);
         } else {
             assert_eq!(3, output_rows);
         }

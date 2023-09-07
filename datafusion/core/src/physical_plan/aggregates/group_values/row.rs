@@ -60,19 +60,17 @@ pub struct GroupValuesRows {
 
     /// Random state for creating hashes
     random_state: RandomState,
-
-    /// Schema fields for the row converter
-    fields: Vec<SortField>,
 }
 
 impl GroupValuesRows {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
-        let fields: Vec<SortField> = schema
-            .fields()
-            .iter()
-            .map(|f| SortField::new(f.data_type().clone()))
-            .collect();
-        let row_converter = RowConverter::new(fields.clone())?;
+        let row_converter = RowConverter::new(
+            schema
+                .fields()
+                .iter()
+                .map(|f| SortField::new(f.data_type().clone()))
+                .collect(),
+        )?;
 
         let map = RawTable::with_capacity(0);
         let group_values = row_converter.empty_rows(0, 0);
@@ -84,7 +82,6 @@ impl GroupValuesRows {
             group_values,
             hashes_buffer: Default::default(),
             random_state: Default::default(),
-            fields,
         })
     }
 }
@@ -188,8 +185,7 @@ impl GroupValues for GroupValuesRows {
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
         let count = batch.num_rows();
-        // FIXME: there is no good way to clear_shrink for self.row_converter self.group_values
-        self.row_converter = RowConverter::new(self.fields.clone()).unwrap();
+        // FIXME: there is no good way to clear_shrink for self.group_values
         self.group_values = self.row_converter.empty_rows(count, 0);
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared

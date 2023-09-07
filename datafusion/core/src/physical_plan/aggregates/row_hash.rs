@@ -171,21 +171,21 @@ struct SpillState {
 /// ```text
 /// Partial Aggregation [batch_size = 2] (max memory = 3 rows)
 ///
-///  INPUTS        PARTIALLY AGGREGATED (UPDATE BATCH)
-/// ┌─────────┐    ┌─────────────────┐
-/// │ a │ b   │    │ a │    AVG(b)   │
-/// │---│-----│    │   │[count]│[sum]│
-/// │ 3 │ 3.0 │ ─▶ │---│-------│-----│
-/// │ 2 │ 2.0 │    │ 2 │ 1     │ 2.0 │ ─▶ output
-/// └─────────┘    │ 3 │ 2     │ 7.0 │
-/// ┌─────────┐ ─▶ │ 4 │ 1     │ 8.0 │
-/// │ 3 │ 4.0 │    └─────────────────┘
-/// │ 4 │ 8.0 │    ┌─────────────────┐
-/// └─────────┘    │ a │    AVG(b)   │
-/// ┌─────────┐    │---│-------│-----│
-/// │ 1 │ 1.0 │ ─▶ │ 1 │ 1     │ 1.0 │ ─▶ output
-/// │ 3 │ 2.0 │    │ 3 │ 1     │ 2.0 │
-/// └─────────┘    └─────────────────┘
+///  INPUTS        PARTIALLY AGGREGATED (UPDATE BATCH)   OUTPUTS
+/// ┌─────────┐    ┌─────────────────┐                  ┌─────────────────┐
+/// │ a │ b   │    │ a │    AVG(b)   │                  │ a │    AVG(b)   │
+/// │---│-----│    │   │[count]│[sum]│                  │   │[count]│[sum]│
+/// │ 3 │ 3.0 │ ─▶ │---│-------│-----│                  │---│-------│-----│
+/// │ 2 │ 2.0 │    │ 2 │ 1     │ 2.0 │ ─▶ early emit ─▶ │ 2 │ 1     │ 2.0 │
+/// └─────────┘    │ 3 │ 2     │ 7.0 │               │  │ 3 │ 2     │ 7.0 │
+/// ┌─────────┐ ─▶ │ 4 │ 1     │ 8.0 │               │  └─────────────────┘
+/// │ 3 │ 4.0 │    └─────────────────┘               └▶ ┌─────────────────┐
+/// │ 4 │ 8.0 │    ┌─────────────────┐                  │ 4 │ 1     │ 8.0 │
+/// └─────────┘    │ a │    AVG(b)   │               ┌▶ │ 1 │ 1     │ 1.0 │
+/// ┌─────────┐    │---│-------│-----│               │  └─────────────────┘
+/// │ 1 │ 1.0 │ ─▶ │ 1 │ 1     │ 1.0 │ ─▶ early emit ─▶ ┌─────────────────┐
+/// │ 3 │ 2.0 │    │ 3 │ 1     │ 2.0 │                  │ 3 │ 1     │ 2.0 │
+/// └─────────┘    └─────────────────┘                  └─────────────────┘
 ///   
 ///
 /// Final Aggregation [batch_size = 2] (max memory = 3 rows)
@@ -199,7 +199,7 @@ struct SpillState {
 /// │ 2 │ 2     │ 1.0 │    │ 2 │ 2     │ 1.0 │           │       │ 1 │    4.0 │
 /// └─────────────────┘    │ 3 │ 4     │ 8.0 │           ▼       │ 2 │    1.0 │
 /// ┌─────────────────┐ ─▶ │ 4 │ 1     │ 7.0 │     Streaming  ─▶ └────────────┘
-/// │ 3 │ 1     │ 5.0 │    └─────────────────┘     merge sort    ┌────────────┐
+/// │ 3 │ 1     │ 5.0 │    └─────────────────┘     merge sort ─▶ ┌────────────┐
 /// │ 4 │ 1     │ 7.0 │    ┌─────────────────┐            ▲      │ a │ AVG(b) │
 /// └─────────────────┘    │ a │    AVG(b)   │            │      │---│--------│
 /// ┌─────────────────┐    │---│-------│-----│ ─▶ memory ─┘      │ 3 │    2.0 │
@@ -719,11 +719,17 @@ impl GroupedHashAggregateStream {
             && matches!(self.group_ordering, GroupOrdering::None)
             && matches!(self.mode, AggregateMode::Partial)
             && (self.update_memory_reservation().is_err() || self.spill_state.force_spill)
+            && self.group_values.len() >= self.batch_size
         {
-            let batch = self.emit(EmitTo::All, false)?;
-            if batch.num_rows() > 0 {
-                self.exec_state = ExecutionState::ProducingOutput(batch);
-            }
+            let n = self.group_values.len() / self.batch_size * self.batch_size;
+            println!(
+                "{}, {}, {}",
+                self.group_values.len(),
+                n,
+                self.current_group_indices.len()
+            );
+            let batch = self.emit(EmitTo::First(n), false)?;
+            self.exec_state = ExecutionState::ProducingOutput(batch);
         }
         Ok(())
     }
