@@ -41,7 +41,7 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::intervals::check_support;
+use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries,
     OrderingEquivalenceProperties, PhysicalExpr,

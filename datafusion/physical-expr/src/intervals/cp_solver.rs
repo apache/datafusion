@@ -21,23 +21,24 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
+use super::utils::{
+    convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
+};
+use super::IntervalBound;
+use crate::expressions::Literal;
+use crate::intervals::interval_aritmetic::{apply_operator, Interval};
+use crate::utils::{build_dag, ExprTreeNode};
+use crate::PhysicalExpr;
+
 use arrow_schema::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
+
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
 use petgraph::Outgoing;
-
-use crate::expressions::{BinaryExpr, CastExpr, Column, Literal};
-use crate::intervals::interval_aritmetic::{
-    apply_operator, is_operator_supported, Interval,
-};
-use crate::utils::{build_dag, ExprTreeNode};
-use crate::PhysicalExpr;
-
-use super::IntervalBound;
 
 // Interval arithmetic provides a way to perform mathematical operations on
 // intervals, which represent a range of possible values rather than a single
@@ -203,15 +204,6 @@ impl PartialEq for ExprIntervalGraphNode {
     }
 }
 
-// This function returns the inverse operator of the given operator.
-fn get_inverse_op(op: Operator) -> Operator {
-    match op {
-        Operator::Plus => Operator::Minus,
-        Operator::Minus => Operator::Plus,
-        _ => unreachable!(),
-    }
-}
-
 /// This function refines intervals `left_child` and `right_child` by applying
 /// constraint propagation through `parent` via operation. The main idea is
 /// that we can shrink ranges of variables x and y using parent interval p.
@@ -231,22 +223,45 @@ pub fn propagate_arithmetic(
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let inverse_op = get_inverse_op(*op);
-    // First, propagate to the left:
-    match apply_operator(&inverse_op, parent, right_child)?.intersect(left_child)? {
-        // Left is feasible:
-        Some(value) => {
-            // Propagate to the right using the new left.
-            let right = match op {
-                Operator::Minus => apply_operator(op, &value, parent),
-                Operator::Plus => apply_operator(&inverse_op, parent, &value),
-                _ => unreachable!(),
-            }?
-            .intersect(right_child)?;
-            // Return intervals for both children:
-            Ok((Some(value), right))
+    match (left_child.get_datatype()?, right_child.get_datatype()?) {
+        // If we have a child whose type is a time interval (i.e. DataType::Interval), we need special handling
+        // since timestamp differencing results in a Duration type.
+        (DataType::Timestamp(..), DataType::Interval(_)) => {
+            propagate_time_interval_at_right(
+                left_child,
+                right_child,
+                parent,
+                op,
+                &inverse_op,
+            )
         }
-        // If the left child is infeasible, short-circuit.
-        None => Ok((None, None)),
+        (DataType::Interval(_), DataType::Timestamp(..)) => {
+            propagate_time_interval_at_left(
+                left_child,
+                right_child,
+                parent,
+                op,
+                &inverse_op,
+            )
+        }
+        _ => {
+            // First, propagate to the left:
+            match apply_operator(&inverse_op, parent, right_child)?
+                .intersect(left_child)?
+            {
+                // Left is feasible:
+                Some(value) => {
+                    // Propagate to the right using the new left.
+                    let right =
+                        propagate_right(&value, parent, right_child, op, &inverse_op)?;
+
+                    // Return intervals for both children:
+                    Ok((Some(value), right))
+                }
+                // If the left child is infeasible, short-circuit.
+                None => Ok((None, None)),
+            }
+        }
     }
 }
 
@@ -288,12 +303,28 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    let parent = comparison_operator_target(
-        &left_child.get_datatype()?,
-        op,
-        &right_child.get_datatype()?,
-    )?;
-    propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
+    let left_type = left_child.get_datatype()?;
+    let right_type = right_child.get_datatype()?;
+    let parent = comparison_operator_target(&left_type, op, &right_type)?;
+    match (&left_type, &right_type) {
+        // We can not compare a Duration type with a time interval type
+        // without a reference timestamp unless the latter has a zero month field.
+        (DataType::Interval(_), DataType::Duration(_)) => {
+            propagate_comparison_to_time_interval_at_left(
+                left_child,
+                &parent,
+                right_child,
+            )
+        }
+        (DataType::Duration(_), DataType::Interval(_)) => {
+            propagate_comparison_to_time_interval_at_left(
+                left_child,
+                &parent,
+                right_child,
+            )
+        }
+        _ => propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child),
+    }
 }
 
 impl ExprIntervalGraph {
@@ -542,20 +573,112 @@ impl ExprIntervalGraph {
     }
 }
 
-/// Indicates whether interval arithmetic is supported for the given expression.
-/// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
-/// We do not support every type of [`Operator`]s either. Over time, this check
-/// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
-/// Currently, [`CastExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
-pub fn check_support(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let expr_any = expr.as_any();
-    let expr_supported = if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>()
-    {
-        is_operator_supported(binary_expr.op())
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
+/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
+/// where the time interval resides on the left side of the operation.
+fn propagate_time_interval_at_left(
+    left_child: &Interval,
+    right_child: &Interval,
+    parent: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    // We check if the child's time interval(s) has a non-zero month or day field(s).
+    // If so, we return it as is without propagating. Otherwise, we first convert
+    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
+    if let Some(duration) = convert_interval_type_to_duration(left_child) {
+        match apply_operator(inverse_op, parent, right_child)?.intersect(duration)? {
+            Some(value) => {
+                let right = propagate_right(&value, parent, right_child, op, inverse_op)?;
+                let new_interval = convert_duration_type_to_interval(&value);
+                Ok((new_interval, right))
+            }
+            None => Ok((None, None)),
+        }
     } else {
-        expr_any.is::<Column>() || expr_any.is::<Literal>() || expr_any.is::<CastExpr>()
-    };
-    expr_supported && expr.children().iter().all(check_support)
+        let right = propagate_right(left_child, parent, right_child, op, inverse_op)?;
+        Ok((Some(left_child.clone()), right))
+    }
+}
+
+/// During the propagation of [`Interval`] values on an [`ExprIntervalGraph`], if there exists a `timestamp - timestamp`
+/// operation, the result would be of type `Duration`. However, we may encounter a situation where a time interval
+/// is involved in an arithmetic operation with a `Duration` type. This function offers special handling for such cases,
+/// where the time interval resides on the right side of the operation.
+fn propagate_time_interval_at_right(
+    left_child: &Interval,
+    right_child: &Interval,
+    parent: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    // We check if the child's time interval(s) has a non-zero month or day field(s).
+    // If so, we return it as is without propagating. Otherwise, we first convert
+    // the time intervals to the Duration type, then propagate, and then convert the bounds to time intervals again.
+    if let Some(duration) = convert_interval_type_to_duration(right_child) {
+        match apply_operator(inverse_op, parent, &duration)?.intersect(left_child)? {
+            Some(value) => {
+                let right =
+                    propagate_right(left_child, parent, &duration, op, inverse_op)?;
+                let right =
+                    right.and_then(|right| convert_duration_type_to_interval(&right));
+                Ok((Some(value), right))
+            }
+            None => Ok((None, None)),
+        }
+    } else {
+        match apply_operator(inverse_op, parent, right_child)?.intersect(left_child)? {
+            Some(value) => Ok((Some(value), Some(right_child.clone()))),
+            None => Ok((None, None)),
+        }
+    }
+}
+
+/// This is a subfunction of the `propagate_arithmetic` function that propagates to the right child.
+fn propagate_right(
+    left: &Interval,
+    parent: &Interval,
+    right: &Interval,
+    op: &Operator,
+    inverse_op: &Operator,
+) -> Result<Option<Interval>> {
+    match op {
+        Operator::Minus => apply_operator(op, left, parent),
+        Operator::Plus => apply_operator(inverse_op, parent, left),
+        _ => unreachable!(),
+    }?
+    .intersect(right)
+}
+
+/// Converts the `time interval` (as the left child) to duration, then performs the propagation rule for comparison operators.
+pub fn propagate_comparison_to_time_interval_at_left(
+    left_child: &Interval,
+    parent: &Interval,
+    right_child: &Interval,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    if let Some(converted) = convert_interval_type_to_duration(left_child) {
+        propagate_arithmetic(&Operator::Minus, parent, &converted, right_child)
+    } else {
+        Err(DataFusionError::Internal(
+                    "Interval type has a non-zero month field, cannot compare with a Duration type".to_string(),
+                ))
+    }
+}
+
+/// Converts the `time interval` (as the right child) to duration, then performs the propagation rule for comparison operators.
+pub fn propagate_comparison_to_time_interval_at_right(
+    left_child: &Interval,
+    parent: &Interval,
+    right_child: &Interval,
+) -> Result<(Option<Interval>, Option<Interval>)> {
+    if let Some(converted) = convert_interval_type_to_duration(right_child) {
+        propagate_arithmetic(&Operator::Minus, parent, left_child, &converted)
+    } else {
+        Err(DataFusionError::Internal(
+                    "Interval type has a non-zero month field, cannot compare with a Duration type".to_string(),
+                ))
+    }
 }
 
 #[cfg(test)]
@@ -1123,6 +1246,172 @@ mod tests {
         let final_node_count = graph.node_count();
         // Assert that the final node count is equal the previous node count (i.e., no node was pruned).
         assert_eq!(prev_node_count, final_node_count);
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_constraints_singleton_interval_at_right() -> Result<()> {
+        let expression = BinaryExpr::new(
+            Arc::new(Column::new("ts_column", 0)),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::new_interval_mdn(0, 1, 321))),
+        );
+        let parent = Interval::new(
+            IntervalBound::new(
+                // 15.10.2020 - 10:11:12.000_000_321 AM
+                ScalarValue::TimestampNanosecond(Some(1_602_756_672_000_000_321), None),
+                false,
+            ),
+            IntervalBound::new(
+                // 16.10.2020 - 10:11:12.000_000_321 AM
+                ScalarValue::TimestampNanosecond(Some(1_602_843_072_000_000_321), None),
+                false,
+            ),
+        );
+        let left_child = Interval::new(
+            IntervalBound::new(
+                // 10.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampNanosecond(Some(1_602_324_672_000_000_000), None),
+                false,
+            ),
+            IntervalBound::new(
+                // 20.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampNanosecond(Some(1_603_188_672_000_000_000), None),
+                false,
+            ),
+        );
+        let right_child = Interval::new(
+            IntervalBound::new(
+                // 1 day 321 ns
+                ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                false,
+            ),
+            IntervalBound::new(
+                // 1 day 321 ns
+                ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                false,
+            ),
+        );
+        let children = vec![&left_child, &right_child];
+        let result = expression.propagate_constraints(&parent, &children)?;
+
+        assert_eq!(
+            Some(Interval::new(
+                // 14.10.2020 - 10:11:12 AM
+                IntervalBound::new(
+                    ScalarValue::TimestampNanosecond(
+                        Some(1_602_670_272_000_000_000),
+                        None
+                    ),
+                    false,
+                ),
+                // 15.10.2020 - 10:11:12 AM
+                IntervalBound::new(
+                    ScalarValue::TimestampNanosecond(
+                        Some(1_602_756_672_000_000_000),
+                        None
+                    ),
+                    false,
+                ),
+            )),
+            result[0]
+        );
+        assert_eq!(
+            Some(Interval::new(
+                // 1 day 321 ns in Duration type
+                IntervalBound::new(
+                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                    false,
+                ),
+                // 1 day 321 ns in Duration type
+                IntervalBound::new(
+                    ScalarValue::IntervalMonthDayNano(Some(0x1_0000_0000_0000_0141)),
+                    false,
+                ),
+            )),
+            result[1]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_constraints_column_interval_at_left() -> Result<()> {
+        let expression = BinaryExpr::new(
+            Arc::new(Column::new("interval_column", 1)),
+            Operator::Plus,
+            Arc::new(Column::new("ts_column", 0)),
+        );
+        let parent = Interval::new(
+            IntervalBound::new(
+                // 15.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampMillisecond(Some(1_602_756_672_000), None),
+                false,
+            ),
+            IntervalBound::new(
+                // 16.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampMillisecond(Some(1_602_843_072_000), None),
+                false,
+            ),
+        );
+        let right_child = Interval::new(
+            IntervalBound::new(
+                // 10.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
+                false,
+            ),
+            IntervalBound::new(
+                // 20.10.2020 - 10:11:12 AM
+                ScalarValue::TimestampMillisecond(Some(1_603_188_672_000), None),
+                false,
+            ),
+        );
+        let left_child = Interval::new(
+            IntervalBound::new(
+                // 2 days
+                ScalarValue::IntervalDayTime(Some(172_800_000)),
+                false,
+            ),
+            IntervalBound::new(
+                // 10 days
+                ScalarValue::IntervalDayTime(Some(864_000_000)),
+                false,
+            ),
+        );
+        let children = vec![&left_child, &right_child];
+        let result = expression.propagate_constraints(&parent, &children)?;
+
+        assert_eq!(
+            Some(Interval::new(
+                // 10.10.2020 - 10:11:12 AM
+                IntervalBound::new(
+                    ScalarValue::TimestampMillisecond(Some(1_602_324_672_000), None),
+                    false,
+                ),
+                // 14.10.2020 - 10:11:12 AM
+                IntervalBound::new(
+                    ScalarValue::TimestampMillisecond(Some(1_602_670_272_000), None),
+                    false,
+                )
+            )),
+            result[1]
+        );
+        assert_eq!(
+            Some(Interval::new(
+                IntervalBound::new(
+                    // 2 days
+                    ScalarValue::IntervalDayTime(Some(172_800_000)),
+                    false,
+                ),
+                IntervalBound::new(
+                    // 6 days
+                    ScalarValue::IntervalDayTime(Some(518_400_000)),
+                    false,
+                ),
+            )),
+            result[0]
+        );
+
         Ok(())
     }
 }

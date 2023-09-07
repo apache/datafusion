@@ -1850,6 +1850,7 @@ fn create_external_table_with_compression_type() {
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv.bz2'",
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON COMPRESSION TYPE GZIP LOCATION 'foo.json.gz'",
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON COMPRESSION TYPE BZIP2 LOCATION 'foo.json.bz2'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS NONSTANDARD COMPRESSION TYPE GZIP LOCATION 'foo.unk'",
         ];
     for sql in sqls {
         let expected = "CreateExternalTable: Bare { table: \"t\" }";
@@ -1862,11 +1863,13 @@ fn create_external_table_with_compression_type() {
         "CREATE EXTERNAL TABLE t STORED AS AVRO COMPRESSION TYPE BZIP2 LOCATION 'foo.avro'",
         "CREATE EXTERNAL TABLE t STORED AS PARQUET COMPRESSION TYPE GZIP LOCATION 'foo.parquet'",
         "CREATE EXTERNAL TABLE t STORED AS PARQUET COMPRESSION TYPE BZIP2 LOCATION 'foo.parquet'",
+        "CREATE EXTERNAL TABLE t STORED AS ARROW COMPRESSION TYPE GZIP LOCATION 'foo.arrow'",
+        "CREATE EXTERNAL TABLE t STORED AS ARROW COMPRESSION TYPE BZIP2 LOCATION 'foo.arrow'",
     ];
     for sql in sqls {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"File compression type can be specified for CSV/JSON files.\")",
+            "Plan(\"File compression type cannot be set for PARQUET, AVRO, or ARROW files.\")",
             format!("{err:?}")
         );
     }
