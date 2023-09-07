@@ -480,7 +480,7 @@ file system or remote object store as a named table which can be queried.</p>
 <span class="o">&lt;</span><span class="n">key_value_list</span><span class="o">&gt;</span> <span class="o">:=</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">literal</span><span class="p">,</span> <span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">file_type</span></code> is one of <code class="docutils literal notranslate"><span class="pre">CSV</span></code>, <code class="docutils literal notranslate"><span class="pre">PARQUET</span></code>, <code class="docutils literal notranslate"><span class="pre">AVRO</span></code> or <code class="docutils literal notranslate"><span class="pre">JSON</span></code></p>
+<p><code class="docutils literal notranslate"><span class="pre">file_type</span></code> is one of <code class="docutils literal notranslate"><span class="pre">CSV</span></code>, <code class="docutils literal notranslate"><span class="pre">ARROW</span></code>, <code class="docutils literal notranslate"><span class="pre">PARQUET</span></code>, <code class="docutils literal notranslate"><span class="pre">AVRO</span></code> or <code class="docutils literal notranslate"><span class="pre">JSON</span></code></p>
 <p><code class="docutils literal notranslate"><span class="pre">LOCATION</span> <span class="pre">&lt;literal&gt;</span></code> specifies the location to find the data. It can be
 a path to a file or directory of partitioned files locally or on an
 object store.</p>
@@ -497,6 +497,14 @@ scanning a subset of the file.</p>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
 <span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_simple.csv&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>It is also possible to use compressed files, such as <code class="docutils literal notranslate"><span class="pre">.csv.gz</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
+<span class="n">COMPRESSION</span><span class="w"> </span><span class="k">TYPE</span><span class="w"> </span><span class="n">GZIP</span>
+<span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_simple.csv.gz&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>It is also possible to specify the schema manually.</p>
