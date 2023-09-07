@@ -1294,16 +1294,6 @@ mod tests {
             (vec![(col_d, option1), (col_e, option2)], true),
         ];
 
-        // let requirements = vec![
-        //     (
-        //         vec![
-        //             (col_d, option1),
-        //             (col_e, option2),
-        //         ],
-        //         true,
-        //     ),
-        // ];
-
         for (cols, expected) in requirements {
             let err_msg = format!("Error in test case:{cols:?}");
             let required = cols

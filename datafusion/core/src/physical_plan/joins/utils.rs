@@ -333,10 +333,6 @@ fn get_updated_right_ordering_equivalence_properties(
         // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            // add_offset_to_ordering_equivalence_classes(
-            //     right_oeq_classes,
-            //     left_columns_len,
-            // )?
             right_oeq_properties.add_offset(left_columns_len)?;
         }
         _ => {}
@@ -346,7 +342,6 @@ fn get_updated_right_ordering_equivalence_properties(
         right_oeq_properties.oeq_class(),
         join_eq_properties,
     ))
-    // Ok(vec![])
 }
 
 /// Merge left and right sort expressions, checking for duplicates.
