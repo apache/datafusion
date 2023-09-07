@@ -298,7 +298,7 @@ fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
 ) -> Result<Option<ScalarValue>> {
-    let lit_data_type = lit_value.get_datatype();
+    let lit_data_type = lit_value.data_type();
     // the rule just support the signed numeric data type now
     if !is_support_data_type(&lit_data_type) || !is_support_data_type(target_type) {
         return Ok(None);
@@ -817,7 +817,7 @@ mod tests {
             for s2 in &scalars {
                 let expected_value = ExpectedCast::Value(s2.clone());
 
-                expect_cast(s1.clone(), s2.get_datatype(), expected_value);
+                expect_cast(s1.clone(), s2.data_type(), expected_value);
             }
         }
     }
@@ -842,7 +842,7 @@ mod tests {
             for s2 in &scalars {
                 let expected_value = ExpectedCast::Value(s2.clone());
 
-                expect_cast(s1.clone(), s2.get_datatype(), expected_value);
+                expect_cast(s1.clone(), s2.data_type(), expected_value);
             }
         }
 
@@ -976,10 +976,10 @@ mod tests {
             assert_eq!(lit_tz_none, lit_tz_utc);
 
             // e.g. DataType::Timestamp(_, None)
-            let dt_tz_none = lit_tz_none.get_datatype();
+            let dt_tz_none = lit_tz_none.data_type();
 
             // e.g. DataType::Timestamp(_, Some(utc))
-            let dt_tz_utc = lit_tz_utc.get_datatype();
+            let dt_tz_utc = lit_tz_utc.data_type();
 
             // None <--> None
             expect_cast(
@@ -1102,7 +1102,7 @@ mod tests {
                 if let (
                     DataType::Timestamp(left_unit, left_tz),
                     DataType::Timestamp(right_unit, right_tz),
-                ) = (actual_value.get_datatype(), expected_value.get_datatype())
+                ) = (actual_value.data_type(), expected_value.data_type())
                 {
                     assert_eq!(left_unit, right_unit);
                     assert_eq!(left_tz, right_tz);

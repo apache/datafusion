@@ -939,11 +939,11 @@ impl LogicalPlan {
                 // Verify if the types of the params matches the types of the values
                 let iter = prepare_lp.data_types.iter().zip(param_values.iter());
                 for (i, (param_type, value)) in iter.enumerate() {
-                    if *param_type != value.get_datatype() {
+                    if *param_type != value.data_type() {
                         return plan_err!(
                             "Expected parameter of type {:?}, got {:?} at index {}",
                             param_type,
-                            value.get_datatype(),
+                            value.data_type(),
                             i
                         );
                     }
@@ -1183,11 +1183,11 @@ impl LogicalPlan {
                         ))
                     })?;
                     // check if the data type of the value matches the data type of the placeholder
-                    if Some(value.get_datatype()) != *data_type {
+                    if Some(value.data_type()) != *data_type {
                         return internal_err!(
                             "Placeholder value type mismatch: expected {:?}, got {:?}",
                             data_type,
-                            value.get_datatype()
+                            value.data_type()
                         );
                     }
                     // Replace the placeholder with the value
