@@ -240,7 +240,7 @@ pub enum FileWriterMode {
 pub trait BatchSerializer: Unpin + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
-    /// Duplicates self to support serializing multiple batches in parralell on multiple cores
+    /// Duplicates self to support serializing multiple batches in parallel on multiple cores
     fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
         Err(DataFusionError::NotImplemented(
             "Parallel serialization is not implemented for this file type".into(),
@@ -358,11 +358,11 @@ async fn serialize_rb_stream_to_object_store(
             Ok(Ok((cnt, bytes))) => {
                 match writer.write_all(&bytes).await {
                     Ok(_) => (),
-                    Err(_) => {
+                    Err(e) => {
                         return Err((
                             writer,
-                            DataFusionError::Internal(
-                                "Unknown error writing to object store".into(),
+                            DataFusionError::Execution(
+                                format!("Error writing to object store: {e}"),
                             ),
                         ))
                     }
@@ -373,12 +373,12 @@ async fn serialize_rb_stream_to_object_store(
                 // Return the writer along with the error
                 return Err((writer, e));
             }
-            Err(_) => {
+            Err(e) => {
                 // Handle task panic or cancellation
                 return Err((
                     writer,
-                    DataFusionError::Internal(
-                        "Serialization task panicked or was cancelled".into(),
+                    DataFusionError::Execution(
+                        format!("Serialization task panicked or was cancelled: {e}")
                     ),
                 ));
             }
