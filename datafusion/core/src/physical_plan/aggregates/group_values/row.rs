@@ -117,7 +117,10 @@ impl GroupValues for GroupValuesRows {
                 None => {
                     // Add new entry to aggr_state and save newly created index
                     let group_idx = self.group_values.as_ref().unwrap().num_rows();
-                    self.group_values.as_mut().unwrap().push(group_rows.row(row));
+                    self.group_values
+                        .as_mut()
+                        .unwrap()
+                        .push(group_rows.row(row));
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
@@ -153,7 +156,8 @@ impl GroupValues for GroupValuesRows {
         Ok(match emit_to {
             EmitTo::All => {
                 // Eventually we may also want to clear the hash table here
-                self.row_converter.convert_rows(self.group_values.as_ref().unwrap())?
+                self.row_converter
+                    .convert_rows(self.group_values.as_ref().unwrap())?
             }
             EmitTo::First(n) => {
                 let groups_rows = self.group_values.as_ref().unwrap().iter().take(n);
@@ -164,7 +168,10 @@ impl GroupValues for GroupValuesRows {
                 for row in self.group_values.as_ref().unwrap().iter().skip(n) {
                     new_group_values.push(row);
                 }
-                std::mem::swap(&mut new_group_values, &mut self.group_values.as_mut().unwrap());
+                std::mem::swap(
+                    &mut new_group_values,
+                    &mut self.group_values.as_mut().unwrap(),
+                );
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {

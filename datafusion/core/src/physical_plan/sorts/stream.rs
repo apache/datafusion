@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::physical_plan::sorts::cursor::{FieldArray, FieldCursor, RowCursor};
+use crate::physical_plan::wrapper::CardinalityAwareRowConverter;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{PhysicalExpr, PhysicalSortExpr};
-use crate::physical_plan::wrapper::CardinalityAwareRowConverter;
 use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
