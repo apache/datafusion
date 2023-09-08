@@ -943,7 +943,7 @@ mod tests {
         OrderingEquivalenceProperties,
     )> {
         // Assume schema satisfies ordering a ASC NULLS LAST
-        // and d ASC NULLS LAST, b ASC NULLS LAST and e DESC NULLS FIRST, f ASC NULLS LAST
+        // and d ASC NULLS LAST, b ASC NULLS LAST and e DESC NULLS FIRST, f ASC NULLS LAST, g ASC NULLS LAST
         // Assume that column a and c are aliases.
         let col_a = &Column::new("a", 0);
         let col_b = &Column::new("b", 1);
@@ -951,6 +951,7 @@ mod tests {
         let col_d = &Column::new("d", 3);
         let col_e = &Column::new("e", 4);
         let col_f = &Column::new("f", 5);
+        let col_g = &Column::new("g", 6);
         let option1 = SortOptions {
             descending: false,
             nulls_first: false,
@@ -992,6 +993,10 @@ mod tests {
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(col_f.clone()),
+                    options: option1,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(col_g.clone()),
                     options: option1,
                 },
             ],
@@ -1200,6 +1205,7 @@ mod tests {
         let col_d = &Column::new("d", 3);
         let col_e = &Column::new("e", 4);
         let col_f = &Column::new("f", 5);
+        let col_g = &Column::new("g", 6);
         let option1 = SortOptions {
             descending: false,
             nulls_first: false,
@@ -1233,6 +1239,10 @@ mod tests {
             (vec![(col_d, option1)], true),
             (vec![(col_d, option1), (col_b, option1)], true),
             (vec![(col_d, option2), (col_b, option1)], false),
+            (
+                vec![(col_e, option2), (col_f, option1), (col_g, option1)],
+                true,
+            ),
             (vec![(col_e, option2), (col_f, option1)], true),
             (vec![(col_e, option1), (col_f, option1)], false),
             (vec![(col_e, option2), (col_b, option1)], false),
@@ -1348,19 +1358,34 @@ mod tests {
         };
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![
-            (vec![(col_a, Some(option1))], vec![]),
+            (vec![(col_a, Some(option1))], vec![(col_a, Some(option1))]),
             (vec![(col_a, Some(option2))], vec![(col_a, Some(option2))]),
-            (vec![(col_a, None)], vec![]),
+            (vec![(col_a, None)], vec![(col_a, Some(option1))]),
             // Test whether equivalence works as expected
-            (vec![(col_c, Some(option1))], vec![]),
-            (vec![(col_c, None)], vec![]),
+            (vec![(col_c, Some(option1))], vec![(col_a, Some(option1))]),
+            (vec![(col_c, None)], vec![(col_a, Some(option1))]),
             // Test whether ordering equivalence works as expected
-            (vec![(col_d, Some(option1)), (col_b, Some(option1))], vec![]),
-            (vec![(col_d, None), (col_b, None)], vec![]),
-            (vec![(col_e, Some(option2)), (col_f, Some(option1))], vec![]),
+            (
+                vec![(col_d, Some(option1)), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+            ),
+            (
+                vec![(col_d, None), (col_b, None)],
+                vec![(col_a, Some(option1))],
+            ),
+            (
+                vec![(col_e, Some(option2)), (col_f, Some(option1))],
+                vec![(col_a, Some(option1))],
+            ),
             // We should be able to normalize in compatible requirements also (not exactly equal)
-            (vec![(col_e, Some(option2)), (col_f, None)], vec![]),
-            (vec![(col_e, None), (col_f, None)], vec![]),
+            (
+                vec![(col_e, Some(option2)), (col_f, None)],
+                vec![(col_a, Some(option1))],
+            ),
+            (
+                vec![(col_e, None), (col_f, None)],
+                vec![(col_a, Some(option1))],
+            ),
         ];
 
         let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;

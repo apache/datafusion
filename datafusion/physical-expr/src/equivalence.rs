@@ -27,6 +27,7 @@ use arrow_schema::Fields;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
+use itertools::izip;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::ops::Range;
@@ -785,22 +786,43 @@ fn collapse_sort_reqs(input: LexOrderingReq) -> LexOrderingReq {
     output
 }
 
-fn is_global_req(
-    req: &PhysicalSortRequirement,
-    oeq_class: &OrderingEquivalentClass,
-) -> bool {
-    for ordering in std::iter::once(oeq_class.head()).chain(oeq_class.others().iter()) {
-        let PhysicalSortRequirement { expr, options } = req;
-        let global_ordering = &ordering[0];
-        if let Some(options) = options {
-            if options == &global_ordering.options && expr.eq(&global_ordering.expr) {
-                return true;
+fn req_satisfied(given: LexOrderingRef, req: &[PhysicalSortRequirement]) -> bool {
+    if given.len() != req.len() {
+        false
+    } else {
+        for (given, req) in izip!(given.iter(), req.iter()) {
+            let PhysicalSortRequirement { expr, options } = req;
+            if let Some(options) = options {
+                if options != &given.options || !expr.eq(&given.expr) {
+                    return false;
+                }
+            } else if !expr.eq(&given.expr) {
+                return false;
             }
-        } else if expr.eq(&global_ordering.expr) {
-            return true;
+        }
+        true
+    }
+}
+
+fn prune_last_n_that_is_in_oeq(
+    input: &[PhysicalSortRequirement],
+    oeq_class: &OrderingEquivalentClass,
+) -> usize {
+    let input_len = input.len();
+    for ordering in std::iter::once(oeq_class.head()).chain(oeq_class.others().iter()) {
+        let ordering_len = ordering.len();
+        let mut search_range = std::cmp::min(ordering_len, input_len);
+        while search_range > 0 {
+            let req_section = &input[input_len - search_range..];
+            let given_section = &ordering[0..search_range];
+            if req_satisfied(given_section, req_section) {
+                return search_range;
+            } else {
+                search_range -= 1;
+            }
         }
     }
-    false
+    0
 }
 
 /// This function constructs a duplicate-free vector by filtering out duplicate
@@ -809,15 +831,20 @@ fn simplify_sort_reqs(
     input: LexOrderingReq,
     oeq_class: &OrderingEquivalentClass,
 ) -> LexOrderingReq {
-    let mut last_idx = input.len();
-    while last_idx > 0 {
-        if is_global_req(&input[last_idx - 1], oeq_class) {
-            last_idx -= 1;
-        } else {
+    let mut section = &input[..];
+    loop {
+        let n_prune = prune_last_n_that_is_in_oeq(section, oeq_class);
+        // Cannot prune entries from the end of requirement
+        if n_prune == 0 {
             break;
         }
+        section = &section[0..section.len() - n_prune];
     }
-    input[0..last_idx].to_vec()
+    if section.is_empty() {
+        PhysicalSortRequirement::from_sort_exprs(oeq_class.head())
+    } else {
+        section.to_vec()
+    }
 }
 
 /// This function searches for the slice `section` inside the slice `given`.
