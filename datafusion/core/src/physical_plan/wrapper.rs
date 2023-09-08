@@ -19,7 +19,7 @@ use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use arrow_array::*;
 use arrow_array::cast::AsArray;
-use arrow::row::RowConverter;
+use arrow::row::{RowConverter, Row};
 
 const LOW_CARDINALITY_THRESHOLD: usize = 10;
 
@@ -41,7 +41,14 @@ impl CardinalityAwareRowConverter {
         return self.inner.as_ref().unwrap().size();
     }
     
-    pub fn convert_rows(&self, rows: &Rows) -> Result<Vec<ArrayRef>, ArrowError> {
+    pub fn empty_rows(&self, row_capacity: usize, data_capacity: usize) -> Rows {
+        return self.inner.as_ref().unwrap().empty_rows(row_capacity, data_capacity);
+    }
+
+    pub fn convert_rows<'a, I>(&self, rows: I) -> Result<Vec<ArrayRef>, ArrowError>
+    where
+        I: IntoIterator<Item = Row<'a>>,
+    {
         return self.inner.as_ref().unwrap().convert_rows(rows);
     }
 
