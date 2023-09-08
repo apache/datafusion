@@ -24,9 +24,9 @@ use std::task::Poll;
 
 use crate::physical_plan::displayable;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::internal_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{exec_err, internal_err};
 use datafusion_execution::TaskContext;
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
@@ -177,7 +177,7 @@ impl RecordBatchReceiverStreamBuilder {
                             Ok(_) => continue,
                             // This means a blocking task error
                             Err(e) => {
-                                return Some(internal_err!("Spawned Task error: {e}"));
+                                return Some(exec_err!("Spawned Task error: {e}"));
                             }
                         }
                     }
