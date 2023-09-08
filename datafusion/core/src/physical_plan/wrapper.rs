@@ -55,17 +55,16 @@ impl CardinalityAwareRowConverter {
     pub fn convert_columns(
         &mut self,
         columns: &[ArrayRef]) -> Result<Rows, ArrowError> {
-        if self.fields != None {
-            let mut updated_fields = self.fields.take();
+        if let Some(mut updated_fields) = self.fields.take() {
             for (i, col) in columns.iter().enumerate() {
                 if let DataType::Dictionary(_, _) = col.data_type() {
                     let cardinality = col.as_any_dictionary_opt().unwrap().values().len();
                     if cardinality >= LOW_CARDINALITY_THRESHOLD {
-                        updated_fields.as_mut().unwrap()[i] = updated_fields.as_ref().unwrap()[i].clone().preserve_dictionaries(false);
+                        updated_fields[i] = updated_fields[i].clone().preserve_dictionaries(false);
                     }
                 }
             }
-            self.inner = Some(RowConverter::new(updated_fields.unwrap())?);
+            self.inner = Some(RowConverter::new(updated_fields)?);
         }
         self.inner.as_mut().unwrap().convert_columns(columns)
     }
