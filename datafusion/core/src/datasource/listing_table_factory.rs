@@ -216,7 +216,6 @@ impl TableProviderFactory for ListingTableFactory {
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
-            .with_infinite_source(infinite_source)
             .with_file_sort_order(cmd.order_exprs.clone())
             .with_insert_mode(insert_mode)
             .with_single_file(single_file)
