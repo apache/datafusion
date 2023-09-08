@@ -52,7 +52,7 @@ pub struct GroupValuesRows {
     /// important for multi-column group keys.
     ///
     /// [`Row`]: arrow::row::Row
-    group_values: Rows,
+    group_values: Option<Rows>,
 
     // buffer to be reused to store hashes
     hashes_buffer: Vec<u64>,
@@ -71,14 +71,13 @@ impl GroupValuesRows {
                 .collect(),
         )?;
 
-        let map = RawTable::with_capacity(0);
-        let group_values = row_converter.empty_rows(0, 0);
+        let map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
 
         Ok(Self {
             row_converter,
             map,
             map_size: 0,
-            group_values,
+            group_values: None,
             hashes_buffer: Default::default(),
             random_state: Default::default(),
         })
@@ -90,6 +89,8 @@ impl GroupValues for GroupValuesRows {
         // Convert the group keys into the row format
         // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
         let group_rows = self.row_converter.convert_columns(cols)?;
+        self.group_values = Some(self.row_converter.empty_rows(0, 0));
+
         let n_rows = group_rows.num_rows();
 
         // tracks to which group each of the input rows belongs
@@ -106,7 +107,7 @@ impl GroupValues for GroupValuesRows {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                group_rows.row(row) == self.group_values.row(*group_idx)
+                group_rows.row(row) == self.group_values.as_mut().unwrap().row(*group_idx)
             });
 
             let group_idx = match entry {
@@ -115,8 +116,8 @@ impl GroupValues for GroupValuesRows {
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
-                    let group_idx = self.group_values.num_rows();
-                    self.group_values.push(group_rows.row(row));
+                    let group_idx = self.group_values.as_ref().unwrap().num_rows();
+                    self.group_values.as_mut().unwrap().push(group_rows.row(row));
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
@@ -135,7 +136,7 @@ impl GroupValues for GroupValuesRows {
 
     fn size(&self) -> usize {
         self.row_converter.size()
-            + self.group_values.size()
+            + self.group_values.as_ref().unwrap().size()
             + self.map_size
             + self.hashes_buffer.allocated_size()
     }
@@ -145,25 +146,25 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn len(&self) -> usize {
-        self.group_values.num_rows()
+        self.group_values.as_ref().unwrap().num_rows()
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         Ok(match emit_to {
             EmitTo::All => {
                 // Eventually we may also want to clear the hash table here
-                self.row_converter.convert_rows(&self.group_values)?
+                self.row_converter.convert_rows(self.group_values.as_ref().unwrap())?
             }
             EmitTo::First(n) => {
-                let groups_rows = self.group_values.iter().take(n);
+                let groups_rows = self.group_values.as_ref().unwrap().iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
                 // TODO file some ticket in arrow-rs to make this more efficent?
                 let mut new_group_values = self.row_converter.empty_rows(0, 0);
-                for row in self.group_values.iter().skip(n) {
+                for row in self.group_values.as_ref().unwrap().iter().skip(n) {
                     new_group_values.push(row);
                 }
-                std::mem::swap(&mut new_group_values, &mut self.group_values);
+                std::mem::swap(&mut new_group_values, &mut self.group_values.as_mut().unwrap());
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
