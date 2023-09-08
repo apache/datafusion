@@ -28,7 +28,7 @@ use crate::{
     DataFusionError, Result,
 };
 
-use super::StatementOptions;
+use super::{parse_utils::split_option_and_column_path, StatementOptions};
 
 /// Options for writing parquet files
 #[derive(Clone, Debug)]
@@ -121,6 +121,7 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for ParquetWriterOptions {
         let statement_options = configs_and_statement_options.1;
         let mut builder = default_builder(configs)?;
         for (option, value) in &statement_options.options {
+            let (option, col_path) = split_option_and_column_path(option);
             builder = match option.to_lowercase().as_str(){
                 "max_row_group_size" => builder
                     .set_max_row_group_size(value.parse()
@@ -144,27 +145,67 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for ParquetWriterOptions {
                 "data_page_row_count_limit" => builder
                     .set_data_page_row_count_limit(value.parse()
                     .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as usize as required for {option}!")))?),
-                "bloom_filter_enabled" => builder
-                    .set_bloom_filter_enabled(value.parse()
-                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?),
-                "encoding" => builder
-                    .set_encoding(parse_encoding_string(value)?),
-                "dictionary_enabled" => builder
-                    .set_dictionary_enabled(value.parse()
-                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?),
-                "compression" => builder
-                    .set_compression(parse_compression_string(value)?),
-                "statistics_enabled" => builder
-                    .set_statistics_enabled(parse_statistics_string(value)?),
-                "max_statistics_size" => builder
-                    .set_max_statistics_size(value.parse()
-                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as usize as required for {option}!")))?),
-                "bloom_filter_fpp" => builder
-                    .set_bloom_filter_fpp(value.parse()
-                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as f64 as required for {option}!")))?),
-                "bloom_filter_ndv" => builder
-                    .set_bloom_filter_ndv(value.parse()
-                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as u64 as required for {option}!")))?),
+                "bloom_filter_enabled" => {
+                    let parsed_value = value.parse()
+                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?;
+                    match col_path{
+                        Some(path) => builder.set_column_bloom_filter_enabled(path, parsed_value),
+                        None => builder.set_bloom_filter_enabled(parsed_value)
+                    }
+                },
+                "encoding" => {
+                    let parsed_encoding = parse_encoding_string(value)?;
+                    match col_path{
+                        Some(path) => builder.set_column_encoding(path, parsed_encoding),
+                        None => builder.set_encoding(parsed_encoding)
+                    }
+                },
+                "dictionary_enabled" => {
+                    let parsed_value = value.parse()
+                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as bool as required for {option}!")))?;
+                    match col_path{
+                        Some(path) => builder.set_column_dictionary_enabled(path, parsed_value),
+                        None => builder.set_dictionary_enabled(parsed_value)
+                    }
+                },
+                "compression" => {
+                    let parsed_compression = parse_compression_string(value)?;
+                    match col_path{
+                        Some(path) => builder.set_column_compression(path, parsed_compression),
+                        None => builder.set_compression(parsed_compression)
+                    }
+                },
+                "statistics_enabled" => {
+                    let parsed_value = parse_statistics_string(value)?;
+                    match col_path{
+                        Some(path) => builder.set_column_statistics_enabled(path, parsed_value),
+                        None => builder.set_statistics_enabled(parsed_value)
+                    }
+                },
+                "max_statistics_size" => {
+                    let parsed_value = value.parse()
+                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as usize as required for {option}!")))?;
+                    match col_path{
+                        Some(path) => builder.set_column_max_statistics_size(path, parsed_value),
+                        None => builder.set_max_statistics_size(parsed_value)
+                    }
+                },
+                "bloom_filter_fpp" => {
+                    let parsed_value = value.parse()
+                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as f64 as required for {option}!")))?;
+                    match col_path{
+                        Some(path) => builder.set_column_bloom_filter_fpp(path, parsed_value),
+                        None => builder.set_bloom_filter_fpp(parsed_value)
+                    }
+                },
+                "bloom_filter_ndv" => {
+                    let parsed_value = value.parse()
+                    .map_err(|_| DataFusionError::Configuration(format!("Unable to parse {value} as u64 as required for {option}!")))?;
+                    match col_path{
+                        Some(path) => builder.set_column_bloom_filter_ndv(path, parsed_value),
+                        None => builder.set_bloom_filter_ndv(parsed_value)
+                    }
+                },
                 _ => return Err(DataFusionError::Configuration(format!("Found unsupported option {option} with value {value} for Parquet format!")))
             }
         }

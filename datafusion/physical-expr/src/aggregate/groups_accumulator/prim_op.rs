@@ -22,7 +22,7 @@ use arrow_array::{ArrayRef, BooleanArray, PrimitiveArray};
 use arrow_schema::DataType;
 use datafusion_common::Result;
 
-use crate::{aggregate::utils::adjust_output_array, GroupsAccumulator};
+use crate::GroupsAccumulator;
 
 use super::{accumulate::NullState, EmitTo};
 
@@ -115,9 +115,9 @@ where
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let values = emit_to.take_needed(&mut self.values);
         let nulls = self.null_state.build(emit_to);
-        let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)); // no copy
-
-        adjust_output_array(&self.data_type, Arc::new(values))
+        let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
+            .with_data_type(self.data_type.clone());
+        Ok(Arc::new(values))
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {

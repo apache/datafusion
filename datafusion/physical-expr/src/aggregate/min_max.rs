@@ -1075,8 +1075,8 @@ impl Accumulator for SlidingMinAccumulator {
 mod tests {
     use super::*;
     use crate::expressions::col;
-    use crate::expressions::tests::aggregate;
-    use crate::generic_test_op;
+    use crate::expressions::tests::{aggregate, aggregate_new};
+    use crate::{generic_test_op, generic_test_op_new};
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
@@ -1172,11 +1172,14 @@ mod tests {
 
         let right = ScalarValue::Decimal128(Some(124), 10, 3);
         let result = max(&left, &right);
-        let expect = DataFusionError::Internal(format!(
+        let err_msg = format!(
             "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
             (Decimal128(Some(123), 10, 2), Decimal128(Some(124), 10, 3))
-        ));
-        assert_eq!(expect.to_string(), result.unwrap_err().to_string());
+        );
+        let expect = DataFusionError::Internal(err_msg);
+        assert!(expect
+            .strip_backtrace()
+            .starts_with(&result.unwrap_err().strip_backtrace()));
 
         // max batch
         let array: ArrayRef = Arc::new(
@@ -1489,6 +1492,26 @@ mod tests {
             Max,
             ScalarValue::Time64Nanosecond(Some(5))
         )
+    }
+
+    #[test]
+    fn max_new_timestamp_micro() -> Result<()> {
+        let dt = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let actual = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5])
+            .with_data_type(dt.clone());
+        let expected: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![5]).with_data_type(dt.clone()));
+        generic_test_op_new!(Arc::new(actual), dt.clone(), Max, &expected)
+    }
+
+    #[test]
+    fn max_new_timestamp_micro_with_tz() -> Result<()> {
+        let dt = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let actual = TimestampMicrosecondArray::from(vec![1, 2, 3, 4, 5])
+            .with_data_type(dt.clone());
+        let expected: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![5]).with_data_type(dt.clone()));
+        generic_test_op_new!(Arc::new(actual), dt.clone(), Max, &expected)
     }
 
     #[test]

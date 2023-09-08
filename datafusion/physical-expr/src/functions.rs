@@ -1046,7 +1046,7 @@ mod tests {
                     match expr.evaluate(&batch) {
                         Ok(_) => assert!(false, "expected error"),
                         Err(error) => {
-                            assert_eq!(error.to_string(), expected_error.to_string());
+                            assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));
                         }
                     }
                 }

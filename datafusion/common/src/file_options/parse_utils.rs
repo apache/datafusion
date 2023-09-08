@@ -20,6 +20,7 @@
 use parquet::{
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
     file::properties::{EnabledStatistics, WriterVersion},
+    schema::types::ColumnPath,
 };
 
 use crate::{DataFusionError, Result};
@@ -179,5 +180,17 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
             "Unknown or unsupported parquet statistics setting {str_setting} \
             valid options are 'none', 'page', and 'chunk'"
         ))),
+    }
+}
+
+pub(crate) fn split_option_and_column_path(
+    str_setting: &str,
+) -> (String, Option<ColumnPath>) {
+    match str_setting.replace('\'', "").split_once("::") {
+        Some((s1, s2)) => {
+            let col_path = ColumnPath::new(s2.split('.').map(|s| s.to_owned()).collect());
+            (s1.to_owned(), Some(col_path))
+        }
+        None => (str_setting.to_owned(), None),
     }
 }
