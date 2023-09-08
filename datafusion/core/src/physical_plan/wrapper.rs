@@ -137,6 +137,9 @@ mod tests {
             arrow::row::SortField::new_with_options(DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)), SortOptions::default()),
             arrow::row::SortField::new_with_options(DataType::Int32, SortOptions::default())
         ];
+
+        // With the `CardinalityAwareRowConverter`, when the high cardinality dictionary-encoded sort field is 
+        // converted to the `Row` format, the dictionary encoding is not preserved and we switch to Utf8 encoding.
         let mut converter = CardinalityAwareRowConverter::new(sort_fields.clone()).unwrap();
         let rows = converter.convert_columns(&batch.columns()).unwrap();        
         let converted_batch = converter.convert_rows(&rows).unwrap();
@@ -144,7 +147,8 @@ mod tests {
 
         let mut converter = RowConverter::new(sort_fields.clone()).unwrap();
         let rows = converter.convert_columns(&batch.columns()).unwrap();        
-        let converted_batch = converter.convert_rows(&rows).unwrap();
+        let converted_batch: Vec<Arc<dyn Array>> = converter.convert_rows(&rows).unwrap();
+        // With the `RowConverter`, the dictionary encoding is preserved.
         assert_eq!(converted_batch[0].data_type(), &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)));
     }
 
@@ -155,6 +159,8 @@ mod tests {
             arrow::row::SortField::new_with_options(DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)), SortOptions::default()),
             arrow::row::SortField::new_with_options(DataType::Int32, SortOptions::default())
         ];
+        // With low cardinality dictionary-encoded sort fields, both `CardinalityAwareRowConverter` and `RowConverter`
+        // preserves the dictionary encoding.
         let mut converter = CardinalityAwareRowConverter::new(sort_fields.clone()).unwrap();
         let rows = converter.convert_columns(&batch.columns()).unwrap();        
         let converted_batch = converter.convert_rows(&rows).unwrap();
