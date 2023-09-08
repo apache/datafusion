@@ -218,6 +218,7 @@ CREATE TABLE test_divide_zero_float_nullable(
     (-1.0, -1.0),
     (1.0, 1.0), 
     (NULL, NULL),
+    (0., 0.),
     ('NaN'::double, 'NaN'::double);
 
 query RR rowsort
@@ -226,6 +227,7 @@ SELECT c1/0, c2/0 FROM test_divide_zero_float_nullable
 -Infinity -Infinity
 Infinity Infinity
 NULL NULL
+NaN NaN
 NaN NaN
 
 statement ok
@@ -239,15 +241,20 @@ CREATE TABLE test_divide_zero_float_non_nullable(
     ); 
 
 query RR
-INSERT INTO test_divide_zero_float_non_nullable VALUES(-1.0, -1.0), (1.0, 1.0), ('NaN'::double, 'NaN'::double)
+INSERT INTO test_divide_zero_float_non_nullable VALUES
+    (-1.0, -1.0),
+    (1.0, 1.0),
+    (0., 0.),
+    ('NaN'::double, 'NaN'::double)
 ----
-3
+4
 
 query RR rowsort
 SELECT c1/0, c2/0 FROM test_divide_zero_float_non_nullable
 ----
 -Infinity -Infinity
 Infinity Infinity
+NaN NaN
 NaN NaN
 
 statement ok
