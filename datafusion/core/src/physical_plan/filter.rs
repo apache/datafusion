@@ -40,13 +40,14 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries,
     OrderingEquivalenceProperties, PhysicalExpr,
 };
 
 use datafusion_physical_expr::intervals::utils::check_support;
+use datafusion_physical_expr::utils::collect_columns;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -154,8 +155,18 @@ impl ExecutionPlan for FilterExec {
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let mut res = self.input.ordering_equivalence_properties();
-        let constants = collect_constants_from_predicate(self.predicate());
-        res.add_constants(constants);
+        let stats = self.statistics();
+
+        if let Some(col_stats) = stats.column_statistics {
+            let columns = collect_columns(self.predicate());
+            let mut constants = vec![];
+            for column in columns {
+                if col_stats[column.index()].is_singleton() {
+                    constants.push(Arc::new(column) as Arc<dyn PhysicalExpr>);
+                }
+            }
+            res.add_constants(constants);
+        }
         res
     }
 
@@ -376,51 +387,6 @@ fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAnd
 /// The equals Column-Pairs and Non-equals Column-Pairs in the Predicates
 pub type EqualAndNonEqual<'a> =
     (Vec<(&'a Column, &'a Column)>, Vec<(&'a Column, &'a Column)>);
-
-/// Checks whether physical expression is literal
-fn is_literal(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any().is::<Literal>()
-}
-
-/// Checks whether physical expression is column
-fn is_column(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any().is::<Column>()
-}
-
-/// Collects physical expressions that have constant result according to
-/// predicate expression.
-fn collect_constants_from_predicate(
-    predicate: &Arc<dyn PhysicalExpr>,
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    get_constant_expr_helper(predicate, vec![])
-}
-
-/// Helper function to collect expression have constant values
-fn get_constant_expr_helper(
-    expr: &Arc<dyn PhysicalExpr>,
-    mut res: Vec<Arc<dyn PhysicalExpr>>,
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        // in the 3=a form
-        if binary.op() == &Operator::Eq
-            && is_literal(binary.left())
-            && is_column(binary.right())
-        {
-            res.push(binary.right().clone())
-        }
-        // In the a = 3 form
-        else if binary.op() == &Operator::Eq
-            && is_literal(binary.right())
-            && is_column(binary.left())
-        {
-            res.push(binary.left().clone())
-        } else if binary.op() == &Operator::And {
-            res = get_constant_expr_helper(binary.left(), res);
-            res = get_constant_expr_helper(binary.right(), res);
-        }
-    }
-    res
-}
 
 #[cfg(test)]
 mod tests {

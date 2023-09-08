@@ -231,7 +231,8 @@ fn calculate_selectivity(
                 1.0,
                 |acc, (i, ExprBoundaries { interval, .. })| {
                     let temp =
-                        cardinality_ratio(&initial_boundaries[i].interval, interval)?;
+                        cardinality_ratio(&initial_boundaries[i].interval, interval)
+                            .unwrap_or(1.0);
                     Ok(acc * temp)
                 },
             )

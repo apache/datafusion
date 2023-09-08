@@ -119,6 +119,8 @@ impl EquivalenceProperties {
         }
     }
 
+    /// Normalizes physical expression according to `EquivalentClass`es inside `self.classes`.
+    /// expression is replaced with `EquivalentClass::head` expression if it is among `EquivalentClass::others`.
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         expr.clone()
             .transform(&|expr| {
@@ -140,6 +142,9 @@ impl EquivalenceProperties {
             .unwrap_or(expr)
     }
 
+    /// This function applies the \[`normalize_expr`]
+    /// function for all expression in `exprs` and returns a vector of
+    /// normalized physical expressions.
     pub fn normalize_exprs(
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
@@ -150,6 +155,9 @@ impl EquivalenceProperties {
             .collect::<Vec<_>>()
     }
 
+    /// This function normalizes `sort_requirement` according to `EquivalenceClasses` in the `self`.
+    /// If the given sort requirement doesn't belong to equivalence set inside
+    /// `self`, it returns `sort_requirement` as is.
     pub fn normalize_sort_requirement(
         &self,
         mut sort_requirement: PhysicalSortRequirement,
@@ -158,6 +166,9 @@ impl EquivalenceProperties {
         sort_requirement
     }
 
+    /// This function applies the \[`normalize_sort_requirement`]
+    /// function for all sort requirements in `sort_reqs` and returns a vector of
+    /// normalized sort expressions.
     pub fn normalize_sort_requirements(
         &self,
         sort_reqs: &[PhysicalSortRequirement],
@@ -169,6 +180,9 @@ impl EquivalenceProperties {
         collapse_vec(normalized_sort_reqs)
     }
 
+    /// Similar to the \[`normalize_sort_requirements`] this function normalizes
+    /// sort expressions in `sort_exprs` and returns a vector of
+    /// normalized sort expressions.
     pub fn normalize_sort_exprs(
         &self,
         sort_exprs: &[PhysicalSortExpr],
@@ -199,11 +213,13 @@ impl EquivalenceProperties {
 #[derive(Debug, Clone)]
 pub struct OrderingEquivalenceProperties {
     oeq_class: Option<OrderingEquivalentClass>,
+    /// Keeps track of expressions that have constant value.
     constants: Vec<Arc<dyn PhysicalExpr>>,
     schema: SchemaRef,
 }
 
 impl OrderingEquivalenceProperties {
+    /// Create an empty `OrderingEquivalenceProperties`
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             oeq_class: None,
@@ -212,6 +228,8 @@ impl OrderingEquivalenceProperties {
         }
     }
 
+    /// Extends `OrderingEquivalenceProperties` by adding ordering inside the `other`
+    /// to the `self.oeq_class`.
     pub fn extend(&mut self, other: Option<OrderingEquivalentClass>) {
         if let Some(other) = other {
             if let Some(class) = &mut self.oeq_class {
@@ -240,6 +258,7 @@ impl OrderingEquivalenceProperties {
         }
     }
 
+    /// Add physical expression that have constant value to the `self.constants`
     pub fn add_constants(&mut self, constants: Vec<Arc<dyn PhysicalExpr>>) {
         for constant in constants {
             if !exprs_contains(&self.constants, &constant) {
@@ -258,7 +277,7 @@ impl OrderingEquivalenceProperties {
     ) -> Vec<PhysicalSortRequirement> {
         let normalized_sort_reqs =
             prune_sort_reqs_with_constants(sort_reqs, &self.constants);
-        let mut normalized_sort_reqs = collapse_sort_reqs(normalized_sort_reqs);
+        let mut normalized_sort_reqs = collapse_lex_req(normalized_sort_reqs);
         if let Some(oeq_class) = &self.oeq_class {
             for item in oeq_class.others() {
                 let item = PhysicalSortRequirement::from_sort_exprs(item);
@@ -283,9 +302,9 @@ impl OrderingEquivalenceProperties {
                     normalized_sort_reqs.splice(updated_start..updated_end, head);
                 }
             }
-            normalized_sort_reqs = simplify_sort_reqs(normalized_sort_reqs, oeq_class);
+            normalized_sort_reqs = simplify_lex_req(normalized_sort_reqs, oeq_class);
         }
-        collapse_sort_reqs(normalized_sort_reqs)
+        collapse_lex_req(normalized_sort_reqs)
     }
 
     /// Checks whether `leading_ordering` is contained in any of the ordering
@@ -439,6 +458,7 @@ impl OrderingEquivalentClass {
         }
     }
 
+    /// Adds `offset` value to the index of each expression inside `self.head` and `self.others`.
     pub fn add_offset(&self, offset: usize) -> Result<OrderingEquivalentClass> {
         let head = add_offset_to_lex_ordering(self.head(), offset)?;
         let others = self
@@ -768,60 +788,37 @@ fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
     output
 }
 
-/// This function constructs a duplicate-free vector by filtering out duplicate
-/// entries inside the given vector `input`.
-fn collapse_sort_reqs(input: LexOrderingReq) -> LexOrderingReq {
+/// This function constructs a duplicate-free `LexOrderingReq` by filtering out duplicate
+/// entries that have same physical expression inside the given vector `input`.
+/// `vec![a Some(Asc), a Some(Desc)]` is collapsed to the `vec![a Some(Asc)]`. Since
+/// when same expression is already seen before, following expressions are redundant.
+fn collapse_lex_req(input: LexOrderingReq) -> LexOrderingReq {
     let mut output = vec![];
     for item in input {
-        if !sort_reqs_contains(&output, &item) {
+        if !lex_req_contains(&output, &item) {
             output.push(item);
         }
     }
     output
 }
 
-fn req_satisfied(given: LexOrderingRef, req: &[PhysicalSortRequirement]) -> bool {
-    if given.len() != req.len() {
-        false
-    } else {
-        for (given, req) in izip!(given.iter(), req.iter()) {
-            let PhysicalSortRequirement { expr, options } = req;
-            if let Some(options) = options {
-                if options != &given.options || !expr.eq(&given.expr) {
-                    return false;
-                }
-            } else if !expr.eq(&given.expr) {
-                return false;
-            }
-        }
-        true
-    }
-}
-
-fn prune_last_n_that_is_in_oeq(
-    input: &[PhysicalSortRequirement],
-    oeq_class: &OrderingEquivalentClass,
-) -> usize {
-    let input_len = input.len();
-    for ordering in std::iter::once(oeq_class.head()).chain(oeq_class.others().iter()) {
-        let ordering_len = ordering.len();
-        let mut search_range = std::cmp::min(ordering_len, input_len);
-        while search_range > 0 {
-            let req_section = &input[input_len - search_range..];
-            let given_section = &ordering[0..search_range];
-            if req_satisfied(given_section, req_section) {
-                return search_range;
-            } else {
-                search_range -= 1;
-            }
+/// Check whether `sort_req.expr` is among the expressions of `lex_req`.
+fn lex_req_contains(
+    lex_req: &[PhysicalSortRequirement],
+    sort_req: &PhysicalSortRequirement,
+) -> bool {
+    for constant in lex_req {
+        if constant.expr.eq(&sort_req.expr) {
+            return true;
         }
     }
-    0
+    false
 }
 
-/// This function constructs a duplicate-free vector by filtering out duplicate
-/// entries inside the given vector `input`.
-fn simplify_sort_reqs(
+/// This function simplifies lexicographical ordering requirement
+/// inside `input` by removing postfix lexicographical requirements
+/// that satisfy global ordering (occurs inside the ordering equivalent class)
+fn simplify_lex_req(
     input: LexOrderingReq,
     oeq_class: &OrderingEquivalentClass,
 ) -> LexOrderingReq {
@@ -839,6 +836,49 @@ fn simplify_sort_reqs(
     } else {
         section.to_vec()
     }
+}
+
+/// Determines how many entries from the end can be deleted.
+/// Last n entry satisfies global ordering, hence having them
+/// as postfix in the lexicographical requirement is unnecessary.
+/// Assume requirement is [a ASC, b ASC, c ASC], also assume that
+/// existing ordering is [c ASC, d ASC]. In this case, since [c ASC]
+/// is satisfied by the existing ordering (e.g corresponding section is global ordering),
+/// [c ASC] can be pruned from the requirement: [a ASC, b ASC, c ASC]. In this case,
+/// this function will return 1, to indicate last element can be removed from the requirement
+fn prune_last_n_that_is_in_oeq(
+    input: &[PhysicalSortRequirement],
+    oeq_class: &OrderingEquivalentClass,
+) -> usize {
+    let input_len = input.len();
+    for ordering in std::iter::once(oeq_class.head()).chain(oeq_class.others().iter()) {
+        let mut search_range = std::cmp::min(ordering.len(), input_len);
+        while search_range > 0 {
+            let req_section = &input[input_len - search_range..];
+            // let given_section = &ordering[0..search_range];
+            if req_satisfied(ordering, req_section) {
+                return search_range;
+            } else {
+                search_range -= 1;
+            }
+        }
+    }
+    0
+}
+
+/// Checks whether given section satisfies req.
+fn req_satisfied(given: LexOrderingRef, req: &[PhysicalSortRequirement]) -> bool {
+    for (given, req) in izip!(given.iter(), req.iter()) {
+        let PhysicalSortRequirement { expr, options } = req;
+        if let Some(options) = options {
+            if options != &given.options || !expr.eq(&given.expr) {
+                return false;
+            }
+        } else if !expr.eq(&given.expr) {
+            return false;
+        }
+    }
+    true
 }
 
 /// This function searches for the slice `section` inside the slice `given`.
@@ -872,18 +912,6 @@ fn exprs_contains(
 ) -> bool {
     for constant in constants {
         if constant.eq(expr) {
-            return true;
-        }
-    }
-    false
-}
-
-fn sort_reqs_contains(
-    sort_reqs: &[PhysicalSortRequirement],
-    sort_req: &PhysicalSortRequirement,
-) -> bool {
-    for constant in sort_reqs {
-        if constant.expr.eq(&sort_req.expr) {
             return true;
         }
     }

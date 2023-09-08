@@ -70,3 +70,12 @@ pub struct ColumnStatistics {
     /// Number of distinct values
     pub distinct_count: Option<usize>,
 }
+
+impl ColumnStatistics {
+    pub fn is_singleton(&self) -> bool {
+        match (&self.min_value, &self.max_value) {
+            (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
+            (_, _) => false,
+        }
+    }
+}

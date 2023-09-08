@@ -324,7 +324,7 @@ pub fn cross_join_equivalence_properties(
 /// it can thereafter safely be used for ordering equivalence normalization.
 fn get_updated_right_ordering_equivalent_class(
     join_type: &JoinType,
-    mut right_oeq_class: OrderingEquivalentClass,
+    right_oeq_class: &OrderingEquivalentClass,
     left_columns_len: usize,
     join_eq_properties: &EquivalenceProperties,
 ) -> Result<OrderingEquivalentClass> {
@@ -332,7 +332,10 @@ fn get_updated_right_ordering_equivalent_class(
         // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            right_oeq_class = right_oeq_class.add_offset(left_columns_len)?;
+            let right_oeq_class = right_oeq_class.add_offset(left_columns_len)?;
+            return Ok(
+                right_oeq_class.normalize_with_equivalence_properties(join_eq_properties)
+            );
         }
         _ => {}
     };
@@ -381,7 +384,7 @@ pub fn combine_join_ordering_equivalence_properties(
 
                 let updated_right_oeq = get_updated_right_ordering_equivalent_class(
                     join_type,
-                    oeq_class.clone(),
+                    oeq_class,
                     left_columns_len,
                     &join_eq_properties,
                 )?;
@@ -408,7 +411,7 @@ pub fn combine_join_ordering_equivalence_properties(
                 .map(|right_oeq_class| {
                     get_updated_right_ordering_equivalent_class(
                         join_type,
-                        right_oeq_class.clone(),
+                        right_oeq_class,
                         left_columns_len,
                         &join_eq_properties,
                     )
@@ -1872,7 +1875,7 @@ mod tests {
 
         let result = get_updated_right_ordering_equivalent_class(
             &join_type,
-            right_oeq_class.clone(),
+            &right_oeq_class,
             left_columns_len,
             &join_eq_properties,
         )?;
