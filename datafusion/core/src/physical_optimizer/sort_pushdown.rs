@@ -43,7 +43,7 @@ use itertools::izip;
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
 /// computational cost by pushing down `SortExec`s through some executors.
 ///
-/// [`EnforceSorting`]: crate::physical_optimizer::sort_enforcement::EnforceSorting
+/// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
 #[derive(Debug, Clone)]
 pub(crate) struct SortPushDown {
     /// Current plan

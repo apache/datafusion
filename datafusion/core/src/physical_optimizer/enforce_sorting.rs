@@ -1021,6 +1021,7 @@ mod tests {
     use datafusion_physical_expr::expressions::{col, NotExpr};
     use datafusion_physical_expr::PhysicalSortExpr;
 
+    use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
     use std::sync::Arc;
 
     fn create_test_schema() -> Result<SchemaRef> {
@@ -2620,6 +2621,63 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    // With new change in SortEnforcement EnforceSorting->EnforceDistribution->EnforceSorting
+    // should produce same result with EnforceDistribution+EnforceSorting
+    // This enables us to use EnforceSorting possibly before EnforceDistribution
+    // Given that it will be called at least once after last EnforceDistribution. The reason is that
+    // EnforceDistribution may invalidate ordering invariant.
+    async fn test_commutativity() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        let memory_exec = memory_exec(&schema);
+        let sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let window = bounded_window_exec("nullable_col", sort_exprs.clone(), memory_exec);
+        let repartition = repartition_exec(window);
+
+        let orig_plan =
+            Arc::new(SortExec::new(sort_exprs, repartition)) as Arc<dyn ExecutionPlan>;
+        let actual = get_plan_string(&orig_plan);
+        println!("{:?}", actual);
+        let expected_input = vec![
+            "SortExec: expr=[nullable_col@0 ASC]",
+            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_eq!(
+            expected_input, actual,
+            "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_input:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let mut plan = orig_plan.clone();
+        let rules = vec![
+            Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
+            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
+        ];
+        for rule in rules {
+            plan = rule.optimize(plan, state.config_options())?;
+        }
+        let first_plan = plan.clone();
+
+        let mut plan = orig_plan.clone();
+        let rules = vec![
+            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
+            Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
+            Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
+        ];
+        for rule in rules {
+            plan = rule.optimize(plan, state.config_options())?;
+        }
+        let second_plan = plan.clone();
+
+        assert_eq!(get_plan_string(&first_plan), get_plan_string(&second_plan));
         Ok(())
     }
 

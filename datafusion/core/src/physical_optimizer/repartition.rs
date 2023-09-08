@@ -31,8 +31,8 @@ mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
     use crate::error::Result;
-    use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
-    use crate::physical_optimizer::sort_enforcement::EnforceSorting;
+    use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
+    use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_optimizer::PhysicalOptimizerRule;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,

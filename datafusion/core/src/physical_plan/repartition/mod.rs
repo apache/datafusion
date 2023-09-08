@@ -637,8 +637,14 @@ impl RepartitionExec {
 
     /// Set Order preserving flag
     pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
-        // Set "preserve order" mode only if the operator cannot maintain the order:
-        self.preserve_order = preserve_order && !self.maintains_input_order()[0];
+        // Set "preserve order" mode only if the input partition count is larger than 1
+        // Because in these cases naive `RepartitionExec` cannot maintain ordering. Using
+        // `SortPreservingRepartitionExec` is necessity. However, when input partition number
+        // is 1, `RepartitionExec` can maintain ordering. In this case, we don't need to use
+        // `SortPreservingRepartitionExec` variant to maintain ordering.
+        if self.input.output_partitioning().partition_count() > 1 {
+            self.preserve_order = preserve_order
+        }
         self
     }
 

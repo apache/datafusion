@@ -23,10 +23,10 @@ use crate::config::ConfigOptions;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
-use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
+use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
+use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
-use crate::physical_optimizer::sort_enforcement::EnforceSorting;
 use crate::{error::Result, physical_plan::ExecutionPlan};
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which

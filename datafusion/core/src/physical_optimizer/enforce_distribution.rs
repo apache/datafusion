@@ -28,7 +28,7 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::{DataFusionError, Result};
-use crate::physical_optimizer::sort_enforcement::{unbounded_output, ExecTree};
+use crate::physical_optimizer::enforce_sorting::{unbounded_output, ExecTree};
 use crate::physical_optimizer::utils::{add_sort_above, get_plan_string};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -1688,7 +1688,7 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-    use crate::physical_optimizer::sort_enforcement::EnforceSorting;
+    use crate::physical_optimizer::enforce_sorting::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
