@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::physical_plan::aggregates::group_values::GroupValues;
+use crate::physical_plan::wrapper::CardinalityAwareRowConverter;
 use ahash::RandomState;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::ArrayRef;
@@ -29,7 +30,7 @@ use hashbrown::raw::RawTable;
 /// A [`GroupValues`] making use of [`Rows`]
 pub struct GroupValuesRows {
     /// Converter for the group values
-    row_converter: RowConverter,
+    row_converter: CardinalityAwareRowConverter,
 
     /// Logically maps group values to a group_index in
     /// [`Self::group_values`] and in each accumulator
@@ -63,7 +64,7 @@ pub struct GroupValuesRows {
 
 impl GroupValuesRows {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
-        let row_converter = RowConverter::new(
+        let row_converter = CardinalityAwareRowConverter::new(
             schema
                 .fields()
                 .iter()
