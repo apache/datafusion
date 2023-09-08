@@ -1152,7 +1152,7 @@ impl ScalarValue {
     /// Getter for the `DataType` of the value.
     ///
     /// Suggest using  [`Self::data_type`] as a more standard API
-    #[deprecated(since = "30.0.0", note = "use data_type instead")]
+    #[deprecated(since = "31.0.0", note = "use data_type instead")]
     pub fn get_datatype(&self) -> DataType {
         self.data_type()
     }
