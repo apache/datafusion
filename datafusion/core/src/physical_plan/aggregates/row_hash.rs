@@ -715,11 +715,10 @@ impl GroupedHashAggregateStream {
     /// Currently only [`GroupOrdering::None`] is supported for spilling.
     /// TODO: support group_ordering for spilling
     fn emit_early_if_necessary(&mut self) -> Result<()> {
-        if self.reservation.size() > 0
+        if self.group_values.len() >= self.batch_size
             && matches!(self.group_ordering, GroupOrdering::None)
             && matches!(self.mode, AggregateMode::Partial)
             && (self.update_memory_reservation().is_err() || self.spill_state.force_spill)
-            && self.group_values.len() >= self.batch_size
         {
             let n = self.group_values.len() / self.batch_size * self.batch_size;
             let batch = self.emit(EmitTo::First(n), false)?;

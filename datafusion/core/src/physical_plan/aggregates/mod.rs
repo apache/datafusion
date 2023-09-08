@@ -675,7 +675,9 @@ impl AggregateExec {
         })
     }
 
-    /// Only for testing. When `force_spill` is true, it spills every batch.
+    /// Only for testing. When `force_spill` is true, it spills every batch for final aggregation.
+    /// It outputs every batch early for partial aggregation.
+    /// TODO:  test by different memory pool sizes instead of propagating the `force_spill` flag
     #[allow(clippy::too_many_arguments)]
     pub fn try_new_for_test(
         mode: AggregateMode,
@@ -1446,10 +1448,13 @@ mod tests {
             DataType::Int64,
         ))];
 
-        let session_config = SessionConfig::new().with_batch_size(4);
-        let task_ctx = TaskContext::default().with_session_config(session_config);
-        let task_ctx = Arc::new(task_ctx);
-        // let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            let session_config = SessionConfig::new().with_batch_size(4);
+            let task_ctx = TaskContext::default().with_session_config(session_config);
+            Arc::new(task_ctx)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Partial,
@@ -1592,10 +1597,13 @@ mod tests {
             DataType::Float64,
         ))];
 
-        let session_config = SessionConfig::new().with_batch_size(2);
-        let task_ctx = TaskContext::default().with_session_config(session_config);
-        let task_ctx = Arc::new(task_ctx);
-        // let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            let session_config = SessionConfig::new().with_batch_size(2);
+            let task_ctx = TaskContext::default().with_session_config(session_config);
+            Arc::new(task_ctx)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let partial_aggregate = Arc::new(AggregateExec::try_new_for_test(
             AggregateMode::Partial,
