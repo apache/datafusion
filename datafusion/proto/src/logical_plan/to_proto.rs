@@ -1073,7 +1073,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
         use protobuf::scalar_value::Value;
 
-        let data_type = val.get_datatype();
+        let data_type = val.data_type();
         match val {
             ScalarValue::Boolean(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::BoolValue(*s))
