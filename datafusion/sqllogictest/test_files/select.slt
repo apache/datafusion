@@ -225,10 +225,10 @@ select
 false true false true true false false true false true true false true true false false true
 
 # select NaNs
-query RRRR
-select 'NaN'::double a, '-NaN'::double b, 'NaN'::float c, '-NaN'::float d
+query BBBB
+select (isnan('NaN'::double) AND 'NaN'::double > 0) a, (isnan('-NaN'::double) AND '-NaN'::double < 0) b, (isnan('NaN'::float) AND 'NaN'::float > 0) c, (isnan('-NaN'::float) AND '-NaN'::float < 0) d
 ----
-NaN -NaN NaN -NaN
+true true true true
 
 # select limit clause
 query I

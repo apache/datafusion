@@ -18,6 +18,7 @@
 //! Helper that helps with interactive editing, including multi-line parsing and validation,
 //! and auto-completion for file name during creating external table.
 
+use datafusion::common::sql_err;
 use datafusion::error::DataFusionError;
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
@@ -162,9 +163,10 @@ pub fn unescape_input(input: &str) -> datafusion::error::Result<String> {
                     't' => '\t',
                     '\\' => '\\',
                     _ => {
-                        return Err(DataFusionError::SQL(ParserError::TokenizerError(
-                            format!("unsupported escape char: '\\{}'", next_char),
-                        )))
+                        return sql_err!(ParserError::TokenizerError(format!(
+                            "unsupported escape char: '\\{}'",
+                            next_char
+                        ),))
                     }
                 });
             }

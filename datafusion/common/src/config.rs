@@ -473,6 +473,10 @@ config_namespace! {
 
         /// When set to true, the explain statement will only print physical plans
         pub physical_plan_only: bool, default = false
+
+        /// When set to true, the explain statement will print operator statistics
+        /// for physical plans
+        pub show_statistics: bool, default = false
     }
 }
 

@@ -378,6 +378,126 @@ mod tests {
     }
 
     #[test]
+    fn test_writeroptions_parquet_column_specific() -> Result<()> {
+        let mut option_map: HashMap<String, String> = HashMap::new();
+
+        option_map.insert("bloom_filter_enabled::col1".to_owned(), "true".to_owned());
+        option_map.insert(
+            "bloom_filter_enabled::col2.nested".to_owned(),
+            "true".to_owned(),
+        );
+        option_map.insert("encoding::col1".to_owned(), "plain".to_owned());
+        option_map.insert("encoding::col2.nested".to_owned(), "rle".to_owned());
+        option_map.insert("dictionary_enabled::col1".to_owned(), "true".to_owned());
+        option_map.insert(
+            "dictionary_enabled::col2.nested".to_owned(),
+            "true".to_owned(),
+        );
+        option_map.insert("compression::col1".to_owned(), "zstd(4)".to_owned());
+        option_map.insert("compression::col2.nested".to_owned(), "zstd(10)".to_owned());
+        option_map.insert("statistics_enabled::col1".to_owned(), "page".to_owned());
+        option_map.insert(
+            "statistics_enabled::col2.nested".to_owned(),
+            "none".to_owned(),
+        );
+        option_map.insert("bloom_filter_fpp::col1".to_owned(), "0.123".to_owned());
+        option_map.insert(
+            "bloom_filter_fpp::col2.nested".to_owned(),
+            "0.456".to_owned(),
+        );
+        option_map.insert("bloom_filter_ndv::col1".to_owned(), "123".to_owned());
+        option_map.insert("bloom_filter_ndv::col2.nested".to_owned(), "456".to_owned());
+
+        let options = StatementOptions::from(&option_map);
+        let config = ConfigOptions::new();
+
+        let parquet_options = ParquetWriterOptions::try_from((&config, &options))?;
+        let properties = parquet_options.writer_options();
+
+        let col1 = ColumnPath::from(vec!["col1".to_owned()]);
+        let col2_nested = ColumnPath::from(vec!["col2".to_owned(), "nested".to_owned()]);
+
+        // Verify the expected options propagated down to parquet crate WriterProperties struct
+
+        properties
+            .bloom_filter_properties(&col1)
+            .expect("expected bloom filter enabled for col1");
+
+        properties
+            .bloom_filter_properties(&col2_nested)
+            .expect("expected bloom filter enabled cor col2_nested");
+
+        assert_eq!(
+            properties.encoding(&col1).expect("expected encoding"),
+            Encoding::PLAIN
+        );
+
+        assert_eq!(
+            properties
+                .encoding(&col2_nested)
+                .expect("expected encoding"),
+            Encoding::RLE
+        );
+
+        assert!(properties.dictionary_enabled(&col1));
+        assert!(properties.dictionary_enabled(&col2_nested));
+
+        assert_eq!(
+            properties.compression(&col1),
+            Compression::ZSTD(ZstdLevel::try_new(4_i32)?)
+        );
+
+        assert_eq!(
+            properties.compression(&col2_nested),
+            Compression::ZSTD(ZstdLevel::try_new(10_i32)?)
+        );
+
+        assert_eq!(
+            properties.statistics_enabled(&col1),
+            EnabledStatistics::Page
+        );
+
+        assert_eq!(
+            properties.statistics_enabled(&col2_nested),
+            EnabledStatistics::None
+        );
+
+        assert_eq!(
+            properties
+                .bloom_filter_properties(&col1)
+                .expect("expected bloom properties!")
+                .fpp,
+            0.123
+        );
+
+        assert_eq!(
+            properties
+                .bloom_filter_properties(&col2_nested)
+                .expect("expected bloom properties!")
+                .fpp,
+            0.456
+        );
+
+        assert_eq!(
+            properties
+                .bloom_filter_properties(&col1)
+                .expect("expected bloom properties!")
+                .ndv,
+            123
+        );
+
+        assert_eq!(
+            properties
+                .bloom_filter_properties(&col2_nested)
+                .expect("expected bloom properties!")
+                .ndv,
+            456
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_writeroptions_csv_from_statement_options() -> Result<()> {
         let mut option_map: HashMap<String, String> = HashMap::new();
         option_map.insert("header".to_owned(), "true".to_owned());

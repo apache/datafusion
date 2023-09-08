@@ -392,7 +392,7 @@ mod tests {
             regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
                 .expect_err("unsupported flag should have failed");
 
-        assert_eq!(re_err.to_string(), "Error during planning: regexp_match() does not support the \"global\" option");
+        assert_eq!(re_err.strip_backtrace(), "Error during planning: regexp_match() does not support the \"global\" option");
     }
 
     #[test]
@@ -500,7 +500,7 @@ mod tests {
         ]);
         let pattern_err = re.expect_err("broken pattern should have failed");
         assert_eq!(
-            pattern_err.to_string(),
+            pattern_err.strip_backtrace(),
             "External error: regex parse error:\n    [\n    ^\nerror: unclosed character class"
         );
     }

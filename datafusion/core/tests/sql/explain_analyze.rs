@@ -807,3 +807,21 @@ async fn explain_physical_plan_only() {
     ]];
     assert_eq!(expected, actual);
 }
+
+#[tokio::test]
+async fn csv_explain_analyze_with_statistics() {
+    let mut config = ConfigOptions::new();
+    config.explain.physical_plan_only = true;
+    config.explain.show_statistics = true;
+    let ctx = SessionContext::with_config(config.into());
+    register_aggregate_csv_by_sql(&ctx).await;
+
+    let sql = "EXPLAIN ANALYZE SELECT c1 FROM aggregate_test_100";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // should contain scan statistics
+    assert_contains!(&formatted, ", statistics=[]");
+}

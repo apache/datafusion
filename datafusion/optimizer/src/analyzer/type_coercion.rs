@@ -42,7 +42,6 @@ use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
 use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
-use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
     type_coercion, window_function, AggregateFunction, BuiltinScalarFunction, Expr,
@@ -112,13 +111,13 @@ fn analyze_internal(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // TODO: from_plan can't change the schema, so we need to do this here
+    // TODO: with_new_exprs can't change the schema, so we need to do this here
     match &plan {
         LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
             new_expr,
             Arc::new(new_inputs[0].clone()),
         )?)),
-        _ => from_plan(plan, &new_expr, &new_inputs),
+        _ => plan.with_new_exprs(new_expr, &new_inputs),
     }
 }
 
@@ -874,8 +873,8 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed."))"#,
-            &format!("{err:?}")
+            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.",
+            err.strip_backtrace()
         );
         Ok(())
     }
@@ -944,8 +943,8 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed."))"#,
-            &format!("{err:?}")
+            "type_coercion\ncaused by\nError during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.",
+            err.strip_backtrace()
         );
         Ok(())
     }
@@ -1457,7 +1456,7 @@ mod test {
         };
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: \
             Failed to coerce case (Interval(MonthDayNano)) and \
             when ([Float32, Binary, Utf8]) to common types in \
@@ -1475,7 +1474,7 @@ mod test {
         };
         let err = coerce_case_expression(case, &schema).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: \
             Failed to coerce then ([Date32, Float32, Binary]) and \
             else (Some(Timestamp(Nanosecond, None))) to common types \

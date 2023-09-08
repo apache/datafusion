@@ -30,7 +30,7 @@ async fn unsupported_ddl_returns_error() {
     let sql = "create view test_view as select * from test";
     let df = ctx.sql_with_options(sql, options).await;
     assert_eq!(
-        df.unwrap_err().to_string(),
+        df.unwrap_err().strip_backtrace(),
         "Error during planning: DDL not supported: CreateView"
     );
 
@@ -49,7 +49,7 @@ async fn unsupported_dml_returns_error() {
     let sql = "insert into test values (1)";
     let df = ctx.sql_with_options(sql, options).await;
     assert_eq!(
-        df.unwrap_err().to_string(),
+        df.unwrap_err().strip_backtrace(),
         "Error during planning: DML not supported: Insert Into"
     );
 
@@ -70,7 +70,7 @@ async fn unsupported_copy_returns_error() {
     let sql = format!("copy (values(1)) to '{}'", tmpfile.to_string_lossy());
     let df = ctx.sql_with_options(&sql, options).await;
     assert_eq!(
-        df.unwrap_err().to_string(),
+        df.unwrap_err().strip_backtrace(),
         "Error during planning: DML not supported: COPY"
     );
 
@@ -88,7 +88,7 @@ async fn unsupported_statement_returns_error() {
     let sql = "set datafusion.execution.batch_size = 5";
     let df = ctx.sql_with_options(sql, options).await;
     assert_eq!(
-        df.unwrap_err().to_string(),
+        df.unwrap_err().strip_backtrace(),
         "Error during planning: Statement not supported: SetVariable"
     );
 
@@ -110,7 +110,7 @@ async fn ddl_can_not_be_planned_by_session_state() {
     let plan = state.create_logical_plan(sql).await.unwrap();
     let physical_plan = state.create_physical_plan(&plan).await;
     assert_eq!(
-        physical_plan.unwrap_err().to_string(),
+        physical_plan.unwrap_err().strip_backtrace(),
         "This feature is not implemented: Unsupported logical plan: DropTable"
     );
 }
