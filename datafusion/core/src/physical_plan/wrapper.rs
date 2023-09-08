@@ -87,11 +87,6 @@ mod tests {
 
     // Generate a record batch with a high cardinality dictionary field
     fn generate_batch_with_cardinality(card: String) -> Result<RecordBatch, ArrowError> {
-        let schema = SchemaRef::new(Schema::new(vec![
-            Field::new("a_dict", DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)), false),
-            Field::new("b_prim", DataType::Int32, false),
-        ]));
-        
         let col_a: ArrayRef;
         if card == "high" {
             // building column `a_dict`
