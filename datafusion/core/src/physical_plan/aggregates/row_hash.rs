@@ -722,12 +722,6 @@ impl GroupedHashAggregateStream {
             && self.group_values.len() >= self.batch_size
         {
             let n = self.group_values.len() / self.batch_size * self.batch_size;
-            println!(
-                "{}, {}, {}",
-                self.group_values.len(),
-                n,
-                self.current_group_indices.len()
-            );
             let batch = self.emit(EmitTo::First(n), false)?;
             self.exec_state = ExecutionState::ProducingOutput(batch);
         }
@@ -740,6 +734,7 @@ impl GroupedHashAggregateStream {
     /// sorted, set `self.group_ordering` to Full, then later we can read with [`EmitTo::First`].
     fn update_merged_stream(&mut self) -> Result<()> {
         let batch = self.emit(EmitTo::All, true)?;
+        self.clear_shrink(&batch);
         let mut streams: Vec<SendableRecordBatchStream> = vec![];
         let expr = self.spill_state.spill_expr.clone();
         let schema = batch.schema();

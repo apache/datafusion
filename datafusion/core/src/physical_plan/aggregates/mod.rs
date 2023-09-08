@@ -1540,11 +1540,7 @@ mod tests {
             common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 3);
-        if spill {
-            assert_eq!(batch.num_rows(), 16);
-        } else {
-            assert_eq!(batch.num_rows(), 12);
-        }
+        assert_eq!(batch.num_rows(), 12);
 
         let expected = vec![
             "+---+-----+----------+",
@@ -1570,9 +1566,9 @@ mod tests {
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
         if spill {
-            // When spilling, the output rows metrics includes numbers from partial early emitting.
+            // When spilling, the output rows metrics become partial output size + final output size
             // This is due to the AtomicUsize behavior
-            assert_eq!(26, output_rows);
+            assert_eq!(32, output_rows);
         } else {
             assert_eq!(12, output_rows);
         }
@@ -1682,7 +1678,7 @@ mod tests {
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
         if spill {
-            // When spilling, the output rows metrics includes numbers from partial early emitting.
+            // When spilling, the output rows metrics become partial output size + final output size
             // This is due to the AtomicUsize behavior
             assert_eq!(8, output_rows);
         } else {
