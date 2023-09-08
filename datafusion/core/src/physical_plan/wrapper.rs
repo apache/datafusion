@@ -80,7 +80,7 @@ mod tests {
 
     use arrow::error::ArrowError;
     use arrow::datatypes::{DataType, Field};
-    use arrow_schema::{Schema, SchemaRef, SortOptions};
+    use arrow_schema::SortOptions;
     use arrow_array::{StringArray, DictionaryArray, Int32Array, types::Int32Type, RecordBatch, ArrayRef};
 
     use super::*;
