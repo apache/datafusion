@@ -705,12 +705,16 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // A / 0 -> DivideByZero Error
+            // A / 0 -> DivideByZero Error if A is not null and not floating
+            // (float / 0 -> inf | -inf | NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => {
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_zero(&right) =>
+            {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
