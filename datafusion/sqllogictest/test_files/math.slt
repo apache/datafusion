@@ -111,3 +111,174 @@ query BBBB
 SELECT iszero(1.0), iszero(0.0), iszero(-0.0), iszero(NULL)
 ----
 false true true NULL
+
+
+statement ok
+CREATE TABLE test_divide_zero_integer_nullable(
+    c1 TINYINT, 
+    c2 SMALLINT, 
+    c3 INT, 
+    c4 BIGINT, 
+    c5 TINYINT UNSIGNED, 
+    c6 SMALLINT UNSIGNED, 
+    c7 INT UNSIGNED, 
+    c8 BIGINT UNSIGNED, 
+    ) 
+    AS VALUES
+    (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+query IIIIIIII
+SELECT c1/0, c2/0, c3/0, c4/0, c5/0, c6/0, c7/0, c8/0 FROM test_divide_zero_integer_nullable
+----
+NULL NULL NULL NULL NULL NULL NULL NULL
+
+query IIIIIIII
+INSERT INTO test_divide_zero_integer_nullable VALUES(1, 1, 1, 1, 1, 1, 1, 1)
+----
+1
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c1/0 FROM test_divide_zero_integer_nullable
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c2/0 FROM test_divide_zero_integer_nullable
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c3/0 FROM test_divide_zero_integer_nullable
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c4/0 FROM test_divide_zero_integer_nullable
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c5/0 FROM test_divide_zero_integer_nullable
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c6/0 FROM test_divide_zero_integer_nullable
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c7/0 FROM test_divide_zero_integer_nullable
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c8/0 FROM test_divide_zero_integer_nullable
+
+statement ok
+drop table test_divide_zero_integer_nullable
+
+
+statement ok
+CREATE TABLE test_divide_zero_integer_non_nullable(
+    c1 TINYINT NOT NULL, 
+    c2 SMALLINT NOT NULL, 
+    c3 INT NOT NULL, 
+    c4 BIGINT NOT NULL, 
+    c5 TINYINT UNSIGNED NOT NULL, 
+    c6 SMALLINT UNSIGNED NOT NULL, 
+    c7 INT UNSIGNED NOT NULL, 
+    c8 BIGINT UNSIGNED NOT NULL, 
+    );
+
+query IIIIIIII
+INSERT INTO test_divide_zero_integer_non_nullable VALUES(1, 1, 1, 1, 1, 1, 1, 1)
+----
+1
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c1/0 FROM test_divide_zero_integer_non_nullable
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c2/0 FROM test_divide_zero_integer_non_nullable
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c3/0 FROM test_divide_zero_integer_non_nullable
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c4/0 FROM test_divide_zero_integer_non_nullable
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c5/0 FROM test_divide_zero_integer_non_nullable
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c6/0 FROM test_divide_zero_integer_non_nullable
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c7/0 FROM test_divide_zero_integer_non_nullable
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error
+SELECT c8/0 FROM test_divide_zero_integer_non_nullable
+
+statement ok
+drop table test_divide_zero_integer_non_nullable
+
+
+statement ok
+CREATE TABLE test_divide_zero_float_nullable(
+    c1 float,
+    c2 double, 
+    ) AS VALUES
+    (-1.0, -1.0),
+    (1.0, 1.0), 
+    (NULL, NULL),
+    ('NaN'::double, 'NaN'::double);
+
+query RR rowsort
+SELECT c1/0, c2/0 FROM test_divide_zero_float_nullable
+----
+-Infinity -Infinity
+Infinity Infinity
+NULL NULL
+NaN NaN
+
+statement ok
+drop table test_divide_zero_float_nullable
+
+
+statement ok
+CREATE TABLE test_divide_zero_float_non_nullable(
+    c1 float NOT NULL,
+    c2 double NOT NULL, 
+    ); 
+
+query RR
+INSERT INTO test_divide_zero_float_non_nullable VALUES(-1.0, -1.0), (1.0, 1.0), ('NaN'::double, 'NaN'::double)
+----
+3
+
+query RR rowsort
+SELECT c1/0, c2/0 FROM test_divide_zero_float_non_nullable
+----
+-Infinity -Infinity
+Infinity Infinity
+NaN NaN
+
+statement ok
+drop table test_divide_zero_float_non_nullable
+
+
+statement ok
+CREATE TABLE test_divide_zero_decimal_nullable(c1 DECIMAL(9, 2)) AS VALUES (1), (NULL);
+
+query R rowsort
+SELECT c1/0 FROM test_divide_zero_decimal_nullable WHERE c1 IS NULL;
+----
+NULL
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT c1/0 FROM test_divide_zero_decimal_nullable WHERE c1 IS NOT NULL;
+
+statement ok
+drop table test_divide_zero_decimal_nullable
+
+
+statement ok
+CREATE TABLE test_divide_zero_decimal_non_nullable(c1 DECIMAL(9,2) NOT NULL); 
+
+query R
+INSERT INTO test_divide_zero_decimal_non_nullable VALUES(1)
+----
+1
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Divide by zero error 
+SELECT c1/0 FROM test_divide_zero_decimal_non_nullable 
+
+statement ok
+drop table test_divide_zero_decimal_non_nullable 
