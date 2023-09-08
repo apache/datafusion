@@ -71,13 +71,14 @@ impl GroupValuesRows {
                 .collect(),
         )?;
 
-        let map: RawTable<(u64, usize)> = RawTable::with_capacity(0);
+        let map = RawTable::with_capacity(0);
+        let group_values = row_converter.empty_rows(0, 0);
 
         Ok(Self {
             row_converter,
             map,
             map_size: 0,
-            group_values: None,
+            group_values: Some(group_values),
             hashes_buffer: Default::default(),
             random_state: Default::default(),
         })
