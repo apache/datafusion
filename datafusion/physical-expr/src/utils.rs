@@ -18,10 +18,8 @@
 use crate::equivalence::{EquivalenceProperties, OrderingEquivalenceProperties};
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::sort_properties::{ExprOrdering, SortProperties};
-use crate::{update_ordering, EquivalentClass, OrderingEquivalentClass};
-use crate::{
-    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
-};
+use crate::update_ordering;
+use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, is_not_null, SlicesIterator};
@@ -34,6 +32,7 @@ use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
+use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use std::borrow::Borrow;
@@ -151,83 +150,6 @@ fn normalize_sort_exprs(
         ordering_eq_properties,
     );
     PhysicalSortRequirement::to_sort_exprs(normalized_exprs)
-}
-
-pub fn normalize_expr_with_equivalence_properties(
-    expr: Arc<dyn PhysicalExpr>,
-    eq_properties: &[EquivalentClass],
-) -> Arc<dyn PhysicalExpr> {
-    expr.clone()
-        .transform(&|expr| {
-            let normalized_form =
-                expr.as_any().downcast_ref::<Column>().and_then(|column| {
-                    for class in eq_properties {
-                        if class.contains(column) {
-                            return Some(Arc::new(class.head().clone()) as _);
-                        }
-                    }
-                    None
-                });
-            Ok(if let Some(normalized_form) = normalized_form {
-                Transformed::Yes(normalized_form)
-            } else {
-                Transformed::No(expr)
-            })
-        })
-        .unwrap_or(expr)
-}
-
-/// This function normalizes `sort_expr` according to `eq_properties`. If the
-/// given sort expression doesn't belong to equivalence set `eq_properties`,
-/// it returns `sort_expr` as is.
-fn normalize_sort_expr_with_equivalence_properties(
-    mut sort_expr: PhysicalSortExpr,
-    eq_properties: &[EquivalentClass],
-) -> PhysicalSortExpr {
-    sort_expr.expr =
-        normalize_expr_with_equivalence_properties(sort_expr.expr, eq_properties);
-    sort_expr
-}
-
-/// This function applies the [`normalize_sort_expr_with_equivalence_properties`]
-/// function for all sort expressions in `sort_exprs` and returns a vector of
-/// normalized sort expressions.
-pub fn normalize_sort_exprs_with_equivalence_properties(
-    sort_exprs: LexOrderingRef,
-    eq_properties: &EquivalenceProperties,
-) -> LexOrdering {
-    sort_exprs
-        .iter()
-        .map(|expr| {
-            normalize_sort_expr_with_equivalence_properties(
-                expr.clone(),
-                eq_properties.classes(),
-            )
-        })
-        .collect()
-}
-
-/// This function normalizes `oeq_classes` expressions according to `eq_properties`.
-/// More explicitly, it makes sure that expressions in `oeq_classes` are head entries
-/// in `eq_properties`, replacing any non-head entries with head entries if necessary.
-pub fn normalize_ordering_equivalence_classes(
-    oeq_class: Option<&OrderingEquivalentClass>,
-    eq_properties: &EquivalenceProperties,
-) -> Option<OrderingEquivalentClass> {
-    oeq_class.map(|class| {
-        let head =
-            normalize_sort_exprs_with_equivalence_properties(class.head(), eq_properties);
-
-        let others = class
-            .others()
-            .iter()
-            .map(|other| {
-                normalize_sort_exprs_with_equivalence_properties(other, eq_properties)
-            })
-            .collect();
-
-        EquivalentClass::new(head, others)
-    })
 }
 
 /// Transform `sort_reqs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
@@ -866,6 +788,18 @@ pub fn find_orderings_of_exprs(
     Ok(orderings)
 }
 
+/// Merge left and right sort expressions, checking for duplicates.
+pub fn merge_vectors(
+    left: &[PhysicalSortExpr],
+    right: &[PhysicalSortExpr],
+) -> Vec<PhysicalSortExpr> {
+    left.iter()
+        .cloned()
+        .chain(right.iter().cloned())
+        .unique()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::fmt::{Display, Formatter};
@@ -875,7 +809,7 @@ mod tests {
     use super::*;
     use crate::equivalence::OrderingEquivalenceProperties;
     use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
-    use crate::PhysicalSortExpr;
+    use crate::{OrderingEquivalentClass, PhysicalSortExpr};
 
     use arrow::compute::SortOptions;
     use arrow_array::Int32Array;
@@ -1816,22 +1750,20 @@ mod tests {
             Field::new("c", DataType::Int32, true),
         ]);
         let mut equal_properties = EquivalenceProperties::new(Arc::new(schema.clone()));
-        let mut ordering_equal_properties =
-            OrderingEquivalenceProperties::new(Arc::new(schema.clone()));
         let mut expected_oeq = OrderingEquivalenceProperties::new(Arc::new(schema));
 
         equal_properties
             .add_equal_conditions((&Column::new("a", 0), &Column::new("c", 2)));
-        ordering_equal_properties.add_equal_conditions((
-            &vec![PhysicalSortExpr {
-                expr: Arc::new(Column::new("b", 1)),
-                options: sort_options,
-            }],
-            &vec![PhysicalSortExpr {
-                expr: Arc::new(Column::new("c", 2)),
-                options: sort_options,
-            }],
-        ));
+        let head = vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("b", 1)),
+            options: sort_options,
+        }];
+        let others = vec![vec![PhysicalSortExpr {
+            expr: Arc::new(Column::new("c", 2)),
+            options: sort_options,
+        }]];
+        let oeq_class = OrderingEquivalentClass::new(head, others);
+
         expected_oeq.add_equal_conditions((
             &vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
@@ -1843,15 +1775,12 @@ mod tests {
             }],
         ));
 
-        let normalized_class = normalize_ordering_equivalence_classes(
-            ordering_equal_properties.oeq_class(),
-            &equal_properties,
-        )
-        .unwrap();
+        let normalized_oeq_class =
+            oeq_class.normalize_with_equivalence_properties(&equal_properties);
         let expected = expected_oeq.oeq_class().unwrap();
         assert!(
-            normalized_class.head().eq(expected.head())
-                && normalized_class.others().eq(expected.others())
+            normalized_oeq_class.head().eq(expected.head())
+                && normalized_oeq_class.others().eq(expected.others())
         );
 
         Ok(())

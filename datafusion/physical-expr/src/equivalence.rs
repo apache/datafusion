@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::expressions::{CastExpr, Column};
-use crate::utils::collect_columns;
+use crate::utils::{collect_columns, merge_vectors};
 use crate::{
     LexOrdering, LexOrderingRef, LexOrderingReq, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -211,47 +211,7 @@ impl OrderingEquivalenceProperties {
             schema,
         }
     }
-}
 
-/// Adds the `offset` value to `Column` indices inside `expr`. This function is
-/// generally used during the update of the right table schema in join operations.
-pub(crate) fn add_offset_to_expr(
-    expr: Arc<dyn PhysicalExpr>,
-    offset: usize,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
-            col.name(),
-            offset + col.index(),
-        )))),
-        None => Ok(Transformed::No(e)),
-    })
-}
-
-/// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
-pub(crate) fn add_offset_to_sort_expr(
-    sort_expr: &PhysicalSortExpr,
-    offset: usize,
-) -> Result<PhysicalSortExpr> {
-    Ok(PhysicalSortExpr {
-        expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
-        options: sort_expr.options,
-    })
-}
-
-/// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
-/// inside `sort_exprs`.
-pub fn add_offset_to_lex_ordering(
-    sort_exprs: LexOrderingRef,
-    offset: usize,
-) -> Result<LexOrdering> {
-    sort_exprs
-        .iter()
-        .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
-        .collect()
-}
-
-impl OrderingEquivalenceProperties {
     pub fn extend(&mut self, other: Option<OrderingEquivalentClass>) {
         if let Some(other) = other {
             if let Some(class) = &mut self.oeq_class {
@@ -278,18 +238,6 @@ impl OrderingEquivalenceProperties {
             let others = vec![new_conditions.1.clone()];
             self.oeq_class = Some(OrderingEquivalentClass::new(head, others))
         }
-    }
-
-    pub fn add_offset(&mut self, offset: usize) -> Result<()> {
-        if let Some(oeq_class) = &mut self.oeq_class {
-            oeq_class.head = add_offset_to_lex_ordering(oeq_class.head(), offset)?;
-            oeq_class.others = oeq_class
-                .others()
-                .iter()
-                .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
-                .collect::<Result<HashSet<_>>>()?;
-        }
-        Ok(())
     }
 
     pub fn add_constants(&mut self, constants: Vec<Arc<dyn PhysicalExpr>>) {
@@ -339,9 +287,7 @@ impl OrderingEquivalenceProperties {
         }
         collapse_sort_reqs(normalized_sort_reqs)
     }
-}
 
-impl OrderingEquivalenceProperties {
     /// Checks whether `leading_ordering` is contained in any of the ordering
     /// equivalence classes.
     pub fn satisfies_leading_ordering(
@@ -491,6 +437,54 @@ impl OrderingEquivalentClass {
         for ordering in self.others.clone().into_iter() {
             self.insert(update_with_alias(ordering, oeq_alias_map));
         }
+    }
+
+    pub fn add_offset(&self, offset: usize) -> Result<OrderingEquivalentClass> {
+        let head = add_offset_to_lex_ordering(self.head(), offset)?;
+        let others = self
+            .others()
+            .iter()
+            .map(|ordering| add_offset_to_lex_ordering(ordering, offset))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(OrderingEquivalentClass::new(head, others))
+    }
+
+    /// This function normalizes `OrderingEquivalenceProperties` according to `eq_properties`.
+    /// More explicitly, it makes sure that expressions in `oeq_class` are head entries
+    /// in `eq_properties`, replacing any non-head entries with head entries if necessary.
+    pub fn normalize_with_equivalence_properties(
+        &self,
+        eq_properties: &EquivalenceProperties,
+    ) -> OrderingEquivalentClass {
+        let head = eq_properties.normalize_sort_exprs(self.head());
+
+        let others = self
+            .others()
+            .iter()
+            .map(|other| eq_properties.normalize_sort_exprs(other))
+            .collect();
+
+        EquivalentClass::new(head, others)
+    }
+
+    /// Prefix with existing ordering.
+    pub fn prefix_ordering_equivalent_class_with_existing_ordering(
+        &self,
+        existing_ordering: &[PhysicalSortExpr],
+        eq_properties: &EquivalenceProperties,
+    ) -> OrderingEquivalentClass {
+        let existing_ordering = eq_properties.normalize_sort_exprs(existing_ordering);
+        let normalized_head = eq_properties.normalize_sort_exprs(self.head());
+        let updated_head = merge_vectors(&existing_ordering, &normalized_head);
+        let updated_others = self
+            .others()
+            .iter()
+            .map(|ordering| {
+                let normalized_ordering = eq_properties.normalize_sort_exprs(ordering);
+                merge_vectors(&existing_ordering, &normalized_ordering)
+            })
+            .collect();
+        OrderingEquivalentClass::new(updated_head, updated_others)
     }
 }
 
@@ -907,6 +901,44 @@ fn prune_sort_reqs_with_constants(
         }
     }
     new_ordering
+}
+
+/// Adds the `offset` value to `Column` indices inside `expr`. This function is
+/// generally used during the update of the right table schema in join operations.
+pub(crate) fn add_offset_to_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    offset: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
+            col.name(),
+            offset + col.index(),
+        )))),
+        None => Ok(Transformed::No(e)),
+    })
+}
+
+/// Adds the `offset` value to `Column` indices inside `sort_expr.expr`.
+pub(crate) fn add_offset_to_sort_expr(
+    sort_expr: &PhysicalSortExpr,
+    offset: usize,
+) -> Result<PhysicalSortExpr> {
+    Ok(PhysicalSortExpr {
+        expr: add_offset_to_expr(sort_expr.expr.clone(), offset)?,
+        options: sort_expr.options,
+    })
+}
+
+/// Adds the `offset` value to `Column` indices for each `sort_expr.expr`
+/// inside `sort_exprs`.
+pub fn add_offset_to_lex_ordering(
+    sort_exprs: LexOrderingRef,
+    offset: usize,
+) -> Result<LexOrdering> {
+    sort_exprs
+        .iter()
+        .map(|sort_expr| add_offset_to_sort_expr(sort_expr, offset))
+        .collect()
 }
 
 #[cfg(test)]

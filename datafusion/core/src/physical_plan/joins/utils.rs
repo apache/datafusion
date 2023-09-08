@@ -44,16 +44,15 @@ use datafusion_common::{
     exec_err, plan_err, DataFusionError, JoinType, Result, ScalarValue, SharedResult,
 };
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::normalize_ordering_equivalence_classes;
 use datafusion_physical_expr::{
     add_offset_to_lex_ordering, EquivalentClass, LexOrdering, LexOrderingRef,
     OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalExpr,
     PhysicalSortExpr,
 };
 
+use datafusion_physical_expr::utils::merge_vectors;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
-use itertools::Itertools;
 use parking_lot::Mutex;
 
 /// The on clause of the join, as vector of (left, right) columns.
@@ -323,59 +322,21 @@ pub fn cross_join_equivalence_properties(
 ///
 /// This way; once we normalize an expression according to equivalence properties,
 /// it can thereafter safely be used for ordering equivalence normalization.
-fn get_updated_right_ordering_equivalence_properties(
+fn get_updated_right_ordering_equivalent_class(
     join_type: &JoinType,
-    mut right_oeq_properties: OrderingEquivalenceProperties,
+    mut right_oeq_class: OrderingEquivalentClass,
     left_columns_len: usize,
     join_eq_properties: &EquivalenceProperties,
-) -> Result<Option<OrderingEquivalentClass>> {
+) -> Result<OrderingEquivalentClass> {
     match join_type {
         // In these modes, indices of the right schema should be offset by
         // the left table size.
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            right_oeq_properties.add_offset(left_columns_len)?;
+            right_oeq_class = right_oeq_class.add_offset(left_columns_len)?;
         }
         _ => {}
     };
-
-    Ok(normalize_ordering_equivalence_classes(
-        right_oeq_properties.oeq_class(),
-        join_eq_properties,
-    ))
-}
-
-/// Merge left and right sort expressions, checking for duplicates.
-fn merge_vectors(
-    left: &[PhysicalSortExpr],
-    right: &[PhysicalSortExpr],
-) -> Vec<PhysicalSortExpr> {
-    left.iter()
-        .cloned()
-        .chain(right.iter().cloned())
-        .unique()
-        .collect()
-}
-
-/// Prefix with existing ordering.
-fn prefix_ordering_equivalence_with_existing_ordering(
-    existing_ordering: &[PhysicalSortExpr],
-    oeq_properties: &OrderingEquivalenceProperties,
-    eq_properties: &EquivalenceProperties,
-) -> Option<OrderingEquivalentClass> {
-    let existing_ordering = eq_properties.normalize_sort_exprs(existing_ordering);
-    oeq_properties.oeq_class().map(|oeq_class| {
-        let normalized_head = eq_properties.normalize_sort_exprs(oeq_class.head());
-        let updated_head = merge_vectors(&existing_ordering, &normalized_head);
-        let updated_others = oeq_class
-            .others()
-            .iter()
-            .map(|ordering| {
-                let normalized_ordering = eq_properties.normalize_sort_exprs(ordering);
-                merge_vectors(&existing_ordering, &normalized_ordering)
-            })
-            .collect();
-        OrderingEquivalentClass::new(updated_head, updated_others)
-    })
+    Ok(right_oeq_class.normalize_with_equivalence_properties(join_eq_properties))
 }
 
 /// Calculate ordering equivalence properties for the given join operation.
@@ -405,23 +366,26 @@ pub fn combine_join_ordering_equivalence_properties(
         (true, false) => {
             new_properties.extend(left_oeq_properties.oeq_class().cloned());
             // In this special case, right side ordering can be prefixed with left side ordering.
-            if probe_side == Some(JoinSide::Left)
-                && right.output_ordering().is_some()
-                && *join_type == JoinType::Inner
-            {
-                let right_oeq_classes =
-                    get_updated_right_ordering_equivalence_properties(
-                        join_type,
-                        right_oeq_properties,
-                        left_columns_len,
-                        &join_eq_properties,
-                    )?;
-                // Create new ordering equivalence properties from updated class.
-                let mut right_oeq_properties =
-                    OrderingEquivalenceProperties::new(join_eq_properties.schema());
-                right_oeq_properties.extend(right_oeq_classes);
-
+            if let (
+                Some(JoinSide::Left),
+                Some(_right_ordering),
+                JoinType::Inner,
+                Some(oeq_class),
+            ) = (
+                probe_side,
+                right.output_ordering(),
+                join_type,
+                right_oeq_properties.oeq_class(),
+            ) {
                 let left_output_ordering = left.output_ordering().unwrap_or(&[]);
+
+                let updated_right_oeq = get_updated_right_ordering_equivalent_class(
+                    join_type,
+                    oeq_class.clone(),
+                    left_columns_len,
+                    &join_eq_properties,
+                )?;
+
                 // Right side ordering equivalence properties should be prepended with
                 // those of the left side while constructing output ordering equivalence
                 // properties since stream side is the left side.
@@ -430,31 +394,43 @@ pub fn combine_join_ordering_equivalence_properties(
                 // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
-                let updated_right_oeq_classes =
-                    prefix_ordering_equivalence_with_existing_ordering(
+                let updated_right_oeq_class = updated_right_oeq
+                    .prefix_ordering_equivalent_class_with_existing_ordering(
                         left_output_ordering,
-                        &right_oeq_properties,
                         &join_eq_properties,
                     );
-                new_properties.extend(updated_right_oeq_classes);
+                new_properties.extend(Some(updated_right_oeq_class));
             }
         }
         (false, true) => {
-            let right_oeq_classes = get_updated_right_ordering_equivalence_properties(
-                join_type,
-                right_oeq_properties,
-                left_columns_len,
-                &join_eq_properties,
-            )?;
-            new_properties.extend(right_oeq_classes);
+            let updated_right_oeq = right_oeq_properties
+                .oeq_class()
+                .map(|right_oeq_class| {
+                    get_updated_right_ordering_equivalent_class(
+                        join_type,
+                        right_oeq_class.clone(),
+                        left_columns_len,
+                        &join_eq_properties,
+                    )
+                })
+                .transpose()?;
+            new_properties.extend(updated_right_oeq);
             // In this special case, left side ordering can be prefixed with right side ordering.
-            if probe_side == Some(JoinSide::Right)
-                && left.output_ordering().is_some()
-                && *join_type == JoinType::Inner
-            {
+            if let (
+                Some(JoinSide::Right),
+                Some(_left_ordering),
+                JoinType::Inner,
+                Some(left_oeq_class),
+            ) = (
+                probe_side,
+                left.output_ordering(),
+                join_type,
+                left_oeq_properties.oeq_class(),
+            ) {
                 let right_output_ordering = right.output_ordering().unwrap_or(&[]);
                 let right_output_ordering =
                     add_offset_to_lex_ordering(right_output_ordering, left_columns_len)?;
+
                 // Left side ordering equivalence properties should be prepended with
                 // those of the right side while constructing output ordering equivalence
                 // properties since stream side is the right side.
@@ -463,13 +439,12 @@ pub fn combine_join_ordering_equivalence_properties(
                 // ordering of the left table is `a ASC`, then the ordering equivalence `b ASC`
                 // for the right table should be converted to `a ASC, b ASC` before it is added
                 // to the ordering equivalences of the join.
-                let updated_left_oeq_classes =
-                    prefix_ordering_equivalence_with_existing_ordering(
+                let updated_left_oeq_class = left_oeq_class
+                    .prefix_ordering_equivalent_class_with_existing_ordering(
                         &right_output_ordering,
-                        &left_oeq_properties,
                         &join_eq_properties,
                     );
-                new_properties.extend(updated_left_oeq_classes);
+                new_properties.extend(Some(updated_left_oeq_class));
             }
         }
         (false, false) => {}
@@ -1858,12 +1833,6 @@ mod tests {
         let join_type = JoinType::Inner;
 
         let options = SortOptions::default();
-        let fields: Fields = ["x", "y", "z", "w"]
-            .into_iter()
-            .map(|name| Field::new(name, DataType::Int32, true))
-            .collect();
-        let mut right_oeq_properties =
-            OrderingEquivalenceProperties::new(Arc::new(Schema::new(fields)));
         let right_oeq_class = OrderingEquivalentClass::new(
             vec![
                 PhysicalSortExpr {
@@ -1886,7 +1855,6 @@ mod tests {
                 },
             ]],
         );
-        right_oeq_properties.extend(Some(right_oeq_class));
 
         let left_columns_len = 4;
 
@@ -1902,13 +1870,12 @@ mod tests {
         join_eq_properties
             .add_equal_conditions((&Column::new("d", 3), &Column::new("w", 7)));
 
-        let result = get_updated_right_ordering_equivalence_properties(
+        let result = get_updated_right_ordering_equivalent_class(
             &join_type,
-            right_oeq_properties,
+            right_oeq_class.clone(),
             left_columns_len,
             &join_eq_properties,
-        )?
-        .unwrap();
+        )?;
 
         let expected = OrderingEquivalentClass::new(
             vec![

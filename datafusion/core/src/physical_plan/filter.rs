@@ -377,25 +377,39 @@ fn collect_columns_from_predicate(predicate: &Arc<dyn PhysicalExpr>) -> EqualAnd
 pub type EqualAndNonEqual<'a> =
     (Vec<(&'a Column, &'a Column)>, Vec<(&'a Column, &'a Column)>);
 
+/// Checks whether physical expression is literal
 fn is_literal(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any().is::<Literal>()
 }
 
+/// Checks whether physical expression is column
 fn is_column(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any().is::<Column>()
 }
 
+/// Collects physical expressions that have constant result according to
+/// predicate expression.
+fn collect_constants_from_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    get_constant_expr_helper(predicate, vec![])
+}
+
+/// Helper function to collect expression have constant values
 fn get_constant_expr_helper(
     expr: &Arc<dyn PhysicalExpr>,
     mut res: Vec<Arc<dyn PhysicalExpr>>,
 ) -> Vec<Arc<dyn PhysicalExpr>> {
     if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        // in the 3=a form
         if binary.op() == &Operator::Eq
             && is_literal(binary.left())
             && is_column(binary.right())
         {
             res.push(binary.right().clone())
-        } else if binary.op() == &Operator::Eq
+        }
+        // In the a = 3 form
+        else if binary.op() == &Operator::Eq
             && is_literal(binary.right())
             && is_column(binary.left())
         {
@@ -406,12 +420,6 @@ fn get_constant_expr_helper(
         }
     }
     res
-}
-
-fn collect_constants_from_predicate(
-    predicate: &Arc<dyn PhysicalExpr>,
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    get_constant_expr_helper(predicate, vec![])
 }
 
 #[cfg(test)]
