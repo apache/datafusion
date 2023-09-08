@@ -1143,7 +1143,7 @@ impl ScalarValue {
             }
             ScalarValue::Struct(_, fields) => DataType::Struct(fields.clone()),
             ScalarValue::Dictionary(k, v) => {
-                DataType::Dictionary(k.clone(), Box::new(v.get_datatype()))
+                DataType::Dictionary(k.clone(), Box::new(v.data_type()))
             }
             ScalarValue::Null => DataType::Null,
         }
@@ -1152,6 +1152,7 @@ impl ScalarValue {
     /// Getter for the `DataType` of the value.
     ///
     /// Suggest using  [`Self::data_type`] as a more standard API
+    #[deprecated(since = "30.0.0", note = "use data_type instead")]
     pub fn get_datatype(&self) -> DataType {
         self.data_type()
     }
@@ -1403,7 +1404,7 @@ impl ScalarValue {
                     "Empty iterator passed to ScalarValue::iter_to_array"
                 );
             }
-            Some(sv) => sv.get_datatype(),
+            Some(sv) => sv.data_type(),
         };
 
         /// Creates an array of $ARRAY_TY by unpacking values of
@@ -2173,7 +2174,7 @@ impl ScalarValue {
                     Arc::new(StructArray::from(field_values))
                 }
                 None => {
-                    let dt = self.get_datatype();
+                    let dt = self.data_type();
                     new_null_array(&dt, size)
                 }
             },
@@ -2778,9 +2779,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
         let (fields, scalars): (SchemaBuilder, Vec<_>) = value
             .into_iter()
-            .map(|(name, scalar)| {
-                (Field::new(name, scalar.get_datatype(), false), scalar)
-            })
+            .map(|(name, scalar)| (Field::new(name, scalar.data_type(), false), scalar))
             .unzip();
 
         Self::Struct(Some(scalars), fields.finish().fields)

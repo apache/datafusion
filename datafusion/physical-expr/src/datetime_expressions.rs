@@ -554,7 +554,7 @@ fn date_bin_impl(
         ColumnarValue::Scalar(v) => {
             return exec_err!(
                 "DATE_BIN expects stride argument to be an INTERVAL but got {}",
-                v.get_datatype()
+                v.data_type()
             )
         }
         ColumnarValue::Array(_) => {
@@ -569,7 +569,7 @@ fn date_bin_impl(
         ColumnarValue::Scalar(v) => {
             return exec_err!(
                 "DATE_BIN expects origin argument to be a TIMESTAMP with nanosececond precision but got {}",
-                v.get_datatype()
+                v.data_type()
             )
         }
         ColumnarValue::Array(_) => return not_impl_err!(
