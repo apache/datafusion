@@ -42,36 +42,47 @@ pub struct DisplayableExecutionPlan<'a> {
     inner: &'a dyn ExecutionPlan,
     /// How to show metrics
     show_metrics: ShowMetrics,
+    /// If statistics should be displayed
+    show_statistics: bool,
 }
 
 impl<'a> DisplayableExecutionPlan<'a> {
-    /// Create a wrapper around an [`'ExecutionPlan'] which can be
+    /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways
     pub fn new(inner: &'a dyn ExecutionPlan) -> Self {
         Self {
             inner,
             show_metrics: ShowMetrics::None,
+            show_statistics: false,
         }
     }
 
-    /// Create a wrapper around an [`'ExecutionPlan'] which can be
+    /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows aggregated
     /// metrics
     pub fn with_metrics(inner: &'a dyn ExecutionPlan) -> Self {
         Self {
             inner,
             show_metrics: ShowMetrics::Aggregated,
+            show_statistics: false,
         }
     }
 
-    /// Create a wrapper around an [`'ExecutionPlan'] which can be
+    /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows all low
     /// level metrics
     pub fn with_full_metrics(inner: &'a dyn ExecutionPlan) -> Self {
         Self {
             inner,
             show_metrics: ShowMetrics::Full,
+            show_statistics: false,
         }
+    }
+
+    /// Enable display of statistics
+    pub fn set_show_statistics(mut self, show_statistics: bool) -> Self {
+        self.show_statistics = show_statistics;
+        self
     }
 
     /// Return a `format`able structure that produces a single line
@@ -94,6 +105,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             format_type: DisplayFormatType,
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
+            show_statistics: bool,
         }
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -102,6 +114,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     f,
                     indent: 0,
                     show_metrics: self.show_metrics,
+                    show_statistics: self.show_statistics,
                 };
                 accept(self.plan, &mut visitor)
             }
@@ -110,6 +123,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             format_type,
             plan: self.inner,
             show_metrics: self.show_metrics,
+            show_statistics: self.show_statistics,
         }
     }
 
@@ -128,6 +142,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
+            show_statistics: bool,
         }
         impl<'a> fmt::Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -137,6 +152,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     f,
                     t,
                     show_metrics: self.show_metrics,
+                    show_statistics: self.show_statistics,
                     graphviz_builder: GraphvizBuilder::default(),
                     parents: Vec::new(),
                 };
@@ -153,6 +169,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
         Wrapper {
             plan: self.inner,
             show_metrics: self.show_metrics,
+            show_statistics: self.show_statistics,
         }
     }
 
@@ -162,6 +179,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
+            show_statistics: bool,
         }
 
         impl<'a> fmt::Display for Wrapper<'a> {
@@ -171,6 +189,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     t: DisplayFormatType::Default,
                     indent: 0,
                     show_metrics: self.show_metrics,
+                    show_statistics: self.show_statistics,
                 };
                 visitor.pre_visit(self.plan)?;
                 Ok(())
@@ -180,6 +199,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
         Wrapper {
             plan: self.inner,
             show_metrics: self.show_metrics,
+            show_statistics: self.show_statistics,
         }
     }
 
@@ -215,6 +235,8 @@ struct IndentVisitor<'a, 'b> {
     indent: usize,
     /// How to show metrics
     show_metrics: ShowMetrics,
+    /// If statistics should be displayed
+    show_statistics: bool,
 }
 
 impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
@@ -244,6 +266,9 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
                 }
             }
         }
+        if self.show_statistics {
+            write!(self.f, ", statistics=[{}]", plan.statistics())?;
+        }
         writeln!(self.f)?;
         self.indent += 1;
         Ok(true)
@@ -261,6 +286,9 @@ struct GraphvizVisitor<'a, 'b> {
     t: DisplayFormatType,
     /// How to show metrics
     show_metrics: ShowMetrics,
+    /// If statistics should be displayed
+    show_statistics: bool,
+
     graphviz_builder: GraphvizBuilder,
     /// Used to record parent node ids when visiting a plan.
     parents: Vec<usize>,
@@ -318,8 +346,24 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             }
         };
 
-        self.graphviz_builder
-            .add_node(self.f, id, &label, Some(&metrics))?;
+        let statistics = if self.show_statistics {
+            format!("statistics=[{}]", plan.statistics())
+        } else {
+            "".to_string()
+        };
+
+        let delimiter = if !metrics.is_empty() && !statistics.is_empty() {
+            ", "
+        } else {
+            ""
+        };
+
+        self.graphviz_builder.add_node(
+            self.f,
+            id,
+            &label,
+            Some(&format!("{}{}{}", metrics, delimiter, statistics)),
+        )?;
 
         if let Some(parent_node_id) = self.parents.last() {
             self.graphviz_builder
