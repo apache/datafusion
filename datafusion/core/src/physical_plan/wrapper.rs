@@ -79,7 +79,7 @@ mod tests {
     use rand::Rng;
 
     use arrow::error::ArrowError;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::DataType;
     use arrow_schema::SortOptions;
     use arrow_array::{StringArray, DictionaryArray, Int32Array, types::Int32Type, RecordBatch, ArrayRef};
 
