@@ -189,6 +189,7 @@ impl GroupValues for GroupValuesRows {
         self.group_values = self.row_converter.empty_rows(count, 0);
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }

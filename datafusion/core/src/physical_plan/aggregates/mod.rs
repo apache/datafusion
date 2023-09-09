@@ -675,33 +675,6 @@ impl AggregateExec {
         })
     }
 
-    /// Only for testing. When `force_spill` is true, it spills every batch for final aggregation.
-    /// It outputs every batch early for partial aggregation.
-    /// TODO:  test by different memory pool sizes instead of propagating the `force_spill` flag
-    #[allow(clippy::too_many_arguments)]
-    pub fn try_new_for_test(
-        mode: AggregateMode,
-        group_by: PhysicalGroupBy,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        order_by_expr: Vec<Option<LexOrdering>>,
-        input: Arc<dyn ExecutionPlan>,
-        input_schema: SchemaRef,
-        force_spill: bool,
-    ) -> Result<Self> {
-        let mut exec = AggregateExec::try_new(
-            mode,
-            group_by,
-            aggr_expr,
-            filter_expr,
-            order_by_expr,
-            input,
-            input_schema,
-        )?;
-        exec.force_spill = force_spill;
-        Ok(exec)
-    }
-
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
@@ -1420,6 +1393,18 @@ mod tests {
         )
     }
 
+    fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
+        let session_config = SessionConfig::new().with_batch_size(batch_size);
+        let runtime = Arc::new(
+            RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(max_memory, 1.0))
+                .unwrap(),
+        );
+        let task_ctx = TaskContext::default()
+            .with_session_config(session_config)
+            .with_runtime(runtime);
+        Arc::new(task_ctx)
+    }
+
     async fn check_grouping_sets(
         input: Arc<dyn ExecutionPlan>,
         spill: bool,
@@ -1449,14 +1434,12 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
-            let session_config = SessionConfig::new().with_batch_size(4);
-            let task_ctx = TaskContext::default().with_session_config(session_config);
-            Arc::new(task_ctx)
+            new_spill_ctx(4, 1000)
         } else {
             Arc::new(TaskContext::default())
         };
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new_for_test(
+        let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
@@ -1464,7 +1447,6 @@ mod tests {
             vec![None],
             input,
             input_schema.clone(),
-            spill,
         )?);
 
         let result =
@@ -1530,7 +1512,23 @@ mod tests {
 
         let final_grouping_set = PhysicalGroupBy::new_single(final_group);
 
-        let merged_aggregate = Arc::new(AggregateExec::try_new_for_test(
+        let task_ctx = if spill {
+            let session_config = SessionConfig::new().with_batch_size(4);
+            let runtime = Arc::new(
+                // memory 3160 is too large for partial aggregation to do partial-emits; however,
+                // 3160 is minimum for the final aggregation completes even with spilling
+                RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(3160, 1.0))
+                    .unwrap(),
+            );
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime);
+            Arc::new(task_ctx)
+        } else {
+            task_ctx
+        };
+
+        let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
@@ -1538,7 +1536,6 @@ mod tests {
             vec![None],
             merge,
             input_schema,
-            spill,
         )?);
 
         let result =
@@ -1570,13 +1567,7 @@ mod tests {
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
-        if spill {
-            // When spilling, the output rows metrics become partial output size + final output size
-            // This is due to the AtomicUsize behavior
-            assert_eq!(32, output_rows);
-        } else {
-            assert_eq!(12, output_rows);
-        }
+        assert_eq!(12, output_rows);
 
         Ok(())
     }
@@ -1598,15 +1589,7 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
-            let session_config = SessionConfig::new().with_batch_size(2);
-            let runtime = Arc::new(
-                RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1956, 1.0))
-                    .unwrap(),
-            );
-            let task_ctx = TaskContext::default()
-                .with_session_config(session_config)
-                .with_runtime(runtime);
-            Arc::new(task_ctx)
+            new_spill_ctx(2, 1956)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -1691,7 +1674,7 @@ mod tests {
         let output_rows = metrics.output_rows().unwrap();
         if spill {
             // When spilling, the output rows metrics become partial output size + final output size
-            // This is due to the AtomicUsize behavior
+            // This is because final aggregation starts while partial aggregation is still emitting
             assert_eq!(8, output_rows);
         } else {
             assert_eq!(3, output_rows);
@@ -2071,7 +2054,11 @@ mod tests {
         is_first_acc: bool,
         spill: bool,
     ) -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
+        let task_ctx = if spill {
+            new_spill_ctx(2, 2581)
+        } else {
+            Arc::new(TaskContext::default())
+        };
 
         let (schema, data) = some_data_v2();
         let partition1 = data[0].clone();
@@ -2114,7 +2101,7 @@ mod tests {
             schema.clone(),
             None,
         )?);
-        let aggregate_exec = Arc::new(AggregateExec::try_new_for_test(
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -2122,7 +2109,6 @@ mod tests {
             vec![Some(ordering_req.clone())],
             memory_exec,
             schema.clone(),
-            spill,
         )?);
         let coalesce = if use_coalesce_batches {
             let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
@@ -2131,7 +2117,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(aggregate_exec))
                 as Arc<dyn ExecutionPlan>
         };
-        let aggregate_final = Arc::new(AggregateExec::try_new_for_test(
+        let aggregate_final = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             groups,
             aggregates.clone(),
@@ -2139,7 +2125,6 @@ mod tests {
             vec![Some(ordering_req)],
             coalesce,
             schema,
-            spill,
         )?) as Arc<dyn ExecutionPlan>;
 
         let result = crate::physical_plan::collect(aggregate_final, task_ctx).await?;

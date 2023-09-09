@@ -31,6 +31,8 @@ use rand::{Rng, SeedableRng};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_execution::memory_pool::GreedyMemoryPool;
+use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_physical_expr::expressions::{col, Sum};
 use datafusion_physical_expr::{AggregateExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
@@ -57,15 +59,12 @@ mod tests {
             let mut handles = Vec::new();
             for i in 0..n {
                 let test_idx = i % test_cases.len();
-                for spill in [false, true] {
-                    let group_by_columns = test_cases[test_idx].clone();
-                    let job = tokio::spawn(run_aggregate_test(
-                        make_staggered_batches::<true>(1000, distinct, i as u64),
-                        group_by_columns,
-                        spill,
-                    ));
-                    handles.push(job);
-                }
+                let group_by_columns = test_cases[test_idx].clone();
+                let job = tokio::spawn(run_aggregate_test(
+                    make_staggered_batches::<true>(1000, distinct, i as u64),
+                    group_by_columns,
+                ));
+                handles.push(job);
             }
             for job in handles {
                 job.await.unwrap();
@@ -77,11 +76,7 @@ mod tests {
 /// Perform batch and streaming aggregation with same input
 /// and verify outputs of `AggregateExec` with pipeline breaking stream `GroupedHashAggregateStream`
 /// and non-pipeline breaking stream `BoundedAggregateStream` produces same result.
-async fn run_aggregate_test(
-    input1: Vec<RecordBatch>,
-    group_by_columns: Vec<&str>,
-    spill: bool,
-) {
+async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::with_config(session_config);
@@ -116,7 +111,7 @@ async fn run_aggregate_test(
     let group_by = PhysicalGroupBy::new_single(expr);
 
     let aggregate_exec_running = Arc::new(
-        AggregateExec::try_new_for_test(
+        AggregateExec::try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregate_expr.clone(),
@@ -124,13 +119,12 @@ async fn run_aggregate_test(
             vec![None],
             running_source,
             schema.clone(),
-            spill,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
 
     let aggregate_exec_usual = Arc::new(
-        AggregateExec::try_new_for_test(
+        AggregateExec::try_new(
             AggregateMode::Partial,
             group_by.clone(),
             aggregate_expr.clone(),
@@ -138,7 +132,6 @@ async fn run_aggregate_test(
             vec![None],
             usual_source,
             schema.clone(),
-            spill,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;

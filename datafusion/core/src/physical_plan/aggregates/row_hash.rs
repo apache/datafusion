@@ -525,8 +525,7 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::Done => {
                     // release the memory reservation since sending back output batch itself needs
                     // some memory reservation, so make some room for it.
-                    let s = self.schema();
-                    self.clear_shrink(&RecordBatch::new_empty(s));
+                    self.clear_all();
                     let _ = self.update_memory_reservation();
                     return Poll::Ready(None);
                 }
@@ -718,6 +717,12 @@ impl GroupedHashAggregateStream {
         self.current_group_indices.shrink_to(batch.num_rows());
     }
 
+    /// Clear memory and shirk capacities to zero.
+    fn clear_all(&mut self) {
+        let s = self.schema();
+        self.clear_shrink(&RecordBatch::new_empty(s));
+    }
+
     /// Emit if the used memory exceeds the target for partial aggregation.
     /// Currently only [`GroupOrdering::None`] is supported for spilling.
     /// TODO: support group_ordering for spilling
@@ -740,7 +745,9 @@ impl GroupedHashAggregateStream {
     /// sorted, set `self.group_ordering` to Full, then later we can read with [`EmitTo::First`].
     fn update_merged_stream(&mut self) -> Result<()> {
         let batch = self.emit(EmitTo::All, true)?;
-        self.clear_shrink(&batch);
+        // clear up memory for streaming_merge
+        self.clear_all();
+        self.update_memory_reservation()?;
         let mut streams: Vec<SendableRecordBatchStream> = vec![];
         let expr = self.spill_state.spill_expr.clone();
         let schema = batch.schema();
