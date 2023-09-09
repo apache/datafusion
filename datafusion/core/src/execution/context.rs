@@ -28,10 +28,11 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
+use datafusion_common::alias::AliasGenerator;
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, StringifiedPlan, UserDefinedLogicalNode,
+    DescribeTable, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -77,11 +78,11 @@ use sqlparser::dialect::dialect_from_str;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
-use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::PhysicalPlanner;
+use crate::physical_planner::DefaultPhysicalPlanner;
+use crate::physical_planner::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -469,19 +470,12 @@ impl SessionContext {
             input,
             if_not_exists,
             or_replace,
-            primary_key,
+            constraints,
         } = cmd;
-
-        if !primary_key.is_empty() {
-            Err(DataFusionError::Execution(
-                "Primary keys on MemoryTables are not currently supported!".to_string(),
-            ))?;
-        }
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
         let input = self.state().optimize(&input)?;
         let table = self.table(&name).await;
-
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
@@ -499,11 +493,15 @@ impl SessionContext {
                 "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
             )),
             (_, _, Err(_)) => {
-                let schema = Arc::new(input.schema().as_ref().into());
+                let df_schema = input.schema();
+                let schema = Arc::new(df_schema.as_ref().into());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(schema, batches)?);
+                let table = Arc::new(
+                    // pass constraints to the mem table.
+                    MemTable::try_new(schema, batches)?.with_constraints(constraints),
+                );
 
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
@@ -782,6 +780,20 @@ impl SessionContext {
         self.state
             .write()
             .aggregate_functions
+            .insert(f.name.clone(), Arc::new(f));
+    }
+
+    /// Registers a window UDF within this context.
+    ///
+    /// Note in SQL queries, window function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
+    /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
+    pub fn register_udwf(&self, f: WindowUDF) {
+        self.state
+            .write()
+            .window_functions
             .insert(f.name.clone(), Arc::new(f));
     }
 
@@ -1278,6 +1290,10 @@ impl FunctionRegistry for SessionContext {
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.state.read().udaf(name)
     }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        self.state.read().udwf(name)
+    }
 }
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
@@ -1328,6 +1344,8 @@ pub struct SessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    /// Window functions registered in the context
+    window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
@@ -1422,6 +1440,7 @@ impl SessionState {
             catalog_list,
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
+            window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
             config,
             execution_props: ExecutionProps::new(),
@@ -1898,6 +1917,11 @@ impl SessionState {
         &self.aggregate_functions
     }
 
+    /// Return reference to window functions
+    pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
+    }
+
     /// Return [SerializerRegistry] for extensions
     pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
         self.serializer_registry.clone()
@@ -1929,6 +1953,10 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.state.aggregate_functions().get(name).cloned()
+    }
+
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+        self.state.window_functions().get(name).cloned()
     }
 
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
@@ -1978,11 +2006,25 @@ impl FunctionRegistry for SessionState {
             ))
         })
     }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        let result = self.window_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "There is no UDWF named \"{name}\" in the registry"
+            ))
+        })
+    }
 }
 
 impl OptimizerConfig for SessionState {
     fn query_execution_start_time(&self) -> DateTime<Utc> {
         self.execution_props.query_execution_start_time
+    }
+
+    fn alias_generator(&self) -> Arc<AliasGenerator> {
+        self.execution_props.alias_generator.clone()
     }
 
     fn options(&self) -> &ConfigOptions {
@@ -2007,6 +2049,7 @@ impl From<&SessionState> for TaskContext {
             state.config.clone(),
             state.scalar_functions.clone(),
             state.aggregate_functions.clone(),
+            state.window_functions.clone(),
             state.runtime_env.clone(),
         )
     }
@@ -2129,13 +2172,11 @@ mod tests {
     async fn create_variable_err() -> Result<()> {
         let ctx = SessionContext::new();
 
-        let err = plan_and_collect(&ctx, "SElECT @=   X#=?!~ 5")
-            .await
-            .unwrap_err();
+        let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
 
         assert_eq!(
             err.to_string(),
-            "Execution error: variable [\"@\"] has no type information"
+            "Error during planning: variable [\"@=\"] has no type information"
         );
         Ok(())
     }
@@ -2204,7 +2245,7 @@ mod tests {
         // Note capitalization
         let my_avg = create_udaf(
             "MY_AVG",
-            DataType::Float64,
+            vec![DataType::Float64],
             Arc::new(DataType::Float64),
             Volatility::Immutable,
             Arc::new(|_| {
@@ -2263,11 +2304,11 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         let expected = vec![
-            "+--------------+--------------+-----------------+",
-            "| SUM(test.c1) | SUM(test.c2) | COUNT(UInt8(1)) |",
-            "+--------------+--------------+-----------------+",
-            "| 10           | 110          | 20              |",
-            "+--------------+--------------+-----------------+",
+            "+--------------+--------------+----------+",
+            "| SUM(test.c1) | SUM(test.c2) | COUNT(*) |",
+            "+--------------+--------------+----------+",
+            "| 10           | 110          | 20       |",
+            "+--------------+--------------+----------+",
         ];
         assert_batches_eq!(expected, &results);
 

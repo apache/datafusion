@@ -18,7 +18,7 @@
 //! Values execution plan
 
 use super::expressions::PhysicalSortExpr;
-use super::{common, SendableRecordBatchStream, Statistics};
+use super::{common, DisplayAs, SendableRecordBatchStream, Statistics};
 use crate::physical_plan::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
@@ -94,6 +94,20 @@ impl ValuesExec {
     }
 }
 
+impl DisplayAs for ValuesExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "ValuesExec")
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for ValuesExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -143,18 +157,6 @@ impl ExecutionPlan for ValuesExec {
             self.schema.clone(),
             None,
         )?))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "ValuesExec")
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

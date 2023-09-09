@@ -20,11 +20,14 @@
 # DataFusion Benchmarks
 
 This crate contains benchmarks based on popular public data sets and
-open source benchmark suites, making it easy to run more realistic
-benchmarks to help with performance and scalability testing of DataFusion.
+open source benchmark suites, to help with performance and scalability
+testing of DataFusion.
 
-# Benchmarks Against Other Engines
 
+## Other engines
+
+The benchmarks measure changes to DataFusion itself, rather than
+its performance against other engines. For competitive benchmarking,
 DataFusion is included in the benchmark setups for several popular
 benchmarks that compare performance with other engines. For example:
 
@@ -36,30 +39,35 @@ benchmarks that compare performance with other engines. For example:
 
 # Running the benchmarks
 
-## Running Benchmarks
+## `bench.sh`
 
-The easiest way to run benchmarks from DataFusion source checkouts is
-to use the [bench.sh](bench.sh) script. Usage instructions can be
-found with:
+The easiest way to run benchmarks is the [bench.sh](bench.sh)
+script. Usage instructions can be found with:
 
 ```shell
 # show usage
 ./bench.sh
 ```
 
-## Generating Data
+## Generating data
 
-You can create data for all these benchmarks using the [bench.sh](bench.sh) script:
+You can create / download the data for these benchmarks using the [bench.sh](bench.sh) script:
+
+Create / download all datasets
 
 ```shell
 ./bench.sh data
 ```
 
-Data is generated in the `data` subdirectory and will not be checked
-in because this directory has been added to the `.gitignore` file.
+Create / download a specific dataset (TPCH)
 
+```shell
+./bench.sh data tpch
+```
 
-## Example to compare peformance on main to a branch
+Data is placed in the `data` subdirectory.
+
+## Comparing performance of main and a branch
 
 ```shell
 git checkout main
@@ -143,38 +151,22 @@ Benchmark tpch_mem.json
 ```
 
 
-# Benchmark Descriptions:
+### Running Benchmarks Manually
 
-## `tpch` Benchmark derived from TPC-H
-
-These benchmarks are derived from the [TPC-H][1] benchmark. And we use this repo as the source of tpch-gen and answers:
-https://github.com/databricks/tpch-dbgen.git, based on [2.17.1](https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf) version of TPC-H.
-
-
-### Running the DataFusion Benchmarks Manually
-
-The benchmark can then be run (assuming the data created from `dbgen` is in `./data`) with a command such as:
+Assuming data in the `data` directory, the `tpch` benchmark can be run with a command like this
 
 ```bash
-cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+cargo run --release --bin dfbench -- tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
-If you omit `--query=<query_id>` argument, then all benchmarks will be run one by one (from query 1 to query 22).
+See the help for more details
 
-```bash
-cargo run --release --bin tpch -- benchmark datafusion --iterations 1 --path ./data --format tbl --batch-size 4096
-```
+### Different features
 
 You can enable the features `simd` (to use SIMD instructions, `cargo nightly` is required.) and/or `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`:
 
 ```
 cargo run --release --features "simd mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
-```
-
-If you want to disable collection of statistics (and thus cost based optimizers), you can pass `--disable-statistics` flag.
-
-```bash
-cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path /mnt/tpch-parquet --format parquet --query 17 --disable-statistics
 ```
 
 The benchmark program also supports CSV and Parquet input file formats and a utility is provided to convert from `tbl`
@@ -188,9 +180,10 @@ Or if you want to verify and run all the queries in the benchmark, you can just 
 
 ### Comparing results between runs
 
-Any `tpch` execution with `-o <dir>` argument will produce a summary file right under the `<dir>`
-directory. It is a JSON serialized form of all the runs that happened as well as the runtime metadata
-(number of cores, DataFusion version, etc.).
+Any `dfbench` execution with `-o <dir>` argument will produce a
+summary JSON in the specified directory. This file contains a
+serialized form of all the runs that happened and runtime
+metadata (number of cores, DataFusion version, etc.).
 
 ```shell
 $ git checkout main
@@ -251,6 +244,32 @@ The result of query 1 should produce the following output when executed against 
 +--------------+--------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+----------------------+-------------+
 Query 1 iteration 0 took 1956.1 ms
 Query 1 avg time: 1956.11 ms
+```
+
+# Benchmark Descriptions
+
+## `dfbench`
+
+The `dfbench` program contains subcommands to run various benchmarks.
+
+Full help can be found in the relevant sub command. For example to get help for tpch,
+run `cargo run --release  --bin dfbench tpch --help`
+
+```shell
+cargo run --release --bin dfbench  --help
+...
+datafusion-benchmarks 27.0.0
+benchmark command
+
+USAGE:
+    dfbench <SUBCOMMAND>
+
+SUBCOMMANDS:
+    clickbench      Run the clickbench benchmark
+    help            Prints this message or the help of the given subcommand(s)
+    tpch            Run the tpch benchmark.
+    tpch-convert    Convert tpch .slt files to .parquet or .csv files
+
 ```
 
 ## NYC Taxi Benchmark

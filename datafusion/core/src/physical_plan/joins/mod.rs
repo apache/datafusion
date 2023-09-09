@@ -31,6 +31,9 @@ mod sort_merge_join;
 mod symmetric_hash_join;
 pub mod utils;
 
+#[cfg(test)]
+pub mod test_utils;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Partitioning mode to use for hash join
 pub enum PartitionMode {
@@ -41,4 +44,13 @@ pub enum PartitionMode {
     /// When set to Auto, DataFusion optimizer will decide which PartitionMode mode(Partitioned/CollectLeft) is optimal based on statistics.
     /// It will also consider swapping the left and right inputs for the Join
     Auto,
+}
+
+/// Partitioning mode to use for symmetric hash join
+#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamJoinPartitionMode {
+    /// Left/right children are partitioned using the left and right keys
+    Partitioned,
+    /// Both sides will collected into one partition
+    SinglePartition,
 }

@@ -17,9 +17,6 @@
 
 //! Defines the LIMIT plan
 
-use futures::stream::Stream;
-use futures::stream::StreamExt;
-use log::trace;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -28,18 +25,21 @@ use std::task::{Context, Poll};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
+
+use super::expressions::PhysicalSortExpr;
+use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::{DisplayAs, RecordBatchStream, SendableRecordBatchStream, Statistics};
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{DataFusionError, Result};
-
-use super::expressions::PhysicalSortExpr;
-use super::{
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
-};
-
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
+
+use futures::stream::Stream;
+use futures::stream::StreamExt;
+use log::trace;
 
 /// Limit execution plan
 #[derive(Debug)]
@@ -82,6 +82,25 @@ impl GlobalLimitExec {
     }
 }
 
+impl DisplayAs for GlobalLimitExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "GlobalLimitExec: skip={}, fetch={}",
+                    self.skip,
+                    self.fetch.map_or("None".to_string(), |x| x.to_string())
+                )
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for GlobalLimitExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -118,6 +137,10 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
     }
 
     fn with_new_children(
@@ -162,23 +185,6 @@ impl ExecutionPlan for GlobalLimitExec {
             self.fetch,
             baseline_metrics,
         )))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "GlobalLimitExec: skip={}, fetch={}",
-                    self.skip,
-                    self.fetch.map_or("None".to_string(), |x| x.to_string())
-                )
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -265,6 +271,20 @@ impl LocalLimitExec {
     }
 }
 
+impl DisplayAs for LocalLimitExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "LocalLimitExec: fetch={}", self.fetch)
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for LocalLimitExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -300,6 +320,10 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.equivalence_properties()
     }
 
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        self.input.ordering_equivalence_properties()
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -329,18 +353,6 @@ impl ExecutionPlan for LocalLimitExec {
             Some(self.fetch),
             baseline_metrics,
         )))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "LocalLimitExec: fetch={}", self.fetch)
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

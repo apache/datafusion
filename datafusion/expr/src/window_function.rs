@@ -19,11 +19,10 @@
 //! sets of rows that are related to the current query row.
 //!
 //! see also <https://www.postgresql.org/docs/current/functions-window.html>
-//!
 
 use crate::aggregate_function::AggregateFunction;
 use crate::type_coercion::functions::data_types;
-use crate::{aggregate_function, AggregateUDF, Signature, TypeSignature, Volatility};
+use crate::{AggregateUDF, Signature, TypeSignature, Volatility, WindowUDF};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
@@ -33,11 +32,14 @@ use strum_macros::EnumIter;
 /// WindowFunction
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WindowFunction {
-    /// window function that leverages an aggregate function
+    /// A built in aggregate function that leverages an aggregate function
     AggregateFunction(AggregateFunction),
-    /// window function that leverages a built-in window function
+    /// A a built-in window function
     BuiltInWindowFunction(BuiltInWindowFunction),
+    /// A user defined aggregate function
     AggregateUDF(Arc<AggregateUDF>),
+    /// A user defined aggregate function
+    WindowUDF(Arc<WindowUDF>),
 }
 
 /// Find DataFusion's built-in window function by name.
@@ -69,6 +71,7 @@ impl fmt::Display for WindowFunction {
             WindowFunction::AggregateFunction(fun) => fun.fmt(f),
             WindowFunction::BuiltInWindowFunction(fun) => fun.fmt(f),
             WindowFunction::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
+            WindowFunction::WindowUDF(fun) => fun.fmt(f),
         }
     }
 }
@@ -152,81 +155,117 @@ impl FromStr for BuiltInWindowFunction {
 }
 
 /// Returns the datatype of the window function
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `WindowFunction::return_type` instead"
+)]
 pub fn return_type(
     fun: &WindowFunction,
     input_expr_types: &[DataType],
 ) -> Result<DataType> {
-    match fun {
-        WindowFunction::AggregateFunction(fun) => {
-            aggregate_function::return_type(fun, input_expr_types)
-        }
-        WindowFunction::BuiltInWindowFunction(fun) => {
-            return_type_for_built_in(fun, input_expr_types)
-        }
-        WindowFunction::AggregateUDF(fun) => {
-            Ok((*(fun.return_type)(input_expr_types)?).clone())
+    fun.return_type(input_expr_types)
+}
+
+impl WindowFunction {
+    /// Returns the datatype of the window function
+    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+        match self {
+            WindowFunction::AggregateFunction(fun) => fun.return_type(input_expr_types),
+            WindowFunction::BuiltInWindowFunction(fun) => {
+                fun.return_type(input_expr_types)
+            }
+            WindowFunction::AggregateUDF(fun) => {
+                Ok((*(fun.return_type)(input_expr_types)?).clone())
+            }
+            WindowFunction::WindowUDF(fun) => {
+                Ok((*(fun.return_type)(input_expr_types)?).clone())
+            }
         }
     }
 }
 
 /// Returns the datatype of the built-in window function
-fn return_type_for_built_in(
-    fun: &BuiltInWindowFunction,
-    input_expr_types: &[DataType],
-) -> Result<DataType> {
-    // Note that this function *must* return the same type that the respective physical expression returns
-    // or the execution panics.
+impl BuiltInWindowFunction {
+    pub fn return_type(&self, input_expr_types: &[DataType]) -> Result<DataType> {
+        // Note that this function *must* return the same type that the respective physical expression returns
+        // or the execution panics.
 
-    // verify that this is a valid set of data types for this function
-    data_types(input_expr_types, &signature_for_built_in(fun))?;
+        // verify that this is a valid set of data types for this function
+        data_types(input_expr_types, &self.signature())?;
 
-    match fun {
-        BuiltInWindowFunction::RowNumber
-        | BuiltInWindowFunction::Rank
-        | BuiltInWindowFunction::DenseRank => Ok(DataType::UInt64),
-        BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
-            Ok(DataType::Float64)
+        match self {
+            BuiltInWindowFunction::RowNumber
+            | BuiltInWindowFunction::Rank
+            | BuiltInWindowFunction::DenseRank => Ok(DataType::UInt64),
+            BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
+                Ok(DataType::Float64)
+            }
+            BuiltInWindowFunction::Ntile => Ok(DataType::UInt32),
+            BuiltInWindowFunction::Lag
+            | BuiltInWindowFunction::Lead
+            | BuiltInWindowFunction::FirstValue
+            | BuiltInWindowFunction::LastValue
+            | BuiltInWindowFunction::NthValue => Ok(input_expr_types[0].clone()),
         }
-        BuiltInWindowFunction::Ntile => Ok(DataType::UInt32),
-        BuiltInWindowFunction::Lag
-        | BuiltInWindowFunction::Lead
-        | BuiltInWindowFunction::FirstValue
-        | BuiltInWindowFunction::LastValue
-        | BuiltInWindowFunction::NthValue => Ok(input_expr_types[0].clone()),
     }
 }
 
 /// the signatures supported by the function `fun`.
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `WindowFunction::signature` instead"
+)]
 pub fn signature(fun: &WindowFunction) -> Signature {
-    match fun {
-        WindowFunction::AggregateFunction(fun) => aggregate_function::signature(fun),
-        WindowFunction::BuiltInWindowFunction(fun) => signature_for_built_in(fun),
-        WindowFunction::AggregateUDF(fun) => fun.signature.clone(),
+    fun.signature()
+}
+
+impl WindowFunction {
+    /// the signatures supported by the function `fun`.
+    pub fn signature(&self) -> Signature {
+        match self {
+            WindowFunction::AggregateFunction(fun) => fun.signature(),
+            WindowFunction::BuiltInWindowFunction(fun) => fun.signature(),
+            WindowFunction::AggregateUDF(fun) => fun.signature.clone(),
+            WindowFunction::WindowUDF(fun) => fun.signature.clone(),
+        }
     }
 }
 
 /// the signatures supported by the built-in window function `fun`.
+#[deprecated(
+    since = "27.0.0",
+    note = "please use `BuiltInWindowFunction::signature` instead"
+)]
 pub fn signature_for_built_in(fun: &BuiltInWindowFunction) -> Signature {
-    // note: the physical expression must accept the type returned by this function or the execution panics.
-    match fun {
-        BuiltInWindowFunction::RowNumber
-        | BuiltInWindowFunction::Rank
-        | BuiltInWindowFunction::DenseRank
-        | BuiltInWindowFunction::PercentRank
-        | BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
-        BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => Signature::one_of(
-            vec![
-                TypeSignature::Any(1),
-                TypeSignature::Any(2),
-                TypeSignature::Any(3),
-            ],
-            Volatility::Immutable,
-        ),
-        BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
-            Signature::any(1, Volatility::Immutable)
+    fun.signature()
+}
+
+impl BuiltInWindowFunction {
+    /// the signatures supported by the built-in window function `fun`.
+    pub fn signature(&self) -> Signature {
+        // note: the physical expression must accept the type returned by this function or the execution panics.
+        match self {
+            BuiltInWindowFunction::RowNumber
+            | BuiltInWindowFunction::Rank
+            | BuiltInWindowFunction::DenseRank
+            | BuiltInWindowFunction::PercentRank
+            | BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
+            BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => {
+                Signature::one_of(
+                    vec![
+                        TypeSignature::Any(1),
+                        TypeSignature::Any(2),
+                        TypeSignature::Any(3),
+                    ],
+                    Volatility::Immutable,
+                )
+            }
+            BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
+                Signature::any(1, Volatility::Immutable)
+            }
+            BuiltInWindowFunction::Ntile => Signature::any(1, Volatility::Immutable),
+            BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
         }
-        BuiltInWindowFunction::Ntile => Signature::any(1, Volatility::Immutable),
-        BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
     }
 }
 
@@ -237,10 +276,10 @@ mod tests {
     #[test]
     fn test_count_return_type() -> Result<()> {
         let fun = find_df_window_func("count").unwrap();
-        let observed = return_type(&fun, &[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8])?;
         assert_eq!(DataType::Int64, observed);
 
-        let observed = return_type(&fun, &[DataType::UInt64])?;
+        let observed = fun.return_type(&[DataType::UInt64])?;
         assert_eq!(DataType::Int64, observed);
 
         Ok(())
@@ -249,10 +288,10 @@ mod tests {
     #[test]
     fn test_first_value_return_type() -> Result<()> {
         let fun = find_df_window_func("first_value").unwrap();
-        let observed = return_type(&fun, &[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = return_type(&fun, &[DataType::UInt64])?;
+        let observed = fun.return_type(&[DataType::UInt64])?;
         assert_eq!(DataType::UInt64, observed);
 
         Ok(())
@@ -261,10 +300,10 @@ mod tests {
     #[test]
     fn test_last_value_return_type() -> Result<()> {
         let fun = find_df_window_func("last_value").unwrap();
-        let observed = return_type(&fun, &[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = return_type(&fun, &[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -273,10 +312,10 @@ mod tests {
     #[test]
     fn test_lead_return_type() -> Result<()> {
         let fun = find_df_window_func("lead").unwrap();
-        let observed = return_type(&fun, &[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = return_type(&fun, &[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -285,10 +324,10 @@ mod tests {
     #[test]
     fn test_lag_return_type() -> Result<()> {
         let fun = find_df_window_func("lag").unwrap();
-        let observed = return_type(&fun, &[DataType::Utf8])?;
+        let observed = fun.return_type(&[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = return_type(&fun, &[DataType::Float64])?;
+        let observed = fun.return_type(&[DataType::Float64])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -297,10 +336,10 @@ mod tests {
     #[test]
     fn test_nth_value_return_type() -> Result<()> {
         let fun = find_df_window_func("nth_value").unwrap();
-        let observed = return_type(&fun, &[DataType::Utf8, DataType::UInt64])?;
+        let observed = fun.return_type(&[DataType::Utf8, DataType::UInt64])?;
         assert_eq!(DataType::Utf8, observed);
 
-        let observed = return_type(&fun, &[DataType::Float64, DataType::UInt64])?;
+        let observed = fun.return_type(&[DataType::Float64, DataType::UInt64])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -309,7 +348,7 @@ mod tests {
     #[test]
     fn test_percent_rank_return_type() -> Result<()> {
         let fun = find_df_window_func("percent_rank").unwrap();
-        let observed = return_type(&fun, &[])?;
+        let observed = fun.return_type(&[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())
@@ -318,7 +357,7 @@ mod tests {
     #[test]
     fn test_cume_dist_return_type() -> Result<()> {
         let fun = find_df_window_func("cume_dist").unwrap();
-        let observed = return_type(&fun, &[])?;
+        let observed = fun.return_type(&[])?;
         assert_eq!(DataType::Float64, observed);
 
         Ok(())

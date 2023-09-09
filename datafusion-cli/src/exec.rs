@@ -41,6 +41,20 @@ use std::time::Instant;
 use std::{fs::File, sync::Arc};
 use url::Url;
 
+/// run and execute SQL statements and commands, against a context with the given print options
+pub async fn exec_from_commands(
+    ctx: &mut SessionContext,
+    print_options: &PrintOptions,
+    commands: Vec<String>,
+) {
+    for sql in commands {
+        match exec_and_print(ctx, print_options, sql).await {
+            Ok(_) => {}
+            Err(err) => println!("{err}"),
+        }
+    }
+}
+
 /// run and execute SQL statements and commands from a file, against a context with the given print options
 pub async fn exec_from_lines(
     ctx: &mut SessionContext,
@@ -58,11 +72,8 @@ pub async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match unescape_input(line) {
-                        Ok(sql) => match exec_and_print(ctx, print_options, sql).await {
-                            Ok(_) => {}
-                            Err(err) => eprintln!("{err}"),
-                        },
+                    match exec_and_print(ctx, print_options, query).await {
+                        Ok(_) => {}
                         Err(err) => eprintln!("{err}"),
                     }
                     query = "".to_owned();
@@ -77,7 +88,8 @@ pub async fn exec_from_lines(
     }
 
     // run the left over query if the last statement doesn't contain ‘;’
-    if !query.is_empty() {
+    // ignore if it only consists of '\n'
+    if query.contains(|c| c != '\n') {
         match exec_and_print(ctx, print_options, query).await {
             Ok(_) => {}
             Err(err) => println!("{err}"),
@@ -149,11 +161,8 @@ pub async fn exec_from_repl(
             }
             Ok(line) => {
                 rl.add_history_entry(line.trim_end())?;
-                match unescape_input(&line) {
-                    Ok(sql) => match exec_and_print(ctx, &print_options, sql).await {
-                        Ok(_) => {}
-                        Err(err) => eprintln!("{err}"),
-                    },
+                match exec_and_print(ctx, &print_options, line).await {
+                    Ok(_) => {}
                     Err(err) => eprintln!("{err}"),
                 }
             }
@@ -182,6 +191,7 @@ async fn exec_and_print(
 ) -> Result<()> {
     let now = Instant::now();
 
+    let sql = unescape_input(&sql)?;
     let plan = ctx.state().create_logical_plan(&sql).await?;
     let df = match &plan {
         LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {

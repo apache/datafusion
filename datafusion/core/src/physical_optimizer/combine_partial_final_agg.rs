@@ -91,8 +91,14 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                                             ),
                                         )
                                     {
+                                        let mode = if *final_mode == AggregateMode::Final
+                                        {
+                                            AggregateMode::Single
+                                        } else {
+                                            AggregateMode::SinglePartitioned
+                                        };
                                         AggregateExec::try_new(
-                                            AggregateMode::Single,
+                                            mode,
                                             input_group_by.clone(),
                                             input_aggr_expr.to_vec(),
                                             input_filter_expr.to_vec(),
@@ -225,7 +231,7 @@ mod tests {
             let config = ConfigOptions::new();
             let optimized = optimizer.optimize($PLAN, &config)?;
             // Now format correctly
-            let plan = displayable(optimized.as_ref()).indent().to_string();
+            let plan = displayable(optimized.as_ref()).indent(true).to_string();
             let actual_lines = trim_plan_display(&plan);
 
             assert_eq!(

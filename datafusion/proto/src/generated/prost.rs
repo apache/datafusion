@@ -122,6 +122,19 @@ pub struct CsvFormat {
     pub has_header: bool,
     #[prost(string, tag = "2")]
     pub delimiter: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub quote: ::prost::alloc::string::String,
+    #[prost(oneof = "csv_format::OptionalEscape", tags = "4")]
+    pub optional_escape: ::core::option::Option<csv_format::OptionalEscape>,
+}
+/// Nested message and enum types in `CsvFormat`.
+pub mod csv_format {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalEscape {
+        #[prost(string, tag = "4")]
+        Escape(::prost::alloc::string::String),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -747,7 +760,7 @@ pub struct WindowExprNode {
     /// repeated LogicalExprNode filter = 7;
     #[prost(message, optional, tag = "8")]
     pub window_frame: ::core::option::Option<WindowFrame>,
-    #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2")]
+    #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2, 3, 9")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
 }
 /// Nested message and enum types in `WindowExprNode`.
@@ -757,9 +770,12 @@ pub mod window_expr_node {
     pub enum WindowFunction {
         #[prost(enumeration = "super::AggregateFunction", tag = "1")]
         AggrFunction(i32),
-        /// udaf = 3
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
+        #[prost(string, tag = "3")]
+        Udaf(::prost::alloc::string::String),
+        #[prost(string, tag = "9")]
+        Udwf(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -890,6 +906,11 @@ pub struct WindowFrameBound {
 pub struct Schema {
     #[prost(message, repeated, tag = "1")]
     pub columns: ::prost::alloc::vec::Vec<Field>,
+    #[prost(map = "string, string", tag = "2")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -904,6 +925,11 @@ pub struct Field {
     /// for complex data types like structs, unions
     #[prost(message, repeated, tag = "4")]
     pub children: ::prost::alloc::vec::Vec<Field>,
+    #[prost(map = "string, string", tag = "5")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1084,7 +1110,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 39, 21, 24, 25, 35, 36, 37, 38, 26, 27, 28, 29, 30, 31, 32, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -1133,12 +1159,22 @@ pub mod scalar_value {
         ListValue(super::ScalarListValue),
         #[prost(message, tag = "20")]
         Decimal128Value(super::Decimal128),
+        #[prost(message, tag = "39")]
+        Decimal256Value(super::Decimal256),
         #[prost(int64, tag = "21")]
         Date64Value(i64),
         #[prost(int32, tag = "24")]
         IntervalYearmonthValue(i32),
         #[prost(int64, tag = "25")]
         IntervalDaytimeValue(i64),
+        #[prost(int64, tag = "35")]
+        DurationSecondValue(i64),
+        #[prost(int64, tag = "36")]
+        DurationMillisecondValue(i64),
+        #[prost(int64, tag = "37")]
+        DurationMicrosecondValue(i64),
+        #[prost(int64, tag = "38")]
+        DurationNanosecondValue(i64),
         #[prost(message, tag = "26")]
         TimestampValue(super::ScalarTimestampValue),
         #[prost(message, tag = "27")]
@@ -1160,6 +1196,16 @@ pub mod scalar_value {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Decimal128 {
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag = "2")]
+    pub p: i64,
+    #[prost(int64, tag = "3")]
+    pub s: i64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decimal256 {
     #[prost(bytes = "vec", tag = "1")]
     pub value: ::prost::alloc::vec::Vec<u8>,
     #[prost(int64, tag = "2")]
@@ -1373,7 +1419,7 @@ pub mod owned_table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1424,6 +1470,8 @@ pub mod physical_plan_node {
         SortPreservingMerge(
             ::prost::alloc::boxed::Box<super::SortPreservingMergeExecNode>,
         ),
+        #[prost(message, tag = "22")]
+        NestedLoopJoin(::prost::alloc::boxed::Box<super::NestedLoopJoinExecNode>),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1513,6 +1561,8 @@ pub struct PhysicalScalarUdfNode {
 pub struct PhysicalAggregateExprNode {
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "5")]
+    pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
@@ -1747,6 +1797,19 @@ pub struct CsvScanExecNode {
     pub has_header: bool,
     #[prost(string, tag = "3")]
     pub delimiter: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub quote: ::prost::alloc::string::String,
+    #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
+    pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
+}
+/// Nested message and enum types in `CsvScanExecNode`.
+pub mod csv_scan_exec_node {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalEscape {
+        #[prost(string, tag = "5")]
+        Escape(::prost::alloc::string::String),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1921,6 +1984,21 @@ pub struct SortPreservingMergeExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Maximum number of highest/lowest rows to fetch; negative means no limit
+    #[prost(int64, tag = "3")]
+    pub fetch: i64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NestedLoopJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(enumeration = "JoinType", tag = "3")]
+    pub join_type: i32,
+    #[prost(message, optional, tag = "4")]
+    pub filter: ::core::option::Option<JoinFilter>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2222,6 +2300,16 @@ pub enum ScalarFunction {
     ArrayToString = 97,
     Cardinality = 98,
     TrimArray = 99,
+    Encode = 101,
+    Decode = 102,
+    Cot = 103,
+    ArrayHas = 104,
+    ArrayHasAny = 105,
+    ArrayHasAll = 106,
+    ArrayRemoveN = 107,
+    ArrayReplaceN = 108,
+    ArrayRemoveAll = 109,
+    ArrayReplaceAll = 110,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2330,6 +2418,16 @@ impl ScalarFunction {
             ScalarFunction::ArrayToString => "ArrayToString",
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::TrimArray => "TrimArray",
+            ScalarFunction::Encode => "Encode",
+            ScalarFunction::Decode => "Decode",
+            ScalarFunction::Cot => "Cot",
+            ScalarFunction::ArrayHas => "ArrayHas",
+            ScalarFunction::ArrayHasAny => "ArrayHasAny",
+            ScalarFunction::ArrayHasAll => "ArrayHasAll",
+            ScalarFunction::ArrayRemoveN => "ArrayRemoveN",
+            ScalarFunction::ArrayReplaceN => "ArrayReplaceN",
+            ScalarFunction::ArrayRemoveAll => "ArrayRemoveAll",
+            ScalarFunction::ArrayReplaceAll => "ArrayReplaceAll",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2435,6 +2533,16 @@ impl ScalarFunction {
             "ArrayToString" => Some(Self::ArrayToString),
             "Cardinality" => Some(Self::Cardinality),
             "TrimArray" => Some(Self::TrimArray),
+            "Encode" => Some(Self::Encode),
+            "Decode" => Some(Self::Decode),
+            "Cot" => Some(Self::Cot),
+            "ArrayHas" => Some(Self::ArrayHas),
+            "ArrayHasAny" => Some(Self::ArrayHasAny),
+            "ArrayHasAll" => Some(Self::ArrayHasAll),
+            "ArrayRemoveN" => Some(Self::ArrayRemoveN),
+            "ArrayReplaceN" => Some(Self::ArrayReplaceN),
+            "ArrayRemoveAll" => Some(Self::ArrayRemoveAll),
+            "ArrayReplaceAll" => Some(Self::ArrayReplaceAll),
             _ => None,
         }
     }
@@ -2803,6 +2911,7 @@ pub enum AggregateMode {
     Final = 1,
     FinalPartitioned = 2,
     Single = 3,
+    SinglePartitioned = 4,
 }
 impl AggregateMode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2815,6 +2924,7 @@ impl AggregateMode {
             AggregateMode::Final => "FINAL",
             AggregateMode::FinalPartitioned => "FINAL_PARTITIONED",
             AggregateMode::Single => "SINGLE",
+            AggregateMode::SinglePartitioned => "SINGLE_PARTITIONED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2824,6 +2934,7 @@ impl AggregateMode {
             "FINAL" => Some(Self::Final),
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
             "SINGLE" => Some(Self::Single),
+            "SINGLE_PARTITIONED" => Some(Self::SinglePartitioned),
             _ => None,
         }
     }

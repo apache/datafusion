@@ -33,7 +33,7 @@ use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::options::ReadOptions;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream,
 };
 use crate::prelude::{CsvReadOptions, SessionContext};
@@ -363,6 +363,25 @@ impl UnboundedExec {
         }
     }
 }
+
+impl DisplayAs for UnboundedExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "UnboundableExec: unbounded={}",
+                    self.batch_produce.is_none(),
+                )
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for UnboundedExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -404,22 +423,6 @@ impl ExecutionPlan for UnboundedExec {
             count: 0,
             batch: self.batch.clone(),
         }))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "UnboundableExec: unbounded={}",
-                    self.batch_produce.is_none(),
-                )
-            }
-        }
     }
 
     fn statistics(&self) -> Statistics {

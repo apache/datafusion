@@ -27,13 +27,14 @@ use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    project_schema, ExecutionPlan, SendableRecordBatchStream, Statistics,
+    project_schema, DisplayAs, DisplayFormatType, ExecutionPlan,
+    SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
 use datafusion_expr::{Expr, LogicalPlanBuilder};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Debug, Formatter};
+use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::timeout;
@@ -201,6 +202,12 @@ impl CustomExec {
             db,
             projected_schema,
         }
+    }
+}
+
+impl DisplayAs for CustomExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "CustomExec")
     }
 }
 

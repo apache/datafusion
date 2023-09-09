@@ -19,7 +19,6 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::function::suggest_valid_function;
-use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
     expr, window_function, AggregateFunction, BuiltinScalarFunction, Expr, WindowFrame,
@@ -96,8 +95,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if let Ok(fun) = self.find_window_func(&name) {
                 let expr = match fun {
                     WindowFunction::AggregateFunction(aggregate_fun) => {
-                        let (aggregate_fun, args) = self.aggregate_fn_to_expr(
-                            aggregate_fun,
+                        let args = self.function_args_to_expr(
                             function.args,
                             schema,
                             planner_context,
@@ -135,12 +133,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                 )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
-                let (fun, args) = self.aggregate_fn_to_expr(
-                    fun,
-                    function.args,
-                    schema,
-                    planner_context,
-                )?;
+                let args =
+                    self.function_args_to_expr(function.args, schema, planner_context)?;
+
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                     fun, args, distinct, None, order_by,
                 )));
@@ -183,10 +178,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     pub(super) fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
         window_function::find_df_window_func(name)
+            // next check user defined aggregates
             .or_else(|| {
                 self.schema_provider
                     .get_aggregate_meta(name)
                     .map(WindowFunction::AggregateUDF)
+            })
+            // next check user defined window functions
+            .or_else(|| {
+                self.schema_provider
+                    .get_window_meta(name)
+                    .map(WindowFunction::WindowUDF)
             })
             .ok_or_else(|| {
                 DataFusionError::Plan(format!("There is no window function named {name}"))
@@ -227,29 +229,5 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         args.into_iter()
             .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, planner_context))
             .collect::<Result<Vec<Expr>>>()
-    }
-
-    pub(super) fn aggregate_fn_to_expr(
-        &self,
-        fun: AggregateFunction,
-        args: Vec<FunctionArg>,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<(AggregateFunction, Vec<Expr>)> {
-        let args = match fun {
-            // Special case rewrite COUNT(*) to COUNT(constant)
-            AggregateFunction::Count => args
-                .into_iter()
-                .map(|a| match a {
-                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
-                        Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone()))
-                    }
-                    _ => self.sql_fn_arg_to_logical_expr(a, schema, planner_context),
-                })
-                .collect::<Result<Vec<Expr>>>()?,
-            _ => self.function_args_to_expr(args, schema, planner_context)?,
-        };
-
-        Ok((fun, args))
     }
 }

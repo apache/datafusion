@@ -17,8 +17,9 @@
 
 //! Logical plan types
 
-use crate::expr::InSubquery;
-use crate::expr::{Exists, Placeholder};
+use crate::expr::{Alias, Exists, InSubquery, Placeholder};
+use crate::expr_rewriter::create_col_from_scalar_expr;
+use crate::expr_vec_fmt;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -27,22 +28,23 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
+
+use super::DdlStatement;
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue,
+    aggregate_functional_dependencies, plan_err, Column, DFField, DFSchema, DFSchemaRef,
+    DataFusionError, FunctionalDependencies, OwnedTableReference, Result, ScalarValue,
 };
-use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-
 // backwards compatibility
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
-use super::DdlStatement;
+use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -77,7 +79,7 @@ pub enum LogicalPlan {
     Join(Join),
     /// Apply Cross Join to two logical plans
     CrossJoin(CrossJoin),
-    /// Repartition the plan based on a partitioning scheme.
+    /// Repartition the plan based on a partitioning scheme
     Repartition(Repartition),
     /// Union multiple inputs
     Union(Union),
@@ -390,8 +392,111 @@ impl LogicalPlan {
         Ok(using_columns)
     }
 
+    /// returns the first output expression of this `LogicalPlan` node.
+    pub fn head_output_expr(&self) -> Result<Option<Expr>> {
+        match self {
+            LogicalPlan::Projection(projection) => Ok(Some(projection.expr.as_slice()[0].clone())),
+            LogicalPlan::Aggregate(agg) => {
+                if agg.group_expr.is_empty() {
+                    Ok(Some(agg.aggr_expr.as_slice()[0].clone()))
+                } else {
+                    Ok(Some(agg.group_expr.as_slice()[0].clone()))
+                }
+            }
+            LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Distinct(Distinct { input, .. })
+            | LogicalPlan::Sort(Sort { input, .. })
+            | LogicalPlan::Limit(Limit { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::Window(Window { input, .. }) => input.head_output_expr(),
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                join_type,
+                ..
+            }) => match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                    if left.schema().fields().is_empty() {
+                        right.head_output_expr()
+                    } else {
+                        left.head_output_expr()
+                    }
+                }
+                JoinType::LeftSemi | JoinType::LeftAnti => left.head_output_expr(),
+                JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
+            },
+            LogicalPlan::CrossJoin(cross) => {
+                if cross.left.schema().fields().is_empty() {
+                    cross.right.head_output_expr()
+                } else {
+                    cross.left.head_output_expr()
+                }
+            }
+            LogicalPlan::Union(union) => Ok(Some(Expr::Column(
+                union.schema.fields()[0].qualified_column(),
+            ))),
+            LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(
+                table.projected_schema.fields()[0].qualified_column(),
+            ))),
+            LogicalPlan::SubqueryAlias(subquery_alias) => {
+                let expr_opt = subquery_alias.input.head_output_expr()?;
+                expr_opt
+                    .map(|expr| {
+                        Ok(Expr::Column(create_col_from_scalar_expr(
+                            &expr,
+                            subquery_alias.alias.to_string(),
+                        )?))
+                    })
+                    .map_or(Ok(None), |v| v.map(Some))
+            }
+            LogicalPlan::Subquery(_) => Ok(None),
+            LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Prepare(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Unnest(_) => Ok(None),
+        }
+    }
+
     pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
-        from_plan(self, &self.expressions(), inputs)
+        // with_new_inputs use original expression,
+        // so we don't need to recompute Schema.
+        match &self {
+            LogicalPlan::Projection(projection) => {
+                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                    projection.expr.to_vec(),
+                    Arc::new(inputs[0].clone()),
+                    projection.schema.clone(),
+                )?))
+            }
+            LogicalPlan::Window(Window {
+                window_expr,
+                schema,
+                ..
+            }) => Ok(LogicalPlan::Window(Window {
+                input: Arc::new(inputs[0].clone()),
+                window_expr: window_expr.to_vec(),
+                schema: schema.clone(),
+            })),
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                aggr_expr,
+                schema,
+                ..
+            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                Arc::new(inputs[0].clone()),
+                group_expr.to_vec(),
+                aggr_expr.to_vec(),
+                schema.clone(),
+            )?)),
+            _ => from_plan(self, &self.expressions(), inputs),
+        }
     }
 
     /// Convert a prepared [`LogicalPlan`] into its inner logical plan
@@ -401,7 +506,7 @@ impl LogicalPlan {
             LogicalPlan::Prepare(prepare_lp) => {
                 // Verify if the number of params matches the number of values
                 if prepare_lp.data_types.len() != param_values.len() {
-                    return Err(DataFusionError::Internal(format!(
+                    return Err(DataFusionError::Plan(format!(
                         "Expected {} parameters, got {}",
                         prepare_lp.data_types.len(),
                         param_values.len()
@@ -412,7 +517,7 @@ impl LogicalPlan {
                 let iter = prepare_lp.data_types.iter().zip(param_values.iter());
                 for (i, (param_type, value)) in iter.enumerate() {
                     if *param_type != value.get_datatype() {
-                        return Err(DataFusionError::Internal(format!(
+                        return Err(DataFusionError::Plan(format!(
                             "Expected parameter of type {:?}, got {:?} at index {}",
                             param_type,
                             value.get_datatype(),
@@ -789,13 +894,9 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl<'a> Display for Wrapper<'a> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                writeln!(
-                    f,
-                    "// Begin DataFusion GraphViz Plan (see https://graphviz.org)"
-                )?;
-                writeln!(f, "digraph {{")?;
-
                 let mut visitor = GraphvizVisitor::new(f);
+
+                visitor.start_graph()?;
 
                 visitor.pre_visit_plan("LogicalPlan")?;
                 self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
@@ -806,8 +907,7 @@ impl LogicalPlan {
                 self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
-                writeln!(f, "}}")?;
-                writeln!(f, "// End DataFusion GraphViz Plan")?;
+                visitor.end_graph()?;
                 Ok(())
             }
         }
@@ -906,13 +1006,17 @@ impl LogicalPlan {
                             }
 
                             if !full_filter.is_empty() {
-                                write!(f, ", full_filters={full_filter:?}")?;
+                                write!(f, ", full_filters=[{}]", expr_vec_fmt!(full_filter))?;
                             };
                             if !partial_filter.is_empty() {
-                                write!(f, ", partial_filters={partial_filter:?}")?;
+                                write!(f, ", partial_filters=[{}]", expr_vec_fmt!(partial_filter))?;
                             }
                             if !unsupported_filters.is_empty() {
-                                write!(f, ", unsupported_filters={unsupported_filters:?}")?;
+                                write!(
+                                    f,
+                                    ", unsupported_filters=[{}]",
+                                    expr_vec_fmt!(unsupported_filters)
+                                )?;
                             }
                         }
 
@@ -928,7 +1032,7 @@ impl LogicalPlan {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{expr_item:?}")?;
+                            write!(f, "{expr_item}")?;
                         }
                         Ok(())
                     }
@@ -941,11 +1045,15 @@ impl LogicalPlan {
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
-                    }) => write!(f, "Filter: {expr:?}"),
+                    }) => write!(f, "Filter: {expr}"),
                     LogicalPlan::Window(Window {
                         ref window_expr, ..
                     }) => {
-                        write!(f, "WindowAggr: windowExpr=[{window_expr:?}]")
+                        write!(
+                            f,
+                            "WindowAggr: windowExpr=[[{}]]",
+                            expr_vec_fmt!(window_expr)
+                        )
                     }
                     LogicalPlan::Aggregate(Aggregate {
                         ref group_expr,
@@ -953,7 +1061,9 @@ impl LogicalPlan {
                         ..
                     }) => write!(
                         f,
-                        "Aggregate: groupBy=[{group_expr:?}], aggr=[{aggr_expr:?}]"
+                        "Aggregate: groupBy=[[{}]], aggr=[[{}]]",
+                        expr_vec_fmt!(group_expr),
+                        expr_vec_fmt!(aggr_expr)
                     ),
                     LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
                         write!(f, "Sort: ")?;
@@ -961,7 +1071,7 @@ impl LogicalPlan {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{expr_item:?}")?;
+                            write!(f, "{expr_item}")?;
                         }
                         if let Some(a) = fetch {
                             write!(f, ", fetch={a}")?;
@@ -1015,7 +1125,7 @@ impl LogicalPlan {
                         }
                         Partitioning::Hash(expr, n) => {
                             let hash_expr: Vec<String> =
-                                expr.iter().map(|e| format!("{e:?}")).collect();
+                                expr.iter().map(|e| format!("{e}")).collect();
                             write!(
                                 f,
                                 "Repartition: Hash({}) partition_count={}",
@@ -1025,7 +1135,7 @@ impl LogicalPlan {
                         }
                         Partitioning::DistributeBy(expr) => {
                             let dist_by_expr: Vec<String> =
-                                expr.iter().map(|e| format!("{e:?}")).collect();
+                                expr.iter().map(|e| format!("{e}")).collect();
                             write!(f, "Repartition: DistributeBy({})", dist_by_expr.join(", "),)
                         }
                     },
@@ -1140,6 +1250,11 @@ impl Projection {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
+        // Update functional dependencies of `input` according to projection
+        // expressions:
+        let id_key_groups = calc_func_dependencies_for_project(&expr, &input)?;
+        let schema = schema.as_ref().clone();
+        let schema = Arc::new(schema.with_functional_dependencies(id_key_groups));
         Ok(Self {
             expr,
             input,
@@ -1161,13 +1276,6 @@ impl Projection {
             schema,
         }
     }
-
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Projection> {
-        match plan {
-            LogicalPlan::Projection(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Projection!"),
-        }
-    }
 }
 
 /// Aliased subquery
@@ -1187,7 +1295,13 @@ impl SubqueryAlias {
     pub fn try_new(plan: LogicalPlan, alias: impl Into<OwnedTableReference>) -> Result<Self> {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
-        let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
+        // Since schema is the same, other than qualifier, we can use existing
+        // functional dependencies:
+        let func_dependencies = plan.schema().functional_dependencies().clone();
+        let schema = DFSchemaRef::new(
+            DFSchema::try_from_qualified_schema(&alias, &schema)?
+                .with_functional_dependencies(func_dependencies),
+        );
         Ok(SubqueryAlias {
             input: Arc::new(plan),
             alias,
@@ -1232,22 +1346,15 @@ impl Filter {
         }
 
         // filter predicates should not be aliased
-        if let Expr::Alias(expr, alias) = predicate {
+        if let Expr::Alias(Alias { expr, name, .. }) = predicate {
             return Err(DataFusionError::Plan(format!(
                 "Attempted to create Filter predicate with \
-                expression `{expr}` aliased as '{alias}'. Filter predicates should not be \
+                expression `{expr}` aliased as '{name}'. Filter predicates should not be \
                 aliased."
             )));
         }
 
         Ok(Self { predicate, input })
-    }
-
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Filter> {
-        match plan {
-            LogicalPlan::Filter(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Filter!"),
-        }
     }
 }
 
@@ -1260,6 +1367,28 @@ pub struct Window {
     pub window_expr: Vec<Expr>,
     /// The schema description of the window output
     pub schema: DFSchemaRef,
+}
+
+impl Window {
+    /// Create a new window operator.
+    pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        let mut window_fields: Vec<DFField> = input.schema().fields().clone();
+        window_fields.extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
+        let metadata = input.schema().metadata().clone();
+
+        // Update functional dependencies for window:
+        let mut window_func_dependencies = input.schema().functional_dependencies().clone();
+        window_func_dependencies.extend_target_indices(window_fields.len());
+
+        Ok(Window {
+            input,
+            window_expr,
+            schema: Arc::new(
+                DFSchema::new_with_metadata(window_fields, metadata)?
+                    .with_functional_dependencies(window_func_dependencies),
+            ),
+        })
+    }
 }
 
 /// Produces rows from a table provider by reference or from the context
@@ -1446,10 +1575,12 @@ impl Aggregate {
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
+
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
         )?;
+
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
 
@@ -1477,6 +1608,11 @@ impl Aggregate {
                 schema.fields().len()
             )));
         }
+
+        let aggregate_func_dependencies =
+            calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
+        let new_schema = schema.as_ref().clone();
+        let schema = Arc::new(new_schema.with_functional_dependencies(aggregate_func_dependencies));
         Ok(Self {
             input,
             group_expr,
@@ -1484,13 +1620,68 @@ impl Aggregate {
             schema,
         })
     }
+}
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Aggregate> {
-        match plan {
-            LogicalPlan::Aggregate(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Aggregate!"),
-        }
+/// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
+fn contains_grouping_set(group_expr: &[Expr]) -> bool {
+    group_expr
+        .iter()
+        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+}
+
+/// Calculates functional dependencies for aggregate expressions.
+fn calc_func_dependencies_for_aggregate(
+    // Expressions in the GROUP BY clause:
+    group_expr: &[Expr],
+    // Input plan of the aggregate:
+    input: &LogicalPlan,
+    // Aggregate schema
+    aggr_schema: &DFSchema,
+) -> Result<FunctionalDependencies> {
+    // We can do a case analysis on how to propagate functional dependencies based on
+    // whether the GROUP BY in question contains a grouping set expression:
+    // - If so, the functional dependencies will be empty because we cannot guarantee
+    //   that GROUP BY expression results will be unique.
+    // - Otherwise, it may be possible to propagate functional dependencies.
+    if !contains_grouping_set(group_expr) {
+        let group_by_expr_names = group_expr
+            .iter()
+            .map(|item| item.display_name())
+            .collect::<Result<Vec<_>>>()?;
+        let aggregate_func_dependencies =
+            aggregate_functional_dependencies(input.schema(), &group_by_expr_names, aggr_schema);
+        Ok(aggregate_func_dependencies)
+    } else {
+        Ok(FunctionalDependencies::empty())
     }
+}
+
+/// This function projects functional dependencies of the `input` plan according
+/// to projection expressions `exprs`.
+fn calc_func_dependencies_for_project(
+    exprs: &[Expr],
+    input: &LogicalPlan,
+) -> Result<FunctionalDependencies> {
+    let input_fields = input.schema().fields();
+    // Calculate expression indices (if present) in the input schema.
+    let proj_indices = exprs
+        .iter()
+        .filter_map(|expr| {
+            let expr_name = match expr {
+                Expr::Alias(alias) => {
+                    format!("{}", alias.expr)
+                }
+                _ => format!("{}", expr),
+            };
+            input_fields
+                .iter()
+                .position(|item| item.qualified_name() == expr_name)
+        })
+        .collect::<Vec<_>>();
+    Ok(input
+        .schema()
+        .functional_dependencies()
+        .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
 /// Sorts its input according to a list of sort expressions.
@@ -1694,28 +1885,46 @@ mod tests {
     fn test_display_graphviz() -> Result<()> {
         let plan = display_plan()?;
 
+        let expected_graphviz = r###"
+// Begin DataFusion GraphViz Plan,
+// display it online here: https://dreampuf.github.io/GraphvizOnline
+
+digraph {
+  subgraph cluster_1
+  {
+    graph[label="LogicalPlan"]
+    2[shape=box label="Projection: employee_csv.id"]
+    3[shape=box label="Filter: employee_csv.state IN (<subquery>)"]
+    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]
+    4[shape=box label="Subquery:"]
+    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]
+    5[shape=box label="TableScan: employee_csv projection=[state]"]
+    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]
+    6[shape=box label="TableScan: employee_csv projection=[id, state]"]
+    3 -> 6 [arrowhead=none, arrowtail=normal, dir=back]
+  }
+  subgraph cluster_7
+  {
+    graph[label="Detailed LogicalPlan"]
+    8[shape=box label="Projection: employee_csv.id\nSchema: [id:Int32]"]
+    9[shape=box label="Filter: employee_csv.state IN (<subquery>)\nSchema: [id:Int32, state:Utf8]"]
+    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]
+    10[shape=box label="Subquery:\nSchema: [state:Utf8]"]
+    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]
+    11[shape=box label="TableScan: employee_csv projection=[state]\nSchema: [state:Utf8]"]
+    10 -> 11 [arrowhead=none, arrowtail=normal, dir=back]
+    12[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]
+    9 -> 12 [arrowhead=none, arrowtail=normal, dir=back]
+  }
+}
+// End DataFusion GraphViz Plan
+"###;
+
         // just test for a few key lines in the output rather than the
         // whole thing to make test mainteance easier.
         let graphviz = format!("{}", plan.display_graphviz());
 
-        assert!(
-            graphviz.contains(r#"// Begin DataFusion GraphViz Plan (see https://graphviz.org)"#),
-            "\n{}",
-            plan.display_graphviz()
-        );
-        assert!(
-            graphviz
-                .contains(r#"[shape=box label="TableScan: employee_csv projection=[id, state]"]"#),
-            "\n{}",
-            plan.display_graphviz()
-        );
-        assert!(graphviz.contains(r#"[shape=box label="TableScan: employee_csv projection=[id, state]\nSchema: [id:Int32, state:Utf8]"]"#),
-                "\n{}", plan.display_graphviz());
-        assert!(
-            graphviz.contains(r#"// End DataFusion GraphViz Plan"#),
-            "\n{}",
-            plan.display_graphviz()
-        );
+        assert_eq!(expected_graphviz, graphviz);
         Ok(())
     }
 
@@ -1736,7 +1945,7 @@ mod tests {
                 _ => {
                     return Err(DataFusionError::NotImplemented(
                         "unknown plan type".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -1752,7 +1961,7 @@ mod tests {
                 _ => {
                     return Err(DataFusionError::NotImplemented(
                         "unknown plan type".to_string(),
-                    ))
+                    ));
                 }
             };
 

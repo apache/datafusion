@@ -15,6 +15,57 @@
 # specific language governing permissions and limitations
 # under the License.
 
+#######
+# Setup test data table
+#######
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  INT UNSIGNED NOT NULL,
+  c10 BIGINT UNSIGNED NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+statement ok
+CREATE TABLE d_table (c1 decimal(10,3), c2 varchar)
+as values
+(110.000, 'A'), (110.001, 'A'), (110.002, 'A'), (110.003, 'A'), (110.004, 'A'), (110.005, 'A'), (110.006, 'A'), (110.007, 'A'), (110.008, 'A'), (110.009, 'A'),
+(-100.000, 'B'),(-100.001, 'B'),(-100.002, 'B'),(-100.003, 'B'),(-100.004, 'B'),(-100.005, 'B'),(-100.006, 'B'),(-100.007, 'B'),(-100.008, 'B'),(-100.009, 'B')
+
+statement ok
+CREATE TABLE median_table (
+    col_i8 TINYINT,
+    col_i16 SMALLINT,
+    col_i32 INT,
+    col_i64 BIGINT,
+    col_u8 TINYINT UNSIGNED,
+    col_u16 SMALLINT UNSIGNED,
+    col_u32 INT UNSIGNED,
+    col_u64 BIGINT UNSIGNED,
+    col_f32 FLOAT,
+    col_f64 DOUBLE,
+    col_f64_nan DOUBLE
+) as VALUES
+( -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0, 0, 0, arrow_cast(0,'UInt64'), 1.1, 1.1, 1.1 ),
+( -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0, 0, 0, arrow_cast(0,'UInt64'), 4.4, 4.4, arrow_cast('NAN','Float64') ),
+( 100,  100,    100,         arrow_cast(100,'Int64'),              100,100,100, arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64') ),
+( 127, 32767, 2147483647, arrow_cast(9223372036854775807,'Int64'), 255, 65535,  4294967295, 18446744073709551615, 2.2, 2.2, arrow_cast('NAN','Float64') )
+
+statement ok
+CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
+(0,null), (1,1), (null,1), (3,2), (3,2)
 
 #######
 # Error tests
@@ -44,9 +95,16 @@ SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 statement error Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
-# csv_query_array_agg_unsupported
-statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
-SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100
+# array agg can use order by
+query ?
+SELECT array_agg(c13 ORDER BY c13)
+FROM
+  (SELECT *
+  FROM aggregate_test_100
+  ORDER BY c13
+  LIMIT 5) as t1
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
 
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
@@ -307,73 +365,73 @@ SELECT median(c12) FROM aggregate_test_100
 
 # median_i8
 query I
-SELECT median(a) FROM median_i8
+SELECT median(col_i8) FROM median_table
 ----
 -14
 
 # median_i16
 query I
-SELECT median(a) FROM median_i16
+SELECT median(col_i16) FROM median_table
 ----
 -16334
 
 # median_i32
 query I
-SELECT median(a) FROM median_i32
+SELECT median(col_i32) FROM median_table
 ----
 -1073741774
 
 # median_i64
 query I
-SELECT median(a) FROM median_i64
+SELECT median(col_i64) FROM median_table
 ----
 -4611686018427387854
 
 # median_u8
 query I
-SELECT median(a) FROM median_u8
+SELECT median(col_u8) FROM median_table
 ----
 50
 
 # median_u16
 query I
-SELECT median(a) FROM median_u16
+SELECT median(col_u16) FROM median_table
 ----
 50
 
 # median_u32
 query I
-SELECT median(a) FROM median_u32
+SELECT median(col_u32) FROM median_table
 ----
 50
 
 # median_u64
 query I
-SELECT median(a) FROM median_u64
+SELECT median(col_u64) FROM median_table
 ----
 50
 
 # median_f32
 query R
-SELECT median(a) FROM median_f32
+SELECT median(col_f32) FROM median_table
 ----
-3.3
+2.75
 
 # median_f64
 query R
-SELECT median(a) FROM median_f64
+SELECT median(col_f64) FROM median_table
 ----
-3.3
+2.75
 
 # median_f64_nan
 query R
-SELECT median(a) FROM median_f64_nan
+SELECT median(col_f64_nan) FROM median_table
 ----
 NaN
 
 # approx_median_f64_nan
 query R
-SELECT approx_median(a) FROM median_f64_nan
+SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
@@ -398,7 +456,7 @@ drop table cpu;
 
 # this test is to show create table as and select into works in the same way
 statement ok
-SELECT * INTO cpu 
+SELECT * INTO cpu
 FROM (VALUES
     ('host0', 90.1),
     ('host1', 90.2),
@@ -1172,10 +1230,6 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 4 29 1.260869565217 123 -117 23
 5 -194 -13.857142857143 118 -101 14
 
-# csv_query_array_agg_unsupported
-statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
-SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
-
 # csv_query_array_cube_agg_with_overflow
 query TIIRIII
 select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
@@ -1369,114 +1423,148 @@ select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.c
 2 1 1.414213562373 1
 
 
-# sum / count for all nulls
+
+# aggregates on empty tables
 statement ok
-create table the_nulls as values (null::bigint, 1), (null::bigint, 1), (null::bigint, 2);
+CREATE TABLE empty (column1 bigint, column2 int);
 
-# counts should be zeros (even for nulls)
-query II
-SELECT count(column1), column2 from the_nulls group by column2 order by column2;
+# no group by column
+query IIRIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1)
+FROM empty
 ----
-0 1
-0 2
+0 NULL NULL NULL NULL NULL NULL NULL
 
-# sums should be null
-query II
-SELECT sum(column1), column2 from the_nulls group by column2 order by column2;
+# Same query but with grouping (no groups, so no output)
+query IIRIIIIII
+SELECT
+  count(column1),
+  sum(column1),
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1),
+  column2
+FROM empty
+GROUP BY column2
+ORDER BY column2;
 ----
+
+
+statement ok
+drop table empty
+
+# aggregates on all nulls
+statement ok
+CREATE TABLE the_nulls
+AS VALUES
+  (null::bigint, 1),
+  (null::bigint, 1),
+  (null::bigint, 2);
+
+query II
+select * from the_nulls
+----
+NULL 1
 NULL 1
 NULL 2
 
-# avg should be null
-query RI
-SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
+# no group by column
+query IIRIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1)
+FROM the_nulls
 ----
-NULL 1
-NULL 2
+0 NULL NULL NULL NULL NULL NULL NULL
 
-# bit_and should be null
-query II
-SELECT bit_and(column1), column2 from the_nulls group by column2 order by column2;
+# Same query but with grouping
+query IIRIIIIII
+SELECT
+  count(column1), -- counts should be zero, even for nulls
+  sum(column1),   -- other aggregates should be null
+  avg(column1),
+  min(column1),
+  max(column1),
+  bit_and(column1),
+  bit_or(column1),
+  bit_xor(column1),
+  column2
+FROM the_nulls
+GROUP BY column2
+ORDER BY column2;
 ----
-NULL 1
-NULL 2
-
-# bit_or should be null
-query II
-SELECT bit_or(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# bit_xor should be null
-query II
-SELECT bit_xor(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# min should be null
-query II
-SELECT min(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
-
-# max should be null
-query II
-SELECT max(column1), column2 from the_nulls group by column2 order by column2;
-----
-NULL 1
-NULL 2
+0 NULL NULL NULL NULL NULL NULL NULL 1
+0 NULL NULL NULL NULL NULL NULL NULL 2
 
 
 statement ok
 drop table the_nulls;
-
-# All supported timestamp types
-
-# "nanos" --> TimestampNanosecondArray
-# "micros" --> TimestampMicrosecondArray
-# "millis" --> TimestampMillisecondArray
-# "secs" --> TimestampSecondArray
-# "names" --> StringArray
-
-statement ok
-create table t_source
-as values
- ('2018-11-13T17:11:10.011375885995', 'Row 0'),
- ('2011-12-13T11:13:10.12345', 'Row 1'),
- (null, 'Row 2'),
- ('2021-01-01T05:11:10.432', 'Row 3');
 
 statement ok
 create table bit_aggregate_functions (
   c1 SMALLINT NOT NULL,
   c2 SMALLINT NOT NULL,
   c3 SMALLINT,
+  tag varchar
 )
 as values
-  (5, 10, 11),
-  (33, 11, null),
-  (9, 12, null);
+  (5,  10, 11,   'A'),
+  (33, 11, null, 'B'),
+  (9,  12, null, 'A');
 
-# query_bit_and
-query III
-SELECT bit_and(c1), bit_and(c2), bit_and(c3) FROM bit_aggregate_functions
+# query_bit_and, query_bit_or, query_bit_xor
+query IIIIIIIII
+SELECT
+  bit_and(c1),
+  bit_and(c2),
+  bit_and(c3),
+  bit_or(c1),
+  bit_or(c2),
+  bit_or(c3),
+  bit_xor(c1),
+  bit_xor(c2),
+  bit_xor(c3)
+FROM bit_aggregate_functions
 ----
-1 8 11
+1 8 11 45 15 11 45 13 11
 
-# query_bit_or
-query III
-SELECT bit_or(c1), bit_or(c2), bit_or(c3) FROM bit_aggregate_functions
+# query_bit_and, query_bit_or, query_bit_xor, with group
+query IIIIIIIIIT
+SELECT
+  bit_and(c1),
+  bit_and(c2),
+  bit_and(c3),
+  bit_or(c1),
+  bit_or(c2),
+  bit_or(c3),
+  bit_xor(c1),
+  bit_xor(c2),
+  bit_xor(c3),
+  tag
+FROM bit_aggregate_functions
+GROUP BY tag
+ORDER BY tag
 ----
-45 15 11
+1 8 11 13 14 11 12 6 11 A
+33 11 NULL 33 11 NULL 33 11 NULL B
 
-# query_bit_xor
-query III
-SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3) FROM bit_aggregate_functions
-----
-45 13 11
 
 statement ok
 create table bool_aggregate_functions (
@@ -1518,6 +1606,22 @@ SELECT bool_or(distinct c1), bool_or(distinct c2), bool_or(distinct c3), bool_or
 ----
 true true true false true true false NULL
 
+# All supported timestamp types
+
+# "nanos" --> TimestampNanosecondArray
+# "micros" --> TimestampMicrosecondArray
+# "millis" --> TimestampMillisecondArray
+# "secs" --> TimestampSecondArray
+# "names" --> StringArray
+
+statement ok
+create table t_source
+as values
+ ('2018-11-13T17:11:10.011375885995', 'Row 0', 'X'),
+ ('2011-12-13T11:13:10.12345',        'Row 1', 'X'),
+ (null,                               'Row 2', 'Y'),
+ ('2021-01-01T05:11:10.432',          'Row 3', 'Y');
+
 statement ok
 create table t as
 select
@@ -1525,22 +1629,26 @@ select
   arrow_cast(column1, 'Timestamp(Microsecond, None)') as micros,
   arrow_cast(column1, 'Timestamp(Millisecond, None)') as millis,
   arrow_cast(column1, 'Timestamp(Second, None)') as secs,
-  column2 as names
+  column2 as names,
+  column3 as tag
 from t_source;
 
 # Demonstate the contents
-query PPPPT
+query PPPPTT
 select * from t;
 ----
-2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0
-2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1
-NULL NULL NULL NULL Row 2
-2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0 X
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1 X
+NULL NULL NULL NULL Row 2 Y
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3 Y
 
 
 # aggregate_timestamps_sum
-statement error Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)
+statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)\.
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
+
+statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Timestamp\(Nanosecond, None\)\.
+SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag;
 
 # aggregate_timestamps_count
 query IIII
@@ -1548,6 +1656,11 @@ SELECT count(nanos), count(micros), count(millis), count(secs) FROM t;
 ----
 3 3 3 3
 
+query TIIII
+SELECT tag, count(nanos), count(micros), count(millis), count(secs) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2 2 2 2
+Y 1 1 1 1
 
 # aggregate_timestamps_min
 query PPPP
@@ -1555,17 +1668,31 @@ SELECT min(nanos), min(micros), min(millis), min(secs) FROM t;
 ----
 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
 
+query TPPPP
+SELECT tag, min(nanos), min(micros), min(millis), min(secs) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
+Y 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
+
 # aggregate_timestamps_max
 query PPPP
 SELECT max(nanos), max(micros), max(millis), max(secs) FROM t;
 ----
 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
 
+query TPPPP
+SELECT tag, max(nanos), max(micros), max(millis), max(secs) FROM t GROUP BY tag ORDER BY tag
+----
+X 2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10
+Y 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
 
 
 # aggregate_timestamps_avg
-statement error Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\).
+statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\)\.
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
+
+statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Timestamp\(Nanosecond, None\)\.
+SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
 
 
 statement ok
@@ -1573,6 +1700,101 @@ drop table t_source;
 
 statement ok
 drop table t;
+
+
+# All supported Date tpes
+
+# "date32" --> Date32Array
+# "date64" --> Date64Array
+# "names" --> StringArray
+
+statement ok
+create table t_source
+as values
+ ('2018-11-13', 'Row 0', 'X'),
+ ('2011-12-13', 'Row 1', 'X'),
+ (null,         'Row 2', 'Y'),
+ ('2021-01-01', 'Row 3', 'Y');
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Date32') as date32,
+  -- Workaround https://github.com/apache/arrow-rs/issues/4512 is fixed, can use this
+  -- arrow_cast(column1, 'Date64') as date64,
+  arrow_cast(arrow_cast(column1, 'Date32'), 'Date64') as date64,
+  column2 as names,
+  column3 as tag
+from t_source;
+
+# Demonstate the contents
+query DDTT
+select * from t;
+----
+2018-11-13 2018-11-13T00:00:00 Row 0 X
+2011-12-13 2011-12-13T00:00:00 Row 1 X
+NULL NULL Row 2 Y
+2021-01-01 2021-01-01T00:00:00 Row 3 Y
+
+
+# aggregate_timestamps_sum
+statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Date32\.
+SELECT sum(date32), sum(date64) FROM t;
+
+statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Date32\.
+SELECT tag, sum(date32), sum(date64) FROM t GROUP BY tag ORDER BY tag;
+
+# aggregate_timestamps_count
+query II
+SELECT count(date32), count(date64) FROM t;
+----
+3 3
+
+query TII
+SELECT tag, count(date32), count(date64) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2 2
+Y 1 1
+
+# aggregate_timestamps_min
+query DD
+SELECT min(date32), min(date64) FROM t;
+----
+2011-12-13 2011-12-13T00:00:00
+
+query TDD
+SELECT tag, min(date32), min(date64) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2011-12-13 2011-12-13T00:00:00
+Y 2021-01-01 2021-01-01T00:00:00
+
+# aggregate_timestamps_max
+query DD
+SELECT max(date32), max(date64) FROM t;
+----
+2021-01-01 2021-01-01T00:00:00
+
+query TDD
+SELECT tag, max(date32), max(date64) FROM t GROUP BY tag ORDER BY tag
+----
+X 2018-11-13 2018-11-13T00:00:00
+Y 2021-01-01 2021-01-01T00:00:00
+
+
+# aggregate_timestamps_avg
+statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Date32\.
+SELECT avg(date32), avg(date64) FROM t
+
+statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Date32\.
+SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
 
 # All supported time types
 
@@ -1586,10 +1808,10 @@ drop table t;
 statement ok
 create table t_source
 as values
- ('18:06:30.243620451', 'Row 0'),
- ('20:08:28.161121654', 'Row 1'),
- ('19:11:04.156423842', 'Row 2'),
- ('21:06:28.247821084', 'Row 3');
+ ('18:06:30.243620451', 'Row 0', 'A'),
+ ('20:08:28.161121654', 'Row 1', 'A'),
+ ('19:11:04.156423842', 'Row 2', 'B'),
+ ('21:06:28.247821084', 'Row 3', 'B');
 
 
 statement ok
@@ -1599,27 +1821,37 @@ select
   arrow_cast(column1, 'Time64(Microsecond)') as micros,
   arrow_cast(column1, 'Time32(Millisecond)') as millis,
   arrow_cast(column1, 'Time32(Second)') as secs,
-  column2 as names
+  column2 as names,
+  column3 as tag
 from t_source;
 
 # Demonstate the contents
-query DDDDT
+query DDDDTT
 select * from t;
 ----
-18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30 Row 0
-20:08:28.161121654 20:08:28.161121 20:08:28.161 20:08:28 Row 1
-19:11:04.156423842 19:11:04.156423 19:11:04.156 19:11:04 Row 2
-21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3
+18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30 Row 0 A
+20:08:28.161121654 20:08:28.161121 20:08:28.161 20:08:28 Row 1 A
+19:11:04.156423842 19:11:04.156423 19:11:04.156 19:11:04 Row 2 B
+21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3 B
 
 # aggregate_times_sum
 statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Time64\(Nanosecond\).
 SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
+
+statement error DataFusion error: Error during planning: The function Sum does not support inputs of type Time64\(Nanosecond\)\.
+SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag
 
 # aggregate_times_count
 query IIII
 SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
 ----
 4 4 4 4
+
+query TIIII
+SELECT tag, count(nanos), count(micros), count(millis), count(secs) FROM t GROUP BY tag ORDER BY tag
+----
+A 2 2 2 2
+B 2 2 2 2
 
 
 # aggregate_times_min
@@ -1628,21 +1860,151 @@ SELECT min(nanos), min(micros), min(millis), min(secs) FROM t
 ----
 18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30
 
+query TDDDD
+SELECT tag, min(nanos), min(micros), min(millis), min(secs) FROM t GROUP BY tag ORDER BY tag
+----
+A 18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30
+B 19:11:04.156423842 19:11:04.156423 19:11:04.156 19:11:04
+
 # aggregate_times_max
 query DDDD
 SELECT max(nanos), max(micros), max(millis), max(secs) FROM t
 ----
 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
 
+query TDDDD
+SELECT tag, max(nanos), max(micros), max(millis), max(secs) FROM t GROUP BY tag ORDER BY tag
+----
+A 20:08:28.161121654 20:08:28.161121 20:08:28.161 20:08:28
+B 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
+
 
 # aggregate_times_avg
 statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Time64\(Nanosecond\).
 SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
 
+statement error DataFusion error: Error during planning: The function Avg does not support inputs of type Time64\(Nanosecond\)\.
+SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
+
 statement ok
 drop table t_source;
 
 statement ok
+drop table t;
+
+
+# aggregates on strings
+statement ok
+create table t_source
+as values
+ ('Foo', 1),
+ ('Bar', 2),
+ (null,  2),
+ ('Baz', 1);
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Utf8') as utf8,
+  arrow_cast(column1, 'LargeUtf8') as largeutf8,
+  column2 as tag
+from t_source;
+
+# No groupy
+query TTITTI
+SELECT
+  min(utf8),
+  max(utf8),
+  count(utf8),
+  min(largeutf8),
+  max(largeutf8),
+  count(largeutf8)
+FROM t
+----
+Bar Foo 3 Bar Foo 3
+
+
+# with groupby
+query TTITTI
+SELECT
+  min(utf8),
+  max(utf8),
+  count(utf8),
+  min(largeutf8),
+  max(largeutf8),
+  count(largeutf8)
+FROM t
+GROUP BY tag
+ORDER BY tag
+----
+Baz Foo 2 Baz Foo 2
+Bar Bar 1 Bar Bar 1
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
+# aggregates on binary
+statement ok
+create table t_source
+as values
+ ('Foo', 1),
+ ('Bar', 2),
+ (null,  2),
+ ('Baz', 1);
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Binary') as binary,
+  arrow_cast(column1, 'LargeBinary') as largebinary,
+  column2 as tag
+from t_source;
+
+# No groupy
+query error DataFusion error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+SELECT
+  min(binary),
+  max(binary),
+  count(binary),
+  min(largebinary),
+  max(largebinary),
+  count(largebinary)
+FROM t
+
+
+# with groupby
+query error DataFusion error: External error: Internal error: Min/Max accumulator not implemented for type Binary\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+SELECT
+  min(binary),
+  max(binary),
+  count(binary),
+  min(largebinary),
+  max(largebinary),
+  count(largebinary)
+FROM t
+GROUP BY tag
+ORDER BY tag
+
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
+
+
+statement error DataFusion error: Execution error: Table 't_source' doesn't exist\.
+drop table t_source;
+
+statement error DataFusion error: Execution error: Table 't' doesn't exist\.
 drop table t;
 
 query I
@@ -1660,12 +2022,24 @@ select sum(c1), arrow_typeof(sum(c1)) from d_table;
 ----
 100 Decimal128(20, 3)
 
+query TRT
+select c2, sum(c1), arrow_typeof(sum(c1)) from d_table GROUP BY c2 ORDER BY c2;
+----
+A 1100.045 Decimal128(20, 3)
+B -1000.045 Decimal128(20, 3)
+
 
 # aggregate_decimal_avg
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from d_table
 ----
 5 Decimal128(14, 7)
+
+query TRT
+select c2, avg(c1), arrow_typeof(avg(c1)) from d_table GROUP BY c2 ORDER BY c2
+----
+A 110.0045 Decimal128(14, 7)
+B -100.0045 Decimal128(14, 7)
 
 # Use PostgresSQL dialect
 statement ok
@@ -1677,27 +2051,44 @@ CREATE TABLE test_table (c1 INT, c2 INT, c3 INT)
 
 # Inserting data
 statement ok
-INSERT INTO test_table VALUES (1, 10, 50), (1, 20, 60), (2, 10, 70), (2, 20, 80), (3, 10, NULL)
+INSERT INTO test_table VALUES
+  (1, 10, 50),
+  (1, 20, 60),
+  (2, 10, 70),
+  (2, 20, 80),
+  (3, 10, NULL)
 
 # query_group_by_with_filter
-query II rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result FROM test_table GROUP BY c1
+query III rowsort
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20),
+  SUM(c2) FILTER (WHERE c2 < 1) -- no rows pass filter, so the output should be NULL
+FROM test_table GROUP BY c1
 ----
-1 20
-2 20
-3 NULL
+1 20 NULL
+2 20 NULL
+3 NULL NULL
 
 # query_group_by_avg_with_filter
-query IR rowsort
-SELECT c1, AVG(c2) FILTER (WHERE c2 >= 20) AS avg_c2 FROM test_table GROUP BY c1
+query IRR rowsort
+SELECT
+  c1,
+  AVG(c2) FILTER (WHERE c2 >= 20),
+  AVG(c2) FILTER (WHERE c2 < 1)  -- no rows pass filter, so output should be null
+FROM test_table GROUP BY c1
 ----
-1 20
-2 20
-3 NULL
+1 20 NULL
+2 20 NULL
+3 NULL NULL
 
 # query_group_by_with_multiple_filters
 query IIR rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2, AVG(c3) FILTER (WHERE c3 <= 70) AS avg_c3 FROM test_table GROUP BY c1
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2,
+  AVG(c3) FILTER (WHERE c3 <= 70) AS avg_c3
+FROM test_table GROUP BY c1
 ----
 1 20 55
 2 20 70
@@ -1705,7 +2096,10 @@ SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2, AVG(c3) FILTER (WHERE c3 <
 
 # query_group_by_distinct_with_filter
 query II rowsort
-SELECT c1, COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count FROM test_table GROUP BY c1
+SELECT
+  c1,
+  COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count
+FROM test_table GROUP BY c1
 ----
 1 1
 2 1
@@ -1713,19 +2107,27 @@ SELECT c1, COUNT(DISTINCT c2) FILTER (WHERE c2 >= 20) AS distinct_c2_count FROM 
 
 # query_without_group_by_with_filter
 query I rowsort
-SELECT SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2 FROM test_table
+SELECT
+  SUM(c2) FILTER (WHERE c2 >= 20) AS sum_c2
+FROM test_table
 ----
 40
 
 # count_without_group_by_with_filter
 query I rowsort
-SELECT COUNT(c2) FILTER (WHERE c2 >= 20) AS count_c2 FROM test_table
+SELECT
+  COUNT(c2) FILTER (WHERE c2 >= 20) AS count_c2
+FROM test_table
 ----
 2
 
 # query_with_and_without_filter
 query III rowsort
-SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result, SUM(c2) as result_no_filter FROM test_table GROUP BY c1;
+SELECT
+  c1,
+  SUM(c2) FILTER (WHERE c2 >= 20) as result,
+  SUM(c2) as result_no_filter
+FROM test_table GROUP BY c1;
 ----
 1 20 30
 2 20 30
@@ -1733,13 +2135,17 @@ SELECT c1, SUM(c2) FILTER (WHERE c2 >= 20) as result, SUM(c2) as result_no_filte
 
 # query_filter_on_different_column_than_aggregate
 query I rowsort
-select sum(c1) FILTER (WHERE c2 < 30) from test_table;
+select
+  sum(c1) FILTER (WHERE c2 < 30)
+FROM test_table;
 ----
 9
 
 # query_test_empty_filter
 query I rowsort
-SELECT SUM(c2) FILTER (WHERE c2 >= 20000000) AS sum_c2 FROM test_table;
+SELECT
+  SUM(c2) FILTER (WHERE c2 >= 20000000) AS sum_c2
+FROM test_table;
 ----
 NULL
 

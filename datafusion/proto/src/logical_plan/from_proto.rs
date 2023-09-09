@@ -26,7 +26,7 @@ use crate::protobuf::{
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+    i256, DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
     UnionFields, UnionMode,
 };
 use datafusion::execution::registry::FunctionRegistry;
@@ -34,14 +34,15 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
-use datafusion_expr::expr::Placeholder;
+use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
-    array_length, array_ndims, array_position, array_positions, array_prepend,
-    array_remove, array_replace, array_to_string, ascii, asin, asinh, atan, atan2, atanh,
-    bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
-    concat_expr, concat_ws_expr, cos, cosh, date_bin, date_part, date_trunc, degrees,
-    digest, exp,
+    array_has, array_has_all, array_has_any, array_length, array_ndims, array_position,
+    array_positions, array_prepend, array_remove, array_remove_all, array_remove_n,
+    array_replace, array_replace_all, array_replace_n, array_to_string, ascii, asin,
+    asinh, atan, atan2, atanh, bit_length, btrim, cardinality, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, cot,
+    current_date, current_time, date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -365,8 +366,8 @@ impl TryFrom<&protobuf::Field> for Field {
     type Error = Error;
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
-
-        Ok(Self::new(field.name.as_str(), datatype, field.nullable))
+        Ok(Self::new(field.name.as_str(), datatype, field.nullable)
+            .with_metadata(field.metadata.clone()))
     }
 }
 
@@ -417,6 +418,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
+            ScalarFunction::Cot => Self::Cot,
             ScalarFunction::Asin => Self::Asin,
             ScalarFunction::Acos => Self::Acos,
             ScalarFunction::Atan => Self::Atan,
@@ -450,6 +452,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::ArrayAppend => Self::ArrayAppend,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
+            ScalarFunction::ArrayHasAll => Self::ArrayHasAll,
+            ScalarFunction::ArrayHasAny => Self::ArrayHasAny,
+            ScalarFunction::ArrayHas => Self::ArrayHas,
             ScalarFunction::ArrayDims => Self::ArrayDims,
             ScalarFunction::ArrayFill => Self::ArrayFill,
             ScalarFunction::ArrayLength => Self::ArrayLength,
@@ -458,7 +463,11 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayPositions => Self::ArrayPositions,
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
             ScalarFunction::ArrayRemove => Self::ArrayRemove,
+            ScalarFunction::ArrayRemoveN => Self::ArrayRemoveN,
+            ScalarFunction::ArrayRemoveAll => Self::ArrayRemoveAll,
             ScalarFunction::ArrayReplace => Self::ArrayReplace,
+            ScalarFunction::ArrayReplaceN => Self::ArrayReplaceN,
+            ScalarFunction::ArrayReplaceAll => Self::ArrayReplaceAll,
             ScalarFunction::ArrayToString => Self::ArrayToString,
             ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
@@ -473,6 +482,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Sha384 => Self::SHA384,
             ScalarFunction::Sha512 => Self::SHA512,
             ScalarFunction::Digest => Self::Digest,
+            ScalarFunction::Encode => Self::Encode,
+            ScalarFunction::Decode => Self::Decode,
             ScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
             ScalarFunction::Log2 => Self::Log2,
             ScalarFunction::Signum => Self::Signum,
@@ -578,19 +589,9 @@ impl TryFrom<&protobuf::Schema> for Schema {
         let fields = schema
             .columns
             .iter()
-            .map(|c| {
-                let pb_arrow_type_res = c
-                    .arrow_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: Field message was missing required field 'arrow_type'"));
-                let pb_arrow_type: &protobuf::ArrowType = match pb_arrow_type_res {
-                    Ok(res) => res,
-                    Err(e) => return Err(e),
-                };
-                Ok(Field::new(&c.name, pb_arrow_type.try_into()?, c.nullable))
-            })
+            .map(Field::try_from)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self::new(fields))
+        Ok(Self::new_with_metadata(fields, schema.metadata.clone()))
     }
 }
 
@@ -652,6 +653,14 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     val.s as i8,
                 )
             }
+            Value::Decimal256Value(val) => {
+                let array = vec_to_array(val.value.clone());
+                Self::Decimal256(
+                    Some(i256::from_be_bytes(array)),
+                    val.p as u8,
+                    val.s as i8,
+                )
+            }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
             Value::Time32Value(v) => {
                 let time_value =
@@ -679,6 +688,10 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             }
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
+            Value::DurationSecondValue(v) => Self::DurationSecond(Some(*v)),
+            Value::DurationMillisecondValue(v) => Self::DurationMillisecond(Some(*v)),
+            Value::DurationMicrosecondValue(v) => Self::DurationMicrosecond(Some(*v)),
+            Value::DurationNanosecondValue(v) => Self::DurationNanosecond(Some(*v)),
             Value::TimestampValue(v) => {
                 let timezone = if v.timezone.is_empty() {
                     None
@@ -997,6 +1010,36 @@ pub fn parse_expr(
                         window_frame,
                     )))
                 }
+                window_expr_node::WindowFunction::Udaf(udaf_name) => {
+                    let udaf_function = registry.udaf(udaf_name)?;
+                    let args = parse_optional_expr(expr.expr.as_deref(), registry)?
+                        .map(|e| vec![e])
+                        .unwrap_or_else(Vec::new);
+                    Ok(Expr::WindowFunction(WindowFunction::new(
+                        datafusion_expr::window_function::WindowFunction::AggregateUDF(
+                            udaf_function,
+                        ),
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                    )))
+                }
+                window_expr_node::WindowFunction::Udwf(udwf_name) => {
+                    let udwf_function = registry.udwf(udwf_name)?;
+                    let args = parse_optional_expr(expr.expr.as_deref(), registry)?
+                        .map(|e| vec![e])
+                        .unwrap_or_else(Vec::new);
+                    Ok(Expr::WindowFunction(WindowFunction::new(
+                        datafusion_expr::window_function::WindowFunction::WindowUDF(
+                            udwf_function,
+                        ),
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                    )))
+                }
             }
         }
         ExprType::AggregateExpr(expr) => {
@@ -1013,14 +1056,10 @@ pub fn parse_expr(
                 parse_vec_expr(&expr.order_by, registry)?,
             )))
         }
-        ExprType::Alias(alias) => Ok(Expr::Alias(
-            Box::new(parse_required_expr(
-                alias.expr.as_deref(),
-                registry,
-                "expr",
-            )?),
+        ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
+            parse_required_expr(alias.expr.as_deref(), registry, "expr")?,
             alias.alias.clone(),
-        )),
+        ))),
         ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
             is_null.expr.as_deref(),
             registry,
@@ -1089,8 +1128,9 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
+            false,
         ))),
-        ExprType::Ilike(like) => Ok(Expr::ILike(Like::new(
+        ExprType::Ilike(like) => Ok(Expr::Like(Like::new(
             like.negated,
             Box::new(parse_required_expr(like.expr.as_deref(), registry, "expr")?),
             Box::new(parse_required_expr(
@@ -1099,6 +1139,7 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
+            true,
         ))),
         ExprType::SimilarTo(like) => Ok(Expr::SimilarTo(Like::new(
             like.negated,
@@ -1109,6 +1150,7 @@ pub fn parse_expr(
                 "pattern",
             )?),
             parse_escape_char(&like.escape_char)?,
+            false,
         ))),
         ExprType::Case(case) => {
             let when_then_expr = case
@@ -1192,6 +1234,18 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::ArrayHasAll => Ok(array_has_all(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayHasAny => Ok(array_has_any(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayHas => Ok(array_has(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::ArrayFill => Ok(array_fill(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1209,7 +1263,27 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayRemoveN => Ok(array_remove_n(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::ArrayRemoveAll => Ok(array_remove_all(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::ArrayReplace => Ok(array_replace(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::ArrayReplaceN => Ok(array_replace_n(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                    parse_expr(&args[3], registry)?,
+                )),
+                ScalarFunction::ArrayReplaceAll => Ok(array_replace_all(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
@@ -1262,7 +1336,12 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
-                ScalarFunction::Trunc => Ok(trunc(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Trunc => Ok(trunc(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
                 ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], registry)?)),
                 ScalarFunction::OctetLength => {
@@ -1444,6 +1523,9 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::CurrentDate => Ok(current_date()),
+                ScalarFunction::CurrentTime => Ok(current_time()),
+                ScalarFunction::Cot => Ok(cot(parse_expr(&args[0], registry)?)),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),
