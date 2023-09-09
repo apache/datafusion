@@ -432,6 +432,14 @@ impl BatchSerializer for CsvSerializer {
         self.header = false;
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
     }
+
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
+        let new_self = CsvSerializer::new()
+            .with_builder(self.builder.clone())
+            .with_header(self.header);
+        self.header = false;
+        Ok(Box::new(new_self))
+    }
 }
 
 /// Implements [`DataSink`] for writing to a CSV file.
@@ -579,6 +587,7 @@ impl DataSink for CsvSink {
             serializers,
             writers,
             self.config.single_file_output,
+            self.config.unbounded_input,
         )
         .await
     }
