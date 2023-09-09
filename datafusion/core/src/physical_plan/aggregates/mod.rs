@@ -1599,13 +1599,19 @@ mod tests {
 
         let task_ctx = if spill {
             let session_config = SessionConfig::new().with_batch_size(2);
-            let task_ctx = TaskContext::default().with_session_config(session_config);
+            let runtime = Arc::new(
+                RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1956, 1.0))
+                    .unwrap(),
+            );
+            let task_ctx = TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime);
             Arc::new(task_ctx)
         } else {
             Arc::new(TaskContext::default())
         };
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new_for_test(
+        let partial_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
@@ -1613,7 +1619,6 @@ mod tests {
             vec![None],
             input,
             input_schema.clone(),
-            spill,
         )?);
 
         let result =
@@ -1654,7 +1659,7 @@ mod tests {
 
         let final_grouping_set = PhysicalGroupBy::new_single(final_group);
 
-        let merged_aggregate = Arc::new(AggregateExec::try_new_for_test(
+        let merged_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
@@ -1662,7 +1667,6 @@ mod tests {
             vec![None],
             merge,
             input_schema,
-            spill,
         )?);
 
         let result =

@@ -522,7 +522,14 @@ impl Stream for GroupedHashAggregateStream {
                     }
                 }
 
-                ExecutionState::Done => return Poll::Ready(None),
+                ExecutionState::Done => {
+                    // release the memory reservation since sending back output batch itself needs
+                    // some memory reservation, so make some room for it.
+                    let s = self.schema();
+                    self.clear_shrink(&RecordBatch::new_empty(s));
+                    let _ = self.update_memory_reservation();
+                    return Poll::Ready(None);
+                }
             }
         }
     }
@@ -664,7 +671,9 @@ impl GroupedHashAggregateStream {
             }
         }
 
-        self.update_memory_reservation()?;
+        // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
+        // over the target memory size after emission, we can emit again rather than returning Err.
+        let _ = self.update_memory_reservation();
         let batch = RecordBatch::try_new(schema, output)?;
         Ok(batch)
     }
@@ -674,7 +683,7 @@ impl GroupedHashAggregateStream {
     /// memory. Currently only [`GroupOrdering::None`] is supported for spilling.
     fn spill_previous_if_necessary(&mut self, batch: &RecordBatch) -> Result<()> {
         // TODO: support group_ordering for spilling
-        if self.reservation.size() > 0
+        if self.group_values.len() > 0
             && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
             && !matches!(self.mode, AggregateMode::Partial)
@@ -685,8 +694,6 @@ impl GroupedHashAggregateStream {
             self.spill_state.spill_schema = batch.schema();
             self.spill()?;
             self.clear_shrink(batch);
-
-            return self.update_memory_reservation();
         }
         Ok(())
     }

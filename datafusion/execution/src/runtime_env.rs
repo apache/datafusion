@@ -24,6 +24,7 @@ use crate::{
     object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
+use crate::memory_pool::FairSpillPool;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
@@ -166,6 +167,11 @@ impl RuntimeConfig {
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
         let pool_size = (max_memory as f64 * memory_fraction) as usize;
         self.with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+    }
+
+    pub fn with_fair_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
+        let pool_size = (max_memory as f64 * memory_fraction) as usize;
+        self.with_memory_pool(Arc::new(FairSpillPool::new(pool_size)))
     }
 
     /// Use the specified path to create any needed temporary files
