@@ -95,6 +95,8 @@ pub struct FileSinkConfig {
     /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
     /// to which each output partition is written to its own output file.
     pub single_file_output: bool,
+    /// If input is unbounded, tokio tasks need to yield to not block execution forever
+    pub unbounded_input: bool,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
     /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
