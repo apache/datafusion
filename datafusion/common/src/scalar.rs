@@ -47,14 +47,6 @@ use arrow::{
 };
 use arrow_array::{ArrowNativeTypeOp, Scalar};
 
-// Constants we use throughout this file:
-const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
-const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
-const SECS_IN_ONE_MONTH: i64 = 2_592_000; // assuming 30 days.
-const MILLISECS_IN_ONE_MONTH: i64 = 2_592_000_000; // assuming 30 days.
-const MICROSECS_IN_ONE_MONTH: i64 = 2_592_000_000_000; // assuming 30 days.
-const NANOSECS_IN_ONE_MONTH: i128 = 2_592_000_000_000_000; // assuming 30 days.
-
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part to arrow's [`Array`].
 ///
@@ -237,28 +229,10 @@ impl PartialEq for ScalarValue {
             (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.eq(v2),
             (DurationNanosecond(_), _) => false,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.eq(v2),
-            (IntervalYearMonth(v1), IntervalDayTime(v2)) => {
-                ym_to_milli(v1).eq(&dt_to_milli(v2))
-            }
-            (IntervalYearMonth(v1), IntervalMonthDayNano(v2)) => {
-                ym_to_nano(v1).eq(&mdn_to_nano(v2))
-            }
             (IntervalYearMonth(_), _) => false,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.eq(v2),
-            (IntervalDayTime(v1), IntervalYearMonth(v2)) => {
-                dt_to_milli(v1).eq(&ym_to_milli(v2))
-            }
-            (IntervalDayTime(v1), IntervalMonthDayNano(v2)) => {
-                dt_to_nano(v1).eq(&mdn_to_nano(v2))
-            }
             (IntervalDayTime(_), _) => false,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
-            (IntervalMonthDayNano(v1), IntervalYearMonth(v2)) => {
-                mdn_to_nano(v1).eq(&ym_to_nano(v2))
-            }
-            (IntervalMonthDayNano(v1), IntervalDayTime(v2)) => {
-                mdn_to_nano(v1).eq(&dt_to_nano(v2))
-            }
             (IntervalMonthDayNano(_), _) => false,
             (Struct(v1, t1), Struct(v2, t2)) => v1.eq(v2) && t1.eq(t2),
             (Struct(_, _), _) => false,
@@ -377,28 +351,10 @@ impl PartialOrd for ScalarValue {
             }
             (TimestampNanosecond(_, _), _) => None,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.partial_cmp(v2),
-            (IntervalYearMonth(v1), IntervalDayTime(v2)) => {
-                ym_to_milli(v1).partial_cmp(&dt_to_milli(v2))
-            }
-            (IntervalYearMonth(v1), IntervalMonthDayNano(v2)) => {
-                ym_to_nano(v1).partial_cmp(&mdn_to_nano(v2))
-            }
             (IntervalYearMonth(_), _) => None,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
-            (IntervalDayTime(v1), IntervalYearMonth(v2)) => {
-                dt_to_milli(v1).partial_cmp(&ym_to_milli(v2))
-            }
-            (IntervalDayTime(v1), IntervalMonthDayNano(v2)) => {
-                dt_to_nano(v1).partial_cmp(&mdn_to_nano(v2))
-            }
             (IntervalDayTime(_), _) => None,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.partial_cmp(v2),
-            (IntervalMonthDayNano(v1), IntervalYearMonth(v2)) => {
-                mdn_to_nano(v1).partial_cmp(&ym_to_nano(v2))
-            }
-            (IntervalMonthDayNano(v1), IntervalDayTime(v2)) => {
-                mdn_to_nano(v1).partial_cmp(&dt_to_nano(v2))
-            }
             (IntervalMonthDayNano(_), _) => None,
             (DurationSecond(v1), DurationSecond(v2)) => v1.partial_cmp(v2),
             (DurationSecond(_), _) => None,
@@ -429,122 +385,6 @@ impl PartialOrd for ScalarValue {
             (Null, _) => None,
         }
     }
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// year-month-interval.
-#[inline]
-pub fn ym_to_sec(val: &Option<i32>) -> Option<i64> {
-    val.map(|value| (value as i64) * SECS_IN_ONE_MONTH)
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// year-month-interval.
-#[inline]
-pub fn ym_to_milli(val: &Option<i32>) -> Option<i64> {
-    val.map(|value| (value as i64) * MILLISECS_IN_ONE_MONTH)
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// year-month-interval.
-#[inline]
-pub fn ym_to_micro(val: &Option<i32>) -> Option<i64> {
-    val.map(|value| (value as i64) * MICROSECS_IN_ONE_MONTH)
-}
-
-/// This function computes the duration (in nanoseconds) of the given
-/// year-month-interval.
-#[inline]
-pub fn ym_to_nano(val: &Option<i32>) -> Option<i128> {
-    val.map(|value| (value as i128) * NANOSECS_IN_ONE_MONTH)
-}
-
-/// This function computes the duration (in seconds) of the given
-/// daytime-interval.
-#[inline]
-pub fn dt_to_sec(val: &Option<i64>) -> Option<i64> {
-    val.map(|val| {
-        let (days, millis) = IntervalDayTimeType::to_parts(val);
-        (days as i64) * MILLISECS_IN_ONE_DAY + (millis as i64 / 1_000)
-    })
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// daytime-interval.
-#[inline]
-pub fn dt_to_milli(val: &Option<i64>) -> Option<i64> {
-    val.map(|val| {
-        let (days, millis) = IntervalDayTimeType::to_parts(val);
-        (days as i64) * MILLISECS_IN_ONE_DAY + (millis as i64)
-    })
-}
-
-/// This function computes the duration (in microseconds) of the given
-/// daytime-interval.
-#[inline]
-pub fn dt_to_micro(val: &Option<i64>) -> Option<i128> {
-    val.map(|val| {
-        let (days, millis) = IntervalDayTimeType::to_parts(val);
-        (days as i128) * (NANOSECS_IN_ONE_DAY as i128) + (millis as i128) * 1_000
-    })
-}
-
-/// This function computes the duration (in nanoseconds) of the given
-/// daytime-interval.
-#[inline]
-pub fn dt_to_nano(val: &Option<i64>) -> Option<i128> {
-    val.map(|val| {
-        let (days, millis) = IntervalDayTimeType::to_parts(val);
-        (days as i128) * (NANOSECS_IN_ONE_DAY as i128) + (millis as i128) * 1_000_000
-    })
-}
-
-/// This function computes the duration (in seconds) of the given
-/// month-day-nano-interval. Assumes a month is 30 days long.
-#[inline]
-pub fn mdn_to_sec(val: &Option<i128>) -> Option<i128> {
-    val.map(|val| {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
-        (months as i128) * NANOSECS_IN_ONE_MONTH
-            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
-            + (nanos as i128) / 1_000_000_000
-    })
-}
-
-/// This function computes the duration (in milliseconds) of the given
-/// month-day-nano-interval. Assumes a month is 30 days long.
-#[inline]
-pub fn mdn_to_milli(val: &Option<i128>) -> Option<i128> {
-    val.map(|val| {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
-        (months as i128) * NANOSECS_IN_ONE_MONTH
-            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
-            + (nanos as i128) / 1_000_000
-    })
-}
-
-/// This function computes the duration (in microseconds) of the given
-/// month-day-nano-interval. Assumes a month is 30 days long.
-#[inline]
-pub fn mdn_to_micro(val: &Option<i128>) -> Option<i128> {
-    val.map(|val| {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
-        (months as i128) * NANOSECS_IN_ONE_MONTH
-            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
-            + (nanos as i128) / 1_000
-    })
-}
-
-/// This function computes the duration (in nanoseconds) of the given
-/// month-day-nano-interval. Assumes a month is 30 days long.
-#[inline]
-pub fn mdn_to_nano(val: &Option<i128>) -> Option<i128> {
-    val.map(|val| {
-        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(val);
-        (months as i128) * NANOSECS_IN_ONE_MONTH
-            + (days as i128) * (NANOSECS_IN_ONE_DAY as i128)
-            + (nanos as i128)
-    })
 }
 
 impl Eq for ScalarValue {}
@@ -4106,53 +3946,6 @@ mod tests {
             ])),
             None
         );
-        // Different type of intervals can be compared.
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(1, 2)))
-                < IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                    14, 0, 1
-                ))),
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 4)))
-                >= IntervalDayTime(Some(IntervalDayTimeType::make_value(119, 1)))
-        );
-        assert!(
-            IntervalDayTime(Some(IntervalDayTimeType::make_value(12, 86_399_999)))
-                >= IntervalDayTime(Some(IntervalDayTimeType::make_value(12, 0)))
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(2, 12)))
-                == IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                    36, 0, 0
-                ))),
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 0)))
-                != IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 1)))
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(1, 4)))
-                == IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 16))),
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 3)))
-                > IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                    2,
-                    28,
-                    999_999_999
-                ))),
-        );
-        assert!(
-            IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, 1)))
-                > IntervalDayTime(Some(IntervalDayTimeType::make_value(29, 9_999))),
-        );
-        assert!(
-            IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(1, 12, 34)))
-                > IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                    0, 142, 34
-                )))
-        );
     }
 
     #[test]
@@ -5197,6 +4990,9 @@ mod tests {
     }
 
     fn get_random_intervals(sample_size: u64) -> Vec<ScalarValue> {
+        const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
+        const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
+
         let vector_size = sample_size;
         let mut intervals = vec![];
         let mut rng = rand::thread_rng();
