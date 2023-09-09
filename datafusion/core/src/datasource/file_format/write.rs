@@ -300,6 +300,9 @@ pub(crate) async fn create_writer(
     }
 }
 
+type WriterType = AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>;
+type SerializerType = Box<dyn BatchSerializer>;
+
 /// Serializes a single data stream in parallel and writes to an ObjectStore
 /// concurrently. Data order is preserved. In the event of an error,
 /// the ObjectStore writer is returned to the caller in addition to an error,
@@ -309,17 +312,8 @@ async fn serialize_rb_stream_to_object_store(
     mut serializer: Box<dyn BatchSerializer>,
     mut writer: AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
     unbounded_input: bool,
-) -> std::result::Result<
-    (
-        Box<dyn BatchSerializer>,
-        AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
-        u64,
-    ),
-    (
-        AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>,
-        DataFusionError,
-    ),
-> {
+) -> std::result::Result<(SerializerType, WriterType, u64), (WriterType, DataFusionError)>
+{
     let (tx, mut rx) =
         mpsc::channel::<JoinHandle<Result<(usize, Bytes), DataFusionError>>>(100);
 
@@ -361,9 +355,9 @@ async fn serialize_rb_stream_to_object_store(
                     Err(e) => {
                         return Err((
                             writer,
-                            DataFusionError::Execution(
-                                format!("Error writing to object store: {e}"),
-                            ),
+                            DataFusionError::Execution(format!(
+                                "Error writing to object store: {e}"
+                            )),
                         ))
                     }
                 };
@@ -377,9 +371,9 @@ async fn serialize_rb_stream_to_object_store(
                 // Handle task panic or cancellation
                 return Err((
                     writer,
-                    DataFusionError::Execution(
-                        format!("Serialization task panicked or was cancelled: {e}")
-                    ),
+                    DataFusionError::Execution(format!(
+                        "Serialization task panicked or was cancelled: {e}"
+                    )),
                 ));
             }
         }
@@ -405,8 +399,8 @@ async fn serialize_rb_stream_to_object_store(
 /// dependency on the RecordBatches before or after.
 pub(crate) async fn stateless_serialize_and_write_files(
     data: Vec<SendableRecordBatchStream>,
-    mut serializers: Vec<Box<dyn BatchSerializer>>,
-    mut writers: Vec<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>>,
+    mut serializers: Vec<SerializerType>,
+    mut writers: Vec<WriterType>,
     single_file_output: bool,
     unbounded_input: bool,
 ) -> Result<u64> {
@@ -459,12 +453,13 @@ pub(crate) async fn stateless_serialize_and_write_files(
                             triggering_error = Some(e);
                         }
                     },
-                    Err(_) => {
+                    Err(e) => {
                         // Don't panic, instead try to clean up as many writers as possible.
                         // If we hit this code, ownership of a writer was not joined back to
                         // this thread, so we cannot clean it up (hence any_abort_errors is true)
                         any_errors = true;
                         any_abort_errors = true;
+                        triggering_error = Some(DataFusionError::Internal(format!("Unexpected join error while serializing file {e}")));
                     }
                 }
             }
@@ -479,7 +474,6 @@ pub(crate) async fn stateless_serialize_and_write_files(
                         }
                     }
                     false => {
-                        // TODO if we encounter an error during shutdown, delete previously written files?
                         writer.shutdown()
                             .await
                             .map_err(|_| DataFusionError::Internal("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!".into()))?;
