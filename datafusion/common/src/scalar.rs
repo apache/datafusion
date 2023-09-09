@@ -983,7 +983,7 @@ impl ScalarValue {
             }
             ScalarValue::Struct(_, fields) => DataType::Struct(fields.clone()),
             ScalarValue::Dictionary(k, v) => {
-                DataType::Dictionary(k.clone(), Box::new(v.get_datatype()))
+                DataType::Dictionary(k.clone(), Box::new(v.data_type()))
             }
             ScalarValue::Null => DataType::Null,
         }
@@ -992,6 +992,7 @@ impl ScalarValue {
     /// Getter for the `DataType` of the value.
     ///
     /// Suggest using  [`Self::data_type`] as a more standard API
+    #[deprecated(since = "31.0.0", note = "use data_type instead")]
     pub fn get_datatype(&self) -> DataType {
         self.data_type()
     }
@@ -1243,7 +1244,7 @@ impl ScalarValue {
                     "Empty iterator passed to ScalarValue::iter_to_array"
                 );
             }
-            Some(sv) => sv.get_datatype(),
+            Some(sv) => sv.data_type(),
         };
 
         /// Creates an array of $ARRAY_TY by unpacking values of
@@ -2013,7 +2014,7 @@ impl ScalarValue {
                     Arc::new(StructArray::from(field_values))
                 }
                 None => {
-                    let dt = self.get_datatype();
+                    let dt = self.data_type();
                     new_null_array(&dt, size)
                 }
             },
@@ -2618,9 +2619,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
         let (fields, scalars): (SchemaBuilder, Vec<_>) = value
             .into_iter()
-            .map(|(name, scalar)| {
-                (Field::new(name, scalar.get_datatype(), false), scalar)
-            })
+            .map(|(name, scalar)| (Field::new(name, scalar.data_type(), false), scalar))
             .unzip();
 
         Self::Struct(Some(scalars), fields.finish().fields)
@@ -3221,7 +3220,7 @@ mod tests {
     #[test]
     fn scalar_decimal_test() -> Result<()> {
         let decimal_value = ScalarValue::Decimal128(Some(123), 10, 1);
-        assert_eq!(DataType::Decimal128(10, 1), decimal_value.get_datatype());
+        assert_eq!(DataType::Decimal128(10, 1), decimal_value.data_type());
         let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
         assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
@@ -4192,11 +4191,11 @@ mod tests {
 
         // Define list-of-structs scalars
         let nl0 =
-            ScalarValue::new_list(Some(vec![s0.clone(), s1.clone()]), s0.get_datatype());
+            ScalarValue::new_list(Some(vec![s0.clone(), s1.clone()]), s0.data_type());
 
-        let nl1 = ScalarValue::new_list(Some(vec![s2]), s0.get_datatype());
+        let nl1 = ScalarValue::new_list(Some(vec![s2]), s0.data_type());
 
-        let nl2 = ScalarValue::new_list(Some(vec![s1]), s0.get_datatype());
+        let nl2 = ScalarValue::new_list(Some(vec![s1]), s0.data_type());
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
         let array = as_list_array(&array).unwrap();
@@ -4405,7 +4404,7 @@ mod tests {
         );
 
         assert_eq!(
-            scalar.get_datatype(),
+            scalar.data_type(),
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
 
@@ -4418,7 +4417,7 @@ mod tests {
 
         let newscalar = ScalarValue::try_from_array(&array, 0).unwrap();
         assert_eq!(
-            newscalar.get_datatype(),
+            newscalar.data_type(),
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
     }
@@ -4452,7 +4451,7 @@ mod tests {
 
         // turn it back to a scalar
         let cast_scalar = ScalarValue::try_from_array(&cast_array, 0).unwrap();
-        assert_eq!(cast_scalar.get_datatype(), desired_type);
+        assert_eq!(cast_scalar.data_type(), desired_type);
 
         // Some time later the "cast" scalar is turned back into an array:
         let array = cast_scalar.to_array_of_size(10);
