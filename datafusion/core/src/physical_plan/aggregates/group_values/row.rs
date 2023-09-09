@@ -90,8 +90,10 @@ impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // Convert the group keys into the row format
         // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
+
+        let group_values_cols = self.row_converter.convert_rows(self.group_values.as_ref().unwrap())?;
         let group_rows = self.row_converter.convert_columns(cols)?;
-        self.group_values = Some(self.row_converter.empty_rows(0, 0));
+        self.group_values = Some(self.row_converter.convert_columns(&group_values_cols)?);
 
         let n_rows = group_rows.num_rows();
 
