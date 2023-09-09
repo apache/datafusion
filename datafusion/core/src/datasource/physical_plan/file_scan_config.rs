@@ -347,7 +347,7 @@ impl PartitionColumnProjector {
             // check if user forgot to dict-encode the partition value
             let field = self.projected_schema.field(sidx);
             let expected_data_type = field.data_type();
-            let actual_data_type = partition_value.get_datatype();
+            let actual_data_type = partition_value.data_type();
             if let DataType::Dictionary(key_type, _) = expected_data_type {
                 if !matches!(actual_data_type, DataType::Dictionary(_, _)) {
                     warn!("Partition value for column {} was not dictionary-encoded, applied auto-fix.", field.name());
@@ -448,7 +448,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_i8,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::Int16 => {
@@ -456,7 +456,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_i16,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::Int32 => {
@@ -464,7 +464,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_i32,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::Int64 => {
@@ -472,7 +472,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_i64,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::UInt8 => {
@@ -480,7 +480,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_u8,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::UInt16 => {
@@ -488,7 +488,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_u16,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::UInt32 => {
@@ -496,7 +496,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_u32,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             DataType::UInt64 => {
@@ -504,7 +504,7 @@ fn create_output_array(
                     &mut key_buffer_cache.gen_u64,
                     dict_val,
                     len,
-                    val.get_datatype(),
+                    val.data_type(),
                 );
             }
             _ => {}
