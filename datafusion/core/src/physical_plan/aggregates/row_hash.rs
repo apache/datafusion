@@ -474,7 +474,12 @@ impl GroupedHashAggregateStream {
         }
 
         self.update_memory_reservation()?;
-        let batch = RecordBatch::try_new(self.schema(), output)?;
+        assert_eq!(output.len(), self.schema().fields().len());
+        let mut output_columns: Vec<(String, ArrayRef)> = Vec::new();
+        for (i, field) in self.schema().fields().iter().enumerate() {
+            output_columns.push((field.name().clone(), output[i].clone()));
+        }
+        let batch = RecordBatch::try_from_iter(output_columns)?;
         Ok(batch)
     }
 }
