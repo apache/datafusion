@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::physical_plan::aggregates::group_values::GroupValues;
-use crate::physical_plan::wrapper::CardinalityAwareRowConverter;
+use crate::physical_plan::row_converter::CardinalityAwareRowConverter;
 use ahash::RandomState;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_array::ArrayRef;
