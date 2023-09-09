@@ -459,7 +459,9 @@ pub(crate) async fn stateless_serialize_and_write_files(
                         // this thread, so we cannot clean it up (hence any_abort_errors is true)
                         any_errors = true;
                         any_abort_errors = true;
-                        triggering_error = Some(DataFusionError::Internal(format!("Unexpected join error while serializing file {e}")));
+                        triggering_error = Some(DataFusionError::Internal(format!(
+                            "Unexpected join error while serializing file {e}"
+                        )));
                     }
                 }
             }
