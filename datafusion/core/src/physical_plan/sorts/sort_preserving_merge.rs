@@ -848,6 +848,8 @@ mod tests {
                     // This causes the MergeStream to wait for more input
                     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
+
+                Ok(())
             });
 
             streams.push(builder.build());
