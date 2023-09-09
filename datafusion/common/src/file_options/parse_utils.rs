@@ -57,8 +57,8 @@ pub(crate) fn parse_encoding_string(
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet encoding: \
         {str_setting}. Valid values are: plain, plain_dictionary, rle, \
-        /// bit_packed, delta_binary_packed, delta_length_byte_array, \
-        /// delta_byte_array, rle_dictionary, and byte_stream_split."
+        bit_packed, delta_binary_packed, delta_length_byte_array, \
+        delta_byte_array, rle_dictionary, and byte_stream_split."
         ))),
     }
 }
