@@ -21,16 +21,16 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, FileMeta, FileScanConfig, SchemaAdapter,
+    parquet::page_filter::PagePruningPredicate, DisplayAs, FileMeta, FileScanConfig,
+    SchemaAdapter,
 };
 use crate::{
     config::ConfigOptions,
-    datasource::listing::FileRange,
+    datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
     execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
-        common::AbortOnDropSingle,
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
         Partitioning, SendableRecordBatchStream, Statistics,
@@ -38,12 +38,12 @@ use crate::{
 };
 use datafusion_physical_expr::PhysicalSortExpr;
 use fmt::Debug;
+use object_store::path::Path;
 use std::any::Any;
-use std::cmp::min;
 use std::fmt;
-use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
@@ -54,12 +54,11 @@ use datafusion_physical_expr::{
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
-use itertools::Itertools;
 use log::debug;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::arrow::{AsyncArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
@@ -70,12 +69,6 @@ mod row_filter;
 mod row_groups;
 
 pub use metrics::ParquetFileMetrics;
-
-#[derive(Default)]
-struct RepartitionState {
-    current_partition_index: usize,
-    current_partition_size: usize,
-}
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -252,75 +245,51 @@ impl ParquetExec {
     }
 
     /// Redistribute files across partitions according to their size
+    /// See comments on `get_file_groups_repartitioned()` for more detail.
     pub fn get_repartitioned(
         &self,
         target_partitions: usize,
         repartition_file_min_size: usize,
     ) -> Self {
-        let flattened_files = self
-            .base_config()
-            .file_groups
-            .iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
+            self.base_config.file_groups.clone(),
+            target_partitions,
+            repartition_file_min_size,
+        );
 
-        // Perform redistribution only in case all files should be read from beginning to end
-        let has_ranges = flattened_files.iter().any(|f| f.range.is_some());
-        if has_ranges {
-            return self.clone();
+        let mut new_plan = self.clone();
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            new_plan.base_config.file_groups = repartitioned_file_groups;
         }
+        new_plan
+    }
+}
 
-        let total_size = flattened_files
-            .iter()
-            .map(|f| f.object_meta.size as i64)
-            .sum::<i64>();
-        if total_size < (repartition_file_min_size as i64) {
-            return self.clone();
+impl DisplayAs for ParquetExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let predicate_string = self
+                    .predicate
+                    .as_ref()
+                    .map(|p| format!(", predicate={p}"))
+                    .unwrap_or_default();
+
+                let pruning_predicate_string = self
+                    .pruning_predicate
+                    .as_ref()
+                    .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
+                    .unwrap_or_default();
+
+                write!(f, "ParquetExec: ")?;
+                self.base_config.fmt_as(t, f)?;
+                write!(f, "{}{}", predicate_string, pruning_predicate_string,)
+            }
         }
-
-        let target_partition_size =
-            (total_size as usize + (target_partitions) - 1) / (target_partitions);
-
-        let repartitioned_files = flattened_files
-            .into_iter()
-            .scan(RepartitionState::default(), |state, source_file| {
-                let mut produced_files = vec![];
-                let mut range_start = 0;
-                while range_start < source_file.object_meta.size {
-                    let range_end = min(
-                        range_start
-                            + (target_partition_size - state.current_partition_size),
-                        source_file.object_meta.size,
-                    );
-
-                    let mut produced_file = source_file.clone();
-                    produced_file.range = Some(FileRange {
-                        start: range_start as i64,
-                        end: range_end as i64,
-                    });
-                    produced_files.push((state.current_partition_index, produced_file));
-
-                    if state.current_partition_size + (range_end - range_start)
-                        >= target_partition_size
-                    {
-                        state.current_partition_index += 1;
-                        state.current_partition_size = 0;
-                    } else {
-                        state.current_partition_size += range_end - range_start;
-                    }
-                    range_start = range_end;
-                }
-                Some(produced_files)
-            })
-            .flatten()
-            .group_by(|(partition_idx, _)| *partition_idx)
-            .into_iter()
-            .map(|(_, group)| group.map(|(_, vals)| vals).collect_vec())
-            .collect_vec();
-
-        let mut new_parquet_exec = self.clone();
-        new_parquet_exec.base_config.file_groups = repartitioned_files;
-        new_parquet_exec
     }
 }
 
@@ -410,34 +379,6 @@ impl ExecutionPlan for ParquetExec {
             FileStream::new(&self.base_config, partition_index, opener, &self.metrics)?;
 
         Ok(Box::pin(stream))
-    }
-
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                let predicate_string = self
-                    .predicate
-                    .as_ref()
-                    .map(|p| format!(", predicate={p}"))
-                    .unwrap_or_default();
-
-                let pruning_predicate_string = self
-                    .pruning_predicate
-                    .as_ref()
-                    .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
-                    .unwrap_or_default();
-
-                write!(
-                    f,
-                    "ParquetExec: {}{}{}",
-                    self.base_config, predicate_string, pruning_predicate_string,
-                )
-            }
-        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -694,44 +635,51 @@ pub async fn plan_to_parquet(
     writer_properties: Option<WriterProperties>,
 ) -> Result<()> {
     let path = path.as_ref();
-    // create directory to contain the Parquet files (one per partition)
-    let fs_path = std::path::Path::new(path);
-    if let Err(e) = fs::create_dir(fs_path) {
-        return Err(DataFusionError::Execution(format!(
-            "Could not create directory {path}: {e:?}"
-        )));
-    }
-
-    let mut tasks = vec![];
+    let parsed = ListingTableUrl::parse(path)?;
+    let object_store_url = parsed.object_store();
+    let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
-        let plan = plan.clone();
-        let filename = format!("part-{i}.parquet");
-        let path = fs_path.join(filename);
-        let file = fs::File::create(path)?;
-        let mut writer =
-            ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
-        let stream = plan.execute(i, task_ctx.clone())?;
-        let handle: tokio::task::JoinHandle<Result<()>> =
-            tokio::task::spawn(async move {
-                stream
-                    .map(|batch| {
-                        writer.write(&batch?).map_err(DataFusionError::ParquetError)
-                    })
-                    .try_collect()
-                    .await
-                    .map_err(DataFusionError::from)?;
+        let plan: Arc<dyn ExecutionPlan> = plan.clone();
+        let filename = format!("{}/part-{i}.parquet", parsed.prefix());
+        let file = Path::parse(filename)?;
+        let propclone = writer_properties.clone();
 
-                writer.close().map_err(DataFusionError::from).map(|_| ())
-            });
-        tasks.push(AbortOnDropSingle::new(handle));
+        let storeref = store.clone();
+        let (_, multipart_writer) = storeref.put_multipart(&file).await?;
+        let mut stream = plan.execute(i, task_ctx.clone())?;
+        join_set.spawn(async move {
+            let mut writer = AsyncArrowWriter::try_new(
+                multipart_writer,
+                plan.schema(),
+                10485760,
+                propclone,
+            )?;
+            while let Some(next_batch) = stream.next().await {
+                let batch = next_batch?;
+                writer.write(&batch).await?;
+            }
+            writer
+                .close()
+                .await
+                .map_err(DataFusionError::from)
+                .map(|_| ())
+        });
     }
 
-    futures::future::join_all(tasks)
-        .await
-        .into_iter()
-        .try_for_each(|result| {
-            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-        })?;
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(res) => res?,
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -817,6 +765,7 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
+    use url::Url;
 
     struct RoundTripResult {
         /// Data that was read back from ParquetFiles
@@ -965,14 +914,19 @@ mod tests {
     #[tokio::test]
     async fn write_parquet_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
+        // register a local file system object store for /tmp directory
+        let tmp_dir = TempDir::new()?;
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.runtime_env().register_object_store(&local_url, local);
+
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
         let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
-        let tmp_dir = TempDir::new()?;
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let out_dir_url = "file://local/out";
         let e = df
-            .write_parquet(&out_dir, None)
+            .write_parquet(out_dir_url, None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
         assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
@@ -1869,7 +1823,9 @@ mod tests {
         assert!(pruning_predicate.is_some());
 
         // convert to explain plan form
-        let display = displayable(rt.parquet_exec.as_ref()).indent().to_string();
+        let display = displayable(rt.parquet_exec.as_ref())
+            .indent(true)
+            .to_string();
 
         assert_contains!(
             &display,
@@ -1918,242 +1874,6 @@ mod tests {
         let predicate = rt.parquet_exec.predicate.as_ref();
         let filter_phys = logical2physical(&filter, rt.parquet_exec.schema().as_ref());
         assert_eq!(predicate.unwrap().to_string(), filter_phys.to_string());
-    }
-
-    #[tokio::test]
-    async fn parquet_exec_repartition_single_file() {
-        // Single file, single partition into multiple partitions
-        let partitioned_file = PartitionedFile::new("a".to_string(), 123);
-        let single_partition = vec![vec![partitioned_file]];
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: single_partition,
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-                infinite_source: false,
-            },
-            None,
-            None,
-        );
-
-        let actual = file_groups_to_vec(
-            parquet_exec
-                .get_repartitioned(4, 10)
-                .base_config()
-                .file_groups
-                .clone(),
-        );
-        let expected = vec![
-            (0, "a".to_string(), 0, 31),
-            (1, "a".to_string(), 31, 62),
-            (2, "a".to_string(), 62, 93),
-            (3, "a".to_string(), 93, 123),
-        ];
-        assert_eq!(expected, actual);
-    }
-
-    #[tokio::test]
-    async fn parquet_exec_repartition_too_much_partitions() {
-        // Single file, single parittion into 96 partitions
-        let partitioned_file = PartitionedFile::new("a".to_string(), 8);
-        let single_partition = vec![vec![partitioned_file]];
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: single_partition,
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-                infinite_source: false,
-            },
-            None,
-            None,
-        );
-
-        let actual = file_groups_to_vec(
-            parquet_exec
-                .get_repartitioned(96, 5)
-                .base_config()
-                .file_groups
-                .clone(),
-        );
-        let expected = vec![
-            (0, "a".to_string(), 0, 1),
-            (1, "a".to_string(), 1, 2),
-            (2, "a".to_string(), 2, 3),
-            (3, "a".to_string(), 3, 4),
-            (4, "a".to_string(), 4, 5),
-            (5, "a".to_string(), 5, 6),
-            (6, "a".to_string(), 6, 7),
-            (7, "a".to_string(), 7, 8),
-        ];
-        assert_eq!(expected, actual);
-    }
-
-    #[tokio::test]
-    async fn parquet_exec_repartition_multiple_partitions() {
-        // Multiple files in single partition after redistribution
-        let partitioned_file_1 = PartitionedFile::new("a".to_string(), 40);
-        let partitioned_file_2 = PartitionedFile::new("b".to_string(), 60);
-        let source_partitions = vec![vec![partitioned_file_1], vec![partitioned_file_2]];
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: source_partitions,
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-                infinite_source: false,
-            },
-            None,
-            None,
-        );
-
-        let actual = file_groups_to_vec(
-            parquet_exec
-                .get_repartitioned(3, 10)
-                .base_config()
-                .file_groups
-                .clone(),
-        );
-        let expected = vec![
-            (0, "a".to_string(), 0, 34),
-            (1, "a".to_string(), 34, 40),
-            (1, "b".to_string(), 0, 28),
-            (2, "b".to_string(), 28, 60),
-        ];
-        assert_eq!(expected, actual);
-    }
-
-    #[tokio::test]
-    async fn parquet_exec_repartition_same_num_partitions() {
-        // "Rebalance" files across partitions
-        let partitioned_file_1 = PartitionedFile::new("a".to_string(), 40);
-        let partitioned_file_2 = PartitionedFile::new("b".to_string(), 60);
-        let source_partitions = vec![vec![partitioned_file_1], vec![partitioned_file_2]];
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: source_partitions,
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-                infinite_source: false,
-            },
-            None,
-            None,
-        );
-
-        let actual = file_groups_to_vec(
-            parquet_exec
-                .get_repartitioned(2, 10)
-                .base_config()
-                .file_groups
-                .clone(),
-        );
-        let expected = vec![
-            (0, "a".to_string(), 0, 40),
-            (0, "b".to_string(), 0, 10),
-            (1, "b".to_string(), 10, 60),
-        ];
-        assert_eq!(expected, actual);
-    }
-
-    #[tokio::test]
-    async fn parquet_exec_repartition_no_action_ranges() {
-        // No action due to Some(range) in second file
-        let partitioned_file_1 = PartitionedFile::new("a".to_string(), 123);
-        let mut partitioned_file_2 = PartitionedFile::new("b".to_string(), 144);
-        partitioned_file_2.range = Some(FileRange { start: 1, end: 50 });
-
-        let source_partitions = vec![vec![partitioned_file_1], vec![partitioned_file_2]];
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: source_partitions,
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-                infinite_source: false,
-            },
-            None,
-            None,
-        );
-
-        let actual = parquet_exec
-            .get_repartitioned(65, 10)
-            .base_config()
-            .file_groups
-            .clone();
-        assert_eq!(2, actual.len());
-    }
-
-    #[tokio::test]
-    async fn parquet_exec_repartition_no_action_min_size() {
-        // No action due to target_partition_size
-        let partitioned_file = PartitionedFile::new("a".to_string(), 123);
-        let single_partition = vec![vec![partitioned_file]];
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::local_filesystem(),
-                file_groups: single_partition,
-                file_schema: Arc::new(Schema::empty()),
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: vec![],
-                infinite_source: false,
-            },
-            None,
-            None,
-        );
-
-        let actual = parquet_exec
-            .get_repartitioned(65, 500)
-            .base_config()
-            .file_groups
-            .clone();
-        assert_eq!(1, actual.len());
-    }
-
-    fn file_groups_to_vec(
-        file_groups: Vec<Vec<PartitionedFile>>,
-    ) -> Vec<(usize, String, i64, i64)> {
-        file_groups
-            .iter()
-            .enumerate()
-            .flat_map(|(part_idx, files)| {
-                files
-                    .iter()
-                    .map(|f| {
-                        (
-                            part_idx,
-                            f.object_meta.location.to_string(),
-                            f.range.as_ref().unwrap().start,
-                            f.range.as_ref().unwrap().end,
-                        )
-                    })
-                    .collect_vec()
-            })
-            .collect_vec()
     }
 
     /// returns the sum of all the metrics with the specified name
@@ -2218,10 +1938,16 @@ mod tests {
         )
         .await?;
 
+        // register a local file system object store for /tmp directory
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.runtime_env().register_object_store(&local_url, local);
+
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let out_dir_url = "file://local/out";
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-        df.write_parquet(&out_dir, None).await?;
+        df.write_parquet(out_dir_url, None).await?;
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file

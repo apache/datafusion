@@ -17,7 +17,7 @@
 
 //! Expression utilities
 
-use crate::expr::{Sort, WindowFunction};
+use crate::expr::{Alias, Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, Distinct, Extension, Filter, Join, Limit, Partitioning, Prepare,
@@ -31,7 +31,8 @@ use crate::{
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    Column, Constraints, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -265,11 +266,10 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
             Expr::ScalarVariable(_, _)
-            | Expr::Alias(_, _)
+            | Expr::Alias(_)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
-            | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
             | Expr::Not(_)
             | Expr::IsNotNull(_)
@@ -435,7 +435,9 @@ pub fn expand_qualified_wildcard(
         )));
     }
     let qualified_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
+            // We can use the functional dependencies as is, since it only stores indices:
+            .with_functional_dependencies(schema.functional_dependencies().clone());
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,
@@ -703,6 +705,9 @@ where
 /// // create new plan using rewritten_exprs in same position
 /// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
 /// ```
+///
+/// Notice: sometimes [from_plan] will use schema of original plan, it don't change schema!
+/// Such as `Projection/Aggregate/Window`
 pub fn from_plan(plan: &LogicalPlan, expr: &[Expr], inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Projection(Projection { schema, .. }) => {
@@ -757,7 +762,7 @@ pub fn from_plan(plan: &LogicalPlan, expr: &[Expr], inputs: &[LogicalPlan]) -> R
                             // subqueries could contain aliases so we don't recurse into those
                             Ok(RewriteRecursion::Stop)
                         }
-                        Expr::Alias(_, _) => Ok(RewriteRecursion::Mutate),
+                        Expr::Alias(_) => Ok(RewriteRecursion::Mutate),
                         _ => Ok(RewriteRecursion::Continue),
                     }
                 }
@@ -885,7 +890,7 @@ pub fn from_plan(plan: &LogicalPlan, expr: &[Expr], inputs: &[LogicalPlan]) -> R
         })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
             CreateMemoryTable {
                 input: Arc::new(inputs[0].clone()),
-                primary_key: vec![],
+                constraints: Constraints::empty(),
                 name: name.clone(),
                 if_not_exists: *if_not_exists,
                 or_replace: *or_replace,
@@ -985,10 +990,11 @@ pub fn from_plan(plan: &LogicalPlan, expr: &[Expr], inputs: &[LogicalPlan]) -> R
                 })
                 .collect::<Vec<_>>();
 
-            let schema = Arc::new(DFSchema::new_with_metadata(
-                fields,
-                input.schema().metadata().clone(),
-            )?);
+            let schema = Arc::new(
+                DFSchema::new_with_metadata(fields, input.schema().metadata().clone())?
+                    // We can use the existing functional dependencies as is:
+                    .with_functional_dependencies(input.schema().functional_dependencies().clone()),
+            );
 
             Ok(LogicalPlan::Unnest(Unnest {
                 input,
@@ -1073,7 +1079,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
         Expr::OuterReferenceColumn(_, _) => e,
-        Expr::Alias(inner_expr, name) => columnize_expr(*inner_expr, input_schema).alias(name),
+        Expr::Alias(Alias { expr, name, .. }) => columnize_expr(*expr, input_schema).alias(name),
         Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
             expr: Box::new(columnize_expr(*expr, input_schema)),
             data_type,
@@ -1246,6 +1252,7 @@ pub fn find_valid_equijoin_key_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expr_vec_fmt;
     use crate::{
         col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame, WindowFunction,
     };
@@ -1449,22 +1456,22 @@ mod tests {
 
         // 1. col
         let sets = enumerate_grouping_sets(vec![simple_col.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[simple_col]", &result);
 
         // 2. cube
         let sets = enumerate_grouping_sets(vec![cube.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[CUBE (col1, col2, col3)]", &result);
 
         // 3. rollup
         let sets = enumerate_grouping_sets(vec![rollup.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[ROLLUP (col1, col2, col3)]", &result);
 
         // 4. col + cube
         let sets = enumerate_grouping_sets(vec![simple_col.clone(), cube.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \
@@ -1480,7 +1487,7 @@ mod tests {
 
         // 5. col + rollup
         let sets = enumerate_grouping_sets(vec![simple_col.clone(), rollup.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \
@@ -1492,7 +1499,7 @@ mod tests {
 
         // 6. col + grouping_set
         let sets = enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col, col1, col2, col3))]",
@@ -1501,7 +1508,7 @@ mod tests {
 
         // 7. col + grouping_set + rollup
         let sets = enumerate_grouping_sets(vec![simple_col.clone(), grouping_set, rollup.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col, col1, col2, col3), \
@@ -1513,7 +1520,7 @@ mod tests {
 
         // 8. col + cube + rollup
         let sets = enumerate_grouping_sets(vec![simple_col, cube, rollup])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \

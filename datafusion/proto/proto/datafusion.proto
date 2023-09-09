@@ -88,6 +88,10 @@ message ProjectionColumns {
 message CsvFormat {
   bool has_header = 1;
   string delimiter = 2;
+  string quote = 3;
+  oneof optional_escape {
+    string escape = 4;
+  }
 }
 
 message ParquetFormat {
@@ -563,6 +567,16 @@ enum ScalarFunction {
   ArrayToString = 97;
   Cardinality = 98;
   TrimArray = 99;
+  Encode = 101;
+  Decode = 102;
+  Cot = 103;
+  ArrayHas = 104;
+  ArrayHasAny = 105;
+  ArrayHasAll = 106;
+  ArrayRemoveN = 107;
+  ArrayReplaceN = 108;
+  ArrayRemoveAll = 109;
+  ArrayReplaceAll = 110;
 }
 
 message ScalarFunctionNode {
@@ -639,7 +653,8 @@ message WindowExprNode {
   oneof window_function {
     AggregateFunction aggr_function = 1;
     BuiltInWindowFunction built_in_function = 2;
-    // udaf = 3
+    string udaf = 3;
+    string udwf = 9;
   }
   LogicalExprNode expr = 4;
   repeated LogicalExprNode partition_by = 5;
@@ -736,6 +751,7 @@ message WindowFrameBound {
 
 message Schema {
   repeated Field columns = 1;
+  map<string, string> metadata = 2;
 }
 
 message Field {
@@ -745,6 +761,7 @@ message Field {
   bool nullable = 3;
   // for complex data types like structs, unions
   repeated Field children = 4;
+  map<string, string> metadata = 5;
 }
 
 message FixedSizeBinary{
@@ -899,9 +916,17 @@ message ScalarValue{
     //WAS: ScalarType null_list_value = 18;
 
     Decimal128 decimal128_value = 20;
+    Decimal256 decimal256_value = 39;
+
     int64 date_64_value = 21;
     int32 interval_yearmonth_value = 24;
     int64 interval_daytime_value = 25;
+
+    int64 duration_second_value = 35;
+    int64 duration_millisecond_value = 36;
+    int64 duration_microsecond_value = 37;
+    int64 duration_nanosecond_value = 38;
+
     ScalarTimestampValue timestamp_value = 26;
     ScalarDictionaryValue dictionary_value = 27;
     bytes binary_value = 28;
@@ -914,6 +939,12 @@ message ScalarValue{
 }
 
 message Decimal128{
+  bytes value = 1;
+  int64 p = 2;
+  int64 s = 3;
+}
+
+message Decimal256{
   bytes value = 1;
   int64 p = 2;
   int64 s = 3;
@@ -1047,6 +1078,7 @@ message PhysicalPlanNode {
     UnionExecNode union = 19;
     ExplainExecNode explain = 20;
     SortPreservingMergeExecNode sort_preserving_merge = 21;
+    NestedLoopJoinExecNode nested_loop_join = 22;
   }
 }
 
@@ -1107,6 +1139,7 @@ message PhysicalAggregateExprNode {
     string user_defined_aggr_function = 4;
   }
   repeated PhysicalExprNode expr = 2;
+  repeated PhysicalSortExprNode ordering_req = 5;
   bool distinct = 3;
 }
 
@@ -1244,6 +1277,10 @@ message CsvScanExecNode {
   FileScanExecConf base_conf = 1;
   bool has_header = 2;
   string delimiter = 3;
+  string quote = 4;
+  oneof optional_escape {
+    string escape = 5;
+  }
 }
 
 message AvroScanExecNode {
@@ -1307,6 +1344,7 @@ enum AggregateMode {
   FINAL = 1;
   FINAL_PARTITIONED = 2;
   SINGLE = 3;
+  SINGLE_PARTITIONED = 4;
 }
 
 message WindowAggExecNode {
@@ -1363,6 +1401,15 @@ message SortExecNode {
 message SortPreservingMergeExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode expr = 2;
+  // Maximum number of highest/lowest rows to fetch; negative means no limit
+  int64 fetch = 3;
+}
+
+message NestedLoopJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  JoinType join_type = 3;
+  JoinFilter filter = 4;
 }
 
 message CoalesceBatchesExecNode {

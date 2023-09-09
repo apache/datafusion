@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter}
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
-    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
-    Volatility,
+    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
+    Like, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -46,7 +46,7 @@ pub struct ExprSimplifier<S> {
     info: S,
 }
 
-const THRESHOLD_INLINE_INLIST: usize = 3;
+pub const THRESHOLD_INLINE_INLIST: usize = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
@@ -293,7 +293,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Negative(_)
             | Expr::Between { .. }
             | Expr::Like { .. }
-            | Expr::ILike { .. }
             | Expr::SimilarTo { .. }
             | Expr::Case(_)
             | Expr::Cast { .. }
@@ -1070,17 +1069,20 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //
             // Note: the rationale for this rewrite is that the expr can then be further
             // simplified using the existing rules for AND/OR
-            Expr::Case(case)
-                if !case.when_then_expr.is_empty()
-                && case.when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
-                && info.is_boolean_type(&case.when_then_expr[0].1)? =>
+            Expr::Case(Case {
+                expr: None,
+                when_then_expr,
+                else_expr,
+            }) if !when_then_expr.is_empty()
+                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&when_then_expr[0].1)? =>
             {
                 // The disjunction of all the when predicates encountered so far
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
                 let mut out_expr = lit(false);
 
-                for (when, then) in case.when_then_expr {
+                for (when, then) in when_then_expr {
                     let case_expr = when
                         .as_ref()
                         .clone()
@@ -1091,7 +1093,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     filter_expr = filter_expr.or(*when);
                 }
 
-                if let Some(else_expr) = case.else_expr {
+                if let Some(else_expr) = else_expr {
                     let case_expr = filter_expr.not().and(*else_expr);
                     out_expr = out_expr.or(case_expr);
                 }
@@ -1164,6 +1166,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 pattern,
                 negated,
                 escape_char: _,
+                case_insensitive: _,
             }) if !is_null(&expr)
                 && matches!(
                     pattern.as_ref(),
@@ -1173,26 +1176,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 lit(!negated)
             }
 
-            // Rules for ILike
-            Expr::ILike(Like {
-                expr,
-                pattern,
-                negated,
-                escape_char: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
-                ) =>
+            // a is not null/unknown --> true (if a is not nullable)
+            Expr::IsNotNull(expr) | Expr::IsNotUnknown(expr)
+                if !info.nullable(&expr)? =>
             {
-                lit(!negated)
+                lit(true)
             }
 
-            // a IS NOT NULL --> true, if a is not nullable
-            Expr::IsNotNull(expr) if !info.nullable(&expr)? => lit(true),
-
-            // a IS NULL --> false, if a is not nullable
-            Expr::IsNull(expr) if !info.nullable(&expr)? => lit(false),
+            // a is null/unknown --> false (if a is not nullable)
+            Expr::IsNull(expr) | Expr::IsUnknown(expr) if !info.nullable(&expr)? => {
+                lit(false)
+            }
 
             // no additional rewrites possible
             expr => expr,
@@ -1314,10 +1308,8 @@ mod tests {
         expected_expr: Expr,
         date_time: &DateTime<Utc>,
     ) {
-        let execution_props = ExecutionProps {
-            query_execution_start_time: *date_time,
-            var_providers: None,
-        };
+        let execution_props =
+            ExecutionProps::new().with_query_execution_start_time(*date_time);
 
         let mut const_evaluator = ConstEvaluator::try_new(&execution_props).unwrap();
         let evaluated_expr = input_expr
@@ -1673,9 +1665,12 @@ mod tests {
     fn test_simplify_divide_zero_by_zero() {
         // 0 / 0 -> null
         let expr = lit(0) / lit(0);
-        let expected = lit(ScalarValue::Int32(None));
+        let err = try_simplify(expr).unwrap_err();
 
-        assert_eq!(simplify(expr), expected);
+        assert!(
+            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
+            "{err}"
+        );
     }
 
     #[test]
@@ -2603,6 +2598,7 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: false,
         })
     }
 
@@ -2612,24 +2608,27 @@ mod tests {
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: false,
         })
     }
 
     fn ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::ILike(Like {
+        Expr::Like(Like {
             negated: false,
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: true,
         })
     }
 
     fn not_ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::ILike(Like {
+        Expr::Like(Like {
             negated: true,
             expr: Box::new(expr),
             pattern: Box::new(lit(pattern)),
             escape_char: None,
+            case_insensitive: true,
         })
     }
 
@@ -2727,6 +2726,25 @@ mod tests {
     }
 
     #[test]
+    fn simplify_expr_is_unknown() {
+        assert_eq!(simplify(col("c2").is_unknown()), col("c2").is_unknown(),);
+
+        // 'c2_non_null is unknown' is always false
+        assert_eq!(simplify(col("c2_non_null").is_unknown()), lit(false));
+    }
+
+    #[test]
+    fn simplify_expr_is_not_known() {
+        assert_eq!(
+            simplify(col("c2").is_not_unknown()),
+            col("c2").is_not_unknown()
+        );
+
+        // 'c2_non_null is not unknown' is always true
+        assert_eq!(simplify(col("c2_non_null").is_not_unknown()), lit(true));
+    }
+
+    #[test]
     fn simplify_expr_eq() {
         let schema = expr_test_schema();
         assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
@@ -2794,9 +2812,9 @@ mod tests {
 
     #[test]
     fn simplify_expr_case_when_then_else() {
-        // CASE WHERE c2 != false THEN "ok" == "not_ok" ELSE c2 == true
+        // CASE WHEN c2 != false THEN "ok" == "not_ok" ELSE c2 == true
         // -->
-        // CASE WHERE c2 THEN false ELSE c2
+        // CASE WHEN c2 THEN false ELSE c2
         // -->
         // false
         assert_eq!(
@@ -2811,9 +2829,9 @@ mod tests {
             col("c2").not().and(col("c2")) // #1716
         );
 
-        // CASE WHERE c2 != false THEN "ok" == "ok" ELSE c2
+        // CASE WHEN c2 != false THEN "ok" == "ok" ELSE c2
         // -->
-        // CASE WHERE c2 THEN true ELSE c2
+        // CASE WHEN c2 THEN true ELSE c2
         // -->
         // c2
         //
@@ -2831,7 +2849,7 @@ mod tests {
             col("c2").or(col("c2").not().and(col("c2"))) // #1716
         );
 
-        // CASE WHERE ISNULL(c2) THEN true ELSE c2
+        // CASE WHEN ISNULL(c2) THEN true ELSE c2
         // -->
         // ISNULL(c2) OR c2
         //
@@ -2848,7 +2866,7 @@ mod tests {
                 .or(col("c2").is_not_null().and(col("c2")))
         );
 
-        // CASE WHERE c1 then true WHERE c2 then false ELSE true
+        // CASE WHEN c1 then true WHEN c2 then false ELSE true
         // --> c1 OR (NOT(c1) AND c2 AND FALSE) OR (NOT(c1 OR c2) AND TRUE)
         // --> c1 OR (NOT(c1) AND NOT(c2))
         // --> c1 OR NOT(c2)
@@ -2867,7 +2885,7 @@ mod tests {
             col("c1").or(col("c1").not().and(col("c2").not()))
         );
 
-        // CASE WHERE c1 then true WHERE c2 then true ELSE false
+        // CASE WHEN c1 then true WHEN c2 then true ELSE false
         // --> c1 OR (NOT(c1) AND c2 AND TRUE) OR (NOT(c1 OR c2) AND FALSE)
         // --> c1 OR (NOT(c1) AND c2)
         // --> c1 OR c2

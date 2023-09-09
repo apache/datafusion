@@ -19,6 +19,7 @@ use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{
     and,
     expr_rewriter::replace_col,
@@ -152,10 +153,9 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
     predicate.apply(&mut |expr| match expr {
-        Expr::Column(_)
-        | Expr::Literal(_)
-        | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(VisitRecursion::Skip),
+        Expr::Column(_) | Expr::Literal(_) | Expr::Placeholder(_) | Expr::ScalarVariable(_, _) => {
+            Ok(VisitRecursion::Skip)
+        }
         Expr::Exists { .. }
         | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
@@ -164,10 +164,9 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
             is_evaluate = false;
             Ok(VisitRecursion::Stop)
         }
-        Expr::Alias(_, _)
+        Expr::Alias(_)
         | Expr::BinaryExpr(_)
         | Expr::Like(_)
-        | Expr::ILike(_)
         | Expr::SimilarTo(_)
         | Expr::Not(_)
         | Expr::IsNotNull(_)
@@ -233,11 +232,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
 //
 // do nothing.
 //
-fn extract_or_clauses_for_join(
-    filters: &[&Expr],
-    schema: &DFSchema,
-    preserved: bool,
-) -> Vec<Expr> {
+fn extract_or_clauses_for_join(filters: &[&Expr], schema: &DFSchema, preserved: bool) -> Vec<Expr> {
     if !preserved {
         return vec![];
     }
@@ -343,6 +338,20 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
     predicate
 }
 
+fn can_push_and_keep_unpreserved_predicate(predicate: &Expr) -> bool {
+    return match predicate {
+        Expr::BinaryExpr(b) if b.op == Operator::Eq => {
+            return if let (Expr::Column(_), Expr::Literal(_)) = (&*b.left, &*b.right) {
+                true
+            } else if let (Expr::Literal(_), Expr::Column(_)) = (&*b.left, &*b.right) {
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    };
+}
 // push down join/cross-join
 fn push_down_all_join(
     predicates: Vec<Expr>,
@@ -368,10 +377,20 @@ fn push_down_all_join(
     for predicate in predicates {
         if left_preserved && can_pushdown_join_predicate(&predicate, left.schema())? {
             left_push.push(predicate);
-        } else if right_preserved
-            && can_pushdown_join_predicate(&predicate, right.schema())?
-        {
+        } else if right_preserved && can_pushdown_join_predicate(&predicate, right.schema())? {
             right_push.push(predicate);
+        } else if !left_preserved
+            && can_pushdown_join_predicate(&predicate, left.schema())?
+            && can_push_and_keep_unpreserved_predicate(&predicate)
+        {
+            left_push.push(predicate.clone());
+            keep_predicates.push(predicate);
+        } else if !right_preserved
+            && can_pushdown_join_predicate(&predicate, right.schema())?
+            && can_push_and_keep_unpreserved_predicate(&predicate)
+        {
+            right_push.push(predicate.clone());
+            keep_predicates.push(predicate);
         } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
             // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
             // and convert to the join on condition
@@ -383,12 +402,20 @@ fn push_down_all_join(
 
     // For infer predicates, if they can not push through join, just drop them
     for predicate in infer_predicates {
-        if left_preserved && can_pushdown_join_predicate(&predicate, left.schema())? {
-            left_push.push(predicate);
-        } else if right_preserved
-            && can_pushdown_join_predicate(&predicate, right.schema())?
-        {
-            right_push.push(predicate);
+        if can_pushdown_join_predicate(&predicate, left.schema())? {
+            if left_preserved {
+                left_push.push(predicate);
+            } else if can_push_and_keep_unpreserved_predicate(&predicate) {
+                left_push.push(predicate.clone());
+                keep_predicates.push(predicate);
+            }
+        } else if can_pushdown_join_predicate(&predicate, right.schema())? {
+            if right_preserved {
+                right_push.push(predicate);
+            } else if can_push_and_keep_unpreserved_predicate(&predicate) {
+                right_push.push(predicate.clone());
+                keep_predicates.push(predicate);
+            }
         }
     }
 
@@ -397,9 +424,7 @@ fn push_down_all_join(
         for on in on_filter {
             if on_left_preserved && can_pushdown_join_predicate(&on, left.schema())? {
                 left_push.push(on)
-            } else if on_right_preserved
-                && can_pushdown_join_predicate(&on, right.schema())?
-            {
+            } else if on_right_preserved && can_pushdown_join_predicate(&on, right.schema())? {
                 right_push.push(on)
             } else {
                 join_conditions.push(on)
@@ -436,9 +461,7 @@ fn push_down_all_join(
     right_push.extend(on_or_to_right);
 
     let left = match conjunction(left_push) {
-        Some(predicate) => {
-            LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(left.clone()))?)
-        }
+        Some(predicate) => LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(left.clone()))?),
         None => left.clone(),
     };
     let right = match conjunction(right_push) {
@@ -480,15 +503,90 @@ fn push_down_all_join(
     }
 }
 
+fn infer_predicates(join: &Join, predicates_to_infer: HashSet<Expr>) -> Result<HashSet<Expr>> {
+    Ok(predicates_to_infer
+        .iter()
+        .filter_map(|predicate| {
+            let mut join_cols_to_replace = HashMap::new();
+            let columns = match predicate.to_columns() {
+                Ok(columns) => columns,
+                Err(e) => return Some(Err(e)),
+            };
+
+            // Only allow both side key is column.
+            let join_col_keys = join
+                .on
+                .iter()
+                .flat_map(|(l, r)| match (l.try_into_col(), r.try_into_col()) {
+                    (Ok(l_col), Ok(r_col)) => Some((l_col, r_col)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            for col in columns.iter() {
+                for (l, r) in join_col_keys.iter() {
+                    if col == l {
+                        join_cols_to_replace.insert(col, r);
+                        break;
+                    } else if col == r {
+                        join_cols_to_replace.insert(col, l);
+                        break;
+                    }
+                }
+            }
+
+            if join_cols_to_replace.is_empty() {
+                return None;
+            }
+
+            let join_side_predicate = match replace_col(predicate.clone(), &join_cols_to_replace) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Some(Err(e));
+                }
+            };
+
+            Some(Ok(join_side_predicate))
+        })
+        .collect::<Result<HashSet<_>>>()?)
+}
+
+fn infer_predicates_recursively(
+    plan: &LogicalPlan,
+    predicates: HashSet<Expr>,
+) -> Result<HashSet<Expr>> {
+    let mut inferred_predicates = predicates.clone();
+    for input in plan.inputs() {
+        match input {
+            l @ LogicalPlan::Join(j) => {
+                inferred_predicates.extend(
+                    infer_predicates_recursively(l, inferred_predicates.clone())?.into_iter(),
+                );
+                inferred_predicates.extend(infer_predicates(j, predicates.clone())?.into_iter());
+            }
+            _ => (),
+        }
+    }
+    match plan {
+        LogicalPlan::Join(j) => inferred_predicates
+            .extend(&mut infer_predicates(j, inferred_predicates.clone())?.into_iter()),
+        _ => (),
+    }
+
+    println!(
+        "Plan {:?} -> infer predicates: {:?}",
+        plan, inferred_predicates
+    );
+    Ok(inferred_predicates)
+}
+
 fn push_down_join(
     plan: &LogicalPlan,
     join: &Join,
     parent_predicate: Option<&Expr>,
 ) -> Result<Option<LogicalPlan>> {
     let predicates = match parent_predicate {
-        Some(parent_predicate) => {
-            utils::split_conjunction_owned(parent_predicate.clone())
-        }
+        Some(parent_predicate) => utils::split_conjunction_owned(parent_predicate.clone()),
         None => vec![],
     };
 
@@ -499,9 +597,11 @@ fn push_down_join(
         .map(|e| utils::split_conjunction_owned(e.clone()))
         .unwrap_or_else(Vec::new);
 
-    let mut is_inner_join = false;
-    let infer_predicates = if join.join_type == JoinType::Inner {
-        is_inner_join = true;
+    let is_inner_join = join.join_type == JoinType::Inner;
+    let infer_predicates = if join.join_type == JoinType::Inner
+        || join.join_type == JoinType::Left
+        || join.join_type == JoinType::Right
+    {
         // TODO refine the logic, introduce EquivalenceProperties to logical plan and infer additional filters to push down
         // For inner joins, duplicate filters for joined columns so filters can be pushed down
         // to both sides. Take the following query as an example:
@@ -516,57 +616,19 @@ fn push_down_join(
         // Join clauses with `Using` constraints also take advantage of this logic to make sure
         // predicates reference the shared join columns are pushed to both sides.
         // This logic should also been applied to conditions in JOIN ON clause
-        predicates
-            .iter()
-            .chain(on_filters.iter())
-            .filter_map(|predicate| {
-                let mut join_cols_to_replace = HashMap::new();
-                let columns = match predicate.to_columns() {
-                    Ok(columns) => columns,
-                    Err(e) => return Some(Err(e)),
-                };
-
-                // Only allow both side key is column.
-                let join_col_keys = join
-                    .on
-                    .iter()
-                    .flat_map(|(l, r)| match (l.try_into_col(), r.try_into_col()) {
-                        (Ok(l_col), Ok(r_col)) => Some((l_col, r_col)),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
-
-                for col in columns.iter() {
-                    for (l, r) in join_col_keys.iter() {
-                        if col == l {
-                            join_cols_to_replace.insert(col, r);
-                            break;
-                        } else if col == r {
-                            join_cols_to_replace.insert(col, l);
-                            break;
-                        }
-                    }
-                }
-
-                if join_cols_to_replace.is_empty() {
-                    return None;
-                }
-
-                let join_side_predicate =
-                    match replace_col(predicate.clone(), &join_cols_to_replace) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            return Some(Err(e));
-                        }
-                    };
-
-                Some(Ok(join_side_predicate))
-            })
-            .collect::<Result<Vec<_>>>()?
+        let predicates_to_infer = if is_inner_join {
+            let mut predicates = predicates.clone();
+            predicates.append(&mut on_filters.clone());
+            predicates
+        } else {
+            predicates.clone()
+        };
+        infer_predicates_recursively(plan, predicates_to_infer.into_iter().collect())?
+            .into_iter()
+            .collect()
     } else {
         vec![]
     };
-
     if on_filters.is_empty() && predicates.is_empty() && infer_predicates.is_empty() {
         return Ok(None);
     }
@@ -598,7 +660,12 @@ impl OptimizerRule for PushDownFilter {
         let filter = match plan {
             LogicalPlan::Filter(filter) => filter,
             // we also need to pushdown filter in Join.
-            LogicalPlan::Join(join) => return push_down_join(plan, join, None),
+            LogicalPlan::Join(join) => {
+                return {
+                    // println!("Checking join {:?} {:?}", join.on, join.filter);
+                    push_down_join(plan, join, None)
+                };
+            }
             _ => return Ok(None),
         };
 
@@ -627,19 +694,14 @@ impl OptimizerRule for PushDownFilter {
                 self.try_optimize(&new_filter, _config)?
                     .unwrap_or(new_filter)
             }
-            LogicalPlan::Repartition(_)
-            | LogicalPlan::Distinct(_)
-            | LogicalPlan::Sort(_) => {
+            LogicalPlan::Repartition(_) | LogicalPlan::Distinct(_) | LogicalPlan::Sort(_) => {
                 // commutable
-                let new_filter =
-                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
+                let new_filter = plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
                 child_plan.with_new_inputs(&[new_filter])?
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let mut replace_map = HashMap::new();
-                for (i, field) in
-                    subquery_alias.input.schema().fields().iter().enumerate()
-                {
+                for (i, field) in subquery_alias.input.schema().fields().iter().enumerate() {
                     replace_map.insert(
                         subquery_alias
                             .schema
@@ -650,8 +712,7 @@ impl OptimizerRule for PushDownFilter {
                         Expr::Column(field.qualified_column()),
                     );
                 }
-                let new_predicate =
-                    replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
+                let new_predicate = replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     subquery_alias.input.clone(),
@@ -669,7 +730,7 @@ impl OptimizerRule for PushDownFilter {
                     .map(|(i, field)| {
                         // strip alias, as they should not be part of filters
                         let expr = match &projection.expr[i] {
-                            Expr::Alias(expr, _) => expr.as_ref().clone(),
+                            Expr::Alias(Alias { expr, .. }) => expr.as_ref().clone(),
                             expr => expr.clone(),
                         };
 
@@ -749,13 +810,11 @@ impl OptimizerRule for PushDownFilter {
                     )?),
                     None => (*agg.input).clone(),
                 };
-                let new_agg =
-                    from_plan(&filter.input, &filter.input.expressions(), &vec![child])?;
+                let new_agg = filter.input.with_new_inputs(&vec![child])?;
                 match conjunction(keep_predicates) {
-                    Some(predicate) => LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        Arc::new(new_agg),
-                    )?),
+                    Some(predicate) => {
+                        LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(new_agg))?)
+                    }
                     None => new_agg,
                 }
             }
@@ -810,16 +869,14 @@ impl OptimizerRule for PushDownFilter {
                 });
 
                 match conjunction(new_predicate) {
-                    Some(predicate) => LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        Arc::new(new_scan),
-                    )?),
+                    Some(predicate) => {
+                        LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(new_scan))?)
+                    }
                     None => new_scan,
                 }
             }
             LogicalPlan::Extension(extension_plan) => {
-                let prevent_cols =
-                    extension_plan.node.prevent_predicate_push_down_columns();
+                let prevent_cols = extension_plan.node.prevent_predicate_push_down_columns();
 
                 let predicates = utils::split_conjunction_owned(filter.predicate.clone());
 
@@ -852,10 +909,9 @@ impl OptimizerRule for PushDownFilter {
                 let new_extension = child_plan.with_new_inputs(&new_children)?;
 
                 match conjunction(keep_predicates) {
-                    Some(predicate) => LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        Arc::new(new_extension),
-                    )?),
+                    Some(predicate) => {
+                        LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(new_extension))?)
+                    }
                     None => new_extension,
                 }
             }
@@ -873,10 +929,7 @@ impl PushDownFilter {
 }
 
 /// replaces columns by its name on the projection.
-pub fn replace_cols_by_name(
-    e: Expr,
-    replace_map: &HashMap<String, Expr>,
-) -> Result<Expr> {
+pub fn replace_cols_by_name(e: Expr, replace_map: &HashMap<String, Expr>) -> Result<Expr> {
     e.transform_up(&|expr| {
         Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
@@ -901,19 +954,15 @@ mod tests {
     use datafusion_common::{DFSchema, DFSchemaRef};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
-        Expr, Extension, LogicalPlanBuilder, Operator, TableSource, TableType,
+        and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr, Expr,
+        Extension, LogicalPlanBuilder, Operator, TableSource, TableType,
         UserDefinedLogicalNodeCore,
     };
     use std::fmt::{Debug, Formatter};
     use std::sync::Arc;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        crate::test::assert_optimized_plan_eq(
-            Arc::new(PushDownFilter::new()),
-            plan,
-            expected,
-        )
+        crate::test::assert_optimized_plan_eq(Arc::new(PushDownFilter::new()), plan, expected)
     }
 
     fn assert_optimized_plan_eq_with_rewrite_predicate(
@@ -1039,8 +1088,7 @@ mod tests {
             .aggregate(vec![add(col("b"), col("a"))], vec![sum(col("a")), col("b")])?
             .filter(col("test.b + test.a").gt(lit(10i64)))?
             .build()?;
-        let expected =
-            "Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
+        let expected = "Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
         \n  Filter: test.b + test.a > Int64(10)\
         \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected)
@@ -2150,10 +2198,7 @@ mod tests {
             TableType::Base
         }
 
-        fn supports_filter_pushdown(
-            &self,
-            _e: &Expr,
-        ) -> Result<TableProviderFilterPushDown> {
+        fn supports_filter_pushdown(&self, _e: &Expr) -> Result<TableProviderFilterPushDown> {
             Ok(self.filter_support.clone())
         }
 
@@ -2170,9 +2215,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from((*test_provider.schema()).clone())?),
             projection: None,
             source: Arc::new(test_provider),
             fetch: None,
@@ -2194,8 +2237,7 @@ mod tests {
 
     #[test]
     fn filter_with_table_provider_inexact() -> Result<()> {
-        let plan =
-            table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
+        let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
 
         let expected = "\
         Filter: a = Int64(1)\
@@ -2205,8 +2247,7 @@ mod tests {
 
     #[test]
     fn filter_with_table_provider_multiple_invocations() -> Result<()> {
-        let plan =
-            table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
+        let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
 
         let optimised_plan = PushDownFilter::new()
             .try_optimize(&plan, &OptimizerContext::new())
@@ -2224,8 +2265,7 @@ mod tests {
 
     #[test]
     fn filter_with_table_provider_unsupported() -> Result<()> {
-        let plan =
-            table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
+        let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Unsupported)?;
 
         let expected = "\
         Filter: a = Int64(1)\
@@ -2242,9 +2282,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from((*test_provider.schema()).clone())?),
             projection: Some(vec![0]),
             source: Arc::new(test_provider),
             fetch: None,
@@ -2271,9 +2309,7 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
+            projected_schema: Arc::new(DFSchema::try_from((*test_provider.schema()).clone())?),
             projection: Some(vec![0]),
             source: Arc::new(test_provider),
             fetch: None,

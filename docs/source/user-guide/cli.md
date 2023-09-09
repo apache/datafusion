@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# `datafusion-cli`
+# Command line SQL console
 
 The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to

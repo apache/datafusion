@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Constraints, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::{CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value};
@@ -84,7 +84,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let select_into = select.into.unwrap();
                 LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
                     name: self.object_name_to_table_reference(select_into.name)?,
-                    primary_key: Vec::new(),
+                    constraints: Constraints::empty(),
                     input: Arc::new(plan),
                     if_not_exists: false,
                     or_replace: false,
