@@ -1752,6 +1752,30 @@ select array_to_string(make_array(), ',')
 ----
 (empty)
 
+
+## array_union (aliases: `list_union`)
+
+# array_union scalar function #1
+query TTT
+select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
+----
+[1, 2, 3, 4, 5, 6]
+
+# array_union scalar function #2
+query TTT
+select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
+----
+[1, 2, 3, 4, 5, 6, 7, 8]
+
+# array_union scalar function #3
+query T
+select array_union([], [])
+----
+[]
+
+
+
+
 # list_to_string scalar function #4 (function alias `array_to_string`)
 query TTT
 select list_to_string(['h', 'e', 'l', 'l', 'o'], ','), list_to_string([1, 2, 3, 4, 5], '-'), list_to_string([1.0, 2.0, 3.0], '|');

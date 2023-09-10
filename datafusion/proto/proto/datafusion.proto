@@ -621,6 +621,7 @@ enum ScalarFunction {
   ArrayPopBack = 116;
   StringToArray = 117;
   ToTimestampNanos = 118;
+  ArrayUnion = 119;
 }
 
 message ScalarFunctionNode {

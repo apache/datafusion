@@ -1358,6 +1358,28 @@ macro_rules! to_string {
     }};
 }
 
+
+/// Array_union SQL function
+pub fn array_union(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let array1 = &args[0];
+    let array2= &args[1];
+
+    check_datatypes("array_union", &[array1, array2])?;
+    let list1 = as_list_array(array1)?;
+    let list2 = as_list_array(array2)?;
+    match (list1.value_type(), list2.value_type()){
+        (DataType::Null, _) => {
+            Ok(array2.clone())
+        },
+        (_, DataType::Null) => {
+            Ok(array1.clone())
+        }
+        (DataType::List(_), DataType::List(_)) => concat_internal(args),
+        _ => return exec_err!("can only concatenate lists")
+    }
+}
+
+
 /// Array_to_string SQL function
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = &args[0];
@@ -1466,6 +1488,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     Ok(Arc::new(StringArray::from(res)))
 }
+
 
 /// Cardinality SQL function
 pub fn cardinality(args: &[ArrayRef]) -> Result<ArrayRef> {

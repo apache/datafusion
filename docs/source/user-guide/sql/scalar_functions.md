@@ -2211,6 +2211,47 @@ array_to_string(array, delimiter)
 - list_join
 - list_to_string
 
+### `array_union`
+
+Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
+
+```
+array_union(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```
+❯ select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                 |
++----------------------------------------------------+
+❯ select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                 |
++----------------------------------------------------+
+```
+
+
+----
+
+
+#### Aliases
+
+- list_union
+
+
 ### `cardinality`
 
 Returns the total number of elements in the array.
