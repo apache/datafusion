@@ -20,7 +20,7 @@
 //! performance or to accommodate unbounded streams by fixing the pipeline.
 
 use crate::error::Result;
-use crate::physical_optimizer::sort_enforcement::{unbounded_output, ExecTree};
+use crate::physical_optimizer::enforce_sorting::{unbounded_output, ExecTree};
 use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
