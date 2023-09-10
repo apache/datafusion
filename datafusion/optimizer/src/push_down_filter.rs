@@ -15,20 +15,24 @@
 //! Push Down Filter optimizer rule ensures that filters are applied as early as possible in the plan
 
 use crate::optimizer::ApplyOrder;
+use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{Column, DFSchema, DataFusionError, Result};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    and,
+    and, col,
     expr_rewriter::replace_col,
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
     or,
     utils::from_plan,
     BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
 };
+use datafusion_physical_expr::execution_props::ExecutionProps;
 use itertools::Itertools;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -79,6 +83,7 @@ pub struct PushDownFilter {}
 // non-preserved side it can be more tricky.
 //
 // Returns a tuple of booleans - (left_preserved, right_preserved).
+
 fn lr_is_preserved(plan: &LogicalPlan) -> Result<(bool, bool)> {
     match plan {
         LogicalPlan::Join(Join { join_type, .. }) => match join_type {
@@ -352,18 +357,44 @@ fn can_push_and_keep_unpreserved_predicate(predicate: &Expr) -> bool {
         _ => false,
     };
 }
+
+fn push_predicates(
+    predicate: &Expr,
+    join_plan: &LogicalPlan,
+    schema: &DFSchemaRef,
+    preserved: bool,
+    kept: &mut bool,
+    predicates_to_push: &mut Vec<Expr>,
+) -> Result<()> {
+    if can_pushdown_join_predicate(predicate, schema)? {
+        if preserved {
+            *kept = true;
+            predicates_to_push.push(predicate.clone());
+        } else if can_push_and_keep_unpreserved_predicate(predicate) {
+            predicates_to_push.push(predicate.clone());
+        }
+    } else {
+        if preserved || can_push_and_keep_unpreserved_predicate(predicate) {
+            let aliased_predicates = get_aliased_predicates(join_plan, &vec![predicate.clone()])?;
+
+            for predicate in aliased_predicates {
+                if can_pushdown_join_predicate(&predicate, schema)? {
+                    predicates_to_push.push(predicate);
+                }
+            }
+        }
+    }
+    Ok(())
+}
 // push down join/cross-join
 fn push_down_all_join(
-    predicates: Vec<Expr>,
-    infer_predicates: Vec<Expr>,
+    mut predicates: Vec<Expr>,
     join_plan: &LogicalPlan,
     left: &LogicalPlan,
     right: &LogicalPlan,
     on_filter: Vec<Expr>,
-    is_inner_join: bool,
 ) -> Result<LogicalPlan> {
     let on_filter_empty = on_filter.is_empty();
-    // Get pushable predicates from current optimizer state
     let (left_preserved, right_preserved) = lr_is_preserved(join_plan)?;
 
     // The predicates can be divided to three categories:
@@ -374,52 +405,46 @@ fn push_down_all_join(
     let mut right_push = vec![];
     let mut keep_predicates = vec![];
     let mut join_conditions = vec![];
+
+    let inner_join = match join_plan {
+        LogicalPlan::Join(Join { join_type, .. }) => *join_type == JoinType::Inner,
+        _ => false,
+    };
+
+    if inner_join && !on_filter_empty {
+        predicates.extend(on_filter.clone());
+    }
+
     for predicate in predicates {
-        if left_preserved && can_pushdown_join_predicate(&predicate, left.schema())? {
-            left_push.push(predicate);
-        } else if right_preserved && can_pushdown_join_predicate(&predicate, right.schema())? {
-            right_push.push(predicate);
-        } else if !left_preserved
-            && can_pushdown_join_predicate(&predicate, left.schema())?
-            && can_push_and_keep_unpreserved_predicate(&predicate)
-        {
-            left_push.push(predicate.clone());
-            keep_predicates.push(predicate);
-        } else if !right_preserved
-            && can_pushdown_join_predicate(&predicate, right.schema())?
-            && can_push_and_keep_unpreserved_predicate(&predicate)
-        {
-            right_push.push(predicate.clone());
-            keep_predicates.push(predicate);
-        } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
-            // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
-            // and convert to the join on condition
-            join_conditions.push(predicate);
-        } else {
-            keep_predicates.push(predicate);
-        }
-    }
+        let mut kept = false;
 
-    // For infer predicates, if they can not push through join, just drop them
-    for predicate in infer_predicates {
-        if can_pushdown_join_predicate(&predicate, left.schema())? {
-            if left_preserved {
-                left_push.push(predicate);
-            } else if can_push_and_keep_unpreserved_predicate(&predicate) {
-                left_push.push(predicate.clone());
-                keep_predicates.push(predicate);
-            }
-        } else if can_pushdown_join_predicate(&predicate, right.schema())? {
-            if right_preserved {
-                right_push.push(predicate);
-            } else if can_push_and_keep_unpreserved_predicate(&predicate) {
-                right_push.push(predicate.clone());
+        push_predicates(
+            &predicate,
+            join_plan,
+            left.schema(),
+            left_preserved,
+            &mut kept,
+            &mut left_push,
+        )?;
+        push_predicates(
+            &predicate,
+            join_plan,
+            right.schema(),
+            right_preserved,
+            &mut kept,
+            &mut right_push,
+        )?;
+
+        if !kept {
+            if inner_join && can_evaluate_as_join_condition(&predicate)? {
+                join_conditions.push(predicate);
+            } else {
                 keep_predicates.push(predicate);
             }
         }
     }
 
-    if !on_filter.is_empty() {
+    if !on_filter_empty && !inner_join {
         let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join_plan)?;
         for on in on_filter {
             if on_left_preserved && can_pushdown_join_predicate(&on, left.schema())? {
@@ -459,7 +484,6 @@ fn push_down_all_join(
     left_push.extend(on_or_to_left);
     right_push.extend(or_to_right);
     right_push.extend(on_or_to_right);
-
     let left = match conjunction(left_push) {
         Some(predicate) => LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(left.clone()))?),
         None => left.clone(),
@@ -503,81 +527,95 @@ fn push_down_all_join(
     }
 }
 
-fn infer_predicates(join: &Join, predicates_to_infer: HashSet<Expr>) -> Result<HashSet<Expr>> {
-    Ok(predicates_to_infer
+fn get_equivalent_columns_to_replace(
+    predicate_columns: Vec<Column>,
+    join: &Join,
+) -> Result<Vec<(bool, Column, Column)>> {
+    let (left_preserved, right_preserved) = lr_is_preserved(&LogicalPlan::Join(join.clone()))?;
+
+    // Only allow both side key is column.
+    let join_col_keys = join
+        .on
         .iter()
-        .filter_map(|predicate| {
-            let mut join_cols_to_replace = HashMap::new();
-            let columns = match predicate.to_columns() {
-                Ok(columns) => columns,
-                Err(e) => return Some(Err(e)),
-            };
-
-            // Only allow both side key is column.
-            let join_col_keys = join
-                .on
-                .iter()
-                .flat_map(|(l, r)| match (l.try_into_col(), r.try_into_col()) {
-                    (Ok(l_col), Ok(r_col)) => Some((l_col, r_col)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-
-            for col in columns.iter() {
-                for (l, r) in join_col_keys.iter() {
-                    if col == l {
-                        join_cols_to_replace.insert(col, r);
-                        break;
-                    } else if col == r {
-                        join_cols_to_replace.insert(col, l);
-                        break;
-                    }
-                }
-            }
-
-            if join_cols_to_replace.is_empty() {
-                return None;
-            }
-
-            let join_side_predicate = match replace_col(predicate.clone(), &join_cols_to_replace) {
-                Ok(p) => p,
-                Err(e) => {
-                    return Some(Err(e));
-                }
-            };
-
-            Some(Ok(join_side_predicate))
+        .flat_map(|(l, r)| match (l.try_into_col(), r.try_into_col()) {
+            (Ok(l_col), Ok(r_col)) => Some((l_col, r_col)),
+            _ => None,
         })
-        .collect::<Result<HashSet<_>>>()?)
-}
+        .collect::<Vec<_>>();
 
-fn infer_predicates_recursively(
-    plan: &LogicalPlan,
-    predicates: HashSet<Expr>,
-) -> Result<HashSet<Expr>> {
-    let mut inferred_predicates = predicates.clone();
-    for input in plan.inputs() {
-        match input {
-            l @ LogicalPlan::Join(j) => {
-                inferred_predicates.extend(
-                    infer_predicates_recursively(l, inferred_predicates.clone())?.into_iter(),
-                );
-                inferred_predicates.extend(infer_predicates(j, predicates.clone())?.into_iter());
+    let mut columns_to_replace = vec![];
+    for (l, r) in join_col_keys.clone().into_iter() {
+        for col in predicate_columns.clone() {
+            if col == l {
+                columns_to_replace.push((right_preserved, col, r.clone()));
+            } else if col == r {
+                columns_to_replace.push((left_preserved, col, l.clone()));
             }
-            _ => (),
         }
     }
-    match plan {
-        LogicalPlan::Join(j) => inferred_predicates
-            .extend(&mut infer_predicates(j, inferred_predicates.clone())?.into_iter()),
-        _ => (),
+
+    return Ok(columns_to_replace);
+}
+
+fn unpreserved_null_was_previously_added(predicate: Expr, col: &Expr) -> bool {
+    match predicate {
+        Expr::BinaryExpr(BinaryExpr {
+            left: _left,
+            op: Operator::Or,
+            right,
+        }) => {
+            return match *right {
+                Expr::IsNull(expr) => *expr == col.clone(),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn get_aliased_predicates(plan: &LogicalPlan, predicates: &Vec<Expr>) -> Result<Vec<Expr>> {
+    let join = match plan {
+        LogicalPlan::Join(j) => j,
+        _ => {
+            return {
+                let mut aliased_predicates = vec![];
+                for input in plan.inputs() {
+                    aliased_predicates.extend(get_aliased_predicates(input, predicates)?);
+                }
+                Ok(aliased_predicates)
+            }
+        }
+    };
+
+    let left_aliased_predicates = get_aliased_predicates(&join.left, predicates)?;
+    let right_aliased_predicates = get_aliased_predicates(&join.right, predicates)?;
+
+    let mut all_predicates = vec![];
+    all_predicates.extend(predicates.clone());
+    all_predicates.extend(left_aliased_predicates.clone());
+    all_predicates.extend(right_aliased_predicates.clone());
+
+    let mut new_predicates = vec![];
+    for predicate in all_predicates {
+        for (preserved, col_to_replace, new_col) in
+            get_equivalent_columns_to_replace(predicate.to_columns()?.into_iter().collect(), join)?
+        {
+            let mut replace_columns = HashMap::new();
+            replace_columns.insert(&col_to_replace, &new_col);
+            let col_expr = Expr::Column(new_col.clone());
+            let mut aliased_predicate = replace_col(predicate.clone(), &replace_columns)?;
+            if !preserved
+                && !unpreserved_null_was_previously_added(aliased_predicate.clone(), &col_expr)
+            {
+                aliased_predicate = aliased_predicate.or(col_expr.is_null());
+            }
+            new_predicates.push(aliased_predicate);
+        }
     }
 
-    println!(
-        "Plan {:?} -> infer predicates: {:?}",
-        plan, inferred_predicates
-    );
-    Ok(inferred_predicates)
+    new_predicates.extend(left_aliased_predicates);
+    new_predicates.extend(right_aliased_predicates);
+    Ok(new_predicates.into_iter().unique().collect())
 }
 
 fn push_down_join(
@@ -597,49 +635,12 @@ fn push_down_join(
         .map(|e| utils::split_conjunction_owned(e.clone()))
         .unwrap_or_else(Vec::new);
 
-    let is_inner_join = join.join_type == JoinType::Inner;
-    let infer_predicates = if join.join_type == JoinType::Inner
-        || join.join_type == JoinType::Left
-        || join.join_type == JoinType::Right
-    {
-        // TODO refine the logic, introduce EquivalenceProperties to logical plan and infer additional filters to push down
-        // For inner joins, duplicate filters for joined columns so filters can be pushed down
-        // to both sides. Take the following query as an example:
-        //
-        // ```sql
-        // SELECT * FROM t1 JOIN t2 on t1.id = t2.uid WHERE t1.id > 1
-        // ```
-        //
-        // `t1.id > 1` predicate needs to be pushed down to t1 table scan, while
-        // `t2.uid > 1` predicate needs to be pushed down to t2 table scan.
-        //
-        // Join clauses with `Using` constraints also take advantage of this logic to make sure
-        // predicates reference the shared join columns are pushed to both sides.
-        // This logic should also been applied to conditions in JOIN ON clause
-        let predicates_to_infer = if is_inner_join {
-            let mut predicates = predicates.clone();
-            predicates.append(&mut on_filters.clone());
-            predicates
-        } else {
-            predicates.clone()
-        };
-        infer_predicates_recursively(plan, predicates_to_infer.into_iter().collect())?
-            .into_iter()
-            .collect()
-    } else {
-        vec![]
-    };
-    if on_filters.is_empty() && predicates.is_empty() && infer_predicates.is_empty() {
-        return Ok(None);
-    }
     Ok(Some(push_down_all_join(
         predicates,
-        infer_predicates,
         plan,
         &join.left,
         &join.right,
         on_filters,
-        is_inner_join,
     )?))
 }
 
@@ -661,10 +662,7 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::Filter(filter) => filter,
             // we also need to pushdown filter in Join.
             LogicalPlan::Join(join) => {
-                return {
-                    // println!("Checking join {:?} {:?}", join.on, join.filter);
-                    push_down_join(plan, join, None)
-                };
+                return push_down_join(plan, join, None);
             }
             _ => return Ok(None),
         };
@@ -826,15 +824,7 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let predicates = utils::split_conjunction_owned(filter.predicate.clone());
-                push_down_all_join(
-                    predicates,
-                    vec![],
-                    &filter.input,
-                    left,
-                    right,
-                    vec![],
-                    false,
-                )?
+                push_down_all_join(predicates, &filter.input, left, right, vec![])?
             }
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
@@ -917,6 +907,7 @@ impl OptimizerRule for PushDownFilter {
             }
             _ => return Ok(None),
         };
+
         Ok(Some(new_plan))
     }
 }

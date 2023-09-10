@@ -87,7 +87,7 @@ mod tests {
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("b")])?
-            .distinct()?
+            .distinct(None)?
             .build()?;
 
         let expected = "Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]\

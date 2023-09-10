@@ -311,7 +311,7 @@ impl DataFrame {
     pub fn distinct(self) -> Result<DataFrame> {
         Ok(DataFrame::new(
             self.session_state,
-            LogicalPlanBuilder::from(self.plan).distinct()?.build()?,
+            LogicalPlanBuilder::from(self.plan).distinct(None)?.build()?,
         ))
     }
 
