@@ -28,7 +28,6 @@ Copies the contents of a table or query to file(s). Supported file
 formats are `parquet`, `csv`, and `json` and can be inferred based on
 filename if writing to a single file.
 
-
 <pre>
 COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
 </pre>
