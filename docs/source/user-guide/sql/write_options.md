@@ -29,7 +29,7 @@ Write related options can be specified in the following ways:
 * ```CREATE EXTERNAL TABLE``` options
 * ```COPY``` option tuples
 
-For a list of supported session level config defaults see [Configuration Settings](https://arrow.apache.org/datafusion/user-guide/configs.md). These defaults apply to all write operations but have the lowest level of precedence.
+For a list of supported session level config defaults see [Configuration Settings](https://arrow.apache.org/datafusion/user-guide/configs.html). These defaults apply to all write operations but have the lowest level of precedence.
 
 If inserting to an external table, table specific write options can be specified when the table is created:
 
@@ -110,7 +110,7 @@ The following options are available when writing CSV files. Note: if any unsuppo
 
 ### Parquet Format Specific Options
 
-The following options are available when writing parquet files. If any unsupported option is specified an error will be raised and the query will fail. If a column specific option is specified for a column which does not exist, the option will be ignored without error. For default values, see: [Configuration Settings](https://arrow.apache.org/datafusion/user-guide/configs.md).
+The following options are available when writing parquet files. If any unsupported option is specified an error will be raised and the query will fail. If a column specific option is specified for a column which does not exist, the option will be ignored without error. For default values, see: [Configuration Settings](https://arrow.apache.org/datafusion/user-guide/configs.html).
 
 | Option                       | Can be Column Specific? | Description                                                                                                   |
 |------------------------------|-------------------------|---------------------------------------------------------------------------------------------------------------|
