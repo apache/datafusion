@@ -74,3 +74,13 @@ The following special options are specific to the ```COPY``` query.
 |--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------|
 | SINGLE_FILE_OUTPUT | If true, COPY query will  write output to a single file.                                                                                                             | true          |
 | FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or format cannot be inferred from file extension, then FORMAT must be specified. | N/A           |
+
+### CREATE EXTERNAL TABLE Specific Options
+
+The following special options are specific to creating an external table.
+
+| Option            | Description                                                                                                                                                                                                                                | Default Value                                                                |
+|-------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| SINGLE_FILE       | If true, indicates that this external table is backed by a single file. INSERT INTO queries will append to this file.                                                                                                                      | false                                                                        |
+| CREATE_LOCAL_PATH | If true, the folder or file backing this table will be created on the local file system if it does not already exist when running INSERT INTO queries.                                                                                     | false                                                                        |
+| INSERT_MODE       | Determines if INSERT INTO queries should append to existing files or append new files to an existing directory. Valid values are append_to_file, append_new_files, and error. Note that "error" will block inserting data into this table. | CSV and JSON default to append_to_file. Parquet defaults to append_new_files |
