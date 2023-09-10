@@ -132,6 +132,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         vec![true]
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
