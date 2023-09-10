@@ -84,3 +84,49 @@ The following special options are specific to creating an external table.
 | SINGLE_FILE       | If true, indicates that this external table is backed by a single file. INSERT INTO queries will append to this file.                                                                                                                      | false                                                                        |
 | CREATE_LOCAL_PATH | If true, the folder or file backing this table will be created on the local file system if it does not already exist when running INSERT INTO queries.                                                                                     | false                                                                        |
 | INSERT_MODE       | Determines if INSERT INTO queries should append to existing files or append new files to an existing directory. Valid values are append_to_file, append_new_files, and error. Note that "error" will block inserting data into this table. | CSV and JSON default to append_to_file. Parquet defaults to append_new_files |
+
+### JSON Format Specific Options
+
+The following options are available when writting JSON files. Note: if any unsupported option is specified, an error will be raised and the query will fail.
+
+| Option      | Description                                                                                                                        | Default Value |
+|-------------|------------------------------------------------------------------------------------------------------------------------------------|---------------|
+| COMPRESSION | Sets the compression that should be applied to the entire JSON file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED. | UNCOMPRESSED  |
+
+### CSV Format Sepcific Options
+
+The following options are available when writing CSV files. Note: if any unsupported options is specified an error will be raised and the query will fail.
+
+| Option          | Description                                                                                                                       | Default Value    |
+|-----------------|-----------------------------------------------------------------------------------------------------------------------------------|------------------|
+| COMPRESSION     | Sets the compression that should be applied to the entire CSV file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED. | UNCOMPRESSED     |
+| HEADER          | Sets if the CSV file should include column headers                                                                                | false            |
+| DATE_FORMAT     | Sets the format that dates should be encoded in within the CSV file                                                               | arrow-rs default |
+| DATETIME_FORMAT | Sets the format that datetimes should be encoded in within the CSV file                                                           | arrow-rs default |
+| TIME_FORMAT     | Sets the format that times should be encoded in within the CSV file                                                               | arrow-rs default |
+| RFC3339         | If true, uses RFC339 format for date and time encodings                                                                           | arrow-rs default |
+| NULL_VALUE      | Sets the string which should be used to indicate null values within the CSV file.                                                 | arrow-rs default |
+| DELIMETER       | Sets the character which should be used as the column delimiter within the CSV file.                                              | arrow-rs default |
+
+### Parquet Format Specific Options
+
+The following options are available when writing parquet files. If any unsupported option is specified an error will be raised and the query will fail. If a column specific option is specified for a column which does not exist, the option will be ignored without error. For default values, see: [Configuration Settings](https://arrow.apache.org/datafusion/user-guide/configs.md).
+
+| Option                       | Can be Column Specific? | Description                                                                                                   |
+|------------------------------|-------------------------|---------------------------------------------------------------------------------------------------------------|
+| COMPRESSION                  | Yes                     | Sets the compression codec and if applicable compression level to use                                         |
+| MAX_ROW_GROUP_SIZE           | No                      | Sets the maximum number of rows that can be encoded in a single row group                                     |
+| DATA_PAGESIZE_LIMIT          | No                      | Sets the best effort maximum page size in bytes                                                               |
+| WRITE_BATCH_SIZE             | No                      | Maximum number of rows written for each column in a single batch                                              |
+| WRITER_VERSION               | No                      | Parquet writer version (1.0 or 2.0)                                                                           |
+| DICTIONARY_PAGE_SIZE_LIMIT   | No                      | Sets best effort maximum dictionary page size in bytes                                                        |
+| CREATED_BY                   | No                      | Sets the "created by" property in the parquet file                                                            |
+| COLUMN_INDEX_TRUNCATE_LENGTH | No                      | Sets the max length of min/max value fields in the column index.                                              |
+| DATA_PAGE_ROW_COUNT_LIMIT    | No                      | Sets best effort maximum number of rows in a data page.                                                       |
+| BLOOM_FILTER_ENABLED         | Yes                     | Sets whether a bloom filter should be written into the file.                                                  |
+| ENCODING                     | Yes                     | Sets the encoding that should be used (e.g. PLAIN or RLE)                                                     |
+| DICTIONARY_ENABLED           | Yes                     | Sets if dictionary encoding is enabled. Use this instead of ENCODING to set dictionary encoding.              |
+| STATISTICS_ENABLED           | Yes                     | Sets if statistics are enabled at PAGE or ROW_GROUP level.                                                    |
+| MAX_STATISTICS_SIZE          | Yes                     | Sets the maximum size in bytes that statistics can take up.                                                   |
+| BLOOM_FILTER_FPP             | Yes                     | Sets the false positive probability (fpp) for the bloom filter. Implicitly sets BLOOM_FILTER_ENABLED to true. |
+| BLOOM_FILTER_NDV             | Yes                     | Sets the number of distinct values (ndv) for the bloom filter. Implicitly sets bloom_filter_enabled to true.  |

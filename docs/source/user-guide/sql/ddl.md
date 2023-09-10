@@ -77,6 +77,8 @@ LOCATION <literal>
 <key_value_list> := (<literal> <literal, <literal> <literal>, ...)
 ```
 
+For a detailed list of write related options which can be passed in the OPTIONS key_value_list, see [Write Options](https://arrow.apache.org/datafusion/user-guide/sql/write_options.md).
+
 `file_type` is one of `CSV`, `ARROW`, `PARQUET`, `AVRO` or `JSON`
 
 `LOCATION <literal>` specifies the location to find the data. It can be
