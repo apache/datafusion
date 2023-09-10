@@ -64,7 +64,7 @@ STORED AS <file_type>
 [ DELIMITER <char> ]
 [ COMPRESSION TYPE <GZIP | BZIP2 | XZ | ZSTD> ]
 [ PARTITIONED BY (<column list>) ]
-[ WITH ORDER (<ordered column list>)
+[ WITH ORDER (<ordered column list>) ]
 [ OPTIONS (<key_value_list>) ]
 LOCATION <literal>
 
