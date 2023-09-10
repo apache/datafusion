@@ -39,11 +39,13 @@ use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, Case, ColumnarValue, Expr,
     Like, Volatility,
 };
-use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use datafusion_physical_expr::{
+    create_physical_expr, execution_props::ExecutionProps, intervals::NullableInterval,
+};
 
 use crate::simplify_expressions::SimplifyInfo;
 
-use crate::simplify_expressions::guarantees::{Guarantee, GuaranteeRewriter};
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -154,18 +156,18 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 
     /// Input guarantees and simplify the expression.
     ///
-    /// The guarantees can simplify expressions. For example, if a column is
-    /// guaranteed to always be a certain value, it's references in the expression
-    /// can be replaced with that literal.
+    /// The guarantees can simplify expressions. For example, if a column `x` is
+    /// guaranteed to be `3`, then the expression `x > 1` can be replaced by the
+    /// literal `true`.
     ///
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_physical_expr::execution_props::ExecutionProps;
+    /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
     /// use datafusion_optimizer::simplify_expressions::{
-    ///     ExprSimplifier, SimplifyContext,
-    ///     guarantees::{Guarantee, GuaranteeBound, NullStatus}};
+    ///     ExprSimplifier, SimplifyContext};
     ///
     /// let schema = Schema::new(vec![
     ///   Field::new("x", DataType::Int64, false),
@@ -187,17 +189,16 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// let expr = expr_x.and(expr_y).and(expr_z.clone());
     ///
     /// let guarantees = vec![
-    ///    // x is guaranteed to be between 3 and 5
+    ///    // x ∈ [3, 5]
     ///    (
     ///        col("x"),
-    ///        Guarantee::new(
-    ///            Some(GuaranteeBound::new(ScalarValue::Int64(Some(3)), false)),
-    ///            Some(GuaranteeBound::new(ScalarValue::Int64(Some(5)), false)),
-    ///            NullStatus::NeverNull,
-    ///        )
+    ///        NullableInterval {
+    ///            values: Interval::make(Some(3_i64), Some(5_i64), (false, false)),
+    ///            is_valid: Interval::CERTAINLY_TRUE,
+    ///        }
     ///    ),
-    ///    // y is guaranteed to be 3
-    ///    (col("y"), Guarantee::from(&ScalarValue::UInt32(Some(3)))),
+    ///    // y = 3
+    ///    (col("y"), NullableInterval::from(&ScalarValue::UInt32(Some(3)))),
     /// ];
     /// let output = simplifier.simplify_with_guarantees(expr, &guarantees).unwrap();
     /// // Expression becomes: true AND true AND (z > 5), which simplifies to
@@ -207,7 +208,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn simplify_with_guarantees<'a>(
         &self,
         expr: Expr,
-        guarantees: impl IntoIterator<Item = &'a (Expr, Guarantee)>,
+        guarantees: impl IntoIterator<Item = &'a (Expr, NullableInterval)>,
     ) -> Result<Expr> {
         // Do a simplification pass in case it reveals places where a guarantee
         // could be applied.
@@ -1266,7 +1267,6 @@ mod tests {
     };
 
     use crate::simplify_expressions::{
-        guarantees::{GuaranteeBound, NullStatus},
         utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
         SimplifyContext,
     };
@@ -1281,7 +1281,9 @@ mod tests {
     use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::*;
     use datafusion_physical_expr::{
-        execution_props::ExecutionProps, functions::make_scalar_function,
+        execution_props::ExecutionProps,
+        functions::make_scalar_function,
+        intervals::{Interval, NullableInterval},
     };
 
     // ------------------------------
@@ -2745,7 +2747,10 @@ mod tests {
         try_simplify(expr).unwrap()
     }
 
-    fn simplify_with_guarantee(expr: Expr, guarantees: &[(Expr, Guarantee)]) -> Expr {
+    fn simplify_with_guarantee(
+        expr: Expr,
+        guarantees: &[(Expr, NullableInterval)],
+    ) -> Expr {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
@@ -3230,9 +3235,12 @@ mod tests {
 
         // All guaranteed null
         let guarantees = vec![
-            (col("c3"), Guarantee::from(&ScalarValue::Int64(None))),
-            (col("c4"), Guarantee::from(&ScalarValue::UInt32(None))),
-            (col("c1"), Guarantee::from(&ScalarValue::Utf8(None))),
+            (col("c3"), NullableInterval::from(&ScalarValue::Int64(None))),
+            (
+                col("c4"),
+                NullableInterval::from(&ScalarValue::UInt32(None)),
+            ),
+            (col("c1"), NullableInterval::from(&ScalarValue::Utf8(None))),
         ];
 
         let output = simplify_with_guarantee(expr.clone(), &guarantees);
@@ -3242,16 +3250,18 @@ mod tests {
         let guarantees = vec![
             (
                 col("c3"),
-                Guarantee::new(
-                    Some(GuaranteeBound::new(ScalarValue::Int64(Some(0)), false)),
-                    Some(GuaranteeBound::new(ScalarValue::Int64(Some(2)), false)),
-                    NullStatus::NeverNull,
-                ),
+                NullableInterval {
+                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                    is_valid: Interval::CERTAINLY_TRUE,
+                },
             ),
-            (col("c4"), Guarantee::from(&ScalarValue::UInt32(Some(9)))),
+            (
+                col("c4"),
+                NullableInterval::from(&ScalarValue::UInt32(Some(9))),
+            ),
             (
                 col("c1"),
-                Guarantee::from(&ScalarValue::Utf8(Some("a".to_string()))),
+                NullableInterval::from(&ScalarValue::Utf8(Some("a".to_string()))),
             ),
         ];
         let output = simplify_with_guarantee(expr.clone(), &guarantees);
@@ -3259,15 +3269,23 @@ mod tests {
 
         // Sufficient true guarantees
         let guarantees = vec![
-            (col("c3"), Guarantee::from(&ScalarValue::Int64(Some(9)))),
-            (col("c4"), Guarantee::from(&ScalarValue::UInt32(Some(3)))),
+            (
+                col("c3"),
+                NullableInterval::from(&ScalarValue::Int64(Some(9))),
+            ),
+            (
+                col("c4"),
+                NullableInterval::from(&ScalarValue::UInt32(Some(3))),
+            ),
         ];
         let output = simplify_with_guarantee(expr.clone(), &guarantees);
         assert_eq!(output, lit(true));
 
         // Only partially simplify
-        let guarantees =
-            vec![(col("c4"), Guarantee::from(&ScalarValue::UInt32(Some(3))))];
+        let guarantees = vec![(
+            col("c4"),
+            NullableInterval::from(&ScalarValue::UInt32(Some(3))),
+        )];
         let output = simplify_with_guarantee(expr.clone(), &guarantees);
         assert_eq!(&output, &expr_x);
     }
