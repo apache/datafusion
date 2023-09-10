@@ -3227,11 +3227,11 @@ mod tests {
 
     #[test]
     fn test_simplify_with_guarantee() {
-        // (x >= 3) AND (y + 2 < 10 OR (z NOT IN ("a", "b")))
+        // (c3 >= 3) AND (c4 + 2 < 10 OR (c1 NOT IN ("a", "b")))
         let expr_x = col("c3").gt(lit(3_i64));
         let expr_y = (col("c4") + lit(2_u32)).lt(lit(10_u32));
         let expr_z = col("c1").in_list(vec![lit("a"), lit("b")], true);
-        let expr = expr_x.clone().and(expr_y.or(expr_z));
+        let expr = expr_x.clone().and(expr_y.clone().or(expr_z));
 
         // All guaranteed null
         let guarantees = vec![
@@ -3266,6 +3266,30 @@ mod tests {
         ];
         let output = simplify_with_guarantee(expr.clone(), &guarantees);
         assert_eq!(output, lit(false));
+
+        // Guaranteed true or null -> no change.
+        let guarantees = vec![
+            (
+                col("c3"),
+                NullableInterval {
+                    values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
+                    is_valid: Interval::UNCERTAIN,
+                },
+            ),
+            (
+                col("c4"),
+                NullableInterval {
+                    values: Interval::make(Some(0_u32), Some(5_u32), (false, false)),
+                    is_valid: Interval::UNCERTAIN,
+                },
+            ),
+            (
+                col("c1"),
+                NullableInterval::from(&ScalarValue::Utf8(Some("a".to_string()))),
+            ),
+        ];
+        let output = simplify_with_guarantee(expr.clone(), &guarantees);
+        assert_eq!(output, expr_x.clone().and(expr_y.clone()));
 
         // Sufficient true guarantees
         let guarantees = vec![
