@@ -677,7 +677,7 @@ scalar_expr!(
 scalar_expr!(
     ArrayToString,
     array_to_string,
-    array delimeter,
+    array delimiter,
     "converts each element to its text representation."
 );
 scalar_expr!(

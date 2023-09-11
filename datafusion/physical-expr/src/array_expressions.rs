@@ -1471,18 +1471,18 @@ array_replacement_function!(
 );
 
 macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMETER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
+    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
         let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
         for x in arr {
             match x {
                 Some(x) => {
                     $ARG.push_str(&x.to_string());
-                    $ARG.push_str($DELIMETER);
+                    $ARG.push_str($DELIMITER);
                 }
                 None => {
                     if $WITH_NULL_STRING {
                         $ARG.push_str($NULL_STRING);
-                        $ARG.push_str($DELIMETER);
+                        $ARG.push_str($DELIMITER);
                     }
                 }
             }
@@ -1495,8 +1495,8 @@ macro_rules! to_string {
 pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = &args[0];
 
-    let delimeters = as_generic_string_array::<i32>(&args[1])?;
-    let delimeters: Vec<Option<&str>> = delimeters.iter().collect();
+    let delimiters = as_generic_string_array::<i32>(&args[1])?;
+    let delimiters: Vec<Option<&str>> = delimiters.iter().collect();
 
     let mut null_string = String::from("");
     let mut with_null_string = false;
@@ -1510,7 +1510,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn compute_array_to_string(
         arg: &mut String,
         arr: ArrayRef,
-        delimeter: String,
+        delimiter: String,
         null_string: String,
         with_null_string: bool,
     ) -> Result<&mut String> {
@@ -1522,7 +1522,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                     compute_array_to_string(
                         arg,
                         list_array.value(i),
-                        delimeter.clone(),
+                        delimiter.clone(),
                         null_string.clone(),
                         with_null_string,
                     )?;
@@ -1537,7 +1537,7 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
                         to_string!(
                             arg,
                             arr,
-                            &delimeter,
+                            &delimiter,
                             &null_string,
                             with_null_string,
                             $ARRAY_TYPE
@@ -1555,19 +1555,19 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
     match arr.data_type() {
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
             let list_array = arr.as_list::<i32>();
-            for (arr, &delimeter) in list_array.iter().zip(delimeters.iter()) {
-                if let (Some(arr), Some(delimeter)) = (arr, delimeter) {
+            for (arr, &delimiter) in list_array.iter().zip(delimiters.iter()) {
+                if let (Some(arr), Some(delimiter)) = (arr, delimiter) {
                     arg = String::from("");
                     let s = compute_array_to_string(
                         &mut arg,
                         arr,
-                        delimeter.to_string(),
+                        delimiter.to_string(),
                         null_string.clone(),
                         with_null_string,
                     )?
                     .clone();
 
-                    if let Some(s) = s.strip_suffix(delimeter) {
+                    if let Some(s) = s.strip_suffix(delimiter) {
                         res.push(Some(s.to_string()));
                     } else {
                         res.push(Some(s));
@@ -1578,20 +1578,20 @@ pub fn array_to_string(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         }
         _ => {
-            // delimeter length is 1
-            assert_eq!(delimeters.len(), 1);
-            let delimeter = delimeters[0].unwrap();
+            // delimiter length is 1
+            assert_eq!(delimiters.len(), 1);
+            let delimiter = delimiters[0].unwrap();
             let s = compute_array_to_string(
                 &mut arg,
                 arr.clone(),
-                delimeter.to_string(),
+                delimiter.to_string(),
                 null_string,
                 with_null_string,
             )?
             .clone();
 
             if !s.is_empty() {
-                let s = s.strip_suffix(delimeter).unwrap().to_string();
+                let s = s.strip_suffix(delimiter).unwrap().to_string();
                 res.push(Some(s));
             } else {
                 res.push(Some(s));
