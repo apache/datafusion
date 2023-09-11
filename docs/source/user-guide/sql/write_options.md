@@ -31,7 +31,7 @@ Write related options can be specified in the following ways:
 
 For a list of supported session level config defaults see [Configuration Settings](configs). These defaults apply to all write operations but have the lowest level of precedence.
 
-If inserting to an external table, table specific write options can be specified when the table is created using the `OPTIONS` clause: 
+If inserting to an external table, table specific write options can be specified when the table is created using the `OPTIONS` clause:
 
 ```sql
 CREATE EXTERNAL TABLE
@@ -61,7 +61,7 @@ compression snappy,
 )
 ```
 
-In this example, we write the entirety of `source_table` out to a folder of parquet files. The option `single_file_output` set to false, indicates that the destination path should be interpreted as a folder to which the query will output multiple files. One parquet file will be written in parallel to the folder for each partition in the query. The next option `compression` set to `snappy` indicates that unless otherwise specified all columns should use the snappy compression codec. The option `compression::col1` sets an override, so that the column `col1` in the parquet file will use `ZSTD` compression codec with compression level `5`. In general, parquet option which support column specific settings can be specified with the syntax `OPTION::COLUMN.NESTED.PATH`.
+In this example, we write the entirety of `source_table` out to a folder of parquet files. The option `single_file_output` set to false, indicates that the destination path should be interpreted as a folder to which the query will output multiple files. One parquet file will be written in parallel to the folder for each partition in the query. The next option `compression` set to `snappy` indicates that unless otherwise specified all columns should use the snappy compression codec. The option `compression::col1` sets an override, so that the column `col1` in the parquet file will use `ZSTD` compression codec with compression level `5`. In general, parquet options which support column specific settings can be specified with the syntax `OPTION::COLUMN.NESTED.PATH`.
 
 ## Available Options
 
