@@ -463,6 +463,12 @@ impl GroupedHashAggregateStream {
             self.group_ordering.remove_groups(n);
         }
 
+        // Since the `CardinalityAwareRowConverter` disables dictionary preserving
+        // for the high-cardinality `Dictionary` encoded group by columns while converting
+        // a batch into `Rows` for computation, we get the group by columns as `Utf8`
+        // in the output of the computation. Since the upstream operaters still expect
+        // `Dictionary` arrays, we need to convert the `Utf8` arrays back into `Dictionary`
+        // arrays before passing them on.
         let mut updated_output: Vec<Arc<dyn Array>> = Vec::new();
         for (col, field) in output.iter().zip(self.schema().fields().iter()) {
             if col.data_type() != field.data_type() {
