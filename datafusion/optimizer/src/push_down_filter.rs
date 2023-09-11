@@ -15,24 +15,20 @@
 //! Push Down Filter optimizer rule ensures that filters are applied as early as possible in the plan
 
 use crate::optimizer::ApplyOrder;
-use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, ToDFSchema};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    and, col,
+    and,
     expr_rewriter::replace_col,
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
     or,
     utils::from_plan,
     BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
 };
-use datafusion_physical_expr::execution_props::ExecutionProps;
 use itertools::Itertools;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
