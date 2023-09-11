@@ -29,9 +29,9 @@ Write related options can be specified in the following ways:
 - `CREATE EXTERNAL TABLE` options
 - `COPY` option tuples
 
-For a list of supported session level config defaults see [Configuration Settings](https://arrow.apache.org/datafusion/user-guide/configs.html). These defaults apply to all write operations but have the lowest level of precedence.
+For a list of supported session level config defaults see [Configuration Settings](configs). These defaults apply to all write operations but have the lowest level of precedence.
 
-If inserting to an external table, table specific write options can be specified when the table is created:
+If inserting to an external table, table specific write options can be specified when the table is created using the `OPTIONS` clause: 
 
 ```sql
 CREATE EXTERNAL TABLE
@@ -47,7 +47,7 @@ NULL_VALUE 'NAN'
 );
 ```
 
-When running `INSERT INTO my_table ...`, the above specified options will be respected (gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the `OPTIONS` setting will be ignored. CREATE_LOCAL_PATH is a special option that indicates if DataFusion should create local file paths when writing new files if they do not already exist. This option is useful if you wish to create an external table from scratch, using only DataFusion SQL statements. Finally, NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.
+When running `INSERT INTO my_table ...`, the options from the `CREATE TABLE` will be respected (gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the `OPTIONS` setting will be ignored. CREATE_LOCAL_PATH is a special option that indicates if DataFusion should create local file paths when writing new files if they do not already exist. This option is useful if you wish to create an external table from scratch, using only DataFusion SQL statements. Finally, NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.
 
 Finally, options can be passed when running a `COPY` command.
 
@@ -67,7 +67,7 @@ In this example, we write the entirety of `source_table` out to a folder of parq
 
 ### COPY Specific Options
 
-The following special options are specific to the `COPY` query.
+The following special options are specific to the `COPY` command.
 
 | Option             | Description                                                                                                                                                                  | Default Value |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |

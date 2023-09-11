@@ -32,7 +32,7 @@ filename if writing to a single file.
 COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
 </pre>
 
-For a detailed list of valid OPTIONS, see [Write Options](https://arrow.apache.org/datafusion/user-guide/sql/write_options.html).
+For a detailed list of valid OPTIONS, see [Write Options](write_options).
 
 Copy the contents of `source_table` to `file_name.json` in JSON format:
 
