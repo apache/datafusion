@@ -71,7 +71,7 @@ The following special options are specific to the `COPY` query.
 
 | Option             | Description                                                                                                                                                          | Default Value |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| SINGLE_FILE_OUTPUT | If true, COPY query will write output to a single file.                                                                                                              | true          |
+| SINGLE_FILE_OUTPUT | If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.                                        | true          |
 | FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or format cannot be inferred from file extension, then FORMAT must be specified. | N/A           |
 
 ### CREATE EXTERNAL TABLE Specific Options
