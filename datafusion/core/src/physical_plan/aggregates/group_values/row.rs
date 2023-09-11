@@ -61,8 +61,8 @@ pub struct GroupValuesRows {
     /// Random state for creating hashes
     random_state: RandomState,
 
-    /// Flag indicating whether the group values have been reconverted
-    done: bool,
+    /// Scratch space for storing per-batch group rows
+    scratch_group_rows: Option<Rows>,
 }
 
 impl GroupValuesRows {
@@ -76,36 +76,34 @@ impl GroupValuesRows {
         )?;
 
         let map = RawTable::with_capacity(0);
-        let group_values = row_converter.empty_rows(0, 0);
 
         Ok(Self {
             row_converter,
             map,
             map_size: 0,
-            group_values: Some(group_values),
+            group_values: None,
             hashes_buffer: Default::default(),
             random_state: Default::default(),
-            done: false,
+            scratch_group_rows: None,
         })
     }
 }
 
 impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // Convert the group keys into the row format
-        // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
-        let group_rows: Rows;
-        if !self.done {
-            let group_values_cols = self
-                .row_converter
-                .convert_rows(self.group_values.as_ref().unwrap())?;
-            group_rows = self.row_converter.convert_columns(cols)?; // 1. pd=false, 2. pd=false
-            self.group_values =
-                Some(self.row_converter.convert_columns(&group_values_cols)?);
-            self.done = true;
-        } else {
-            group_rows = self.row_converter.convert_columns(cols)?; // 1. pd=false, 2. pd=false
-        }
+        // Convert the group keys into the row format, reusing rows when possible
+        let group_rows = match self.scratch_group_rows.take() {
+            Some(mut group_rows) => {
+                self.row_converter.append(&mut group_rows, cols)?;
+                group_rows
+            }
+            None => self.row_converter.convert_columns(cols)?,
+        };
+
+        let mut group_values = match self.group_values.take() {
+            Some(group_values) => group_values,
+            None => self.row_converter.empty_rows(0, 0)?,
+        };
 
         let n_rows = group_rows.num_rows();
 
@@ -123,7 +121,7 @@ impl GroupValues for GroupValuesRows {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
-                group_rows.row(row) == self.group_values.as_mut().unwrap().row(*group_idx)
+                group_rows.row(row) == group_values.row(*group_idx)
             });
 
             let group_idx = match entry {
@@ -132,11 +130,8 @@ impl GroupValues for GroupValuesRows {
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
-                    let group_idx = self.group_values.as_ref().unwrap().num_rows();
-                    self.group_values
-                        .as_mut()
-                        .unwrap()
-                        .push(group_rows.row(row));
+                    let group_idx = group_values.num_rows();
+                    group_values.push(group_rows.row(row));
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
@@ -149,6 +144,9 @@ impl GroupValues for GroupValuesRows {
             };
             groups.push(group_idx);
         }
+
+        self.group_values = Some(group_values);
+        self.scratch_group_rows = Some(group_rows);
 
         Ok(())
     }
@@ -165,7 +163,10 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn len(&self) -> usize {
-        self.group_values.as_ref().unwrap().num_rows()
+        self.group_values
+            .as_ref()
+            .map(|group_values| group_values.num_rows())
+            .unwrap_or(0)
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
@@ -180,7 +181,7 @@ impl GroupValues for GroupValuesRows {
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
                 // TODO file some ticket in arrow-rs to make this more efficent?
-                let mut new_group_values = self.row_converter.empty_rows(0, 0);
+                let mut new_group_values = self.row_converter.empty_rows(0, 0)?;
                 for row in self.group_values.as_ref().unwrap().iter().skip(n) {
                     new_group_values.push(row);
                 }
