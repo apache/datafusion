@@ -125,7 +125,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
 
     let mut max_limit = match ScalarValue::try_from_array(results[0].column(0), 0)? {
         ScalarValue::Int64(Some(count)) => count,
-        s => panic!("Expected count as Int64 found {}", s.get_datatype()),
+        s => panic!("Expected count as Int64 found {}", s.data_type()),
     };
 
     max_limit += 1;
@@ -136,7 +136,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let mut min_limit =
         match ScalarValue::try_from_array(last_batch.column(0), last_row_idx)? {
             ScalarValue::Int64(Some(count)) => count,
-            s => panic!("Expected count as Int64 found {}", s.get_datatype()),
+            s => panic!("Expected count as Int64 found {}", s.data_type()),
         };
 
     min_limit -= 1;
