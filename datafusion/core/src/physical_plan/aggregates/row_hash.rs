@@ -458,23 +458,10 @@ impl GroupedHashAggregateStream {
             return Ok(RecordBatch::new_empty(self.schema()));
         }
 
-        let mut output = self.group_values.emit(emit_to)?;
+        let output = self.group_values.emit(emit_to)?;
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
         }
-
-        // Next output each aggregate value
-        for acc in self.accumulators.iter_mut() {
-            match self.mode {
-                AggregateMode::Partial => output.extend(acc.state(emit_to)?),
-                AggregateMode::Final
-                | AggregateMode::FinalPartitioned
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
-            }
-        }
-
-        self.update_memory_reservation()?;
 
         let mut updated_output: Vec<Arc<dyn Array>> = Vec::new();
         output.iter().for_each(|x| match x.data_type() {
@@ -489,6 +476,18 @@ impl GroupedHashAggregateStream {
             }
         });
 
+        // Next output each aggregate value
+        for acc in self.accumulators.iter_mut() {
+            match self.mode {
+                AggregateMode::Partial => updated_output.extend(acc.state(emit_to)?),
+                AggregateMode::Final
+                | AggregateMode::FinalPartitioned
+                | AggregateMode::Single
+                | AggregateMode::SinglePartitioned => updated_output.push(acc.evaluate(emit_to)?),
+            }
+        }
+
+        self.update_memory_reservation()?;
         let batch = RecordBatch::try_new(self.schema(), updated_output)?;
         Ok(batch)
     }
