@@ -3271,7 +3271,7 @@ mod tests {
         let output = simplify_with_guarantee(expr.clone(), &guarantees);
         assert_eq!(output, lit(false));
 
-        // Guaranteed true or null -> no change.
+        // Guaranteed false or null -> no change.
         let guarantees = vec![
             (
                 col("c3"),
@@ -3283,7 +3283,7 @@ mod tests {
             (
                 col("c4"),
                 NullableInterval {
-                    values: Interval::make(Some(0_u32), Some(5_u32), (false, false)),
+                    values: Interval::make(Some(9_u32), Some(9_u32), (false, false)),
                     is_valid: Interval::UNCERTAIN,
                 },
             ),

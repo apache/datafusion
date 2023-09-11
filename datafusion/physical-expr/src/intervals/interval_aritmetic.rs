@@ -743,19 +743,19 @@ enum NullStatus {
 /// NullableInterval {
 ///    values: Interval::make(Some(1), Some(2), (false, true)),
 ///    is_valid: Interval::UNCERTAIN,
-/// }
+/// };
 ///
 /// // (0, ∞)
 /// NullableInterval {
 ///   values: Interval::make(Some(0), None, (true, true)),
 ///   is_valid: Interval::CERTAINLY_TRUE,
-/// }
+/// };
 ///
 /// // {NULL}
-/// NullableInterval::from(ScalarValue::Int32(None))
+/// NullableInterval::from(&ScalarValue::Int32(None));
 ///
 /// // {4}
-/// NullableInterval::from(ScalarValue::Int32(4))
+/// NullableInterval::from(&ScalarValue::Int32(Some(4)));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NullableInterval {
