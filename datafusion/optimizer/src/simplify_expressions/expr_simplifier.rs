@@ -160,6 +160,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// guaranteed to be `3`, then the expression `x > 1` can be replaced by the
     /// literal `true`.
     ///
+    /// The guarantees are provided as an iterator of `(Expr, NullableInterval)`
+    /// pairs, where the [Expr] is a column reference and the [NullableInterval]
+    /// is an interval representing the known possible values of that column.
+    ///
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_expr::{col, lit, Expr};
