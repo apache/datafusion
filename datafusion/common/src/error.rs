@@ -419,13 +419,21 @@ impl DataFusionError {
             .to_string()
     }
 
+    #[cfg(backtrace)]
+    #[inline(always)]
     pub fn get_back_trace() -> String {
         let back_trace = Backtrace::capture();
         if back_trace.status() == BacktraceStatus::Captured {
             return format!("\n\nbacktrace: {}", back_trace);
         }
 
-        "".to_string()
+        "".to_owned()
+    }
+
+    #[cfg(not(backtrace))]
+    #[inline(always)]
+    pub fn get_back_trace() -> String {
+        "".to_owned()
     }
 }
 
