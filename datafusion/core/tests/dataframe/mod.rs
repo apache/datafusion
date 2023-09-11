@@ -486,7 +486,7 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
         .table("t")
         .await?
         .select(vec![col("a")])?
-        .distinct()?
+        .distinct(None)?
         .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
         .unwrap_err();
     assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");

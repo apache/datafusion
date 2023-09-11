@@ -1598,7 +1598,7 @@ mod tests {
         let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
             .filter(col("state").eq(lit("CO")))?
             .project(vec![col("id")])?
-            .distinct()?
+            .distinct(None)?
             .build()?;
 
         let expected = "\
