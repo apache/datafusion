@@ -496,20 +496,6 @@ impl GroupedHashAggregateStream {
         }
 
         self.update_memory_reservation()?;
-
-        let mut updated_output: Vec<Arc<dyn Array>> = Vec::new();
-        output.iter().for_each(|x| match x.data_type() {
-            arrow::datatypes::DataType::Utf8 => {
-                let string_arr: StringArray = StringArray::from(x.to_data());
-                let dict_array: DictionaryArray<Int32Type> =
-                    string_arr.into_iter().collect();
-                updated_output.push(Arc::new(dict_array));
-            }
-            _ => {
-                updated_output.push(x.clone());
-            }
-        });
-
         let batch = RecordBatch::try_new(self.schema(), updated_output)?;
         Ok(batch)
     }
