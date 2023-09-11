@@ -163,12 +163,11 @@ mod tests {
 
     // Generate a record batch with a high cardinality dictionary field
     fn generate_batch_with_cardinality(card: String) -> Result<RecordBatch, ArrowError> {
-        let col_a: ArrayRef;
-        if card == "high" {
+        let col_a = if card == "high" {
             // building column `a_dict`
             let mut values_vector: Vec<String> = Vec::new();
             for _i in 1..=20 {
-                values_vector.push(String::from(Uuid::new_v4().to_string()));
+                values_vector.push(Uuid::new_v4().to_string());
             }
             let values = StringArray::from(values_vector);
 
@@ -177,7 +176,7 @@ mod tests {
                 keys_vector.push(rand::thread_rng().gen_range(0..20));
             }
             let keys = Int32Array::from(keys_vector);
-            col_a = Arc::new(
+            Arc::new(
                 DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap(),
             );
         } else {
@@ -189,10 +188,10 @@ mod tests {
                 keys_vector.push(rand::thread_rng().gen_range(0..2));
             }
             let keys = Int32Array::from(keys_vector);
-            col_a = Arc::new(
+            Arc::new(
                 DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap(),
-            );
-        }
+            )
+        };
 
         // building column `b_prim`
         let mut values: Vec<i32> = Vec::new();
@@ -223,12 +222,12 @@ mod tests {
         // converted to the `Row` format, the dictionary encoding is not preserved and we switch to Utf8 encoding.
         let mut converter =
             CardinalityAwareRowConverter::new(sort_fields.clone()).unwrap();
-        let rows = converter.convert_columns(&batch.columns()).unwrap();
+        let rows = converter.convert_columns(batch.columns()).unwrap();
         let converted_batch = converter.convert_rows(&rows).unwrap();
         assert_eq!(converted_batch[0].data_type(), &DataType::Utf8);
 
         let mut converter = RowConverter::new(sort_fields.clone()).unwrap();
-        let rows = converter.convert_columns(&batch.columns()).unwrap();
+        let rows = converter.convert_columns(batch.columns()).unwrap();
         let converted_batch: Vec<Arc<dyn Array>> = converter.convert_rows(&rows).unwrap();
         // With the `RowConverter`, the dictionary encoding is preserved.
         assert_eq!(
@@ -254,7 +253,7 @@ mod tests {
         // preserves the dictionary encoding.
         let mut converter =
             CardinalityAwareRowConverter::new(sort_fields.clone()).unwrap();
-        let rows = converter.convert_columns(&batch.columns()).unwrap();
+        let rows = converter.convert_columns(batch.columns()).unwrap();
         let converted_batch = converter.convert_rows(&rows).unwrap();
         assert_eq!(
             converted_batch[0].data_type(),
@@ -262,7 +261,7 @@ mod tests {
         );
 
         let mut converter = RowConverter::new(sort_fields.clone()).unwrap();
-        let rows = converter.convert_columns(&batch.columns()).unwrap();
+        let rows = converter.convert_columns(batch.columns()).unwrap();
         let converted_batch = converter.convert_rows(&rows).unwrap();
         assert_eq!(
             converted_batch[0].data_type(),

@@ -170,11 +170,19 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        Ok(match emit_to {
+        let mut group_values = match self.group_values.take() {
+            Some(group_values) => group_values,
+            None => {
+                // not clear it is actually unreachable (may have to make empty arrays)
+                unreachable!()
+            }
+        };
+
+        let output = match emit_to {
             EmitTo::All => {
-                // Eventually we may also want to clear the hash table here
-                self.row_converter
-                    .convert_rows(self.group_values.as_ref().unwrap())?
+                let output = self.row_converter.convert_rows(&group_values)?;
+                group_values.clear();
+                output
             }
             EmitTo::First(n) => {
                 let groups_rows = self.group_values.as_ref().unwrap().iter().take(n);
@@ -182,13 +190,10 @@ impl GroupValues for GroupValuesRows {
                 // Clear out first n group keys by copying them to a new Rows.
                 // TODO file some ticket in arrow-rs to make this more efficent?
                 let mut new_group_values = self.row_converter.empty_rows(0, 0)?;
-                for row in self.group_values.as_ref().unwrap().iter().skip(n) {
+                for row in group_values.iter().skip(n) {
                     new_group_values.push(row);
                 }
-                std::mem::swap(
-                    &mut new_group_values,
-                    &mut self.group_values.as_mut().unwrap(),
-                );
+                std::mem::swap(&mut new_group_values, &mut group_values);
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
@@ -204,6 +209,9 @@ impl GroupValues for GroupValuesRows {
                 }
                 output
             }
-        })
+        };
+
+        self.group_values = Some(group_values);
+        Ok(output)
     }
 }
