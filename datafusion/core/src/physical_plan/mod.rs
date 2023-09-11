@@ -393,6 +393,7 @@ pub mod memory;
 pub mod metrics;
 pub mod projection;
 pub mod repartition;
+mod row_converter;
 pub mod sorts;
 pub mod stream;
 pub mod streaming;
@@ -402,7 +403,6 @@ pub mod union;
 pub mod unnest;
 pub mod values;
 pub mod windows;
-mod row_converter;
 
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;

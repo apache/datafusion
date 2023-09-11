@@ -480,7 +480,8 @@ impl GroupedHashAggregateStream {
         output.iter().for_each(|x| match x.data_type() {
             arrow::datatypes::DataType::Utf8 => {
                 let string_arr: StringArray = StringArray::from(x.to_data());
-                let dict_array: DictionaryArray<Int32Type> = string_arr.into_iter().collect();
+                let dict_array: DictionaryArray<Int32Type> =
+                    string_arr.into_iter().collect();
                 updated_output.push(Arc::new(dict_array));
             }
             _ => {

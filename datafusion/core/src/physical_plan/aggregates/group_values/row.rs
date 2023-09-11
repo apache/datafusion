@@ -96,9 +96,12 @@ impl GroupValues for GroupValuesRows {
         // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
         let group_rows: Rows;
         if !self.done {
-            let group_values_cols = self.row_converter.convert_rows(self.group_values.as_ref().unwrap())?;
+            let group_values_cols = self
+                .row_converter
+                .convert_rows(self.group_values.as_ref().unwrap())?;
             group_rows = self.row_converter.convert_columns(cols)?; // 1. pd=false, 2. pd=false
-            self.group_values = Some(self.row_converter.convert_columns(&group_values_cols)?);
+            self.group_values =
+                Some(self.row_converter.convert_columns(&group_values_cols)?);
             self.done = true;
         } else {
             group_rows = self.row_converter.convert_columns(cols)?; // 1. pd=false, 2. pd=false
