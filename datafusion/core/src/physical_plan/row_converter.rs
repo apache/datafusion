@@ -178,7 +178,7 @@ mod tests {
             let keys = Int32Array::from(keys_vector);
             Arc::new(
                 DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap(),
-            );
+            )
         } else {
             let values_vector = vec!["a", "b", "c"];
             let values = StringArray::from(values_vector);

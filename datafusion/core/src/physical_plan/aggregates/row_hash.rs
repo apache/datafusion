@@ -458,19 +458,34 @@ impl GroupedHashAggregateStream {
             return Ok(RecordBatch::new_empty(self.schema()));
         }
 
-        let mut output = self.group_values.emit(emit_to)?;
+        let output = self.group_values.emit(emit_to)?;
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
+        }
+
+        let mut updated_output: Vec<Arc<dyn Array>> = Vec::new();
+        for (col, field) in output.iter().zip(self.schema().fields().iter()) {
+            if col.data_type() != field.data_type() {
+                assert_eq!(*col.data_type(), arrow::datatypes::DataType::Utf8);
+                let string_arr: StringArray = StringArray::from(col.to_data());
+                let dict_array: DictionaryArray<Int32Type> =
+                    string_arr.into_iter().collect();
+                updated_output.push(Arc::new(dict_array));
+            } else {
+                updated_output.push(col.clone());
+            }
         }
 
         // Next output each aggregate value
         for acc in self.accumulators.iter_mut() {
             match self.mode {
-                AggregateMode::Partial => output.extend(acc.state(emit_to)?),
+                AggregateMode::Partial => updated_output.extend(acc.state(emit_to)?),
                 AggregateMode::Final
                 | AggregateMode::FinalPartitioned
                 | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
+                | AggregateMode::SinglePartitioned => {
+                    updated_output.push(acc.evaluate(emit_to)?)
+                }
             }
         }
 
