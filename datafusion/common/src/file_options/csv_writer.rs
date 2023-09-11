@@ -93,13 +93,13 @@ impl TryFrom<(&ConfigOptions, &StatementOptions)> for CsvWriterOptions {
                     compression = CompressionTypeVariant::from_str(value.replace('\'', "").as_str())?;
                     builder
                 },
-                "delimeter" => {
+                "delimiter" => {
                     // Ignore string literal single quotes passed from sql parsing
                     let value = value.replace('\'', "");
                     let chars: Vec<char> = value.chars().collect();
                     if chars.len()>1{
                         return Err(DataFusionError::Configuration(format!(
-                            "CSV Delimeter Option must be a single char, got: {}", value
+                            "CSV Delimiter Option must be a single char, got: {}", value
                         )))
                     }
                     builder.with_delimiter(chars[0].try_into().map_err(|_| {

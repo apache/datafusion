@@ -213,7 +213,7 @@ single_file_output false,
 header false, 
 compression 'uncompressed',
 datetime_format '%FT%H:%M:%S.%9f',
-delimeter ';',
+delimiter ';',
 null_value 'NULLVAL');
 ----
 2
