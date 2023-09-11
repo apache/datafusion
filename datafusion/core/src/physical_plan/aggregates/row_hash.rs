@@ -466,7 +466,7 @@ impl GroupedHashAggregateStream {
         let mut updated_output: Vec<Arc<dyn Array>> = Vec::new();
         for (col, field) in output.iter().zip(self.schema().fields().iter()) {
             if col.data_type() != field.data_type() {
-                assert!(*col.data_type() == arrow::datatypes::DataType::Utf8);
+                assert_eq!(*col.data_type(), arrow::datatypes::DataType::Utf8);
                 let string_arr: StringArray = StringArray::from(col.to_data());
                 let dict_array: DictionaryArray<Int32Type> =
                     string_arr.into_iter().collect();
