@@ -163,7 +163,7 @@ mod tests {
 
     // Generate a record batch with a high cardinality dictionary field
     fn generate_batch_with_cardinality(card: String) -> Result<RecordBatch, ArrowError> {
-        let col_a = if card == "high" {
+        let col_a: ArrayRef = if card == "high" {
             // building column `a_dict`
             let mut values_vector: Vec<String> = Vec::new();
             for _i in 1..=20 {
