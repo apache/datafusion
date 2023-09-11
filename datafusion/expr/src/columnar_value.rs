@@ -41,7 +41,7 @@ impl ColumnarValue {
     pub fn data_type(&self) -> DataType {
         match self {
             ColumnarValue::Array(array_value) => array_value.data_type().clone(),
-            ColumnarValue::Scalar(scalar_value) => scalar_value.get_datatype(),
+            ColumnarValue::Scalar(scalar_value) => scalar_value.data_type(),
         }
     }
 

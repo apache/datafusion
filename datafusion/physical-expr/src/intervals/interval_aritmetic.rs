@@ -55,7 +55,7 @@ impl IntervalBound {
     /// This convenience function returns the data type associated with this
     /// `IntervalBound`.
     pub fn get_datatype(&self) -> DataType {
-        self.value.get_datatype()
+        self.value.data_type()
     }
 
     /// This convenience function checks whether the `IntervalBound` represents
@@ -475,7 +475,7 @@ impl Interval {
                 // If the minimum value is a negative number, we need to
                 // switch sides to ensure an unsigned result.
                 let (min, max) = if self.lower.value
-                    < ScalarValue::new_zero(&self.lower.value.get_datatype())?
+                    < ScalarValue::new_zero(&self.lower.value.data_type())?
                 {
                     (self.upper.value.clone(), self.lower.value.clone())
                 } else {

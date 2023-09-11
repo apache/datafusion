@@ -2166,14 +2166,14 @@ array_slice(array, begin, end)
 Converts each element to its text representation.
 
 ```
-array_to_string(array, delimeter)
+array_to_string(array, delimiter)
 ```
 
 #### Arguments
 
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
-- **delimeter**: Array element separator.
+- **delimiter**: Array element separator.
 
 #### Example
 
