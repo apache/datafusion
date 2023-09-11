@@ -39,7 +39,7 @@ my_table(a bigint, b bigint)
 STORED AS csv
 COMPRESSION TYPE gzip
 WITH HEADER ROW
-DELIMETER ';'
+DELIMITER ';'
 LOCATION '/test/location/my_csv_table/'
 OPTIONS(
 CREATE_LOCAL_PATH 'true',
@@ -47,7 +47,7 @@ NULL_VALUE 'NAN'
 );
 ```
 
-When running `INSERT INTO my_table ...`, the above specified options will be respected (gzip compression, special delimiter, and header row included). Note that compression, header, and delimeter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the `OPTIONS` setting will be ignored. CREATE_LOCAL_PATH is a special option that indicates if DataFusion should create local file paths when writing new files if they do not already exist. This option is useful if you wish to create an external table from scratch, using only DataFusion SQL statements. Finally, NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.
+When running `INSERT INTO my_table ...`, the above specified options will be respected (gzip compression, special delimiter, and header row included). Note that compression, header, and delimiter settings can also be specified within the `OPTIONS` tuple list. Dedicated syntax within the SQL statement always takes precedence over arbitrary option tuples, so if both are specified the `OPTIONS` setting will be ignored. CREATE_LOCAL_PATH is a special option that indicates if DataFusion should create local file paths when writing new files if they do not already exist. This option is useful if you wish to create an external table from scratch, using only DataFusion SQL statements. Finally, NULL_VALUE is a CSV format specific option that determines how null values should be encoded within the CSV file.
 
 Finally, options can be passed when running a `COPY` command.
 
@@ -72,7 +72,7 @@ The following special options are specific to the `COPY` query.
 | Option             | Description                                                                                                                                                          | Default Value |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | SINGLE_FILE_OUTPUT | If true, COPY query will write output to a single file. Otherwise, multiple files will be written to a directory in parallel.                                        | true          |
-| FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or format cannot be inferred from file extension, then FORMAT must be specified. | N/A           |
+| FORMAT             | Specifies the file format COPY query will write out. If single_file_output is false or the format cannot be inferred from the file extension, then FORMAT must be specified. | N/A           |
 
 ### CREATE EXTERNAL TABLE Specific Options
 
@@ -86,7 +86,7 @@ The following special options are specific to creating an external table.
 
 ### JSON Format Specific Options
 
-The following options are available when writting JSON files. Note: if any unsupported option is specified, an error will be raised and the query will fail.
+The following options are available when writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
 
 | Option      | Description                                                                                                                        | Default Value |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------- |
@@ -105,7 +105,7 @@ The following options are available when writing CSV files. Note: if any unsuppo
 | TIME_FORMAT     | Sets the format that times should be encoded in within the CSV file                                                               | arrow-rs default |
 | RFC3339         | If true, uses RFC339 format for date and time encodings                                                                           | arrow-rs default |
 | NULL_VALUE      | Sets the string which should be used to indicate null values within the CSV file.                                                 | arrow-rs default |
-| DELIMETER       | Sets the character which should be used as the column delimiter within the CSV file.                                              | arrow-rs default |
+| DELIMITER       | Sets the character which should be used as the column delimiter within the CSV file.                                              | arrow-rs default |
 
 ### Parquet Format Specific Options
 
