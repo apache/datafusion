@@ -534,7 +534,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         // input should have 4 partitions
@@ -651,7 +651,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
@@ -741,7 +741,7 @@ mod tests {
         fetch: Option<usize>,
     ) -> Result<Option<usize>> {
         let num_partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
@@ -756,7 +756,7 @@ mod tests {
         num_partitions: usize,
         fetch: usize,
     ) -> Result<Option<usize>> {
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);

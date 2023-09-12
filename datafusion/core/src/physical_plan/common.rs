@@ -68,14 +68,24 @@ fn build_file_list_recurse(
     filenames: &mut Vec<String>,
     ext: &str,
 ) -> Result<()> {
-    let metadata = metadata(dir)?;
+    let metadata = metadata(dir).map_err(|e| {
+        DataFusionError::io_error(e, format!("Reading metadata for directory: {dir}"))
+    })?;
     if metadata.is_file() {
         if dir.ends_with(ext) {
             filenames.push(dir.to_string());
         }
     } else {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
+        let read_dir = fs::read_dir(dir).map_err(|e| {
+            DataFusionError::io_error(e, format!("Reading directory: {dir}"))
+        })?;
+        for entry in read_dir {
+            let entry = entry.map_err(|e| {
+                DataFusionError::io_error(
+                    e,
+                    format!("Reading entry from directory: {dir}"),
+                )
+            })?;
             let path = entry.path();
             if let Some(path_name) = path.to_str() {
                 if path.is_dir() {

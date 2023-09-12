@@ -147,12 +147,19 @@ fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<TempDir>> {
         .iter()
         .map(|root| {
             if !std::path::Path::new(root).exists() {
-                std::fs::create_dir(root)?;
+                std::fs::create_dir(root).map_err(|e| {
+                    DataFusionError::io_error(e, format!("Trying to create {root:?}"))
+                })?;
             }
             Builder::new()
                 .prefix("datafusion-")
                 .tempdir_in(root)
-                .map_err(DataFusionError::IoError)
+                .map_err(|e| {
+                    DataFusionError::io_error(
+                        e,
+                        format!("Trying to create tempdir in {root:?}"),
+                    )
+                })
         })
         .collect()
 }

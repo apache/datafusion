@@ -1257,9 +1257,9 @@ mod tests {
 
     #[tokio::test]
     async fn unbounded_csv_table_without_schema() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let file_path = tmp_dir.path().join("dummy.csv");
-        File::create(file_path)?;
+        File::create(file_path).unwrap();
         let ctx = SessionContext::new();
         let error = ctx
             .register_csv(
@@ -1277,9 +1277,9 @@ mod tests {
 
     #[tokio::test]
     async fn unbounded_json_table_without_schema() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let file_path = tmp_dir.path().join("dummy.json");
-        File::create(file_path)?;
+        File::create(file_path).unwrap();
         let ctx = SessionContext::new();
         let error = ctx
             .register_json(
@@ -1297,9 +1297,9 @@ mod tests {
 
     #[tokio::test]
     async fn unbounded_avro_table_without_schema() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let file_path = tmp_dir.path().join("dummy.avro");
-        File::create(file_path)?;
+        File::create(file_path).unwrap();
         let ctx = SessionContext::new();
         let error = ctx
             .register_avro(
@@ -1887,7 +1887,7 @@ mod tests {
         insert_mode: ListingTableInsertMode,
         file_format: Arc<dyn FileFormat>,
     ) -> Result<Arc<dyn TableProvider>> {
-        File::create(temp_path)?;
+        File::create(temp_path).unwrap();
         let table_path = ListingTableUrl::parse(temp_path).unwrap();
 
         let listing_options =
@@ -1940,7 +1940,7 @@ mod tests {
         );
 
         // Create a temporary directory and a CSV file within it.
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join(filename);
 
         let file_format: Arc<dyn FileFormat> = match file_type {
@@ -2016,7 +2016,7 @@ mod tests {
         assert_batches_eq!(expected, &batches);
 
         // Assert that only 1 file was added to the table
-        let num_files = tmp_dir.path().read_dir()?.count();
+        let num_files = tmp_dir.path().read_dir().unwrap().count();
         assert_eq!(num_files, 1);
 
         // Create a physical plan from the insert plan
@@ -2066,7 +2066,7 @@ mod tests {
         assert_batches_eq!(expected, &batches);
 
         // Assert that no additional files were added to the table
-        let num_files = tmp_dir.path().read_dir()?.count();
+        let num_files = tmp_dir.path().read_dir().unwrap().count();
         assert_eq!(num_files, 1);
 
         // Return Ok if the function
@@ -2101,7 +2101,7 @@ mod tests {
         )?;
 
         // Register appropriate table depending on file_type we want to test
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         match file_type {
             FileType::CSV => {
                 session_ctx
@@ -2217,7 +2217,7 @@ mod tests {
         assert_batches_eq!(expected, &batches);
 
         // Assert that 6 files were added to the table
-        let num_files = tmp_dir.path().read_dir()?.count();
+        let num_files = tmp_dir.path().read_dir().unwrap().count();
         assert_eq!(num_files, 6);
 
         // Create a physical plan from the insert plan
@@ -2260,7 +2260,7 @@ mod tests {
         assert_batches_eq!(expected, &batches);
 
         // Assert that another 6 files were added to the table
-        let num_files = tmp_dir.path().read_dir()?.count();
+        let num_files = tmp_dir.path().read_dir().unwrap().count();
         assert_eq!(num_files, 12);
 
         // Return Ok if the function
@@ -2286,7 +2286,7 @@ mod tests {
         };
 
         // create table
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let tmp_path = tmp_dir.into_path();
         let str_path = tmp_path.to_str().expect("Temp path should convert to &str");
         session_ctx

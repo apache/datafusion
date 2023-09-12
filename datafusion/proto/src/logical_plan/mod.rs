@@ -923,7 +923,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     let mut bytes = vec![];
                     extension_codec
                         .try_encode_table_provider(provider, &mut bytes)
-                        .map_err(|e| context!("Error serializing custom table", e))?;
+                        .map_err(|e| e.with_context("Error serializing custom table"))?;
                     let scan = CustomScan(CustomTableScanNode {
                         table_name: Some(table_name.clone().into()),
                         projection,

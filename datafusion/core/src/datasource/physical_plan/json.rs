@@ -274,6 +274,7 @@ pub async fn plan_to_json(
         let file = object_store::path::Path::parse(filename)?;
 
         let mut stream = plan.execute(i, task_ctx.clone())?;
+        let path = path.to_string();
         join_set.spawn(async move {
             let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
 
@@ -282,14 +283,15 @@ pub async fn plan_to_json(
                 let mut writer = json::LineDelimitedWriter::new(buffer);
                 writer.write(&batch)?;
                 buffer = writer.into_inner();
-                multipart_writer.write_all(&buffer).await?;
+                multipart_writer.write_all(&buffer).await.map_err(|e| {
+                    DataFusionError::io_error(e, format!("writing JSON to {path}"))
+                })?;
                 buffer.clear();
             }
 
-            multipart_writer
-                .shutdown()
-                .await
-                .map_err(DataFusionError::from)
+            multipart_writer.shutdown().await.map_err(|e| {
+                DataFusionError::io_error(e, format!("Compleeting JSON write to {path}"))
+            })
         });
     }
 
@@ -380,7 +382,7 @@ mod tests {
         let url = Url::parse("file://").unwrap();
         ctx.runtime_env().register_object_store(&url, store.clone());
         let filename = "1.json";
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
             filename,
@@ -448,7 +450,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
 
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
@@ -521,7 +523,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
 
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let (object_store_url, file_groups, actual_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
@@ -575,7 +577,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
@@ -628,7 +630,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
@@ -684,7 +686,7 @@ mod tests {
             .await?;
 
         // register a local file system object store for /tmp directory
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);
@@ -777,7 +779,7 @@ mod tests {
     async fn write_json_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
         // register a local file system object store for /tmp directory
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);

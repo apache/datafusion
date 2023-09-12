@@ -612,7 +612,7 @@ mod tests {
     async fn test_union_partitions() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
 
         // Create csv's with different partitioning
         let csv = test::scan_partitioned_csv(4, tmp_dir.path())?;

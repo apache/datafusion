@@ -24,7 +24,7 @@ mod url;
 
 use crate::error::Result;
 use chrono::TimeZone;
-use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, ScalarValue};
 use futures::Stream;
 use object_store::{path::Path, ObjectMeta};
 use std::pin::Pin;
@@ -106,7 +106,11 @@ impl PartitionedFile {
 
     /// Return a file reference from the given path
     pub fn from_path(path: String) -> Result<Self> {
-        let size = std::fs::metadata(path.clone())?.len();
+        let size = std::fs::metadata(path.clone())
+            .map_err(|e| {
+                DataFusionError::io_error(e, format!("Reading metadata for: {path}"))
+            })?
+            .len();
         Ok(Self::new(path, size))
     }
 }

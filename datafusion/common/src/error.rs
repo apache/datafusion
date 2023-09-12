@@ -427,6 +427,16 @@ impl DataFusionError {
 
         "".to_string()
     }
+
+    /// Add additional context to this error
+    pub fn with_context(self, details: impl Into<String>) -> Self {
+        Self::Context(details.into(), Box::new(self))
+    }
+
+    /// Create a [`DataFusionError::IoError`] with context from a [`std::io::Error`]
+    pub fn io_error(e: std::io::Error, details: impl Into<String>) -> Self {
+        Self::IoError(e).with_context(details)
+    }
 }
 
 /// Unwrap an `Option` if possible. Otherwise return an `DataFusionError::Internal`.

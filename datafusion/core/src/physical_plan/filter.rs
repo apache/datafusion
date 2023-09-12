@@ -399,7 +399,7 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         let predicate: Arc<dyn PhysicalExpr> = binary(
@@ -427,7 +427,7 @@ mod tests {
     async fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let input = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         let predicate: Arc<dyn PhysicalExpr> =

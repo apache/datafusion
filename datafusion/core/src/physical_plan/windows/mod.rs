@@ -552,7 +552,7 @@ mod tests {
         );
 
         let task_ctx = Arc::new(TaskContext::default());
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let (input, schema) = create_test_schema(1, tmp_dir.path())?;
 
         let window_exec = Arc::new(WindowAggExec::try_new(
@@ -585,7 +585,7 @@ mod tests {
     #[tokio::test]
     async fn window_function() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let (input, schema) = create_test_schema(1, tmp_dir.path())?;
 
         let window_exec = Arc::new(WindowAggExec::try_new(

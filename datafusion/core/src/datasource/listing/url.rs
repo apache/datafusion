@@ -105,9 +105,19 @@ impl ListingTableUrl {
                 let path = std::path::PathBuf::from(s);
                 if !path.exists() {
                     if is_directory {
-                        fs::create_dir_all(path)?;
+                        fs::create_dir_all(path).map_err(|e| {
+                            DataFusionError::io_error(
+                                e,
+                                format!("creating directory for writing JSON: {s}"),
+                            )
+                        })?;
                     } else {
-                        fs::File::create(path)?;
+                        fs::File::create(path).map_err(|e| {
+                            DataFusionError::io_error(
+                                e,
+                                format!("creating file for writing JSON: {s}"),
+                            )
+                        })?;
                     }
                 }
                 ListingTableUrl::parse(s)
@@ -126,7 +136,12 @@ impl ListingTableUrl {
             None => (s, None),
         };
 
-        let path = std::path::Path::new(prefix).canonicalize()?;
+        let path = std::path::Path::new(prefix).canonicalize().map_err(|e| {
+            DataFusionError::io_error(
+                e,
+                format!("Canonicalizing path for writing JSON: {prefix}"),
+            )
+        })?;
         let url = if path.is_dir() {
             Url::from_directory_path(path)
         } else {

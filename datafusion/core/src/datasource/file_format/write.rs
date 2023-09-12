@@ -169,12 +169,25 @@ pub(crate) enum AbortMode {
 pub(crate) struct AbortableWrite<W: AsyncWrite + Unpin + Send> {
     writer: W,
     mode: AbortMode,
+    description: String,
 }
 
 impl<W: AsyncWrite + Unpin + Send> AbortableWrite<W> {
     /// Create a new `AbortableWrite` instance with the given writer, and write mode.
-    pub(crate) fn new(writer: W, mode: AbortMode) -> Self {
-        Self { writer, mode }
+    pub(crate) fn new(
+        writer: W,
+        mode: AbortMode,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            writer,
+            mode,
+            description: description.into(),
+        }
+    }
+
+    pub(crate) fn description(&self) -> &str {
+        &self.description
     }
 
     /// handling of abort for different write modes
@@ -257,6 +270,7 @@ pub(crate) async fn create_writer(
     object_store: Arc<dyn ObjectStore>,
 ) -> Result<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>> {
     let object = &file_meta.object_meta;
+    let description = format!("write to {}", file_meta.object_meta.location);
     match writer_mode {
         // If the mode is append, call the store's append method and return wrapped in
         // a boxed trait object.
@@ -268,6 +282,7 @@ pub(crate) async fn create_writer(
             let writer = AbortableWrite::new(
                 file_compression_type.convert_async_writer(writer)?,
                 AbortMode::Append,
+                description,
             );
             Ok(writer)
         }
@@ -278,6 +293,7 @@ pub(crate) async fn create_writer(
             let writer = AbortableWrite::new(
                 file_compression_type.convert_async_writer(writer)?,
                 AbortMode::Put,
+                description,
             );
             Ok(writer)
         }
@@ -295,6 +311,7 @@ pub(crate) async fn create_writer(
                     multipart_id,
                     object.location.clone(),
                 )),
+                description,
             ))
         }
     }
@@ -513,17 +530,20 @@ pub(crate) async fn stateless_serialize_and_write_files(
                         any_abort_errors = true;
                     }
                 }
-                false => writer.shutdown().await?,
+                false => writer
+                    .shutdown()
+                    .await
+                    .map_err(|e| DataFusionError::io_error(e, writer.description()))?,
             }
         }
     }
 
     if any_errors {
         match any_abort_errors{
-            true => return Err(DataFusionError::Internal("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written.".into())),
+            true => return internal_err!("Error encountered during writing to ObjectStore and failed to abort all writers. Partial result may have been written."),
             false => match triggering_error {
                 Some(e) => return Err(e),
-                None => return Err(DataFusionError::Internal("Unknown Error encountered during writing to ObjectStore. All writers succesfully aborted.".into()))
+                None => return internal_err!("Unknown Error encountered during writing to ObjectStore. All writers succesfully aborted.")
             }
         }
     }

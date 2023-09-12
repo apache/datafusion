@@ -646,7 +646,10 @@ fn write_sorted(
 }
 
 fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(path)?);
+    let file = File::open(path).map_err(|e| {
+        DataFusionError::io_error(e, format!("Reading spill file: {path:?}"))
+    })?;
+    let file = BufReader::new(file);
     let reader = FileReader::try_new(file, None)?;
     for batch in reader {
         sender
@@ -911,7 +914,7 @@ mod tests {
     async fn test_in_mem_sort() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
         let schema = csv.schema();
 
@@ -981,7 +984,7 @@ mod tests {
         );
 
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
         let schema = csv.schema();
 
@@ -1075,7 +1078,7 @@ mod tests {
                     .with_session_config(session_config),
             );
 
-            let tmp_dir = TempDir::new()?;
+            let tmp_dir = TempDir::new().unwrap();
             let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
             let schema = csv.schema();
 

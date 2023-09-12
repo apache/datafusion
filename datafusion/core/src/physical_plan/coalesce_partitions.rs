@@ -185,7 +185,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let num_partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(num_partitions, tmp_dir.path())?;
 
         // input should have 4 partitions

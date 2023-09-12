@@ -536,7 +536,7 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         // pick column c1 and name it column c1 in the output schema
@@ -574,7 +574,7 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         // pick column c1 and name it column c1 in the output schema
@@ -589,7 +589,7 @@ mod tests {
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
 
         let c1 = col("c2", &schema).unwrap();
@@ -607,7 +607,7 @@ mod tests {
     async fn project_no_column() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
 
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(1, tmp_dir.path())?;
         let expected = collect(csv.execute(0, task_ctx.clone())?).await.unwrap();
 

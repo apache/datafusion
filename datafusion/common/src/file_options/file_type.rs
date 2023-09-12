@@ -135,19 +135,19 @@ impl FileCompressionType {
         Ok(match self.variant {
             #[cfg(feature = "compression")]
             GZIP => ReaderStream::new(AsyncGzEncoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::IoError)
                 .boxed(),
             #[cfg(feature = "compression")]
             BZIP2 => ReaderStream::new(AsyncBzEncoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::IoError)
                 .boxed(),
             #[cfg(feature = "compression")]
             XZ => ReaderStream::new(AsyncXzEncoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::IoError)
                 .boxed(),
             #[cfg(feature = "compression")]
             ZSTD => ReaderStream::new(AsyncZstdEncoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::IoError)
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
@@ -192,19 +192,19 @@ impl FileCompressionType {
         Ok(match self.variant {
             #[cfg(feature = "compression")]
             GZIP => ReaderStream::new(AsyncGzDecoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::IoError)
                 .boxed(),
             #[cfg(feature = "compression")]
             BZIP2 => ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::IoError)
                 .boxed(),
             #[cfg(feature = "compression")]
             XZ => ReaderStream::new(AsyncXzDecoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::IoError)
                 .boxed(),
             #[cfg(feature = "compression")]
             ZSTD => ReaderStream::new(AsyncZstdDecoer::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::IoError)
                 .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {

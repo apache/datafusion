@@ -35,6 +35,7 @@ use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig};
+use datafusion_common::DataFusionError;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -97,9 +98,18 @@ impl TestParquetFile {
 
         println!("Generated test dataset with {num_rows} rows");
 
-        let size = std::fs::metadata(&path)?.len() as usize;
+        let size = std::fs::metadata(&path)
+            .map_err(|e| {
+                DataFusionError::io_error(
+                    e,
+                    format!("Reading metadata for file: {path:?}"),
+                )
+            })?
+            .len() as usize;
 
-        let canonical_path = path.canonicalize()?;
+        let canonical_path = path.canonicalize().map_err(|e| {
+            DataFusionError::io_error(e, format!("Canonicalizing path: {path:?}"))
+        })?;
 
         let object_store_url =
             ListingTableUrl::parse(canonical_path.to_str().unwrap_or_default())?

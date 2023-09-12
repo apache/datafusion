@@ -2322,7 +2322,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_variable_expr() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let partition_count = 4;
         let ctx = create_ctx(&tmp_dir, partition_count).await?;
 
@@ -2364,7 +2364,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_deregister() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let partition_count = 4;
         let ctx = create_ctx(&tmp_dir, partition_count).await?;
 
@@ -2460,7 +2460,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_csv_with_custom_partition_extension() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
 
         // The main stipulation of this test: use a file extension that isn't .csv.
         let file_extension = ".tst";
@@ -2495,7 +2495,7 @@ mod tests {
     async fn send_context_to_threads() -> Result<()> {
         // ensure SessionContexts can be used in a multi-threaded
         // environment. Usecase is for concurrent planing.
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let partition_count = 4;
         let ctx = Arc::new(create_ctx(&tmp_dir, partition_count).await?);
 
@@ -2872,12 +2872,12 @@ mod tests {
         for partition in 0..partition_count {
             let filename = format!("partition-{partition}.{file_extension}");
             let file_path = tmp_dir.path().join(filename);
-            let mut file = File::create(file_path)?;
+            let mut file = File::create(file_path).unwrap();
 
             // generate some data
             for i in 0..=10 {
                 let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
-                file.write_all(data.as_bytes())?;
+                file.write_all(data.as_bytes()).unwrap();
             }
         }
 

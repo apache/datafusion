@@ -155,7 +155,7 @@ pub fn partitioned_file_groups(
         files.push(filename);
     }
 
-    let f = File::open(path)?;
+    let f = File::open(path).unwrap();
     let f = BufReader::new(f);
     for (i, line) in f.lines().enumerate() {
         let line = line.unwrap();

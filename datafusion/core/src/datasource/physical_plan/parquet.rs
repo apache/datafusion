@@ -918,7 +918,7 @@ mod tests {
     async fn write_parquet_results_error_handling() -> Result<()> {
         let ctx = SessionContext::new();
         // register a local file system object store for /tmp directory
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);
@@ -1911,12 +1911,12 @@ mod tests {
         for partition in 0..partition_count {
             let filename = format!("partition-{partition}.{file_extension}");
             let file_path = tmp_dir.path().join(filename);
-            let mut file = File::create(file_path)?;
+            let mut file = File::create(file_path).unwrap();
 
             // generate some data
             for i in 0..=10 {
                 let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
-                file.write_all(data.as_bytes())?;
+                file.write_all(data.as_bytes()).unwrap();
             }
         }
 
@@ -1926,7 +1926,7 @@ mod tests {
     #[tokio::test]
     async fn write_parquet_results() -> Result<()> {
         // create partitioned input file and context
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         // let mut ctx = create_ctx(&tmp_dir, 4).await?;
         let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
@@ -1959,7 +1959,8 @@ mod tests {
         let mut paths = fs::read_dir(&out_dir).unwrap();
         let path = paths.next();
         let name = path
-            .unwrap()?
+            .unwrap()
+            .unwrap()
             .path()
             .file_name()
             .expect("Should be a file name")

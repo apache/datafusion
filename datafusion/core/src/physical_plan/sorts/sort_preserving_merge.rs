@@ -563,7 +563,7 @@ mod tests {
     async fn test_partition_sort() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(partitions, tmp_dir.path()).unwrap();
         let schema = csv.schema();
 
@@ -636,7 +636,7 @@ mod tests {
         context: Arc<TaskContext>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let partitions = 4;
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let csv = test::scan_partitioned_csv(partitions, tmp_dir.path()).unwrap();
 
         let sorted = basic_sort(csv, sort, context).await;

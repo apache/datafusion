@@ -2382,7 +2382,7 @@ mod tests {
         ];
         for compression in test_compressions.into_iter() {
             let df = test_df.clone();
-            let tmp_dir = TempDir::new()?;
+            let tmp_dir = TempDir::new().unwrap();
             let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
             let local_url = Url::parse("file://local").unwrap();
             let ctx = &test_df.session_state;
@@ -2399,7 +2399,8 @@ mod tests {
             .await?;
 
             // Check that file actually used the specified compression
-            let file = std::fs::File::open(tmp_dir.into_path().join("test.parquet"))?;
+            let file =
+                std::fs::File::open(tmp_dir.into_path().join("test.parquet")).unwrap();
 
             let reader =
                 parquet::file::serialized_reader::SerializedFileReader::new(file)

@@ -469,7 +469,17 @@ impl FileOpener for CsvOpener {
                         // Don't seek if no range as breaks FIFO files
                         file_compression_type.convert_read(file)?
                     } else {
-                        file.seek(SeekFrom::Start(result.range.start as _))?;
+                        file.seek(SeekFrom::Start(result.range.start as _))
+                            .map_err(|e| {
+                                DataFusionError::io_error(
+                                    e,
+                                    format!(
+                                        "Seeking to {} in {}",
+                                        result.range.start,
+                                        file_meta.location()
+                                    ),
+                                )
+                            })?;
                         file_compression_type.convert_read(
                             file.take((result.range.end - result.range.start) as u64),
                         )?
@@ -531,6 +541,7 @@ pub async fn plan_to_csv(
         let file = object_store::path::Path::parse(filename)?;
 
         let mut stream = plan.execute(i, task_ctx.clone())?;
+        let path = path.to_string();
         join_set.spawn(async move {
             let (_, mut multipart_writer) = storeref.put_multipart(&file).await?;
             let mut buffer = Vec::with_capacity(1024);
@@ -542,15 +553,16 @@ pub async fn plan_to_csv(
                     .build(buffer);
                 writer.write(&batch)?;
                 buffer = writer.into_inner();
-                multipart_writer.write_all(&buffer).await?;
+                multipart_writer.write_all(&buffer).await.map_err(|e| {
+                    DataFusionError::io_error(e, format!("writing CSV to {path}"))
+                })?;
                 buffer.clear();
                 //prevent writing headers more than once
                 write_headers = false;
             }
-            multipart_writer
-                .shutdown()
-                .await
-                .map_err(DataFusionError::from)
+            multipart_writer.shutdown().await.map_err(|e| {
+                DataFusionError::io_error(e, format!("Completing CSV write to {path}"))
+            })
         });
     }
 
@@ -607,7 +619,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -673,7 +685,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -739,7 +751,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -803,7 +815,7 @@ mod tests {
         let file_schema = aggr_test_schema_with_missing_col();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -857,7 +869,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -938,12 +950,12 @@ mod tests {
         for partition in 0..partition_count {
             let filename = format!("partition-{partition}.{file_extension}");
             let file_path = tmp_dir.path().join(filename);
-            let mut file = File::create(file_path)?;
+            let mut file = File::create(file_path).unwrap();
 
             // generate some data
             for i in 0..=10 {
                 let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
-                file.write_all(data.as_bytes())?;
+                file.write_all(data.as_bytes()).unwrap();
             }
         }
 
@@ -963,7 +975,7 @@ mod tests {
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
@@ -1057,7 +1069,7 @@ mod tests {
         let ctx = SessionContext::new();
 
         // register a local file system object store
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
         ctx.runtime_env().register_object_store(&local_url, local);
@@ -1078,7 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn write_csv_results() -> Result<()> {
         // create partitioned input file and context
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
@@ -1093,7 +1105,7 @@ mod tests {
         .await?;
 
         // register a local file system object store
-        let tmp_dir = TempDir::new()?;
+        let tmp_dir = TempDir::new().unwrap();
         let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
         let local_url = Url::parse("file://local").unwrap();
 
