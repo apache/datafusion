@@ -174,7 +174,7 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::First(n) => {
-                let groups_rows = self.group_values.as_ref().unwrap().iter().take(n);
+                let groups_rows = group_values.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
                 // Clear out first n group keys by copying them to a new Rows.
                 // TODO file some ticket in arrow-rs to make this more efficent?
