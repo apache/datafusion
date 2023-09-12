@@ -238,7 +238,7 @@ async fn sort_preserving_merge() {
 
 #[tokio::test]
 async fn sort_spill_reservation() {
-    let partition_size = batches_byte_size(&dict_batches());
+    let partition_size = batches_byte_size(&maybe_split_batches(dict_batches(), true));
 
     let base_config = SessionConfig::new()
         // do not allow the sort to use the 'concat in place' path
@@ -248,30 +248,32 @@ async fn sort_spill_reservation() {
     // purposely sorting data that requires non trivial memory to
     // sort/merge.
     let test = TestCase::new()
-        // This query uses a different order than the input table to
-        // force a sort. It also needs to have multiple columns to
-        // force RowFormat / interner that makes merge require
-        // substantial memory
+    // This query uses a different order than the input table to
+    // force a sort. It also needs to have multiple columns to
+    // force RowFormat / interner that makes merge require
+    // substantial memory
         .with_query("select * from t ORDER BY a , b DESC")
-        // enough memory to sort if we don't try to merge it all at once
+    // enough memory to sort if we don't try to merge it all at once
         .with_memory_limit(partition_size)
-        // use a single partiton so only a sort is needed
+    // use a single partiton so only a sort is needed
         .with_scenario(Scenario::DictionaryStrings(1))
         .with_disk_manager_config(DiskManagerConfig::NewOs)
+    // make the batches small enough to avoid triggering CardinalityAwareRowConverter
+        .with_single_row_batches(true)
         .with_expected_plan(
             // It is important that this plan only has a SortExec, not
             // also merge, so we can ensure the sort could finish
             // given enough merging memory
             &[
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
-    "| plan_type     | plan                                                                                                   |",
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
-    "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                         |",
-    "|               |   TableScan: t projection=[a, b]                                                                       |",
-    "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                           |",
-    "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
-    "|               |                                                                                                        |",
-    "+---------------+--------------------------------------------------------------------------------------------------------+",
+                "+---------------+----------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                     |",
+                "+---------------+----------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                           |",
+                "|               |   TableScan: t projection=[a, b]                                                                         |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC]                                                             |",
+                "|               |   MemoryExec: partitions=1, partition_sizes=[245], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
+                "|               |                                                                                                          |",
+                "+---------------+----------------------------------------------------------------------------------------------------------+",
             ]
         );
 
@@ -308,6 +310,8 @@ struct TestCase {
     memory_limit: usize,
     config: SessionConfig,
     scenario: Scenario,
+    /// If true, splits all input batches into 1 row each
+    single_row_batches: bool,
     /// How should the disk manager (that allows spilling) be
     /// configured? Defaults to `Disabled`
     disk_manager_config: DiskManagerConfig,
@@ -325,6 +329,7 @@ impl TestCase {
             memory_limit: 0,
             config: SessionConfig::new(),
             scenario: Scenario::AccessLog,
+            single_row_batches: false,
             disk_manager_config: DiskManagerConfig::Disabled,
             expected_plan: vec![],
             expected_success: false,
@@ -381,6 +386,12 @@ impl TestCase {
         self
     }
 
+    /// Should the input be split into 1 row batches?
+    fn with_single_row_batches(mut self, single_row_batches: bool) -> Self {
+        self.single_row_batches = single_row_batches;
+        self
+    }
+
     /// Specify an expected plan to review
     pub fn with_expected_plan(mut self, expected_plan: &[&str]) -> Self {
         self.expected_plan = expected_plan.iter().map(|s| s.to_string()).collect();
@@ -396,11 +407,12 @@ impl TestCase {
             config,
             scenario,
             disk_manager_config,
+            single_row_batches,
             expected_plan,
             expected_success,
         } = self;
 
-        let table = scenario.table();
+        let table = scenario.table(single_row_batches);
 
         let rt_config = RuntimeConfig::new()
             // do not allow spilling
@@ -477,16 +489,18 @@ enum Scenario {
 
 impl Scenario {
     /// return a TableProvider with data for the test
-    fn table(&self) -> Arc<dyn TableProvider> {
+    fn table(&self, one_row_batches: bool) -> Arc<dyn TableProvider> {
         match self {
             Self::AccessLog => {
                 let batches = access_log_batches();
+                let batches = maybe_split_batches(batches, one_row_batches);
                 let table =
                     MemTable::try_new(batches[0].schema(), vec![batches]).unwrap();
                 Arc::new(table)
             }
             Self::AccessLogStreaming => {
                 let batches = access_log_batches();
+                let batches = maybe_split_batches(batches, one_row_batches);
 
                 // Create a new streaming table with the generated schema and batches
                 let table = StreamingTable::try_new(
@@ -502,9 +516,12 @@ impl Scenario {
             }
             Self::DictionaryStrings(num_partitions) => {
                 use datafusion::physical_expr::expressions::col;
-                let batches: Vec<Vec<_>> = std::iter::repeat(dict_batches())
-                    .take(*num_partitions)
-                    .collect();
+                let batches: Vec<Vec<_>> = std::iter::repeat(maybe_split_batches(
+                    dict_batches(),
+                    one_row_batches,
+                ))
+                .take(*num_partitions)
+                .collect();
 
                 let schema = batches[0][0].schema();
                 let options = SortOptions {
@@ -556,6 +573,29 @@ fn access_log_batches() -> Vec<RecordBatch> {
     AccessLogGenerator::new()
         .with_row_limit(1000)
         .with_max_batch_size(50)
+        .collect()
+}
+
+/// If `one_row_batches` is true, then returns new record batches that
+/// are one row in size
+fn maybe_split_batches(
+    batches: Vec<RecordBatch>,
+    one_row_batches: bool,
+) -> Vec<RecordBatch> {
+    if !one_row_batches {
+        return batches;
+    }
+
+    batches
+        .into_iter()
+        .flat_map(|mut batch| {
+            let mut batches = vec![];
+            while batch.num_rows() > 1 {
+                batches.push(batch.slice(0, 1));
+                batch = batch.slice(1, batch.num_rows() - 1);
+            }
+            batches
+        })
         .collect()
 }
 
