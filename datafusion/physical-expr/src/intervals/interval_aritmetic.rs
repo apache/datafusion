@@ -749,7 +749,7 @@ fn calculate_cardinality_based_on_bounds(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NullableInterval {
     /// The value is always null in this interval
-    /// 
+    ///
     /// This is typed so it can be used in physical expressions, which don't do
     /// type coercion.
     Null { datatype: DataType },
@@ -784,7 +784,9 @@ impl From<&ScalarValue> for NullableInterval {
     /// Create an interval that represents a single value.
     fn from(value: &ScalarValue) -> Self {
         if value.is_null() {
-            Self::Null { datatype: value.get_datatype() }
+            Self::Null {
+                datatype: value.get_datatype(),
+            }
         } else {
             Self::NotNull {
                 values: Interval::new(
@@ -835,7 +837,9 @@ impl NullableInterval {
     /// Perform logical negation on a boolean nullable interval.
     fn not(&self) -> Result<Self> {
         match self {
-            Self::Null { datatype } => Ok(Self::Null { datatype: datatype.clone() }),
+            Self::Null { datatype } => Ok(Self::Null {
+                datatype: datatype.clone(),
+            }),
             Self::MaybeNull { values } => Ok(Self::MaybeNull {
                 values: values.not()?,
             }),
@@ -921,12 +925,14 @@ impl NullableInterval {
                         }
                         _ => Ok(Self::MaybeNull { values }),
                     }
+                } else if op.is_comparison_operator() {
+                    Ok(Self::Null {
+                        datatype: DataType::Boolean,
+                    })
                 } else {
-                    if op.is_comparison_operator() {
-                        Ok(Self::Null { datatype: DataType::Boolean})
-                    } else {
-                        Ok(Self::Null { datatype: self.get_datatype()? })
-                    }
+                    Ok(Self::Null {
+                        datatype: self.get_datatype()?,
+                    })
                 }
             }
         }
@@ -947,7 +953,9 @@ impl NullableInterval {
                 _ => Ok(Self::MaybeNull { values }),
             }
         } else {
-            Ok(Self::Null { datatype: DataType::Boolean })
+            Ok(Self::Null {
+                datatype: DataType::Boolean,
+            })
         }
     }
 
@@ -974,10 +982,12 @@ impl NullableInterval {
     /// ```
     pub fn single_value(&self) -> Option<ScalarValue> {
         match self {
-            Self::Null { datatype } => Some(ScalarValue::try_from(datatype).unwrap_or(ScalarValue::Null)),
+            Self::Null { datatype } => {
+                Some(ScalarValue::try_from(datatype).unwrap_or(ScalarValue::Null))
+            }
             Self::MaybeNull { values } | Self::NotNull { values }
-                if values.lower.value == values.upper.value &&
-                    !values.lower.is_unbounded() =>
+                if values.lower.value == values.upper.value
+                    && !values.lower.is_unbounded() =>
             {
                 Some(values.lower.value.clone())
             }

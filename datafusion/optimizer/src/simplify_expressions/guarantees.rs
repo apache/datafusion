@@ -24,7 +24,7 @@ use datafusion_physical_expr::intervals::{Interval, IntervalBound, NullableInter
 
 /// Rewrite expressions to incorporate guarantees.
 pub(crate) struct GuaranteeRewriter<'a> {
-    intervals: HashMap<&'a Expr, &'a NullableInterval>,
+    guarantees: HashMap<&'a Expr, &'a NullableInterval>,
 }
 
 impl<'a> GuaranteeRewriter<'a> {
@@ -32,7 +32,7 @@ impl<'a> GuaranteeRewriter<'a> {
         guarantees: impl IntoIterator<Item = &'a (Expr, NullableInterval)>,
     ) -> Self {
         Self {
-            intervals: guarantees.into_iter().map(|(k, v)| (k, v)).collect(),
+            guarantees: guarantees.into_iter().map(|(k, v)| (k, v)).collect(),
         }
     }
 }
@@ -41,13 +41,17 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
     type N = Expr;
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        if self.guarantees.is_empty() {
+            return Ok(expr);
+        }
+
         match &expr {
-            Expr::IsNull(inner) => match self.intervals.get(inner.as_ref()) {
+            Expr::IsNull(inner) => match self.guarantees.get(inner.as_ref()) {
                 Some(NullableInterval::Null { .. }) => Ok(lit(true)),
                 Some(NullableInterval::NotNull { .. }) => Ok(lit(false)),
                 _ => Ok(expr),
             },
-            Expr::IsNotNull(inner) => match self.intervals.get(inner.as_ref()) {
+            Expr::IsNotNull(inner) => match self.guarantees.get(inner.as_ref()) {
                 Some(NullableInterval::Null { .. }) => Ok(lit(false)),
                 Some(NullableInterval::NotNull { .. }) => Ok(lit(true)),
                 _ => Ok(expr),
@@ -59,7 +63,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                 high,
             }) => {
                 if let (Some(interval), Expr::Literal(low), Expr::Literal(high)) = (
-                    self.intervals.get(inner.as_ref()),
+                    self.guarantees.get(inner.as_ref()),
                     low.as_ref(),
                     high.as_ref(),
                 ) {
@@ -112,7 +116,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                     _ => return Ok(expr),
                 };
 
-                if let Some(col_interval) = self.intervals.get(col.as_ref()) {
+                if let Some(col_interval) = self.guarantees.get(col.as_ref()) {
                     let result = col_interval.apply_operator(&op, &value.into())?;
                     if result.is_certainly_true() {
                         Ok(lit(true))
@@ -128,7 +132,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
 
             // Columns (if interval is collapsed to a single value)
             Expr::Column(_) => {
-                if let Some(col_interval) = self.intervals.get(&expr) {
+                if let Some(col_interval) = self.guarantees.get(&expr) {
                     if let Some(value) = col_interval.single_value() {
                         Ok(lit(value))
                     } else {
@@ -144,7 +148,7 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                 list,
                 negated,
             }) => {
-                if let Some(interval) = self.intervals.get(inner.as_ref()) {
+                if let Some(interval) = self.guarantees.get(inner.as_ref()) {
                     // Can remove items from the list that don't match the guarantee
                     let new_list: Vec<Expr> = list
                         .iter()
