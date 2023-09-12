@@ -372,6 +372,12 @@ mod tests {
         assert_eq!(plan.schema(), optimized_plan.schema())
     }
 
+    fn assert_optimization_rule_fails(plan: &LogicalPlan) {
+        let rule = EliminateCrossJoin::new();
+        let optimized_plan = rule.try_optimize(plan, &OptimizerContext::new()).unwrap();
+        assert!(optimized_plan.is_none());
+    }
+
     #[test]
     fn eliminate_cross_with_simple_and() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
@@ -536,6 +542,30 @@ mod tests {
             "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
         assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    /// See https://github.com/apache/arrow-datafusion/issues/7530
+    fn eliminate_cross_not_possible_nested_inner_join_with_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let t3 = test_table_scan_with_name("t3")?;
+
+        // could not eliminate to inner join with filter
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t3,
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(col("t1.a").not_eq(col("t2.a"))),
+            )?
+            .join(t2, JoinType::Inner, (vec!["t1.a"], vec!["t3.a"]), None)?
+            .filter(col("t1.a").lt(lit(15u32)))?
+            .build()?;
+
+        assert_optimization_rule_fails(&plan);
 
         Ok(())
     }
