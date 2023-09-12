@@ -28,17 +28,11 @@ Copies the contents of a table or query to file(s). Supported file
 formats are `parquet`, `csv`, and `json` and can be inferred based on
 filename if writing to a single file.
 
-The `PER_THREAD_OUTPUT` option treats `file_name` as a directory and writes a file per thread within it.
-
 <pre>
 COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
-
-where <i><b>option</i></b> can be one of:
-    FORMAT <i><b>format_name</i></b>
-    PER_THREAD_OUTPUT <i><b>boolean</i></b>
-    ROW_GROUP_SIZE <i><b>integer</i></b>
-    ROW_GROUP_LIMIT_BYTES <i><b>integer</i></b>
 </pre>
+
+For a detailed list of valid OPTIONS, see [Write Options](write_options).
 
 Copy the contents of `source_table` to `file_name.json` in JSON format:
 
@@ -55,7 +49,7 @@ Copy the contents of `source_table` to one or more Parquet formatted
 files in the `dir_name` directory:
 
 ```sql
-> COPY source_table TO 'dir_name' (FORMAT parquet, PER_THREAD_OUTPUT true);
+> COPY source_table TO 'dir_name' (FORMAT parquet, SINGLE_FILE_OUTPUT false);
 +-------+
 | count |
 +-------+

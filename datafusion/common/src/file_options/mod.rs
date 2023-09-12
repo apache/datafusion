@@ -508,7 +508,7 @@ mod tests {
         option_map.insert("rfc3339".to_owned(), "true".to_owned());
         option_map.insert("null_value".to_owned(), "123".to_owned());
         option_map.insert("compression".to_owned(), "gzip".to_owned());
-        option_map.insert("delimeter".to_owned(), ";".to_owned());
+        option_map.insert("delimiter".to_owned(), ";".to_owned());
 
         let options = StatementOptions::from(&option_map);
         let config = ConfigOptions::new();
