@@ -1042,7 +1042,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sort_fetch_memory_calculation() -> Result<()> {
+    async fn test_sort_fetch_memory_calculation() {
         // This test mirrors down the size from the example above.
         let avg_batch_size = 4000;
         let partitions = 4;
@@ -1068,15 +1068,15 @@ mod tests {
                 sort_spill_reservation_bytes + avg_batch_size * (partitions - 1),
                 1.0,
             );
-            let runtime = Arc::new(RuntimeEnv::new(rt_config)?);
+            let runtime = Arc::new(RuntimeEnv::new(rt_config).unwrap());
             let task_ctx = Arc::new(
                 TaskContext::default()
                     .with_runtime(runtime)
                     .with_session_config(session_config),
             );
 
-            let tmp_dir = TempDir::new()?;
-            let csv = test::scan_partitioned_csv(partitions, tmp_dir.path())?;
+            let tmp_dir = TempDir::new().unwrap();
+            let csv = test::scan_partitioned_csv(partitions, tmp_dir.path()).unwrap();
             let schema = csv.schema();
 
             let sort_exec = Arc::new(
@@ -1084,17 +1084,17 @@ mod tests {
                     vec![
                         // c1 string column
                         PhysicalSortExpr {
-                            expr: col("c1", &schema)?,
+                            expr: col("c1", &schema).unwrap(),
                             options: SortOptions::default(),
                         },
                         // c2 uin32 column
                         PhysicalSortExpr {
-                            expr: col("c2", &schema)?,
+                            expr: col("c2", &schema).unwrap(),
                             options: SortOptions::default(),
                         },
                         // c7 uin8 column
                         PhysicalSortExpr {
-                            expr: col("c7", &schema)?,
+                            expr: col("c7", &schema).unwrap(),
                             options: SortOptions::default(),
                         },
                     ],
@@ -1103,14 +1103,13 @@ mod tests {
                 .with_fetch(fetch),
             );
 
-            let result = collect(sort_exec.clone(), task_ctx).await?;
+            let result = collect(sort_exec.clone(), task_ctx).await.unwrap();
             assert_eq!(result.len(), 1);
 
             let metrics = sort_exec.metrics().unwrap();
             let did_it_spill = metrics.spill_count().unwrap() > 0;
             assert_eq!(did_it_spill, expect_spillage, "with fetch: {fetch:?}");
         }
-        Ok(())
     }
 
     #[tokio::test]
