@@ -64,8 +64,14 @@ const LOW_CARDINALITY_THRESHOLD: usize = 10;
 pub enum CardinalityAwareRowConverter {
     /// Converter is newly initialized, and hasn't yet seen data
     New { fields: Vec<SortField> },
-    /// Converter has seen data and can convert data
-    Converting { inner: RowConverter },
+    /// Converter has seen data and can convert [`Array`]s to/from
+    /// [`Rows`]
+    Converting {
+        converter: RowConverter,
+        /// if preserve_dictionaries is disabled, the output type can be
+        /// different than input.
+        output_types: Vec<DataType>,
+    },
 }
 
 impl CardinalityAwareRowConverter {
@@ -79,21 +85,50 @@ impl CardinalityAwareRowConverter {
                 // TODO account for size of `fields`
                 0
             }
-            Self::Converting { inner } => inner.size(),
+            Self::Converting { converter, .. } => converter.size(),
         }
     }
 
     pub fn empty_rows(&self, row_capacity: usize, data_capacity: usize) -> Result<Rows> {
-        let converter = self.converter()?;
-        Ok(converter.empty_rows(row_capacity, data_capacity))
+        match self {
+            Self::New { .. } => internal_err!(
+                "CardinalityAwareRowConverter has not converted any rows yet"
+            ),
+            Self::Converting { converter, .. } => {
+                Ok(converter.empty_rows(row_capacity, data_capacity))
+            }
+        }
     }
 
     pub fn convert_rows<'a, I>(&self, rows: I) -> Result<Vec<ArrayRef>>
     where
         I: IntoIterator<Item = Row<'a>>,
     {
-        let converter = self.converter()?;
-        Ok(converter.convert_rows(rows)?)
+        match self {
+            Self::New { .. } => internal_err!(
+                "CardinalityAwareRowConverter has not converted any rows yet"
+            ),
+            Self::Converting {
+                converter,
+                output_types,
+            } => {
+                // Cast output type if needed
+                let output = converter
+                    .convert_rows(rows)?
+                    .into_iter()
+                    .zip(output_types.iter())
+                    .map(|(arr, output_type)| {
+                        if arr.data_type() != output_type {
+                            Ok(arrow::compute::cast(&arr, output_type)?)
+                        } else {
+                            Ok(arr)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(output)
+            }
+        }
     }
 
     pub fn append(&mut self, rows: &mut Rows, columns: &[ArrayRef]) -> Result<()> {
@@ -109,8 +144,11 @@ impl CardinalityAwareRowConverter {
     /// Return a mutable reference to the inner converter, creating it if needed
     fn converter_mut(&mut self, columns: &[ArrayRef]) -> Result<&mut RowConverter> {
         if let Self::New { fields } = self {
+            // TODO clean up the code
             let mut updated_fields = fields.clone();
+            let mut output_types = vec![];
             for (i, col) in columns.iter().enumerate() {
+                output_types.push(col.data_type().clone());
                 if let DataType::Dictionary(_, _) = col.data_type() {
                     // see comments on LOW_CARDINALITY_THRESHOLD for
                     // the rationale of this calculation
@@ -122,7 +160,8 @@ impl CardinalityAwareRowConverter {
                 }
             }
             *self = Self::Converting {
-                inner: RowConverter::new(updated_fields)?,
+                converter: RowConverter::new(updated_fields)?,
+                output_types,
             };
         };
 
@@ -130,17 +169,7 @@ impl CardinalityAwareRowConverter {
             Self::New { .. } => {
                 unreachable!();
             }
-            Self::Converting { inner } => Ok(inner),
-        }
-    }
-
-    /// Return a reference to the inner converter, erroring if we have not yet converted a row.
-    fn converter(&self) -> Result<&RowConverter> {
-        match self {
-            Self::New { .. } => internal_err!(
-                "CardinalityAwareRowConverter has not converted any rows yet"
-            ),
-            Self::Converting { inner } => Ok(inner),
+            Self::Converting { converter, .. } => Ok(converter),
         }
     }
 }

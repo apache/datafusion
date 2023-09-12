@@ -94,6 +94,7 @@ impl GroupValues for GroupValuesRows {
         // Convert the group keys into the row format, reusing rows when possible
         let group_rows = match self.scratch_group_rows.take() {
             Some(mut group_rows) => {
+                group_rows.clear();
                 self.row_converter.append(&mut group_rows, cols)?;
                 group_rows
             }

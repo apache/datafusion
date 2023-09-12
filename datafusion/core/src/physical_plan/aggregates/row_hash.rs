@@ -37,7 +37,6 @@ use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
-use arrow::datatypes::Int32Type;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -458,45 +457,24 @@ impl GroupedHashAggregateStream {
             return Ok(RecordBatch::new_empty(self.schema()));
         }
 
-        let output = self.group_values.emit(emit_to)?;
+        let mut output = self.group_values.emit(emit_to)?;
         if let EmitTo::First(n) = emit_to {
             self.group_ordering.remove_groups(n);
-        }
-
-        // Since the `CardinalityAwareRowConverter` disables dictionary preserving
-        // for the high-cardinality `Dictionary` encoded group by columns while converting
-        // a batch into `Rows` for computation, we get the group by columns as `Utf8`
-        // in the output of the computation. Since the upstream operaters still expect
-        // `Dictionary` arrays, we need to convert the `Utf8` arrays back into `Dictionary`
-        // arrays before passing them on.
-        let mut updated_output: Vec<Arc<dyn Array>> = Vec::new();
-        for (col, field) in output.iter().zip(self.schema().fields().iter()) {
-            if col.data_type() != field.data_type() {
-                assert_eq!(*col.data_type(), arrow::datatypes::DataType::Utf8);
-                let string_arr: StringArray = StringArray::from(col.to_data());
-                let dict_array: DictionaryArray<Int32Type> =
-                    string_arr.into_iter().collect();
-                updated_output.push(Arc::new(dict_array));
-            } else {
-                updated_output.push(col.clone());
-            }
         }
 
         // Next output each aggregate value
         for acc in self.accumulators.iter_mut() {
             match self.mode {
-                AggregateMode::Partial => updated_output.extend(acc.state(emit_to)?),
+                AggregateMode::Partial => output.extend(acc.state(emit_to)?),
                 AggregateMode::Final
                 | AggregateMode::FinalPartitioned
                 | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => {
-                    updated_output.push(acc.evaluate(emit_to)?)
-                }
+                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
             }
         }
 
         self.update_memory_reservation()?;
-        let batch = RecordBatch::try_new(self.schema(), updated_output)?;
+        let batch = RecordBatch::try_new(self.schema(), output)?;
         Ok(batch)
     }
 }
