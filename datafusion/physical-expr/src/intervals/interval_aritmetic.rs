@@ -727,6 +727,7 @@ fn calculate_cardinality_based_on_bounds(
 /// # Examples
 ///
 /// ```
+/// use arrow::datatypes::DataType;
 /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
 /// use datafusion_common::ScalarValue;
 ///
@@ -741,10 +742,10 @@ fn calculate_cardinality_based_on_bounds(
 /// };
 ///
 /// // {NULL}
-/// NullableInterval::Null;
+/// NullableInterval::Null { datatype: DataType::Int32 };
 ///
 /// // {4}
-/// NullableInterval::from(&ScalarValue::Int32(Some(4)));
+/// NullableInterval::from(ScalarValue::Int32(Some(4)));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NullableInterval {
@@ -780,9 +781,9 @@ impl Display for NullableInterval {
     }
 }
 
-impl From<&ScalarValue> for NullableInterval {
+impl From<ScalarValue> for NullableInterval {
     /// Create an interval that represents a single value.
-    fn from(value: &ScalarValue) -> Self {
+    fn from(value: ScalarValue) -> Self {
         if value.is_null() {
             Self::Null {
                 datatype: value.get_datatype(),
@@ -791,7 +792,7 @@ impl From<&ScalarValue> for NullableInterval {
             Self::NotNull {
                 values: Interval::new(
                     IntervalBound::new(value.clone(), false),
-                    IntervalBound::new(value.clone(), false),
+                    IntervalBound::new(value, false),
                 ),
             }
         }
@@ -859,18 +860,18 @@ impl NullableInterval {
     /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
     ///
     /// // 4 > 3 -> true
-    /// let lhs = NullableInterval::from(&ScalarValue::Int32(Some(4)));
-    /// let rhs = NullableInterval::from(&ScalarValue::Int32(Some(3)));
+    /// let lhs = NullableInterval::from(ScalarValue::Int32(Some(4)));
+    /// let rhs = NullableInterval::from(ScalarValue::Int32(Some(3)));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
-    /// assert_eq!(result, NullableInterval::from(&ScalarValue::Boolean(Some(true))));
+    /// assert_eq!(result, NullableInterval::from(ScalarValue::Boolean(Some(true))));
     ///
     /// // [1, 3) > NULL -> NULL
     /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::make(Some(1), Some(3), (false, true)),
     /// };
-    /// let rhs = NullableInterval::from(&ScalarValue::Int32(None));
+    /// let rhs = NullableInterval::from(ScalarValue::Int32(None));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
-    /// assert_eq!(result.single_value(), Some(ScalarValue::Null));
+    /// assert_eq!(result.single_value(), Some(ScalarValue::Boolean(None)));
     ///
     /// // [1, 3] > [2, 4] -> [false, true]
     /// let lhs = NullableInterval::NotNull {
@@ -969,11 +970,11 @@ impl NullableInterval {
     /// use datafusion_common::ScalarValue;
     /// use datafusion_physical_expr::intervals::{Interval, NullableInterval};
     ///
-    /// let interval = NullableInterval::from(&ScalarValue::Int32(Some(4)));
+    /// let interval = NullableInterval::from(ScalarValue::Int32(Some(4)));
     /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(Some(4))));
     ///
-    /// let interval = NullableInterval::from(&ScalarValue::Int32(None));
-    /// assert_eq!(interval.single_value(), Some(ScalarValue::Null));
+    /// let interval = NullableInterval::from(ScalarValue::Int32(None));
+    /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(None)));
     ///
     /// let interval = NullableInterval::MaybeNull {
     ///     values: Interval::make(Some(1), Some(4), (false, true)),

@@ -17,12 +17,22 @@
 
 //! Simplifier implementation for [ExprSimplifier::simplify_with_guarantees()][crate::simplify_expressions::expr_simplifier::ExprSimplifier::simplify_with_guarantees].
 use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
-use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr, Operator};
+use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
 use std::collections::HashMap;
 
 use datafusion_physical_expr::intervals::{Interval, IntervalBound, NullableInterval};
 
 /// Rewrite expressions to incorporate guarantees.
+///
+/// Guarantees are a mapping from an expression (which currently is always a
+/// column reference) to a [NullableInterval]. The interval represents the known
+/// possible values of the column. Using these known values, expressions are
+/// rewritten so they can be simplified using [ConstEvaluator] and [Simplifier].
+///
+/// For example, if we know that a column is not null and has values in the
+/// range [1, 10), we can rewrite `x IS NULL` to `false` or `x < 10` to `true`.
+///
+/// See a full example in [ExprSimplifier::with_guarantees()].
 pub(crate) struct GuaranteeRewriter<'a> {
     guarantees: HashMap<&'a Expr, &'a NullableInterval>,
 }
@@ -89,17 +99,9 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
             }
 
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                // Check if this is a comparison
-                match op {
-                    Operator::Eq
-                    | Operator::NotEq
-                    | Operator::Lt
-                    | Operator::LtEq
-                    | Operator::Gt
-                    | Operator::GtEq
-                    | Operator::IsDistinctFrom
-                    | Operator::IsNotDistinctFrom => {}
-                    _ => return Ok(expr),
+                // We only support comparisons for now
+                if !op.is_comparison_operator() {
+                    return Ok(expr);
                 };
 
                 // Check if this is a comparison between a column and literal
@@ -117,7 +119,8 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                 };
 
                 if let Some(col_interval) = self.guarantees.get(col.as_ref()) {
-                    let result = col_interval.apply_operator(&op, &value.into())?;
+                    let result =
+                        col_interval.apply_operator(&op, &value.clone().into())?;
                     if result.is_certainly_true() {
                         Ok(lit(true))
                     } else if result.is_certainly_false() {
@@ -154,16 +157,14 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                         .iter()
                         .filter_map(|expr| {
                             if let Expr::Literal(item) = expr {
-                                match interval.contains(&NullableInterval::from(item)) {
+                                match interval
+                                    .contains(&NullableInterval::from(item.clone()))
+                                {
                                     // If we know for certain the value isn't in the column's interval,
                                     // we can skip checking it.
-                                    Ok(NullableInterval::NotNull { values })
-                                        if values == Interval::CERTAINLY_FALSE =>
-                                    {
-                                        None
-                                    }
-                                    Err(err) => Some(Err(err)),
-                                    _ => Some(Ok(expr.clone())),
+                                    Ok(interval) if interval.is_certainly_false() => None,
+                                    Ok(_) => Some(Ok(expr.clone())),
+                                    Err(e) => Some(Err(e)),
                                 }
                             } else {
                                 Some(Ok(expr.clone()))
@@ -192,7 +193,7 @@ mod tests {
 
     use arrow::datatypes::DataType;
     use datafusion_common::{tree_node::TreeNode, ScalarValue};
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, lit, Operator};
 
     #[test]
     fn test_null_handling() {
@@ -270,8 +271,10 @@ mod tests {
             (col("x").eq(lit(0)), false),
             (col("x").not_eq(lit(0)), true),
             (col("x").between(lit(2), lit(5)), true),
+            (col("x").between(lit(2), lit(3)), true),
             (col("x").between(lit(5), lit(10)), false),
             (col("x").not_between(lit(2), lit(5)), false),
+            (col("x").not_between(lit(2), lit(3)), false),
             (col("x").not_between(lit(5), lit(10)), true),
             (
                 Expr::BinaryExpr(BinaryExpr {
@@ -451,9 +454,8 @@ mod tests {
             ScalarValue::Decimal128(Some(1000), 19, 2),
         ];
 
-        for scalar in &scalars {
-            let guarantees = vec![(col("x"), NullableInterval::from(scalar))];
-            dbg!(&guarantees);
+        for scalar in scalars {
+            let guarantees = vec![(col("x"), NullableInterval::from(scalar.clone()))];
             let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
             let output = col("x").rewrite(&mut rewriter).unwrap();

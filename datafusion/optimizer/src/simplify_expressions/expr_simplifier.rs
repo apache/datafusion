@@ -50,7 +50,8 @@ use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
     info: S,
-    ///
+    /// Guarantees about the values of columns. This is provided by the user
+    /// in [ExprSimplifier::with_guarantees()].
     guarantees: Vec<(Expr, NullableInterval)>,
 }
 
@@ -207,7 +208,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///        }
     ///    ),
     ///    // y = 3
-    ///    (col("y"), NullableInterval::from(&ScalarValue::UInt32(Some(3)))),
+    ///    (col("y"), NullableInterval::from(ScalarValue::UInt32(Some(3)))),
     /// ];
     /// let simplifier = ExprSimplifier::new(context).with_guarantees(guarantees);
     /// let output = simplifier.simplify(expr).unwrap();
@@ -2753,7 +2754,7 @@ mod tests {
     ) -> Expr {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
-        let mut simplifier = ExprSimplifier::new(
+        let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         )
         .with_guarantees(guarantees);
@@ -3234,12 +3235,9 @@ mod tests {
 
         // All guaranteed null
         let guarantees = vec![
-            (col("c3"), NullableInterval::from(&ScalarValue::Int64(None))),
-            (
-                col("c4"),
-                NullableInterval::from(&ScalarValue::UInt32(None)),
-            ),
-            (col("c1"), NullableInterval::from(&ScalarValue::Utf8(None))),
+            (col("c3"), NullableInterval::from(ScalarValue::Int64(None))),
+            (col("c4"), NullableInterval::from(ScalarValue::UInt32(None))),
+            (col("c1"), NullableInterval::from(ScalarValue::Utf8(None))),
         ];
 
         let output = simplify_with_guarantee(expr.clone(), guarantees);
@@ -3255,11 +3253,11 @@ mod tests {
             ),
             (
                 col("c4"),
-                NullableInterval::from(&ScalarValue::UInt32(Some(9))),
+                NullableInterval::from(ScalarValue::UInt32(Some(9))),
             ),
             (
                 col("c1"),
-                NullableInterval::from(&ScalarValue::Utf8(Some("a".to_string()))),
+                NullableInterval::from(ScalarValue::Utf8(Some("a".to_string()))),
             ),
         ];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
@@ -3293,11 +3291,11 @@ mod tests {
         let guarantees = vec![
             (
                 col("c3"),
-                NullableInterval::from(&ScalarValue::Int64(Some(9))),
+                NullableInterval::from(ScalarValue::Int64(Some(9))),
             ),
             (
                 col("c4"),
-                NullableInterval::from(&ScalarValue::UInt32(Some(3))),
+                NullableInterval::from(ScalarValue::UInt32(Some(3))),
             ),
         ];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
@@ -3306,7 +3304,7 @@ mod tests {
         // Only partially simplify
         let guarantees = vec![(
             col("c4"),
-            NullableInterval::from(&ScalarValue::UInt32(Some(3))),
+            NullableInterval::from(ScalarValue::UInt32(Some(3))),
         )];
         let output = simplify_with_guarantee(expr.clone(), guarantees);
         assert_eq!(&output, &expr_x);
