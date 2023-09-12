@@ -143,7 +143,7 @@ impl GroupOrderingPartial {
             .map(|&idx| group_values[idx].clone())
             .collect();
 
-        Ok(self.row_converter.convert_columns(&sort_values)?)
+        self.row_converter.convert_columns(&sort_values)
     }
 
     /// How many groups be emitted, or None if no data can be emitted
