@@ -16,8 +16,9 @@
 // under the License.
 
 //! DataFusion error types
-
+#[cfg(backtrace)]
 use std::backtrace::{Backtrace, BacktraceStatus};
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
