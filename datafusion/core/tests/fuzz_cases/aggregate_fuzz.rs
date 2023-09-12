@@ -31,8 +31,6 @@ use rand::{Rng, SeedableRng};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_execution::memory_pool::GreedyMemoryPool;
-use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_physical_expr::expressions::{col, Sum};
 use datafusion_physical_expr::{AggregateExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
