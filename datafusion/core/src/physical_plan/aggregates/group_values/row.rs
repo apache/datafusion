@@ -60,9 +60,6 @@ pub struct GroupValuesRows {
 
     /// Random state for creating hashes
     random_state: RandomState,
-
-    /// Scratch space for storing per-batch group rows
-    scratch_group_rows: Option<Rows>,
 }
 
 impl GroupValuesRows {
@@ -84,29 +81,21 @@ impl GroupValuesRows {
             group_values: None,
             hashes_buffer: Default::default(),
             random_state: Default::default(),
-            scratch_group_rows: None,
         })
     }
 }
 
 impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
-        // Convert the group keys into the row format, reusing rows when possible
-        let group_rows = match self.scratch_group_rows.take() {
-            Some(mut group_rows) => {
-                group_rows.clear();
-                self.row_converter.append(&mut group_rows, cols)?;
-                group_rows
-            }
-            None => self.row_converter.convert_columns(cols)?,
-        };
+        // Convert the group keys into the row format
+        // Avoid reallocation when https://github.com/apache/arrow-rs/issues/4479 is available
+        let group_rows = self.row_converter.convert_columns(cols)?;
+        let n_rows = group_rows.num_rows();
 
         let mut group_values = match self.group_values.take() {
             Some(group_values) => group_values,
             None => self.row_converter.empty_rows(0, 0)?,
         };
-
-        let n_rows = group_rows.num_rows();
 
         // tracks to which group each of the input rows belongs
         groups.clear();
@@ -147,7 +136,6 @@ impl GroupValues for GroupValuesRows {
         }
 
         self.group_values = Some(group_values);
-        self.scratch_group_rows = Some(group_rows);
 
         Ok(())
     }

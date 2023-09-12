@@ -131,10 +131,6 @@ impl CardinalityAwareRowConverter {
         }
     }
 
-    pub fn append(&mut self, rows: &mut Rows, columns: &[ArrayRef]) -> Result<()> {
-        Ok(self.converter_mut(columns)?.append(rows, columns)?)
-    }
-
     /// Calls [`RowConverter::convert_columns`] after first
     /// initializing the converter based on cardinalities
     pub fn convert_columns(&mut self, columns: &[ArrayRef]) -> Result<Rows> {
