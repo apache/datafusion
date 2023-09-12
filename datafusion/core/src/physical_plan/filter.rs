@@ -157,14 +157,14 @@ impl ExecutionPlan for FilterExec {
         let mut res = self.input.ordering_equivalence_properties();
         let stats = self.statistics();
 
-        if let Some(col_stats) = stats.column_statistics {
-            let columns = collect_columns(self.predicate());
-            let mut constants = vec![];
-            for column in columns {
-                if col_stats[column.index()].is_singleton() {
-                    constants.push(Arc::new(column) as Arc<dyn PhysicalExpr>);
-                }
-            }
+        // Add columns that have fixed value (singleton) after filtering, to the constants.
+        if let Some(constants) = stats.column_statistics.map(|col_stats| {
+            collect_columns(self.predicate())
+                .into_iter()
+                .filter(|column| col_stats[column.index()].is_singleton())
+                .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
+                .collect::<Vec<_>>()
+        }) {
             res.add_constants(constants);
         }
         res

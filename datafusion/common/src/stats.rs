@@ -74,6 +74,7 @@ pub struct ColumnStatistics {
 impl ColumnStatistics {
     pub fn is_singleton(&self) -> bool {
         match (&self.min_value, &self.max_value) {
+            // Min and max value are same and both are not infinity.
             (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
             (_, _) => false,
         }
