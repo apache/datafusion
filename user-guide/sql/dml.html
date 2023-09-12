@@ -193,6 +193,11 @@
      Status
     </a>
    </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="write_options.html">
+     Write Options
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toctree-l1">
@@ -405,16 +410,10 @@ and modifying data in tables.</p>
 <p>Copies the contents of a table or query to file(s). Supported file
 formats are <code class="docutils literal notranslate"><span class="pre">parquet</span></code>, <code class="docutils literal notranslate"><span class="pre">csv</span></code>, and <code class="docutils literal notranslate"><span class="pre">json</span></code> and can be inferred based on
 filename if writing to a single file.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">PER_THREAD_OUTPUT</span></code> option treats <code class="docutils literal notranslate"><span class="pre">file_name</span></code> as a directory and writes a file per thread within it.</p>
 <pre>
 COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
-
-where <i><b>option</i></b> can be one of:
-    FORMAT <i><b>format_name</i></b>
-    PER_THREAD_OUTPUT <i><b>boolean</i></b>
-    ROW_GROUP_SIZE <i><b>integer</i></b>
-    ROW_GROUP_LIMIT_BYTES <i><b>integer</i></b>
 </pre>
+<p>For a detailed list of valid OPTIONS, see <a class="reference internal" href="write_options.html"><span class="doc std std-doc">Write Options</span></a>.</p>
 <p>Copy the contents of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> to <code class="docutils literal notranslate"><span class="pre">file_name.json</span></code> in JSON format:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;file_name.json&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+</span>
@@ -426,7 +425,7 @@ where <i><b>option</i></b> can be one of:
 </div>
 <p>Copy the contents of <code class="docutils literal notranslate"><span class="pre">source_table</span></code> to one or more Parquet formatted
 files in the <code class="docutils literal notranslate"><span class="pre">dir_name</span></code> directory:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;dir_name&#39;</span><span class="w"> </span><span class="p">(</span><span class="n">FORMAT</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span><span class="w"> </span><span class="n">PER_THREAD_OUTPUT</span><span class="w"> </span><span class="k">true</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;dir_name&#39;</span><span class="w"> </span><span class="p">(</span><span class="n">FORMAT</span><span class="w"> </span><span class="n">parquet</span><span class="p">,</span><span class="w"> </span><span class="n">SINGLE_FILE_OUTPUT</span><span class="w"> </span><span class="k">false</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------+</span>

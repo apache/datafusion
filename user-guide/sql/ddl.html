@@ -193,6 +193,11 @@
      Status
     </a>
    </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="write_options.html">
+     Write Options
+    </a>
+   </li>
   </ul>
  </li>
  <li class="toctree-l1">
@@ -467,7 +472,7 @@ file system or remote object store as a named table which can be queried.</p>
 <span class="p">[</span> <span class="n">DELIMITER</span> <span class="o">&lt;</span><span class="n">char</span><span class="o">&gt;</span> <span class="p">]</span>
 <span class="p">[</span> <span class="n">COMPRESSION</span> <span class="n">TYPE</span> <span class="o">&lt;</span><span class="n">GZIP</span> <span class="o">|</span> <span class="n">BZIP2</span> <span class="o">|</span> <span class="n">XZ</span> <span class="o">|</span> <span class="n">ZSTD</span><span class="o">&gt;</span> <span class="p">]</span>
 <span class="p">[</span> <span class="n">PARTITIONED</span> <span class="n">BY</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column</span> <span class="nb">list</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
-<span class="p">[</span> <span class="n">WITH</span> <span class="n">ORDER</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">ordered</span> <span class="n">column</span> <span class="nb">list</span><span class="o">&gt;</span><span class="p">)</span>
+<span class="p">[</span> <span class="n">WITH</span> <span class="n">ORDER</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">ordered</span> <span class="n">column</span> <span class="nb">list</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
 <span class="p">[</span> <span class="n">OPTIONS</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">key_value_list</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
 <span class="n">LOCATION</span> <span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span>
 
@@ -480,6 +485,7 @@ file system or remote object store as a named table which can be queried.</p>
 <span class="o">&lt;</span><span class="n">key_value_list</span><span class="o">&gt;</span> <span class="o">:=</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">literal</span><span class="p">,</span> <span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
 </pre></div>
 </div>
+<p>For a detailed list of write related options which can be passed in the OPTIONS key_value_list, see <a class="reference internal" href="write_options.html"><span class="doc std std-doc">Write Options</span></a>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">file_type</span></code> is one of <code class="docutils literal notranslate"><span class="pre">CSV</span></code>, <code class="docutils literal notranslate"><span class="pre">ARROW</span></code>, <code class="docutils literal notranslate"><span class="pre">PARQUET</span></code>, <code class="docutils literal notranslate"><span class="pre">AVRO</span></code> or <code class="docutils literal notranslate"><span class="pre">JSON</span></code></p>
 <p><code class="docutils literal notranslate"><span class="pre">LOCATION</span> <span class="pre">&lt;literal&gt;</span></code> specifies the location to find the data. It can be
 a path to a file or directory of partitioned files locally or on an
