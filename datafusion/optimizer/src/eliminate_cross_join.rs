@@ -60,30 +60,26 @@ impl OptimizerRule for EliminateCrossJoin {
 
                 let mut possible_join_keys: Vec<(Expr, Expr)> = vec![];
                 let mut all_inputs: Vec<LogicalPlan> = vec![];
-                match &input {
+                let did_flat_successfully = match &input {
                     LogicalPlan::Join(join) if (join.join_type == JoinType::Inner) => {
-                        // The filter of inner join will lost, skip this rule.
-                        // issue: https://github.com/apache/arrow-datafusion/issues/4844
-                        if join.filter.is_some() {
-                            return Ok(None);
-                        }
-
-                        flatten_join_inputs(
+                        try_flatten_join_inputs(
                             &input,
                             &mut possible_join_keys,
                             &mut all_inputs,
-                        )?;
+                        )?
                     }
-                    LogicalPlan::CrossJoin(_) => {
-                        flatten_join_inputs(
-                            &input,
-                            &mut possible_join_keys,
-                            &mut all_inputs,
-                        )?;
-                    }
+                    LogicalPlan::CrossJoin(_) => try_flatten_join_inputs(
+                        &input,
+                        &mut possible_join_keys,
+                        &mut all_inputs,
+                    )?,
                     _ => {
                         return utils::optimize_children(self, plan, config);
                     }
+                };
+
+                if !did_flat_successfully {
+                    return Ok(None);
                 }
 
                 let predicate = &filter.predicate;
@@ -137,13 +133,20 @@ impl OptimizerRule for EliminateCrossJoin {
     }
 }
 
-fn flatten_join_inputs(
+/// Recursively accumulate possible_join_keys and inputs from inner joins (including cross joins).
+/// Returns a boolean indicating whether the flattening was successful.
+fn try_flatten_join_inputs(
     plan: &LogicalPlan,
     possible_join_keys: &mut Vec<(Expr, Expr)>,
     all_inputs: &mut Vec<LogicalPlan>,
-) -> Result<()> {
+) -> Result<bool> {
     let children = match plan {
-        LogicalPlan::Join(join) => {
+        LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
+            if join.filter.is_some() {
+                // The filter of inner join will lost, skip this rule.
+                // issue: https://github.com/apache/arrow-datafusion/issues/4844
+                return Ok(false);
+            }
             possible_join_keys.extend(join.on.clone());
             let left = &*(join.left);
             let right = &*(join.right);
@@ -163,18 +166,22 @@ fn flatten_join_inputs(
         match *child {
             LogicalPlan::Join(left_join) => {
                 if left_join.join_type == JoinType::Inner {
-                    flatten_join_inputs(child, possible_join_keys, all_inputs)?;
+                    if !try_flatten_join_inputs(child, possible_join_keys, all_inputs)? {
+                        return Ok(false);
+                    }
                 } else {
                     all_inputs.push((*child).clone());
                 }
             }
             LogicalPlan::CrossJoin(_) => {
-                flatten_join_inputs(child, possible_join_keys, all_inputs)?;
+                if !try_flatten_join_inputs(child, possible_join_keys, all_inputs)? {
+                    return Ok(false);
+                }
             }
             _ => all_inputs.push((*child).clone()),
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn find_inner_join(
