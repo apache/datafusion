@@ -68,10 +68,22 @@ impl OptimizerRule for EliminateCrossJoin {
                             return Ok(None);
                         }
 
-                        flatten_join_inputs(&input, &mut possible_join_keys, &mut all_inputs)?;
+                        if !flatten_join_inputs(
+                            &input,
+                            &mut possible_join_keys,
+                            &mut all_inputs,
+                        )? {
+                            return Ok(None);
+                        }
                     }
                     LogicalPlan::CrossJoin(_) => {
-                        flatten_join_inputs(&input, &mut possible_join_keys, &mut all_inputs)?;
+                        if !flatten_join_inputs(
+                            &input,
+                            &mut possible_join_keys,
+                            &mut all_inputs,
+                        )? {
+                            return Ok(None);
+                        }
                     }
                     _ => {
                         return utils::optimize_children(self, plan, config);
@@ -130,11 +142,13 @@ impl OptimizerRule for EliminateCrossJoin {
     }
 }
 
+/// Find inner join from all_inputs and possible_join_keys
+/// Returns a boolean indicating whether the plan can be flattened.
 fn flatten_join_inputs(
     plan: &LogicalPlan,
     possible_join_keys: &mut Vec<(Expr, Expr)>,
     all_inputs: &mut Vec<LogicalPlan>,
-) -> Result<()> {
+) -> Result<bool> {
     let children = match plan {
         LogicalPlan::Join(join) => {
             possible_join_keys.extend(join.on.clone());
@@ -158,18 +172,25 @@ fn flatten_join_inputs(
         match *child {
             LogicalPlan::Join(left_join) => {
                 if left_join.join_type == JoinType::Inner {
-                    flatten_join_inputs(child, possible_join_keys, all_inputs)?;
+                    if left_join.filter.is_some() {
+                        return Ok(false);
+                    }
+                    if !flatten_join_inputs(child, possible_join_keys, all_inputs)? {
+                        return Ok(false);
+                    }
                 } else {
                     all_inputs.push((*child).clone());
                 }
             }
             LogicalPlan::CrossJoin(_) => {
-                flatten_join_inputs(child, possible_join_keys, all_inputs)?;
+                if !flatten_join_inputs(child, possible_join_keys, all_inputs)? {
+                    return Ok(false);
+                }
             }
             _ => all_inputs.push((*child).clone()),
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn find_inner_join(
