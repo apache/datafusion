@@ -363,9 +363,10 @@ impl PhysicalExpr for BinaryExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Vec<Option<Interval>>> {
-        // Get children intervals. Graph brings
+        // Get children intervals.
         let left_interval = children[0];
         let right_interval = children[1];
+
         let (left, right) = if self.op.is_logic_operator() {
             // TODO: Currently, this implementation only supports the AND operator
             //       and does not require any further propagation. In the future,
@@ -617,8 +618,7 @@ pub fn binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit};
-    use crate::expressions::{try_cast, Literal};
+    use crate::expressions::{col, lit, try_cast, Literal};
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };

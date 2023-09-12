@@ -17,6 +17,8 @@
 
 //! This module provides data structures to represent statistics
 
+use std::fmt::Display;
+
 use crate::ScalarValue;
 
 /// Statistics for a relation
@@ -35,6 +37,25 @@ pub struct Statistics {
     /// an estimate). Any or all other fields might still be None, in which case no information is known.
     /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
     pub is_exact: bool,
+}
+
+impl Display for Statistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.num_rows.is_none() && self.total_byte_size.is_none() && !self.is_exact {
+            return Ok(());
+        }
+
+        let rows = self
+            .num_rows
+            .map_or_else(|| "None".to_string(), |v| v.to_string());
+        let bytes = self
+            .total_byte_size
+            .map_or_else(|| "None".to_string(), |v| v.to_string());
+
+        write!(f, "rows={}, bytes={}, exact={}", rows, bytes, self.is_exact)?;
+
+        Ok(())
+    }
 }
 
 /// Statistics for a column within a relation

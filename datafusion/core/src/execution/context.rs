@@ -426,9 +426,8 @@ impl SessionContext {
     /// let err = ctx.sql_with_options("CREATE TABLE foo (x INTEGER)", options)
     ///   .await
     ///   .unwrap_err();
-    /// assert_eq!(
-    ///   err.to_string(),
-    ///   "Error during planning: DDL not supported: CreateMemoryTable"
+    /// assert!(
+    ///   err.to_string().starts_with("Error during planning: DDL not supported: CreateMemoryTable")
     /// );
     /// # Ok(())
     /// # }
@@ -2356,9 +2355,8 @@ mod tests {
         let ctx = SessionContext::new();
 
         let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
-
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: variable [\"@=\"] has no type information"
         );
         Ok(())

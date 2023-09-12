@@ -151,14 +151,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let data_types: HashSet<DataType> =
-            values.iter().map(|e| e.get_datatype()).collect();
+            values.iter().map(|e| e.data_type()).collect();
 
         if data_types.is_empty() {
             Ok(lit(ScalarValue::new_list(None, DataType::Utf8)))
         } else if data_types.len() > 1 {
             not_impl_err!("Arrays with different types are not supported: {data_types:?}")
         } else {
-            let data_type = values[0].get_datatype();
+            let data_type = values[0].data_type();
 
             Ok(lit(ScalarValue::new_list(Some(values), data_type)))
         }

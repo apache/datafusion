@@ -758,7 +758,7 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            _ => self.expected("one of PARQUET, NDJSON, or CSV", token),
+            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", token),
         }
     }
 

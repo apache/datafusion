@@ -41,7 +41,7 @@ use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::intervals::check_support;
+use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ExprBoundaries,
     OrderingEquivalenceProperties, PhysicalExpr,
@@ -775,13 +775,7 @@ mod tests {
             .into_iter()
             .zip(statistics.column_statistics.unwrap())
             .map(|(expected, actual)| {
-                if actual
-                    .min_value
-                    .clone()
-                    .unwrap()
-                    .get_datatype()
-                    .is_floating()
-                {
+                if actual.min_value.clone().unwrap().data_type().is_floating() {
                     // Windows rounds arithmetic operation results differently for floating point numbers.
                     // Therefore, we check if the actual values are in an epsilon range.
                     let actual_min = actual.min_value.unwrap();

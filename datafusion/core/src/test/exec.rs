@@ -228,6 +228,8 @@ impl ExecutionPlan for MockExec {
                         println!("ERROR batch via delayed stream: {e}");
                     }
                 }
+
+                Ok(())
             });
             // returned stream simply reads off the rx stream
             Ok(builder.build())
@@ -364,6 +366,8 @@ impl ExecutionPlan for BarrierExec {
                     println!("ERROR batch via barrier stream stream: {e}");
                 }
             }
+
+            Ok(())
         });
 
         // returned stream simply reads off the rx stream

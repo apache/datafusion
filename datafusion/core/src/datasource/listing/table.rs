@@ -915,6 +915,7 @@ impl TableProvider for ListingTable {
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             writer_mode,
+            unbounded_input: self.options().infinite_source,
             single_file_output: self.options.single_file,
             overwrite,
             file_type_writer_options,
@@ -1862,7 +1863,8 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
-        assert_eq!("Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)", format!("{e}"));
+        assert_eq!(e.strip_backtrace(), "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)");
+
         Ok(())
     }
 

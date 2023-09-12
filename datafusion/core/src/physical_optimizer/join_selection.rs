@@ -1175,7 +1175,7 @@ mod tests_statistical {
 mod util_tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
-    use datafusion_physical_expr::intervals::check_support;
+    use datafusion_physical_expr::intervals::utils::check_support;
     use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;
 

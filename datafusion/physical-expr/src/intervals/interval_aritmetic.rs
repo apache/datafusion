@@ -55,7 +55,7 @@ impl IntervalBound {
     /// This convenience function returns the data type associated with this
     /// `IntervalBound`.
     pub fn get_datatype(&self) -> DataType {
-        self.value.get_datatype()
+        self.value.data_type()
     }
 
     /// This convenience function checks whether the `IntervalBound` represents
@@ -475,7 +475,7 @@ impl Interval {
                 // If the minimum value is a negative number, we need to
                 // switch sides to ensure an unsigned result.
                 let (min, max) = if self.lower.value
-                    < ScalarValue::new_zero(&self.lower.value.get_datatype())?
+                    < ScalarValue::new_zero(&self.lower.value.data_type())?
                 {
                     (self.upper.value.clone(), self.lower.value.clone())
                 } else {
@@ -615,38 +615,6 @@ pub fn cardinality_ratio(
     final_interval: &Interval,
 ) -> Result<f64> {
     Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
-}
-
-/// Indicates whether interval arithmetic is supported for the given operator.
-pub fn is_operator_supported(op: &Operator) -> bool {
-    matches!(
-        op,
-        &Operator::Plus
-            | &Operator::Minus
-            | &Operator::And
-            | &Operator::Gt
-            | &Operator::GtEq
-            | &Operator::Lt
-            | &Operator::LtEq
-            | &Operator::Eq
-    )
-}
-
-/// Indicates whether interval arithmetic is supported for the given data type.
-pub fn is_datatype_supported(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        &DataType::Int64
-            | &DataType::Int32
-            | &DataType::Int16
-            | &DataType::Int8
-            | &DataType::UInt64
-            | &DataType::UInt32
-            | &DataType::UInt16
-            | &DataType::UInt8
-            | &DataType::Float64
-            | &DataType::Float32
-    )
 }
 
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
