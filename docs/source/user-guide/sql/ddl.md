@@ -64,7 +64,7 @@ STORED AS <file_type>
 [ DELIMITER <char> ]
 [ COMPRESSION TYPE <GZIP | BZIP2 | XZ | ZSTD> ]
 [ PARTITIONED BY (<column list>) ]
-[ WITH ORDER (<ordered column list>)
+[ WITH ORDER (<ordered column list>) ]
 [ OPTIONS (<key_value_list>) ]
 LOCATION <literal>
 
@@ -76,6 +76,8 @@ LOCATION <literal>
 
 <key_value_list> := (<literal> <literal, <literal> <literal>, ...)
 ```
+
+For a detailed list of write related options which can be passed in the OPTIONS key_value_list, see [Write Options](write_options).
 
 `file_type` is one of `CSV`, `ARROW`, `PARQUET`, `AVRO` or `JSON`
 
