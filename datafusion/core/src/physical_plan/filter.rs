@@ -157,7 +157,7 @@ impl ExecutionPlan for FilterExec {
         let mut res = self.input.ordering_equivalence_properties();
         let stats = self.statistics();
 
-        // Add columns that have fixed value (singleton) after filtering, to the constants.
+        // Add the columns that have only one value (singleton) after filtering to constants.
         if let Some(constants) = stats.column_statistics.map(|col_stats| {
             collect_columns(self.predicate())
                 .into_iter()
@@ -211,7 +211,7 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics();
         let input_column_stats = match input_stats.column_statistics {
             Some(stats) => stats,
-            None => return Statistics::default(),
+            None => ColumnStatistics::new_with_unbounded_columns(self.schema()),
         };
 
         let starter_ctx =

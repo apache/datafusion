@@ -19,6 +19,8 @@
 
 use std::fmt::Display;
 
+use arrow::datatypes::SchemaRef;
+
 use crate::ScalarValue;
 
 /// Statistics for a relation
@@ -74,9 +76,33 @@ pub struct ColumnStatistics {
 impl ColumnStatistics {
     pub fn is_singleton(&self) -> bool {
         match (&self.min_value, &self.max_value) {
-            // Min and max value are same and both are not infinity.
+            // Min and max values are the same and not infinity.
             (Some(min), Some(max)) => !min.is_null() && !max.is_null() && (min == max),
             (_, _) => false,
         }
+    }
+
+    /// Returns the [`Vec<ColumnStatistics>`] corresponding to the given schema by assigning
+    /// infinite bounds to each column in the schema. This is useful when even the input statistics
+    /// are not known, as the current executor can shrink the bounds of some columns.
+    pub fn new_with_unbounded_columns(schema: SchemaRef) -> Vec<ColumnStatistics> {
+        let data_types = schema
+            .fields()
+            .iter()
+            .map(|field| field.data_type())
+            .collect::<Vec<_>>();
+
+        data_types
+            .into_iter()
+            .map(|data_type| {
+                let dt = ScalarValue::try_from(data_type.clone()).ok();
+                ColumnStatistics {
+                    null_count: None,
+                    max_value: dt.clone(),
+                    min_value: dt,
+                    distinct_count: None,
+                }
+            })
+            .collect()
     }
 }
