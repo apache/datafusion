@@ -34,7 +34,9 @@ use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
     UnionMode,
 };
-use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, OwnedTableReference, ScalarValue,
+};
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField, GroupingSet,
     InList, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
@@ -300,10 +302,10 @@ impl TryFrom<&DFField> for protobuf::DfField {
     }
 }
 
-impl TryFrom<&DFSchemaRef> for protobuf::DfSchema {
+impl TryFrom<&DFSchema> for protobuf::DfSchema {
     type Error = Error;
 
-    fn try_from(s: &DFSchemaRef) -> Result<Self, Self::Error> {
+    fn try_from(s: &DFSchema) -> Result<Self, Self::Error> {
         let columns = s
             .fields()
             .iter()
@@ -313,6 +315,14 @@ impl TryFrom<&DFSchemaRef> for protobuf::DfSchema {
             columns,
             metadata: s.metadata().clone(),
         })
+    }
+}
+
+impl TryFrom<&DFSchemaRef> for protobuf::DfSchema {
+    type Error = Error;
+
+    fn try_from(s: &DFSchemaRef) -> Result<Self, Self::Error> {
+        s.as_ref().try_into()
     }
 }
 
@@ -1073,7 +1083,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
         use protobuf::scalar_value::Value;
 
-        let data_type = val.get_datatype();
+        let data_type = val.data_type();
         match val {
             ScalarValue::Boolean(val) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| Value::BoolValue(*s))

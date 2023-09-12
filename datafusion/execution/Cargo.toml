@@ -35,8 +35,8 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "30.0.0" }
-datafusion-expr = { path = "../expr", version = "30.0.0" }
+datafusion-common = { path = "../common", version = "31.0.0" }
+datafusion-expr = { path = "../expr", version = "31.0.0" }
 futures = "0.3"
 hashbrown = { version = "0.14", features = ["raw"] }
 log = "^0.4"

@@ -34,6 +34,10 @@
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
 //! by another [`SortExec`]. Therefore, this rule removes it from the physical plan.
 
+use std::fmt;
+use std::fmt::Formatter;
+use std::sync::Arc;
+
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::replace_with_order_preserving_variants::{
@@ -41,8 +45,8 @@ use crate::physical_optimizer::replace_with_order_preserving_variants::{
 };
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
-    is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
+    add_sort_above, find_indices, get_plan_string, is_coalesce_partitions, is_limit,
+    is_repartition, is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
     merge_and_order_indices, set_difference,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -53,6 +57,7 @@ use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::utils::{get_at_indices, longest_consecutive_prefix};
@@ -62,8 +67,8 @@ use datafusion_physical_expr::utils::{
     ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
+
 use itertools::{concat, izip, Itertools};
-use std::sync::Arc;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
@@ -87,6 +92,18 @@ pub(crate) struct ExecTree {
     pub idx: usize,
     /// Children of the plan that would need updating if we remove leaf executors
     pub children: Vec<ExecTree>,
+}
+
+impl fmt::Display for ExecTree {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let plan_string = get_plan_string(&self.plan);
+        write!(f, "\nidx: {:?}", self.idx)?;
+        write!(f, "\nplan: {:?}", plan_string)?;
+        for child in self.children.iter() {
+            write!(f, "\nexec_tree:{}", child)?;
+        }
+        writeln!(f)
+    }
 }
 
 impl ExecTree {
@@ -981,13 +998,12 @@ pub(crate) fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
     use crate::physical_optimizer::test_utils::{
         aggregate_exec, bounded_window_exec, coalesce_batches_exec,
-        coalesce_partitions_exec, filter_exec, get_plan_string, global_limit_exec,
-        hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
-        parquet_exec_sorted, repartition_exec, sort_exec, sort_expr, sort_expr_options,
-        sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
+        coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,
+        limit_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_sorted,
+        repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
+        sort_preserving_merge_exec, union_exec,
     };
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::windows::PartitionSearchMode::{
@@ -996,6 +1012,7 @@ mod tests {
     use crate::physical_plan::{displayable, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::csv_exec_sorted;
+
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
@@ -1003,6 +1020,8 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::expressions::{col, NotExpr};
     use datafusion_physical_expr::PhysicalSortExpr;
+
+    use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
     use std::sync::Arc;
 
     fn create_test_schema() -> Result<SchemaRef> {
@@ -2624,6 +2643,18 @@ mod tests {
 
         let orig_plan =
             Arc::new(SortExec::new(sort_exprs, repartition)) as Arc<dyn ExecutionPlan>;
+        let actual = get_plan_string(&orig_plan);
+        println!("{:?}", actual);
+        let expected_input = vec![
+            "SortExec: expr=[nullable_col@0 ASC]",
+            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_eq!(
+            expected_input, actual,
+            "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_input:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
 
         let mut plan = orig_plan.clone();
         let rules = vec![
@@ -2761,6 +2792,55 @@ mod tests {
             "  SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC], has_header=false"];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_do_not_pushdown_through_spm() -> Result<()> {
+        let schema = create_test_schema3()?;
+        let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+        let source = csv_exec_sorted(&schema, sort_exprs.clone(), false);
+        let repartition_rr = repartition_exec(source);
+        let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
+        let physical_plan = sort_exec(vec![sort_expr("b", &schema)], spm);
+
+        let expected_input = ["SortExec: expr=[b@1 ASC]",
+            "  SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+        let expected_optimized = ["SortExec: expr=[b@1 ASC]",
+            "  SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pushdown_through_spm() -> Result<()> {
+        let schema = create_test_schema3()?;
+        let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+        let source = csv_exec_sorted(&schema, sort_exprs.clone(), false);
+        let repartition_rr = repartition_exec(source);
+        let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
+        let physical_plan = sort_exec(
+            vec![
+                sort_expr("a", &schema),
+                sort_expr("b", &schema),
+                sort_expr("c", &schema),
+            ],
+            spm,
+        );
+
+        let expected_input = ["SortExec: expr=[a@0 ASC,b@1 ASC,c@2 ASC]",
+            "  SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+        let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC,b@1 ASC]",
+            "  SortExec: expr=[a@0 ASC,b@1 ASC,c@2 ASC]",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
         Ok(())
     }
