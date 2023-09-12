@@ -181,7 +181,6 @@ mod tests {
     use uuid::Uuid;
 
     use arrow::datatypes::DataType;
-    use arrow::error::ArrowError;
     use arrow_array::{
         types::Int32Type, ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringArray,
     };
@@ -189,111 +188,105 @@ mod tests {
 
     use super::*;
 
-    // Generate a record batch with a high cardinality dictionary field
-    fn generate_batch_with_cardinality(card: String) -> Result<RecordBatch, ArrowError> {
-        let col_a: ArrayRef = if card == "high" {
-            // building column `a_dict`
-            let mut values_vector: Vec<String> = Vec::new();
-            for _i in 1..=20 {
-                values_vector.push(Uuid::new_v4().to_string());
-            }
-            let values = StringArray::from(values_vector);
+    /// Generate a record batch with two columns:
+    ///
+    /// `a_dict`: String Dictionary
+    /// `b_prim`: Int32Array with random values 0..20
+    enum Generator {
+        /// "High" cardinality (20 distinct values)
+        High,
+        /// "Low" cardinality (2 distinct values)
+        Low,
+    }
 
-            let mut keys_vector: Vec<i32> = Vec::new();
-            for _i in 1..=20 {
-                keys_vector.push(rand::thread_rng().gen_range(0..20));
-            }
-            let keys = Int32Array::from(keys_vector);
-            Arc::new(
-                DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap(),
-            )
-        } else {
-            let values_vector = vec!["a", "b", "c"];
-            let values = StringArray::from(values_vector);
+    impl Generator {
+        fn build(&self) -> RecordBatch {
+            let (keys, values) = match self {
+                Self::High => {
+                    let values: Vec<_> =
+                        (0..20).map(|_| Uuid::new_v4().to_string()).collect();
+                    let values = StringArray::from(values);
 
-            let mut keys_vector: Vec<i32> = Vec::new();
-            for _i in 1..=20 {
-                keys_vector.push(rand::thread_rng().gen_range(0..2));
-            }
-            let keys = Int32Array::from(keys_vector);
-            Arc::new(
-                DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap(),
-            )
-        };
+                    let keys: Int32Array = (0..20)
+                        .map(|_| rand::thread_rng().gen_range(0..20))
+                        .collect();
+                    (keys, values)
+                }
+                Self::Low => {
+                    let values = StringArray::from_iter_values(["a", "b", "c"]);
+                    let keys: Int32Array = (0..20)
+                        .map(|_| rand::thread_rng().gen_range(0..2))
+                        .collect();
+                    (keys, values)
+                }
+            };
+            let dict =
+                DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+            let col_a = Arc::new(dict) as ArrayRef;
 
-        // building column `b_prim`
-        let mut values: Vec<i32> = Vec::new();
-        for _i in 1..=20 {
-            values.push(rand::thread_rng().gen_range(0..20));
+            // building column `b_prim`
+            let values: Int32Array = (0..20)
+                .map(|_| rand::thread_rng().gen_range(0..20))
+                .collect();
+            let col_b: ArrayRef = Arc::new(values);
+
+            RecordBatch::try_from_iter(vec![("a_dict", col_a), ("b_prim", col_b)])
+                .unwrap()
         }
-        let col_b: ArrayRef = Arc::new(Int32Array::from(values));
 
-        // building the record batch
-        RecordBatch::try_from_iter(vec![("a_dict", col_a), ("b_prim", col_b)])
+        fn sort_fields(&self) -> Vec<SortField> {
+            vec![
+                SortField::new_with_options(
+                    DataType::Dictionary(
+                        Box::new(DataType::Int32),
+                        Box::new(DataType::Utf8),
+                    ),
+                    SortOptions::default(),
+                ),
+                SortField::new_with_options(DataType::Int32, SortOptions::default()),
+            ]
+        }
     }
 
     #[tokio::test]
     async fn test_with_high_card() {
-        let batch = generate_batch_with_cardinality(String::from("high")).unwrap();
-        let sort_fields = vec![
-            arrow::row::SortField::new_with_options(
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                SortOptions::default(),
-            ),
-            arrow::row::SortField::new_with_options(
-                DataType::Int32,
-                SortOptions::default(),
-            ),
-        ];
+        let generator = Generator::High;
+        let batch = generator.build();
 
-        // With the `CardinalityAwareRowConverter`, when the high cardinality dictionary-encoded sort field is
-        // converted to the `Row` format, the dictionary encoding is not preserved and we switch to Utf8 encoding.
-        let mut converter =
-            CardinalityAwareRowConverter::new(sort_fields.clone()).unwrap();
-        let rows = converter.convert_columns(batch.columns()).unwrap();
-        let converted_batch = converter.convert_rows(&rows).unwrap();
-        assert_eq!(converted_batch[0].data_type(), &DataType::Utf8);
+        let mut card_converter =
+            CardinalityAwareRowConverter::new(generator.sort_fields()).unwrap();
+        let rows = card_converter.convert_columns(batch.columns()).unwrap();
+        let converted_batch = card_converter.convert_rows(&rows).unwrap();
+        assert_eq!(converted_batch, batch.columns());
 
-        let mut converter = RowConverter::new(sort_fields.clone()).unwrap();
-        let rows = converter.convert_columns(batch.columns()).unwrap();
-        let converted_batch: Vec<Arc<dyn Array>> = converter.convert_rows(&rows).unwrap();
-        // With the `RowConverter`, the dictionary encoding is preserved.
-        assert_eq!(
-            converted_batch[0].data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
-        );
+        let mut row_converter = RowConverter::new(generator.sort_fields()).unwrap();
+        let rows = row_converter.convert_columns(batch.columns()).unwrap();
+        let converted_batch = row_converter.convert_rows(&rows).unwrap();
+        assert_eq!(converted_batch, batch.columns());
+
+        // with high cardinality the cardinality aware converter
+        // should be lower, as there is no interning of values
+        assert!(card_converter.size() < row_converter.size());
     }
 
     #[tokio::test]
     async fn test_with_low_card() {
-        let batch = generate_batch_with_cardinality(String::from("low")).unwrap();
-        let sort_fields = vec![
-            arrow::row::SortField::new_with_options(
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                SortOptions::default(),
-            ),
-            arrow::row::SortField::new_with_options(
-                DataType::Int32,
-                SortOptions::default(),
-            ),
-        ];
-        // With low cardinality dictionary-encoded sort fields, both `CardinalityAwareRowConverter` and `RowConverter`
-        // preserves the dictionary encoding.
-        let mut converter =
-            CardinalityAwareRowConverter::new(sort_fields.clone()).unwrap();
-        let rows = converter.convert_columns(batch.columns()).unwrap();
-        let converted_batch = converter.convert_rows(&rows).unwrap();
-        assert_eq!(
-            converted_batch[0].data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
-        );
+        let generator = Generator::Low;
+        let batch = generator.build();
 
-        let mut converter = RowConverter::new(sort_fields.clone()).unwrap();
-        let rows = converter.convert_columns(batch.columns()).unwrap();
-        let converted_batch = converter.convert_rows(&rows).unwrap();
-        assert_eq!(
-            converted_batch[0].data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
-        );
+        let mut card_converter =
+            CardinalityAwareRowConverter::new(generator.sort_fields()).unwrap();
+        let rows = card_converter.convert_columns(batch.columns()).unwrap();
+        let converted_batch = card_converter.convert_rows(&rows).unwrap();
+        assert_eq!(converted_batch, batch.columns());
+
+        let mut row_converter = RowConverter::new(generator.sort_fields()).unwrap();
+        let rows = row_converter.convert_columns(batch.columns()).unwrap();
+        let converted_batch = row_converter.convert_rows(&rows).unwrap();
+        assert_eq!(converted_batch, batch.columns());
+
+        // with low cardinality the row converters sizes should be
+        // equal as the same converter logic is used
+        assert_eq!(card_converter.size(), row_converter.size());
     }
 }
