@@ -196,9 +196,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///    // x ∈ [3, 5]
     ///    (
     ///        col("x"),
-    ///        NullableInterval {
+    ///        NullableInterval::NotNull {
     ///            values: Interval::make(Some(3_i64), Some(5_i64), (false, false)),
-    ///            is_valid: Interval::CERTAINLY_TRUE,
     ///        }
     ///    ),
     ///    // y = 3
@@ -3254,9 +3253,8 @@ mod tests {
         let guarantees = vec![
             (
                 col("c3"),
-                NullableInterval {
+                NullableInterval::NotNull {
                     values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
-                    is_valid: Interval::CERTAINLY_TRUE,
                 },
             ),
             (
@@ -3275,25 +3273,25 @@ mod tests {
         let guarantees = vec![
             (
                 col("c3"),
-                NullableInterval {
+                NullableInterval::MaybeNull {
                     values: Interval::make(Some(0_i64), Some(2_i64), (false, false)),
-                    is_valid: Interval::UNCERTAIN,
                 },
             ),
             (
                 col("c4"),
-                NullableInterval {
+                NullableInterval::MaybeNull {
                     values: Interval::make(Some(9_u32), Some(9_u32), (false, false)),
-                    is_valid: Interval::UNCERTAIN,
                 },
             ),
             (
                 col("c1"),
-                NullableInterval::from(&ScalarValue::Utf8(Some("a".to_string()))),
+                NullableInterval::NotNull {
+                    values: Interval::make(Some("d"), Some("f"), (false, false)),
+                },
             ),
         ];
         let output = simplify_with_guarantee(expr.clone(), &guarantees);
-        assert_eq!(output, expr_x.clone().and(expr_y.clone()));
+        assert_eq!(&output, &expr_x);
 
         // Sufficient true guarantees
         let guarantees = vec![

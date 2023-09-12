@@ -42,32 +42,16 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match &expr {
-            Expr::IsNull(inner) => {
-                if let Some(interval) = self.intervals.get(inner.as_ref()) {
-                    if interval.is_valid == Interval::CERTAINLY_FALSE {
-                        Ok(lit(true))
-                    } else if interval.is_valid == Interval::CERTAINLY_TRUE {
-                        Ok(lit(false))
-                    } else {
-                        Ok(expr)
-                    }
-                } else {
-                    Ok(expr)
-                }
-            }
-            Expr::IsNotNull(inner) => {
-                if let Some(interval) = self.intervals.get(inner.as_ref()) {
-                    if interval.is_valid == Interval::CERTAINLY_FALSE {
-                        Ok(lit(false))
-                    } else if interval.is_valid == Interval::CERTAINLY_TRUE {
-                        Ok(lit(true))
-                    } else {
-                        Ok(expr)
-                    }
-                } else {
-                    Ok(expr)
-                }
-            }
+            Expr::IsNull(inner) => match self.intervals.get(inner.as_ref()) {
+                Some(NullableInterval::Null { .. }) => Ok(lit(true)),
+                Some(NullableInterval::NotNull { .. }) => Ok(lit(false)),
+                _ => Ok(expr),
+            },
+            Expr::IsNotNull(inner) => match self.intervals.get(inner.as_ref()) {
+                Some(NullableInterval::Null { .. }) => Ok(lit(false)),
+                Some(NullableInterval::NotNull { .. }) => Ok(lit(true)),
+                _ => Ok(expr),
+            },
             Expr::Between(Between {
                 expr: inner,
                 negated,
@@ -79,23 +63,18 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                     low.as_ref(),
                     high.as_ref(),
                 ) {
-                    let expr_interval = NullableInterval {
+                    let expr_interval = NullableInterval::NotNull {
                         values: Interval::new(
                             IntervalBound::new(low.clone(), false),
                             IntervalBound::new(high.clone(), false),
                         ),
-                        is_valid: Interval::CERTAINLY_TRUE,
                     };
 
                     let contains = expr_interval.contains(*interval)?;
 
-                    if contains.is_valid == Interval::CERTAINLY_TRUE
-                        && contains.values == Interval::CERTAINLY_TRUE
-                    {
+                    if contains.is_certainly_true() {
                         Ok(lit(!negated))
-                    } else if contains.is_valid == Interval::CERTAINLY_TRUE
-                        && contains.values == Interval::CERTAINLY_FALSE
-                    {
+                    } else if contains.is_certainly_false() {
                         Ok(lit(*negated))
                     } else {
                         Ok(expr)
@@ -135,13 +114,9 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
 
                 if let Some(col_interval) = self.intervals.get(col.as_ref()) {
                     let result = col_interval.apply_operator(&op, &value.into())?;
-                    if result.is_valid == Interval::CERTAINLY_TRUE
-                        && result.values == Interval::CERTAINLY_TRUE
-                    {
+                    if result.is_certainly_true() {
                         Ok(lit(true))
-                    } else if result.is_valid == Interval::CERTAINLY_TRUE
-                        && result.values == Interval::CERTAINLY_FALSE
-                    {
+                    } else if result.is_certainly_false() {
                         Ok(lit(false))
                     } else {
                         Ok(expr)
@@ -178,9 +153,8 @@ impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
                                 match interval.contains(&NullableInterval::from(item)) {
                                     // If we know for certain the value isn't in the column's interval,
                                     // we can skip checking it.
-                                    Ok(result_interval)
-                                        if result_interval.values
-                                            == Interval::CERTAINLY_FALSE =>
+                                    Ok(NullableInterval::NotNull { values })
+                                        if values == Interval::CERTAINLY_FALSE =>
                                     {
                                         None
                                     }
@@ -224,9 +198,8 @@ mod tests {
             // since it's a special case of a column with a single value.
             (
                 col("x"),
-                NullableInterval {
-                    is_valid: Interval::CERTAINLY_TRUE,
-                    ..Default::default()
+                NullableInterval::NotNull {
+                    values: Default::default(),
                 },
             ),
         ];
@@ -276,9 +249,8 @@ mod tests {
             // x ∈ (1, 3] (not null)
             (
                 col("x"),
-                NullableInterval {
+                NullableInterval::NotNull {
                     values: Interval::make(Some(1_i32), Some(3_i32), (true, false)),
-                    is_valid: Interval::CERTAINLY_TRUE,
                 },
             ),
         ];
@@ -335,12 +307,11 @@ mod tests {
             // y ∈ [2021-01-01, ∞) (not null)
             (
                 col("x"),
-                NullableInterval {
+                NullableInterval::NotNull {
                     values: Interval::new(
                         IntervalBound::new(ScalarValue::Date32(Some(18628)), false),
                         IntervalBound::make_unbounded(DataType::Date32).unwrap(),
                     ),
-                    is_valid: Interval::CERTAINLY_TRUE,
                 },
             ),
         ];
@@ -414,9 +385,8 @@ mod tests {
             // x ∈ ("abc", "def"]? (maybe null)
             (
                 col("x"),
-                NullableInterval {
+                NullableInterval::MaybeNull {
                     values: Interval::make(Some("abc"), Some("def"), (true, false)),
-                    is_valid: Interval::UNCERTAIN,
                 },
             ),
         ];
@@ -493,9 +463,8 @@ mod tests {
             // x ∈ [1, 10) (not null)
             (
                 col("x"),
-                NullableInterval {
+                NullableInterval::NotNull {
                     values: Interval::make(Some(1_i32), Some(10_i32), (false, true)),
-                    is_valid: Interval::CERTAINLY_TRUE,
                 },
             ),
         ];

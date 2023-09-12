@@ -384,13 +384,18 @@ impl Interval {
     }
 
     /// Compute the logical negation of this (boolean) interval.
-    pub(crate) fn not(&self) -> Self {
+    pub(crate) fn not(&self) -> Result<Self> {
+        if !matches!(self.get_datatype()?, DataType::Boolean) {
+            return internal_err!(
+                "Cannot apply logical negation to non-boolean interval"
+            );
+        }
         if self == &Interval::CERTAINLY_TRUE {
-            Interval::CERTAINLY_FALSE
+            Ok(Interval::CERTAINLY_FALSE)
         } else if self == &Interval::CERTAINLY_FALSE {
-            Interval::CERTAINLY_TRUE
+            Ok(Interval::CERTAINLY_TRUE)
         } else {
-            Interval::UNCERTAIN
+            Ok(Interval::UNCERTAIN)
         }
     }
 
@@ -680,7 +685,7 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
     match *op {
         Operator::Eq => Ok(lhs.equal(rhs)),
-        Operator::NotEq => Ok(lhs.equal(rhs).not()),
+        Operator::NotEq => Ok(lhs.equal(rhs).not()?),
         Operator::Gt => Ok(lhs.gt(rhs)),
         Operator::GtEq => Ok(lhs.gt_eq(rhs)),
         Operator::Lt => Ok(lhs.lt(rhs)),
@@ -715,20 +720,6 @@ fn calculate_cardinality_based_on_bounds(
     }
 }
 
-/// The null status of an [NullableInterval].
-///
-/// This is an internal convenience that can be used in match statements
-/// (unlike Interval).
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum NullStatus {
-    /// The interval is guaranteed to be non-null.
-    Never,
-    /// The interval is guaranteed to be null.
-    Always,
-    /// The interval isn't guaranteed to never be null or always be null.
-    Maybe,
-}
-
 /// An [Interval] that also tracks null status using a boolean interval.
 ///
 /// This represents values that may be in a particular range or be null.
@@ -740,43 +731,51 @@ enum NullStatus {
 /// use datafusion_common::ScalarValue;
 ///
 /// // [1, 2) U {NULL}
-/// NullableInterval {
+/// NullableInterval::MaybeNull {
 ///    values: Interval::make(Some(1), Some(2), (false, true)),
-///    is_valid: Interval::UNCERTAIN,
 /// };
 ///
 /// // (0, ∞)
-/// NullableInterval {
+/// NullableInterval::NotNull {
 ///   values: Interval::make(Some(0), None, (true, true)),
-///   is_valid: Interval::CERTAINLY_TRUE,
 /// };
 ///
 /// // {NULL}
-/// NullableInterval::from(&ScalarValue::Int32(None));
+/// NullableInterval::Null;
 ///
 /// // {4}
 /// NullableInterval::from(&ScalarValue::Int32(Some(4)));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct NullableInterval {
-    /// The interval for the values
-    pub values: Interval,
-    /// A boolean interval representing whether the value is certainly valid
-    /// (not null), certainly null, or has an unknown validity. This takes
-    /// precedence over the values in the interval: if this field is equal to
-    /// [Interval::CERTAINLY_FALSE], then the interval is certainly null
-    /// regardless of what `values` is.
-    pub is_valid: Interval,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NullableInterval {
+    /// The value is always null in this interval
+    /// 
+    /// This is typed so it can be used in physical expressions, which don't do
+    /// type coercion.
+    Null { datatype: DataType },
+    /// The value may or may not be null in this interval. If it is non null its value is within
+    /// the specified values interval
+    MaybeNull { values: Interval },
+    /// The value is definitely not null in this interval and is within values
+    NotNull { values: Interval },
+}
+
+impl Default for NullableInterval {
+    fn default() -> Self {
+        NullableInterval::MaybeNull {
+            values: Interval::default(),
+        }
+    }
 }
 
 impl Display for NullableInterval {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if self.is_valid == Interval::CERTAINLY_FALSE {
-            write!(f, "NullableInterval: {{NULL}}")
-        } else if Interval::CERTAINLY_TRUE == self.is_valid {
-            write!(f, "NullableInterval: {}", self.values)
-        } else {
-            write!(f, "NullableInterval: {} U {{NULL}}", self.values)
+        match self {
+            Self::Null { .. } => write!(f, "NullableInterval: {{NULL}}"),
+            Self::MaybeNull { values } => {
+                write!(f, "NullableInterval: {} U {{NULL}}", values)
+            }
+            Self::NotNull { values } => write!(f, "NullableInterval: {}", values),
         }
     }
 }
@@ -784,28 +783,65 @@ impl Display for NullableInterval {
 impl From<&ScalarValue> for NullableInterval {
     /// Create an interval that represents a single value.
     fn from(value: &ScalarValue) -> Self {
-        Self {
-            values: Interval::new(
-                IntervalBound::new(value.clone(), false),
-                IntervalBound::new(value.clone(), false),
-            ),
-            is_valid: if value.is_null() {
-                Interval::CERTAINLY_FALSE
-            } else {
-                Interval::CERTAINLY_TRUE
-            },
+        if value.is_null() {
+            Self::Null { datatype: value.get_datatype() }
+        } else {
+            Self::NotNull {
+                values: Interval::new(
+                    IntervalBound::new(value.clone(), false),
+                    IntervalBound::new(value.clone(), false),
+                ),
+            }
         }
     }
 }
 
 impl NullableInterval {
-    fn null_status(&self) -> NullStatus {
-        if self.is_valid == Interval::CERTAINLY_FALSE {
-            NullStatus::Always
-        } else if self.is_valid == Interval::CERTAINLY_TRUE {
-            NullStatus::Never
-        } else {
-            NullStatus::Maybe
+    /// Get the values interval, or None if this interval is definitely null.
+    pub fn values(&self) -> Option<&Interval> {
+        match self {
+            Self::Null { .. } => None,
+            Self::MaybeNull { values } | Self::NotNull { values } => Some(values),
+        }
+    }
+
+    /// Get the data type
+    pub fn get_datatype(&self) -> Result<DataType> {
+        match self {
+            Self::Null { datatype } => Ok(datatype.clone()),
+            Self::MaybeNull { values } | Self::NotNull { values } => {
+                values.get_datatype()
+            }
+        }
+    }
+
+    /// Return true if the value is definitely true (and not null).
+    pub fn is_certainly_true(&self) -> bool {
+        match self {
+            Self::Null { .. } | Self::MaybeNull { .. } => false,
+            Self::NotNull { values } => values == &Interval::CERTAINLY_TRUE,
+        }
+    }
+
+    /// Return true if the value is definitely false (and not null).
+    pub fn is_certainly_false(&self) -> bool {
+        match self {
+            Self::Null { .. } => false,
+            Self::MaybeNull { .. } => false,
+            Self::NotNull { values } => values == &Interval::CERTAINLY_FALSE,
+        }
+    }
+
+    /// Perform logical negation on a boolean nullable interval.
+    fn not(&self) -> Result<Self> {
+        match self {
+            Self::Null { datatype } => Ok(Self::Null { datatype: datatype.clone() }),
+            Self::MaybeNull { values } => Ok(Self::MaybeNull {
+                values: values.not()?,
+            }),
+            Self::NotNull { values } => Ok(Self::NotNull {
+                values: values.not()?,
+            }),
         }
     }
 
@@ -825,65 +861,73 @@ impl NullableInterval {
     /// assert_eq!(result, NullableInterval::from(&ScalarValue::Boolean(Some(true))));
     ///
     /// // [1, 3) > NULL -> NULL
-    /// let lhs = NullableInterval {
+    /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::make(Some(1), Some(3), (false, true)),
-    ///     is_valid: Interval::CERTAINLY_TRUE,
     /// };
     /// let rhs = NullableInterval::from(&ScalarValue::Int32(None));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
-    /// assert_eq!(result.single_value(), Some(ScalarValue::Boolean(None)));
+    /// assert_eq!(result.single_value(), Some(ScalarValue::Null));
     ///
     /// // [1, 3] > [2, 4] -> [false, true]
-    /// let lhs = NullableInterval {
+    /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::make(Some(1), Some(3), (false, false)),
-    ///     is_valid: Interval::CERTAINLY_TRUE,
     /// };
-    /// let rhs = NullableInterval {
+    /// let rhs = NullableInterval::NotNull {
     ///    values: Interval::make(Some(2), Some(4), (false, false)),
-    ///    is_valid: Interval::CERTAINLY_TRUE,
     /// };
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
-    /// assert_eq!(result, NullableInterval {
+    /// // Both inputs are valid (non-null), so result must be non-null
+    /// assert_eq!(result, NullableInterval::NotNull {
     ///    // Uncertain whether inequality is true or false
     ///    values: Interval::UNCERTAIN,
-    ///    // Both inputs are valid (non-null), so result must be non-null
-    ///    is_valid: Interval::CERTAINLY_TRUE,
     /// });
     ///
     /// ```
     pub fn apply_operator(&self, op: &Operator, rhs: &Self) -> Result<Self> {
         match op {
             Operator::IsDistinctFrom => {
-                let values = match (self.null_status(), rhs.null_status()) {
+                let values = match (self, rhs) {
                     // NULL is distinct from NULL -> False
-                    (NullStatus::Always, NullStatus::Always) => Interval::CERTAINLY_FALSE,
-                    // NULL is distinct from non-NULL -> True
-                    // non-NULL is distinct from NULL -> True
-                    (NullStatus::Always, NullStatus::Never)
-                    | (NullStatus::Never, NullStatus::Always) => Interval::CERTAINLY_TRUE,
+                    (Self::Null { .. }, Self::Null { .. }) => Interval::CERTAINLY_FALSE,
                     // x is distinct from y -> x != y,
                     // if at least one of them is never null.
-                    (NullStatus::Never, _) | (_, NullStatus::Never) => {
-                        self.values.equal(&rhs.values).not()
+                    (Self::NotNull { .. }, _) | (_, Self::NotNull { .. }) => {
+                        let lhs_values = self.values();
+                        let rhs_values = rhs.values();
+                        match (lhs_values, rhs_values) {
+                            (Some(lhs_values), Some(rhs_values)) => {
+                                lhs_values.equal(rhs_values).not()?
+                            }
+                            (Some(_), None) | (None, Some(_)) => Interval::CERTAINLY_TRUE,
+                            (None, None) => unreachable!("Null case handled above"),
+                        }
                     }
                     _ => Interval::UNCERTAIN,
                 };
                 // IsDistinctFrom never returns null.
-                Ok(Self {
-                    values,
-                    is_valid: Interval::CERTAINLY_TRUE,
-                })
+                Ok(Self::NotNull { values })
             }
             Operator::IsNotDistinctFrom => self
                 .apply_operator(&Operator::IsDistinctFrom, rhs)
-                .map(|i| NullableInterval {
-                    values: i.values.not(),
-                    is_valid: i.is_valid,
-                }),
+                .map(|i| i.not())?,
             _ => {
-                let values = apply_operator(op, &self.values, &rhs.values)?;
-                let is_valid = self.is_valid.and(&rhs.is_valid)?;
-                Ok(Self { values, is_valid })
+                if let (Some(left_values), Some(right_values)) =
+                    (self.values(), rhs.values())
+                {
+                    let values = apply_operator(op, left_values, right_values)?;
+                    match (self, rhs) {
+                        (Self::NotNull { .. }, Self::NotNull { .. }) => {
+                            Ok(Self::NotNull { values })
+                        }
+                        _ => Ok(Self::MaybeNull { values }),
+                    }
+                } else {
+                    if op.is_comparison_operator() {
+                        Ok(Self::Null { datatype: DataType::Boolean})
+                    } else {
+                        Ok(Self::Null { datatype: self.get_datatype()? })
+                    }
+                }
             }
         }
     }
@@ -894,9 +938,17 @@ impl NullableInterval {
     /// given interval, and [false, true] otherwise.
     pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let values = self.values.contains(&rhs.values)?;
-        let is_valid = self.is_valid.and(&rhs.is_valid)?;
-        Ok(Self { values, is_valid })
+        if let (Some(left_values), Some(right_values)) = (self.values(), rhs.values()) {
+            let values = left_values.contains(right_values)?;
+            match (self, rhs) {
+                (Self::NotNull { .. }, Self::NotNull { .. }) => {
+                    Ok(Self::NotNull { values })
+                }
+                _ => Ok(Self::MaybeNull { values }),
+            }
+        } else {
+            Ok(Self::Null { datatype: DataType::Boolean })
+        }
     }
 
     /// If the interval has collapsed to a single value, return that value.
@@ -913,29 +965,23 @@ impl NullableInterval {
     /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(Some(4))));
     ///
     /// let interval = NullableInterval::from(&ScalarValue::Int32(None));
-    /// assert_eq!(interval.single_value(), Some(ScalarValue::Int32(None)));
+    /// assert_eq!(interval.single_value(), Some(ScalarValue::Null));
     ///
-    /// let interval = NullableInterval {
+    /// let interval = NullableInterval::MaybeNull {
     ///     values: Interval::make(Some(1), Some(4), (false, true)),
-    ///     is_valid: Interval::UNCERTAIN,
     /// };
     /// assert_eq!(interval.single_value(), None);
     /// ```
     pub fn single_value(&self) -> Option<ScalarValue> {
-        if self.is_valid == Interval::CERTAINLY_FALSE {
-            Some(
-                self.values
-                    .get_datatype()
-                    .and_then(ScalarValue::try_from)
-                    .unwrap_or(ScalarValue::Null),
-            )
-        } else if self.is_valid == Interval::CERTAINLY_TRUE
-            && self.values.lower.value == self.values.upper.value
-            && !self.values.lower.value.is_null()
-        {
-            Some(self.values.lower.value.clone())
-        } else {
-            None
+        match self {
+            Self::Null { datatype } => Some(ScalarValue::try_from(datatype).unwrap_or(ScalarValue::Null)),
+            Self::MaybeNull { values } | Self::NotNull { values }
+                if values.lower.value == values.upper.value &&
+                    !values.lower.is_unbounded() =>
+            {
+                Some(values.lower.value.clone())
+            }
+            _ => None,
         }
     }
 }
