@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`CardinalityAwareRowConverter`] for converting data to
-//! [`arrow_row`] format.
+//! [`arrow::row`] format.
 
 use arrow::datatypes::DataType;
 use arrow::row::{Row, RowConverter};
@@ -44,7 +44,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 /// the time of this writing.
 const LOW_CARDINALITY_THRESHOLD: usize = 10;
 
-/// Wrapper around an [`arrow_row`] [`RowConverter` that disables
+/// Wrapper around an [`arrow::row`] [`RowConverter`] that disables
 /// dictionary preservation for high cardinality columns, based on the
 /// observed cardinalities in the first columns converted.
 ///
@@ -63,10 +63,14 @@ const LOW_CARDINALITY_THRESHOLD: usize = 10;
 #[derive(Debug)]
 pub enum CardinalityAwareRowConverter {
     /// Converter is newly initialized, and hasn't yet seen data
-    New { fields: Vec<SortField> },
+    New {
+        /// Defines the Row conversion
+        fields: Vec<SortField>,
+    },
     /// Converter has seen data and can convert [`Array`]s to/from
     /// [`Rows`]
     Converting {
+        /// Underlying converter
         converter: RowConverter,
         /// if preserve_dictionaries is disabled, the output type can be
         /// different than input.
@@ -79,12 +83,11 @@ impl CardinalityAwareRowConverter {
         Ok(Self::New { fields })
     }
 
+    /// Returns the memory size of the underlying [`RowConverter`] if
+    /// any.
     pub fn size(&self) -> usize {
         match self {
-            Self::New { .. } => {
-                // TODO account for size of `fields`
-                0
-            }
+            Self::New { .. } => 0,
             Self::Converting { converter, .. } => converter.size(),
         }
     }
