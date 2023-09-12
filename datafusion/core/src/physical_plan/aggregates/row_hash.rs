@@ -88,9 +88,6 @@ struct SpillState {
 
     /// GROUP BY expressions for merging spilled data
     merging_group_by: PhysicalGroupBy,
-
-    /// Force spilling always for debugging
-    force_spill: bool,
 }
 
 /// Hash based Grouping Aggregator
@@ -357,7 +354,6 @@ impl GroupedHashAggregateStream {
             merged_stream: Box::pin(EmptyRecordBatchStream::new(agg_schema.clone())),
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
-            force_spill: agg.force_spill,
         };
 
         Ok(GroupedHashAggregateStream {
@@ -622,8 +618,13 @@ impl GroupedHashAggregateStream {
         }
 
         match self.update_memory_reservation() {
-            // Here we can ignore `insufficient_capacity_err` because we will spill later
-            Err(DataFusionError::ResourcesExhausted(_)) => Ok(()),
+            // Here we can ignore `insufficient_capacity_err` because we will spill later,
+            // but at least one batch should fit in the memory
+            Err(DataFusionError::ResourcesExhausted(_))
+                if self.group_values.len() >= self.batch_size =>
+            {
+                Ok(())
+            }
             other => other,
         }
     }
@@ -686,7 +687,7 @@ impl GroupedHashAggregateStream {
             && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
             && !matches!(self.mode, AggregateMode::Partial)
-            && (self.update_memory_reservation().is_err() || self.spill_state.force_spill)
+            && self.update_memory_reservation().is_err()
         {
             // Use input batch (Partial mode) schema for spilling because
             // the spilled data will be merged and re-evaluated later.
@@ -730,7 +731,7 @@ impl GroupedHashAggregateStream {
         if self.group_values.len() >= self.batch_size
             && matches!(self.group_ordering, GroupOrdering::None)
             && matches!(self.mode, AggregateMode::Partial)
-            && (self.update_memory_reservation().is_err() || self.spill_state.force_spill)
+            && self.update_memory_reservation().is_err()
         {
             let n = self.group_values.len() / self.batch_size * self.batch_size;
             let batch = self.emit(EmitTo::First(n), false)?;

@@ -281,8 +281,6 @@ pub struct AggregateExec {
     /// Stores mode and output ordering information for the `AggregateExec`.
     aggregation_ordering: Option<AggregationOrdering>,
     required_input_ordering: Option<LexOrderingReq>,
-    /// Force spilling for debugging
-    force_spill: bool,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -671,7 +669,6 @@ impl AggregateExec {
             metrics: ExecutionPlanMetricsSet::new(),
             aggregation_ordering,
             required_input_ordering,
-            force_spill: false,
         })
     }
 
@@ -1513,17 +1510,7 @@ mod tests {
         let final_grouping_set = PhysicalGroupBy::new_single(final_group);
 
         let task_ctx = if spill {
-            let session_config = SessionConfig::new().with_batch_size(4);
-            let runtime = Arc::new(
-                // memory 3160 is too large for partial aggregation to do partial-emits; however,
-                // 3160 is minimum for the final aggregation completes even with spilling
-                RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(3160, 1.0))
-                    .unwrap(),
-            );
-            let task_ctx = TaskContext::default()
-                .with_session_config(session_config)
-                .with_runtime(runtime);
-            Arc::new(task_ctx)
+            new_spill_ctx(4, 3160)
         } else {
             task_ctx
         };
@@ -1589,7 +1576,7 @@ mod tests {
         ))];
 
         let task_ctx = if spill {
-            new_spill_ctx(2, 1956)
+            new_spill_ctx(2, 2144)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -2055,7 +2042,7 @@ mod tests {
         spill: bool,
     ) -> Result<()> {
         let task_ctx = if spill {
-            new_spill_ctx(2, 2581)
+            new_spill_ctx(2, 2812)
         } else {
             Arc::new(TaskContext::default())
         };
