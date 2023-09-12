@@ -159,13 +159,10 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let mut group_values = match self.group_values.take() {
-            Some(group_values) => group_values,
-            None => {
-                // not clear it is actually unreachable (may have to make empty arrays)
-                unreachable!()
-            }
-        };
+        let mut group_values = self
+            .group_values
+            .take()
+            .expect("Can not emit from empty rows");
 
         let output = match emit_to {
             EmitTo::All => {
