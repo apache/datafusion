@@ -32,12 +32,13 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarV
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
-/// This type represents a single endpoint of an [`Interval`]. An endpoint can
-/// be open or closed, denoting whether the interval includes or excludes the
-/// endpoint itself.
+/// This type represents a single endpoint of an [`Interval`]. An
+/// endpoint can be open (does not include the endpoint) or closed
+/// (includes the endpoint).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntervalBound {
     pub value: ScalarValue,
+    /// If true, interval does not include `value`
     pub open: bool,
 }
 
@@ -45,6 +46,18 @@ impl IntervalBound {
     /// Creates a new `IntervalBound` object using the given value.
     pub const fn new(value: ScalarValue, open: bool) -> IntervalBound {
         IntervalBound { value, open }
+    }
+
+    /// Creates a new "open" interval (does not include the `value`
+    /// bound)
+    pub const fn new_open(value: ScalarValue) -> IntervalBound {
+        IntervalBound::new(value, true)
+    }
+
+    /// Creates a new "closed" interval (includes the `value`
+    /// bound)
+    pub const fn new_closed(value: ScalarValue) -> IntervalBound {
+        IntervalBound::new(value, false)
     }
 
     /// This convenience function creates an unbounded interval endpoint.
@@ -336,7 +349,7 @@ impl Interval {
 
     /// Decide if this interval is certainly equal to, possibly equal to,
     /// or can't be equal to `other` by returning [true, true],
-    /// [false, true] or [false, false] respectively.    
+    /// [false, true] or [false, false] respectively.
     pub(crate) fn equal<T: Borrow<Interval>>(&self, other: T) -> Interval {
         let rhs = other.borrow();
         let flags = if !self.lower.is_unbounded()
@@ -438,18 +451,18 @@ impl Interval {
     }
 
     pub const CERTAINLY_FALSE: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
     };
 
     pub const UNCERTAIN: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
     };
 
     pub const CERTAINLY_TRUE: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
     };
 
     /// Returns the cardinality of this interval, which is the number of all

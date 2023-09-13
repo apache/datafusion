@@ -28,8 +28,9 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::{DataFusionError, Result};
-use crate::physical_optimizer::enforce_sorting::{unbounded_output, ExecTree};
-use crate::physical_optimizer::utils::{add_sort_above, get_plan_string};
+use crate::physical_optimizer::utils::{
+    add_sort_above, get_plan_string, unbounded_output, ExecTree,
+};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -1445,7 +1446,7 @@ fn ensure_distribution(
 /// we can optimize distribution of the plan if/when necessary.
 #[derive(Debug, Clone)]
 struct DistributionContext {
-    pub(crate) plan: Arc<dyn ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     /// Keep track of associations for each child of the plan. If `None`,
     /// there is no distribution changing operator in its descendants.
     distribution_onwards: Vec<Option<ExecTree>>,
@@ -1601,7 +1602,7 @@ struct JoinKeyPairs {
 
 #[derive(Debug, Clone)]
 struct PlanWithKeyRequirements {
-    pub plan: Arc<dyn ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     /// Parent required key ordering
     required_key_ordering: Vec<Arc<dyn PhysicalExpr>>,
     /// The request key ordering to children
@@ -1609,7 +1610,7 @@ struct PlanWithKeyRequirements {
 }
 
 impl PlanWithKeyRequirements {
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let children_len = plan.children().len();
         PlanWithKeyRequirements {
             plan,
@@ -1618,7 +1619,7 @@ impl PlanWithKeyRequirements {
         }
     }
 
-    pub fn children(&self) -> Vec<PlanWithKeyRequirements> {
+    fn children(&self) -> Vec<PlanWithKeyRequirements> {
         let plan_children = self.plan.children();
         assert_eq!(plan_children.len(), self.request_key_ordering.len());
         plan_children
@@ -1699,16 +1700,98 @@ mod tests {
     };
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use crate::physical_plan::{displayable, Statistics};
+    use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
 
+    use crate::physical_optimizer::test_utils::repartition_exec;
+    use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+    use crate::physical_plan::sorts::sort::SortExec;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::{FileCompressionType, ScalarValue};
     use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         expressions, expressions::binary, expressions::lit, expressions::Column,
         PhysicalExpr, PhysicalSortExpr,
     };
+
+    /// Models operators like BoundedWindowExec that require an input
+    /// ordering but is easy to construct
+    #[derive(Debug)]
+    struct SortRequiredExec {
+        input: Arc<dyn ExecutionPlan>,
+    }
+
+    impl SortRequiredExec {
+        fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+            Self { input }
+        }
+    }
+
+    impl DisplayAs for SortRequiredExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            write!(f, "SortRequiredExec")
+        }
+    }
+
+    impl ExecutionPlan for SortRequiredExec {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn schema(&self) -> SchemaRef {
+            self.input.schema()
+        }
+
+        fn output_partitioning(&self) -> crate::physical_plan::Partitioning {
+            self.input.output_partitioning()
+        }
+
+        fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+            vec![false]
+        }
+
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+            self.input.output_ordering()
+        }
+
+        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+            vec![self.input.clone()]
+        }
+
+        // model that it requires the output ordering of its input
+        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+            vec![self
+                .output_ordering()
+                .map(PhysicalSortRequirement::from_sort_exprs)]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            assert_eq!(children.len(), 1);
+            let child = children.pop().unwrap();
+            Ok(Arc::new(Self::new(child)))
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<crate::execution::context::TaskContext>,
+        ) -> Result<crate::physical_plan::SendableRecordBatchStream> {
+            unreachable!();
+        }
+
+        fn statistics(&self) -> Statistics {
+            self.input.statistics()
+        }
+    }
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
@@ -1744,6 +1827,10 @@ mod tests {
         ))
     }
 
+    fn parquet_exec_multiple() -> Arc<ParquetExec> {
+        parquet_exec_multiple_sorted(vec![])
+    }
+
     // Created a sorted parquet exec with multiple files
     fn parquet_exec_multiple_sorted(
         output_ordering: Vec<Vec<PhysicalSortExpr>>,
@@ -1765,6 +1852,62 @@ mod tests {
             },
             None,
             None,
+        ))
+    }
+
+    fn csv_exec() -> Arc<CsvExec> {
+        csv_exec_with_sort(vec![])
+    }
+
+    fn csv_exec_with_sort(output_ordering: Vec<Vec<PhysicalSortExpr>>) -> Arc<CsvExec> {
+        Arc::new(CsvExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema(),
+                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering,
+                infinite_source: false,
+            },
+            false,
+            b',',
+            b'"',
+            None,
+            FileCompressionType::UNCOMPRESSED,
+        ))
+    }
+
+    fn csv_exec_multiple() -> Arc<CsvExec> {
+        csv_exec_multiple_sorted(vec![])
+    }
+
+    // Created a sorted parquet exec with multiple files
+    fn csv_exec_multiple_sorted(
+        output_ordering: Vec<Vec<PhysicalSortExpr>>,
+    ) -> Arc<CsvExec> {
+        Arc::new(CsvExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema(),
+                file_groups: vec![
+                    vec![PartitionedFile::new("x".to_string(), 100)],
+                    vec![PartitionedFile::new("y".to_string(), 100)],
+                ],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering,
+                infinite_source: false,
+            },
+            false,
+            b',',
+            b'"',
+            None,
+            FileCompressionType::UNCOMPRESSED,
         ))
     }
 
@@ -1868,6 +2011,48 @@ mod tests {
         )
     }
 
+    fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let predicate = Arc::new(BinaryExpr::new(
+            col("c", &schema()).unwrap(),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
+        ));
+        Arc::new(FilterExec::try_new(predicate, input).unwrap())
+    }
+
+    fn sort_exec(
+        sort_exprs: Vec<PhysicalSortExpr>,
+        input: Arc<dyn ExecutionPlan>,
+        preserve_partitioning: bool,
+    ) -> Arc<dyn ExecutionPlan> {
+        let new_sort = SortExec::new(sort_exprs, input)
+            .with_preserve_partitioning(preserve_partitioning);
+        Arc::new(new_sort)
+    }
+
+    fn sort_preserving_merge_exec(
+        sort_exprs: Vec<PhysicalSortExpr>,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
+    }
+
+    fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(GlobalLimitExec::new(
+            Arc::new(LocalLimitExec::new(input, 100)),
+            0,
+            Some(100),
+        ))
+    }
+
+    fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(UnionExec::new(input))
+    }
+
+    fn sort_required_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(SortRequiredExec::new(input))
+    }
+
     fn trim_plan_display(plan: &str) -> Vec<&str> {
         plan.split('\n')
             .map(|s| s.trim())
@@ -1891,14 +2076,41 @@ mod tests {
         ensure_distribution(distribution_context, &config).map(|item| item.into().plan)
     }
 
+    /// Test whether plan matches with expected plan
+    macro_rules! plans_matches_expected {
+        ($EXPECTED_LINES: expr, $PLAN: expr) => {
+            let physical_plan = $PLAN;
+            let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+            let actual: Vec<&str> = formatted.trim().lines().collect();
+
+            let expected_plan_lines: Vec<&str> = $EXPECTED_LINES
+                .iter().map(|s| *s).collect();
+
+            assert_eq!(
+                expected_plan_lines, actual,
+                "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+            );
+        }
+    }
+
     /// Runs the repartition optimizer and asserts the plan against the expected
     macro_rules! assert_optimized {
         ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr) => {
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, false, 10, false, 1024);
+        };
+
+        ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $BOUNDED_ORDER_PRESERVING_VARIANTS: expr) => {
+            assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $BOUNDED_ORDER_PRESERVING_VARIANTS, 10, false, 1024);
+        };
+
+        ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $BOUNDED_ORDER_PRESERVING_VARIANTS: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
-            config.execution.target_partitions = 10;
-            config.optimizer.bounded_order_preserving_variants = true;
+            config.execution.target_partitions = $TARGET_PARTITIONS;
+            config.optimizer.repartition_file_scans = $REPARTITION_FILE_SCANS;
+            config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
+            config.optimizer.bounded_order_preserving_variants = $BOUNDED_ORDER_PRESERVING_VARIANTS;
 
             // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
             //       because they were written prior to the separation of `BasicEnforcement` into
@@ -2805,7 +3017,7 @@ mod tests {
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 ],
             };
-            assert_optimized!(expected, top_join.clone(), true);
+            assert_optimized!(expected, top_join.clone(), true, true);
 
             let expected_first_sort_enforcement = match join_type {
                 // Should include 3 RepartitionExecs 3 SortExecs
@@ -2850,7 +3062,7 @@ mod tests {
                     "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 ],
             };
-            assert_optimized!(expected_first_sort_enforcement, top_join, false);
+            assert_optimized!(expected_first_sort_enforcement, top_join, false, true);
 
             match join_type {
                 JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
@@ -2909,7 +3121,7 @@ mod tests {
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
-                    assert_optimized!(expected, top_join.clone(), true);
+                    assert_optimized!(expected, top_join.clone(), true, true);
 
                     let expected_first_sort_enforcement = match join_type {
                         // Should include 6 RepartitionExecs (3 of them preserves order) and 3 SortExecs
@@ -2953,7 +3165,12 @@ mod tests {
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
-                    assert_optimized!(expected_first_sort_enforcement, top_join, false);
+                    assert_optimized!(
+                        expected_first_sort_enforcement,
+                        top_join,
+                        false,
+                        true
+                    );
                 }
                 _ => {}
             }
@@ -3027,7 +3244,7 @@ mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected, join.clone(), true);
+        assert_optimized!(expected, join.clone(), true, true);
 
         let expected_first_sort_enforcement = &[
             "SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]",
@@ -3053,7 +3270,7 @@ mod tests {
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected_first_sort_enforcement, join, false);
+        assert_optimized!(expected_first_sort_enforcement, join, false, true);
         Ok(())
     }
 
@@ -3125,6 +3342,1064 @@ mod tests {
         ];
         assert_optimized!(expected, plan.clone(), true);
         assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn added_repartition_to_single_partition() -> Result<()> {
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let plan = aggregate_exec_with_alias(parquet_exec(), alias);
+
+        let expected = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_deepest_node() -> Result<()> {
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let plan = aggregate_exec_with_alias(filter_exec(parquet_exec()), alias);
+
+        let expected = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_unsorted_limit() -> Result<()> {
+        let plan = limit_exec(filter_exec(parquet_exec()));
+
+        let expected = &[
+            "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c@2 = 0",
+            // nothing sorts the data, so the local limit doesn't require sorted data either
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_sorted_limit() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan = limit_exec(sort_exec(sort_key, parquet_exec(), false));
+
+        let expected = &[
+            "GlobalLimitExec: skip=0, fetch=100",
+            "LocalLimitExec: fetch=100",
+            // data is sorted so can't repartition here
+            "SortExec: expr=[c@2 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_sorted_limit_with_filter() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan =
+            sort_required_exec(filter_exec(sort_exec(sort_key, parquet_exec(), false)));
+
+        let expected = &[
+            "SortRequiredExec",
+            "FilterExec: c@2 = 0",
+            // We can use repartition here, ordering requirement by SortRequiredExec
+            // is still satisfied.
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "SortExec: expr=[c@2 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_limit() -> Result<()> {
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let plan = aggregate_exec_with_alias(
+            limit_exec(filter_exec(limit_exec(parquet_exec()))),
+            alias,
+        );
+
+        let expected = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c@2 = 0",
+            // repartition should happen prior to the filter to maximize parallelism
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "GlobalLimitExec: skip=0, fetch=100",
+            "LocalLimitExec: fetch=100",
+            // Expect no repartition to happen for local limit
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_union() -> Result<()> {
+        let plan = union_exec(vec![parquet_exec(); 5]);
+
+        let expected = &[
+            "UnionExec",
+            // Expect no repartition of ParquetExec
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_through_sort_preserving_merge() -> Result<()> {
+        // sort preserving merge with non-sorted input
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan = sort_preserving_merge_exec(sort_key, parquet_exec());
+
+        // need resort as the data was not sorted correctly
+        let expected = &[
+            "SortExec: expr=[c@2 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_sort_preserving_merge() -> Result<()> {
+        // sort preserving merge already sorted input,
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan = sort_preserving_merge_exec(
+            sort_key.clone(),
+            parquet_exec_multiple_sorted(vec![sort_key]),
+        );
+
+        // should not sort (as the data was already sorted)
+        // should not repartition, since increased parallelism is not beneficial for SortPReservingMerge
+        let expected = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
+        // 2 sorted parquet files unioned (partitions are concatenated, sort is preserved)
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = union_exec(vec![parquet_exec_with_sort(vec![sort_key.clone()]); 2]);
+        let plan = sort_preserving_merge_exec(sort_key, input);
+
+        // should not repartition / sort (as the data was already sorted)
+        let expected = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            "UnionExec",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_does_not_destroy_sort() -> Result<()> {
+        //  SortRequired
+        //    Parquet(sorted)
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan =
+            sort_required_exec(filter_exec(parquet_exec_with_sort(vec![sort_key])));
+
+        // during repartitioning ordering is preserved
+        let expected = &[
+            "SortRequiredExec",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true, true);
+        assert_optimized!(expected, plan, false, true);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
+        // model a more complicated scenario where one child of a union can be repartitioned for performance
+        // but the other can not be
+        //
+        // Union
+        //  SortRequired
+        //    Parquet(sorted)
+        //  Filter
+        //    Parquet(unsorted)
+
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input1 = sort_required_exec(parquet_exec_with_sort(vec![sort_key]));
+        let input2 = filter_exec(parquet_exec());
+        let plan = union_exec(vec![input1, input2]);
+
+        // should not repartition below the SortRequired as that
+        // branch doesn't benefit from increased parallelism
+        let expected = &[
+            "UnionExec",
+            // union input 1: no repartitioning
+            "SortRequiredExec",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+            // union input 2: should repartition
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_transitively_with_projection() -> Result<()> {
+        let schema = schema();
+        let proj_exprs = vec![(
+            Arc::new(BinaryExpr::new(
+                col("a", &schema).unwrap(),
+                Operator::Plus,
+                col("b", &schema).unwrap(),
+            )) as Arc<dyn PhysicalExpr>,
+            "sum".to_string(),
+        )];
+        // non sorted input
+        let proj = Arc::new(ProjectionExec::try_new(proj_exprs, parquet_exec())?);
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("sum", &proj.schema()).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan = sort_preserving_merge_exec(sort_key, proj);
+
+        let expected = &[
+            "SortPreservingMergeExec: [sum@0 ASC]",
+            "SortExec: expr=[sum@0 ASC]",
+            // Since this projection is not trivial, increasing parallelism is beneficial
+            "ProjectionExec: expr=[a@0 + b@1 as sum]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+
+        let expected_first_sort_enforcement = &[
+            "SortExec: expr=[sum@0 ASC]",
+            "CoalescePartitionsExec",
+            // Since this projection is not trivial, increasing parallelism is beneficial
+            "ProjectionExec: expr=[a@0 + b@1 as sum]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        assert_optimized!(expected_first_sort_enforcement, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_transitively_with_projection() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let alias = vec![
+            ("a".to_string(), "a".to_string()),
+            ("b".to_string(), "b".to_string()),
+            ("c".to_string(), "c".to_string()),
+        ];
+        // sorted input
+        let plan = sort_preserving_merge_exec(
+            sort_key.clone(),
+            projection_exec_with_alias(
+                parquet_exec_multiple_sorted(vec![sort_key]),
+                alias,
+            ),
+        );
+
+        let expected = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            // Since this projection is trivial, increasing parallelism is not beneficial
+            "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_transitively_past_sort_with_projection() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let plan = sort_preserving_merge_exec(
+            sort_key.clone(),
+            sort_exec(
+                sort_key,
+                projection_exec_with_alias(parquet_exec(), alias),
+                true,
+            ),
+        );
+
+        let expected = &[
+            "SortExec: expr=[c@2 ASC]",
+            // Since this projection is trivial, increasing parallelism is not beneficial
+            "ProjectionExec: expr=[a@0 as a]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+        assert_optimized!(expected, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_transitively_past_sort_with_filter() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan = sort_exec(sort_key, filter_exec(parquet_exec()), false);
+
+        let expected = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            "SortExec: expr=[c@2 ASC]",
+            // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+
+        let expected_first_sort_enforcement = &[
+            "SortExec: expr=[c@2 ASC]",
+            "CoalescePartitionsExec",
+            "FilterExec: c@2 = 0",
+            // Expect repartition on the input of the filter (as it can benefit from additional parallelism)
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        assert_optimized!(expected_first_sort_enforcement, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan = sort_exec(
+            sort_key,
+            projection_exec_with_alias(
+                filter_exec(parquet_exec()),
+                vec![("a".to_string(), "a".to_string())],
+            ),
+            false,
+        );
+
+        let expected = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
+            "SortExec: expr=[c@2 ASC]",
+            "ProjectionExec: expr=[a@0 as a]",
+            "FilterExec: c@2 = 0",
+            // repartition is lowest down
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, plan.clone(), true);
+
+        let expected_first_sort_enforcement = &[
+            "SortExec: expr=[c@2 ASC]",
+            "CoalescePartitionsExec",
+            "ProjectionExec: expr=[a@0 as a]",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        assert_optimized!(expected_first_sort_enforcement, plan, false);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_single_partition() -> Result<()> {
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let plan_parquet = aggregate_exec_with_alias(parquet_exec(), alias.clone());
+        let plan_csv = aggregate_exec_with_alias(csv_exec(), alias);
+
+        let expected_parquet = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "ParquetExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e]",
+        ];
+        let expected_csv = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "CsvExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
+        Ok(())
+    }
+
+    #[test]
+    /// CsvExec on compressed csv file will not be partitioned
+    /// (Not able to decompress chunked csv file)
+    fn parallelization_compressed_csv() -> Result<()> {
+        let compression_types = [
+            FileCompressionType::GZIP,
+            FileCompressionType::BZIP2,
+            FileCompressionType::XZ,
+            FileCompressionType::ZSTD,
+            FileCompressionType::UNCOMPRESSED,
+        ];
+
+        let expected_not_partitioned = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        let expected_partitioned = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "CsvExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        for compression_type in compression_types {
+            let expected = if compression_type.is_compressed() {
+                &expected_not_partitioned[..]
+            } else {
+                &expected_partitioned[..]
+            };
+
+            let plan = aggregate_exec_with_alias(
+                Arc::new(CsvExec::new(
+                    FileScanConfig {
+                        object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                        file_schema: schema(),
+                        file_groups: vec![vec![PartitionedFile::new(
+                            "x".to_string(),
+                            100,
+                        )]],
+                        statistics: Statistics::default(),
+                        projection: None,
+                        limit: None,
+                        table_partition_cols: vec![],
+                        output_ordering: vec![],
+                        infinite_source: false,
+                    },
+                    false,
+                    b',',
+                    b'"',
+                    None,
+                    compression_type,
+                )),
+                vec![("a".to_string(), "a".to_string())],
+            );
+
+            assert_optimized!(expected, plan, true, false, 2, true, 10);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_two_partitions() -> Result<()> {
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let plan_parquet =
+            aggregate_exec_with_alias(parquet_exec_multiple(), alias.clone());
+        let plan_csv = aggregate_exec_with_alias(csv_exec_multiple(), alias.clone());
+
+        let expected_parquet = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            // Plan already has two partitions
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e]",
+        ];
+        let expected_csv = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            // Plan already has two partitions
+            "CsvExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_two_partitions_into_four() -> Result<()> {
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let plan_parquet =
+            aggregate_exec_with_alias(parquet_exec_multiple(), alias.clone());
+        let plan_csv = aggregate_exec_with_alias(csv_exec_multiple(), alias.clone());
+
+        let expected_parquet = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            // Multiple source files splitted across partitions
+            "ParquetExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e]",
+        ];
+        let expected_csv = [
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            // Multiple source files splitted across partitions
+            "CsvExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true, false, 4, true, 10);
+        assert_optimized!(expected_csv, plan_csv, true, false, 4, true, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_sorted_limit() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan_parquet = limit_exec(sort_exec(sort_key.clone(), parquet_exec(), false));
+        let plan_csv = limit_exec(sort_exec(sort_key.clone(), csv_exec(), false));
+
+        let expected_parquet = &[
+            "GlobalLimitExec: skip=0, fetch=100",
+            "LocalLimitExec: fetch=100",
+            // data is sorted so can't repartition here
+            "SortExec: expr=[c@2 ASC]",
+            // Doesn't parallelize for SortExec without preserve_partitioning
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        let expected_csv = &[
+            "GlobalLimitExec: skip=0, fetch=100",
+            "LocalLimitExec: fetch=100",
+            // data is sorted so can't repartition here
+            "SortExec: expr=[c@2 ASC]",
+            // Doesn't parallelize for SortExec without preserve_partitioning
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true);
+        assert_optimized!(expected_csv, plan_csv, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_limit_with_filter() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan_parquet = limit_exec(filter_exec(sort_exec(
+            sort_key.clone(),
+            parquet_exec(),
+            false,
+        )));
+        let plan_csv =
+            limit_exec(filter_exec(sort_exec(sort_key.clone(), csv_exec(), false)));
+
+        let expected_parquet = &[
+            "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c@2 = 0",
+            // even though data is sorted, we can use repartition here. Since
+            // ordering is not used in subsequent stages anyway.
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "SortExec: expr=[c@2 ASC]",
+            // SortExec doesn't benefit from input partitioning
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        let expected_csv = &[
+            "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c@2 = 0",
+            // even though data is sorted, we can use repartition here. Since
+            // ordering is not used in subsequent stages anyway.
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "SortExec: expr=[c@2 ASC]",
+            // SortExec doesn't benefit from input partitioning
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true);
+        assert_optimized!(expected_csv, plan_csv, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_ignores_limit() -> Result<()> {
+        let alias = vec![("a".to_string(), "a".to_string())];
+        let plan_parquet = aggregate_exec_with_alias(
+            limit_exec(filter_exec(limit_exec(parquet_exec()))),
+            alias.clone(),
+        );
+        let plan_csv = aggregate_exec_with_alias(
+            limit_exec(filter_exec(limit_exec(csv_exec()))),
+            alias.clone(),
+        );
+
+        let expected_parquet = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c@2 = 0",
+            // repartition should happen prior to the filter to maximize parallelism
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "GlobalLimitExec: skip=0, fetch=100",
+            // Limit doesn't benefit from input partitioning - no parallelism
+            "LocalLimitExec: fetch=100",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        let expected_csv = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+            "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
+            "LocalLimitExec: fetch=100",
+            "FilterExec: c@2 = 0",
+            // repartition should happen prior to the filter to maximize parallelism
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "GlobalLimitExec: skip=0, fetch=100",
+            // Limit doesn't benefit from input partitioning - no parallelism
+            "LocalLimitExec: fetch=100",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true);
+        assert_optimized!(expected_csv, plan_csv, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_union_inputs() -> Result<()> {
+        let plan_parquet = union_exec(vec![parquet_exec(); 5]);
+        let plan_csv = union_exec(vec![csv_exec(); 5]);
+
+        let expected_parquet = &[
+            "UnionExec",
+            // Union doesn't benefit from input partitioning - no parallelism
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        let expected_csv = &[
+            "UnionExec",
+            // Union doesn't benefit from input partitioning - no parallelism
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true);
+        assert_optimized!(expected_csv, plan_csv, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        // sort preserving merge already sorted input,
+        let plan_parquet = sort_preserving_merge_exec(
+            sort_key.clone(),
+            parquet_exec_with_sort(vec![sort_key.clone()]),
+        );
+        let plan_csv = sort_preserving_merge_exec(
+            sort_key.clone(),
+            csv_exec_with_sort(vec![sort_key.clone()]),
+        );
+
+        // parallelization is not beneficial for SortPreservingMerge
+        let expected_parquet = &[
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+        let expected_csv = &[
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true);
+        assert_optimized!(expected_csv, plan_csv, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        // 2 sorted parquet files unioned (partitions are concatenated, sort is preserved)
+        let input_parquet =
+            union_exec(vec![parquet_exec_with_sort(vec![sort_key.clone()]); 2]);
+        let input_csv = union_exec(vec![csv_exec_with_sort(vec![sort_key.clone()]); 2]);
+        let plan_parquet = sort_preserving_merge_exec(sort_key.clone(), input_parquet);
+        let plan_csv = sort_preserving_merge_exec(sort_key.clone(), input_csv);
+
+        // should not repartition (union doesn't benefit from increased parallelism)
+        // should not sort (as the data was already sorted)
+        let expected_parquet = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            "UnionExec",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+        let expected_csv = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            "UnionExec",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true);
+        assert_optimized!(expected_csv, plan_csv, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_does_not_benefit() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        //  SortRequired
+        //    Parquet(sorted)
+        let plan_parquet =
+            sort_required_exec(parquet_exec_with_sort(vec![sort_key.clone()]));
+        let plan_csv = sort_required_exec(csv_exec_with_sort(vec![sort_key]));
+
+        // no parallelization, because SortRequiredExec doesn't benefit from increased parallelism
+        let expected_parquet = &[
+            "SortRequiredExec",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+        let expected_csv = &[
+            "SortRequiredExec",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true);
+        assert_optimized!(expected_csv, plan_csv, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> {
+        // sorted input
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        //Projection(a as a2, b as b2)
+        let alias_pairs: Vec<(String, String)> = vec![
+            ("a".to_string(), "a2".to_string()),
+            ("c".to_string(), "c2".to_string()),
+        ];
+        let proj_parquet = projection_exec_with_alias(
+            parquet_exec_with_sort(vec![sort_key.clone()]),
+            alias_pairs.clone(),
+        );
+        let sort_key_after_projection = vec![PhysicalSortExpr {
+            expr: col("c2", &proj_parquet.schema()).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan_parquet =
+            sort_preserving_merge_exec(sort_key_after_projection, proj_parquet);
+        let expected = &[
+            "SortPreservingMergeExec: [c2@1 ASC]",
+            "  ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
+            "    ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+        plans_matches_expected!(expected, &plan_parquet);
+
+        // data should not be repartitioned / resorted
+        let expected_parquet = &[
+            "ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected_parquet, plan_parquet, true);
+        Ok(())
+    }
+
+    #[test]
+    fn parallelization_ignores_transitively_with_projection_csv() -> Result<()> {
+        // sorted input
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        //Projection(a as a2, b as b2)
+        let alias_pairs: Vec<(String, String)> = vec![
+            ("a".to_string(), "a2".to_string()),
+            ("c".to_string(), "c2".to_string()),
+        ];
+
+        let proj_csv =
+            projection_exec_with_alias(csv_exec_with_sort(vec![sort_key]), alias_pairs);
+        let sort_key_after_projection = vec![PhysicalSortExpr {
+            expr: col("c2", &proj_csv.schema()).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let plan_csv = sort_preserving_merge_exec(sort_key_after_projection, proj_csv);
+        let expected = &[
+            "SortPreservingMergeExec: [c2@1 ASC]",
+            "  ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
+        ];
+        plans_matches_expected!(expected, &plan_csv);
+
+        // data should not be repartitioned / resorted
+        let expected_csv = &[
+            "ProjectionExec: expr=[a@0 as a2, c@2 as c2]",
+            "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
+        ];
+
+        assert_optimized!(expected_csv, plan_csv, true);
+        Ok(())
+    }
+
+    #[test]
+    fn remove_redundant_roundrobins() -> Result<()> {
+        let input = parquet_exec();
+        let repartition = repartition_exec(repartition_exec(input));
+        let physical_plan = repartition_exec(filter_exec(repartition));
+        let expected = &[
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
+            "  FilterExec: c@2 = 0",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        plans_matches_expected!(expected, &physical_plan);
+
+        let expected = &[
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true);
+        assert_optimized!(expected, physical_plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserve_ordering_through_repartition() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+        let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
+
+        let expected = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            "FilterExec: c@2 = 0",
+            "SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        // last flag sets config.optimizer.bounded_order_preserving_variants
+        assert_optimized!(expected, physical_plan.clone(), true, true);
+        assert_optimized!(expected, physical_plan, false, true);
+
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_preserve_ordering_through_repartition() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
+        let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
+
+        let expected = &[
+            "SortPreservingMergeExec: [c@2 ASC]",
+            "SortExec: expr=[c@2 ASC]",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true);
+        assert_optimized!(expected, physical_plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = parquet_exec_multiple_sorted(vec![sort_key]);
+
+        let sort_req = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let physical_plan = sort_preserving_merge_exec(sort_req, filter_exec(input));
+
+        let expected = &[
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "SortExec: expr=[a@0 ASC]",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true);
+        assert_optimized!(expected, physical_plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let input = parquet_exec_multiple_sorted(vec![sort_key]);
+        let physical_plan = filter_exec(input);
+
+        let expected = &[
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true);
+        assert_optimized!(expected, physical_plan, false);
+
         Ok(())
     }
 }
