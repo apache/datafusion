@@ -371,7 +371,8 @@ pub fn combine_join_ordering_equivalence_properties(
             // In this special case, right side ordering can be prefixed with left side ordering.
             if let (
                 Some(JoinSide::Left),
-                Some(_right_ordering),
+                // right side have an ordering
+                Some(_),
                 JoinType::Inner,
                 Some(oeq_class),
             ) = (
@@ -421,7 +422,8 @@ pub fn combine_join_ordering_equivalence_properties(
             // In this special case, left side ordering can be prefixed with right side ordering.
             if let (
                 Some(JoinSide::Right),
-                Some(_left_ordering),
+                // left side have an ordering
+                Some(_),
                 JoinType::Inner,
                 Some(left_oeq_class),
             ) = (

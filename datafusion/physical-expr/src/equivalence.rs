@@ -260,17 +260,21 @@ impl OrderingEquivalenceProperties {
 
     /// Add physical expression that have constant value to the `self.constants`
     pub fn add_constants(&mut self, constants: Vec<Arc<dyn PhysicalExpr>>) {
-        for constant in constants {
-            if !exprs_contains(&self.constants, &constant) {
+        constants.into_iter().for_each(|constant| {
+            if !physical_exprs_contains(&self.constants, &constant) {
                 self.constants.push(constant);
             }
-        }
+        });
     }
 
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
 
+    /// This function normalizes `sort_reqs` by
+    /// - removing expressions that have constant value from requirement
+    /// - replacing sections that are in the `self.oeq_class.others` with `self.oeq_class.head`
+    /// - removing sections that satisfies global ordering that are in the post fix of requirement
     pub fn normalize_sort_requirements(
         &self,
         sort_reqs: &[PhysicalSortRequirement],
@@ -906,29 +910,27 @@ fn get_compatible_ranges(
         .collect()
 }
 
-fn exprs_contains(
-    constants: &[Arc<dyn PhysicalExpr>],
+/// It is similar to contains method of vector.
+/// Finds whether `expr` is among `physical_exprs`.
+pub fn physical_exprs_contains(
+    physical_exprs: &[Arc<dyn PhysicalExpr>],
     expr: &Arc<dyn PhysicalExpr>,
 ) -> bool {
-    for constant in constants {
-        if constant.eq(expr) {
-            return true;
-        }
-    }
-    false
+    physical_exprs
+        .iter()
+        .any(|physical_expr| physical_expr.eq(expr))
 }
 
+/// Remove ordering requirements that have constant value
 fn prune_sort_reqs_with_constants(
     ordering: &[PhysicalSortRequirement],
     constants: &[Arc<dyn PhysicalExpr>],
 ) -> Vec<PhysicalSortRequirement> {
-    let mut new_ordering = vec![];
-    for order in ordering {
-        if !exprs_contains(constants, &order.expr) {
-            new_ordering.push(order.clone())
-        }
-    }
-    new_ordering
+    ordering
+        .iter()
+        .filter(|&order| !physical_exprs_contains(constants, &order.expr))
+        .cloned()
+        .collect()
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
