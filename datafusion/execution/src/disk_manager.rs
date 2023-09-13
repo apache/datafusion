@@ -147,10 +147,11 @@ impl DiskManager {
     }
 }
 
-/// A named temporary file and the directory it lives in, which may be clean up on drop
+/// A wrapper around a [`NamedTemporaryFile`] that also contains a reference
 #[derive(Debug)]
 pub struct RefCountedTempFile {
-    /// directory in which temporary files are created
+    /// directory in which temporary files are created (Arc is held to ensure
+    /// it is not cleaned up prior to the NamedTempFile)
     #[allow(dead_code)]
     parent_temp_dir: Arc<TempDir>,
     tempfile: NamedTempFile,
