@@ -147,11 +147,12 @@ impl DiskManager {
     }
 }
 
-/// A wrapper around a [`NamedTempFile`] that also contains a reference
+/// A wrapper around a [`NamedTempFile`] that also contains
+/// a reference to its parent temporary directory
 #[derive(Debug)]
 pub struct RefCountedTempFile {
-    /// directory in which temporary files are created (Arc is held to ensure
-    /// it is not cleaned up prior to the NamedTempFile)
+    /// The reference to the directory in which temporary files are created to ensure
+    /// it is not cleaned up prior to the NamedTempFile
     #[allow(dead_code)]
     parent_temp_dir: Arc<TempDir>,
     tempfile: NamedTempFile,
