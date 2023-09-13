@@ -115,7 +115,11 @@ impl CardinalityAwareRowConverter {
                 converter,
                 output_types,
             } => {
-                // Cast output type if needed
+                // Cast output type if needed. The input type and
+                // output type must match exactly (including
+                // encodings).
+                // https://github.com/apache/arrow-datafusion/discussions/7421
+                // could reduce the need for this.
                 let output = converter
                     .convert_rows(rows)?
                     .into_iter()
