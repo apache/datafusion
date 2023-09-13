@@ -36,7 +36,7 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
     expressions::Column,
-    normalize_out_expr_with_columns_map, reverse_order_bys,
+    normalize_out_expr_with_columns_map, physical_exprs_contains, reverse_order_bys,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
@@ -567,6 +567,34 @@ fn calc_required_input_ordering(
     Ok((!required_input_ordering.is_empty()).then_some(required_input_ordering))
 }
 
+/// Check whether group by expression contains all of the expression inside `requirement`
+// As an example Group By (c,b,a) contains all of the expressions in the `requirement`: (a ASC, b DESC)
+fn group_by_contains_all_requirements(
+    group_by: &PhysicalGroupBy,
+    requirement: &LexOrdering,
+) -> bool {
+    // single group by expressions
+    if group_by.groups.len() <= 1 {
+        for req in requirement {
+            let physical_exprs = group_by
+                .expr()
+                .iter()
+                .map(|(expr, _alias)| expr.clone())
+                .collect::<Vec<_>>();
+            if !physical_exprs_contains(&physical_exprs, &req.expr) {
+                return false;
+            }
+        }
+        // Contains all of the requirements
+        true
+    } else {
+        // When we have multiple groups (grouping set)
+        // since group by may be calculated on the subset of the group_by.expr()
+        // it is not guaranteed to have all of the requirements among group by expressions.
+        false
+    }
+}
+
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
@@ -593,16 +621,22 @@ impl AggregateExec {
             .iter()
             .zip(order_by_expr)
             .map(|(aggr_expr, fn_reqs)| {
-                // If the aggregation function is order-sensitive and we are
-                // performing a "first stage" calculation, keep the ordering
-                // requirement as is; otherwise ignore the ordering requirement.
+                // If
+                // - aggregation function is order-sensitive and
+                // - aggregation is performing a "first stage" calculation, and
+                // - at least one of the aggregate function requirement is not inside group by expression
+                // keep the ordering requirement as is; otherwise ignore the ordering requirement.
                 // In non-first stage modes, we accumulate data (using `merge_batch`)
                 // from different partitions (i.e. merge partial results). During
                 // this merge, we consider the ordering of each partial result.
                 // Hence, we do not need to use the ordering requirement in such
                 // modes as long as partial results are generated with the
                 // correct ordering.
-                fn_reqs.filter(|_| is_order_sensitive(aggr_expr) && mode.is_first_stage())
+                fn_reqs.filter(|req| {
+                    is_order_sensitive(aggr_expr)
+                        && mode.is_first_stage()
+                        && !group_by_contains_all_requirements(&group_by, req)
+                })
             })
             .collect::<Vec<_>>();
         let mut aggregator_reverse_reqs = None;
