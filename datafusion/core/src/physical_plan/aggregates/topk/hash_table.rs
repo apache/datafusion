@@ -71,7 +71,7 @@ pub trait ArrowHashTable {
     //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
     //  Soundness: the caller must provide a valid index
     unsafe fn heap_idx_at(&self, map_idx: usize) -> usize;
-    fn drain(&mut self) -> (ArrayRef, Vec<usize>);
+    unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef;
 
     // JUSTIFICATION
     //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
@@ -130,12 +130,9 @@ impl ArrowHashTable for StringHashTable {
         self.map.heap_idx_at(map_idx)
     }
 
-    fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
-        let mut rows = self.map.drain();
-        rows.sort_by(|a, b| a.0.comp(&b.0));
-        let (ids, heap_idxs): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
-        let ids = Arc::new(StringArray::from(ids));
-        (ids, heap_idxs)
+    unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
+        let ids = self.map.take_all(indexes);
+        Arc::new(StringArray::from(ids))
     }
 
     unsafe fn find_or_insert(
@@ -209,10 +206,8 @@ where
         self.map.heap_idx_at(map_idx)
     }
 
-    fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
-        let mut rows = self.map.drain();
-        rows.sort_by(|a, b| a.0.comp(&b.0));
-        let (ids, heap_idxs): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
+    unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
+        let ids = self.map.take_all(indexes);
         let mut builder: PrimitiveBuilder<VAL> = PrimitiveArray::builder(ids.len());
         for id in ids.into_iter() {
             match id {
@@ -220,8 +215,8 @@ where
                 Some(id) => builder.append_value(id),
             }
         }
-        let ids = Arc::new(builder.finish());
-        (ids, heap_idxs)
+        let ids = builder.finish();
+        Arc::new(ids)
     }
 
     unsafe fn find_or_insert(
@@ -324,34 +319,19 @@ impl<ID: KeyType> TopKHashTable<ID> {
         self.map.len()
     }
 
-    pub fn drain(&mut self) -> Vec<(ID, usize)> {
-        self.map.drain().map(|mi| (mi.id, mi.heap_idx)).collect()
+    pub unsafe fn take_all(&mut self, idxs: Vec<usize>) -> Vec<ID> {
+        let ids = idxs
+            .into_iter()
+            .map(|idx| self.map.bucket(idx).as_ref().id.clone())
+            .collect();
+        self.map.clear();
+        ids
     }
 }
 
 impl<ID: KeyType> HashTableItem<ID> {
     pub fn new(hash: u64, id: ID, heap_idx: usize) -> Self {
         Self { hash, id, heap_idx }
-    }
-}
-
-#[cfg(test)]
-fn map_print<ID: KeyType>(map: &RawTable<HashTableItem<ID>>) {
-    use itertools::Itertools;
-    // JUSTIFICATION
-    //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
-    //  Soundness: iterator is safe as long as we don't hold onto it past this stack frame
-    unsafe {
-        let mut indexes = vec![];
-        for mi in map.iter() {
-            let mi = mi.as_ref();
-            println!("id={:?} heap_idx={}", mi.id, mi.heap_idx);
-            indexes.push(mi.heap_idx);
-        }
-        let indexes: Vec<_> = indexes.iter().unique().collect();
-        if indexes.len() != map.len() {
-            panic!("{} indexes and {} keys", indexes.len(), map.len());
-        }
     }
 }
 
@@ -407,30 +387,38 @@ pub fn new_hash_table(limit: usize, kt: DataType) -> Result<Box<dyn ArrowHashTab
 mod tests {
     use super::*;
     use crate::error::Result;
+    use std::collections::BTreeMap;
 
     #[test]
     fn should_resize_properly() -> Result<()> {
+        let mut heap_to_map = BTreeMap::<usize, usize>::new();
         let mut map = TopKHashTable::<Option<String>>::new(5, 3);
-        for (idx, id) in vec!["1", "2", "3", "4", "5"].into_iter().enumerate() {
+        for (heap_idx, id) in vec!["1", "2", "3", "4", "5"].into_iter().enumerate() {
             let mut mapper = vec![];
-            map.insert(idx as u64, Some(id.to_string()), idx, &mut mapper);
-            if idx == 3 {
+            let hash = heap_idx as u64;
+            let map_idx = map.insert(hash, Some(id.to_string()), heap_idx, &mut mapper);
+            let _ = heap_to_map.insert(heap_idx, map_idx);
+            if heap_idx == 3 {
                 assert_eq!(
                     mapper,
                     vec![(0, 0), (1, 1), (2, 2), (3, 3)],
-                    "Pass {idx} resized incorrectly!"
+                    "Pass {heap_idx} resized incorrectly!"
                 );
+                for (heap_idx, map_idx) in mapper {
+                    let _ = heap_to_map.insert(heap_idx, map_idx);
+                }
             } else {
-                assert_eq!(mapper, vec![], "Pass {idx} resized!");
+                assert_eq!(mapper, vec![], "Pass {heap_idx} should not have resized!");
             }
         }
 
-        let (ids, indexes): (Vec<_>, Vec<_>) = map.drain().into_iter().unzip();
+        let (_heap_idxs, map_idxs): (Vec<_>, Vec<_>) = heap_to_map.into_iter().unzip();
+        let ids = unsafe { map.take_all(map_idxs) };
         assert_eq!(
             format!("{:?}", ids),
             r#"[Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]"#
         );
-        assert_eq!(indexes, vec![0, 1, 2, 3, 4]);
+        assert_eq!(map.len(), 0, "Map should have been cleared!");
 
         Ok(())
     }

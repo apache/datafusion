@@ -102,8 +102,8 @@ impl PriorityMap {
     }
 
     pub fn emit(&mut self) -> Result<Vec<ArrayRef>> {
-        let (ids, heap_idxs) = self.map.drain();
-        let vals = self.heap.take_all(heap_idxs);
+        let (vals, map_idxs) = self.heap.drain();
+        let ids = unsafe { self.map.take_all(map_idxs) };
         Ok(vec![ids, vals])
     }
 

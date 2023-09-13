@@ -77,7 +77,7 @@ pub trait ArrowHeap {
         row_idx: usize,
         map: &mut Vec<(usize, usize)>,
     );
-    fn take_all(&mut self, heap_idxs: Vec<usize>) -> ArrayRef;
+    fn drain(&mut self) -> (ArrayRef, Vec<usize>);
 }
 
 /// An implementation of `ArrowHeap` that deals with primitive values
@@ -149,10 +149,11 @@ where
         self.heap.replace_if_better(heap_idx, new_val, map);
     }
 
-    fn take_all(&mut self, heap_idxs: Vec<usize>) -> ArrayRef {
-        let vals = self.heap.take_all(heap_idxs);
+    fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
+        let (vals, map_idxs) = self.heap.drain();
         let vals = Arc::new(PrimitiveArray::<VAL>::from_iter_values(vals));
-        adjust_output_array(&self.data_type, vals).expect("Type is incorrect")
+        let vals = adjust_output_array(&self.data_type, vals).expect("Type is incorrect");
+        (vals, map_idxs)
     }
 }
 
@@ -183,6 +184,10 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         self.len >= self.capacity
     }
 
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
     pub fn append_or_replace(
         &mut self,
         new_val: VAL,
@@ -203,16 +208,32 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         self.len += 1;
     }
 
-    pub fn take_all(&mut self, indexes: Vec<usize>) -> Vec<VAL> {
-        let res = indexes
-            .into_iter()
-            .map(|i| {
-                let hi: HeapItem<VAL> = self.heap[i].take().expect("No heap item");
-                hi.val
-            })
-            .collect();
-        self.len = 0;
-        res
+    fn pop(&mut self, map: &mut Vec<(usize, usize)>) -> Option<HeapItem<VAL>> {
+        if self.len() == 0 {
+            return None;
+        }
+        if self.len() == 1 {
+            self.len = 0;
+            return self.heap[0].take();
+        }
+        self.swap(0, self.len - 1, map);
+        let former_root = self.heap[self.len - 1].take();
+        self.len -= 1;
+        self.heapify_down(0, map);
+        former_root
+    }
+
+    pub fn drain(&mut self) -> (Vec<VAL>, Vec<usize>) {
+        let mut map = Vec::with_capacity(self.len);
+        let mut vals = Vec::with_capacity(self.len);
+        let mut map_idxs = Vec::with_capacity(self.len);
+        while let Some(worst_hi) = self.pop(&mut map) {
+            vals.push(worst_hi.val);
+            map_idxs.push(worst_hi.map_idx);
+        }
+        vals.reverse();
+        map_idxs.reverse();
+        (vals, map_idxs)
     }
 
     fn replace_root(
@@ -578,7 +599,7 @@ BinaryHeap
     }
 
     #[test]
-    fn should_take_all() -> Result<()> {
+    fn should_drain() -> Result<()> {
         let mut map = vec![];
         let mut heap = TopKHeap::new(10, false);
 
@@ -593,8 +614,9 @@ BinaryHeap
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
-        let vals = heap.take_all(vec![1, 0]);
+        let (vals, map_idxs) = heap.drain();
         assert_eq!(vals, vec![1, 2]);
+        assert_eq!(map_idxs, vec![1, 2]);
         assert_eq!(heap.len(), 0);
 
         Ok(())
