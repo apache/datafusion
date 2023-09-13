@@ -188,8 +188,8 @@ impl ExprIntervalGraphNode {
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             let interval = Interval::new(
-                IntervalBound::new(value.clone(), false),
-                IntervalBound::new(value.clone(), false),
+                IntervalBound::new_closed(value.clone()),
+                IntervalBound::new_closed(value.clone()),
             );
             ExprIntervalGraphNode::new_with_interval(expr, interval)
         } else {
@@ -279,13 +279,13 @@ fn comparison_operator_target(
     let unbounded = IntervalBound::make_unbounded(&datatype)?;
     let zero = ScalarValue::new_zero(&datatype)?;
     Ok(match *op {
-        Operator::GtEq => Interval::new(IntervalBound::new(zero, false), unbounded),
-        Operator::Gt => Interval::new(IntervalBound::new(zero, true), unbounded),
-        Operator::LtEq => Interval::new(unbounded, IntervalBound::new(zero, false)),
-        Operator::Lt => Interval::new(unbounded, IntervalBound::new(zero, true)),
+        Operator::GtEq => Interval::new(IntervalBound::new_closed(zero), unbounded),
+        Operator::Gt => Interval::new(IntervalBound::new_open(zero), unbounded),
+        Operator::LtEq => Interval::new(unbounded, IntervalBound::new_closed(zero)),
+        Operator::Lt => Interval::new(unbounded, IntervalBound::new_open(zero)),
         Operator::Eq => Interval::new(
-            IntervalBound::new(zero.clone(), false),
-            IntervalBound::new(zero, false),
+            IntervalBound::new_closed(zero.clone()),
+            IntervalBound::new_closed(zero),
         ),
         _ => unreachable!(),
     })

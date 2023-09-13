@@ -34,8 +34,6 @@
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
 //! by another [`SortExec`]. Therefore, this rule removes it from the physical plan.
 
-use std::fmt;
-use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
@@ -45,9 +43,9 @@ use crate::physical_optimizer::replace_with_order_preserving_variants::{
 };
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, find_indices, get_plan_string, is_coalesce_partitions, is_limit,
-    is_repartition, is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
-    merge_and_order_indices, set_difference,
+    add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
+    is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
+    merge_and_order_indices, set_difference, unbounded_output, ExecTree,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -68,7 +66,7 @@ use datafusion_physical_expr::utils::{
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 
-use itertools::{concat, izip, Itertools};
+use itertools::{izip, Itertools};
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
@@ -79,54 +77,6 @@ impl EnforceSorting {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
-    }
-}
-
-/// This object implements a tree that we use while keeping track of paths
-/// leading to [`SortExec`]s.
-#[derive(Debug, Clone)]
-pub(crate) struct ExecTree {
-    /// The `ExecutionPlan` associated with this node
-    pub plan: Arc<dyn ExecutionPlan>,
-    /// Child index of the plan in its parent
-    pub idx: usize,
-    /// Children of the plan that would need updating if we remove leaf executors
-    pub children: Vec<ExecTree>,
-}
-
-impl fmt::Display for ExecTree {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let plan_string = get_plan_string(&self.plan);
-        write!(f, "\nidx: {:?}", self.idx)?;
-        write!(f, "\nplan: {:?}", plan_string)?;
-        for child in self.children.iter() {
-            write!(f, "\nexec_tree:{}", child)?;
-        }
-        writeln!(f)
-    }
-}
-
-impl ExecTree {
-    /// Create new Exec tree
-    pub fn new(
-        plan: Arc<dyn ExecutionPlan>,
-        idx: usize,
-        children: Vec<ExecTree>,
-    ) -> Self {
-        ExecTree {
-            plan,
-            idx,
-            children,
-        }
-    }
-
-    /// This function returns the executors at the leaves of the tree.
-    fn get_leaves(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        if self.children.is_empty() {
-            vec![self.plan.clone()]
-        } else {
-            concat(self.children.iter().map(|e| e.get_leaves()))
-        }
     }
 }
 
@@ -143,7 +93,7 @@ struct PlanWithCorrespondingSort {
 }
 
 impl PlanWithCorrespondingSort {
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let length = plan.children().len();
         PlanWithCorrespondingSort {
             plan,
@@ -151,7 +101,7 @@ impl PlanWithCorrespondingSort {
         }
     }
 
-    pub fn new_from_children_nodes(
+    fn new_from_children_nodes(
         children_nodes: Vec<PlanWithCorrespondingSort>,
         parent_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
@@ -201,7 +151,7 @@ impl PlanWithCorrespondingSort {
         Ok(PlanWithCorrespondingSort { plan, sort_onwards })
     }
 
-    pub fn children(&self) -> Vec<PlanWithCorrespondingSort> {
+    fn children(&self) -> Vec<PlanWithCorrespondingSort> {
         self.plan
             .children()
             .into_iter()
@@ -258,7 +208,7 @@ struct PlanWithCorrespondingCoalescePartitions {
 }
 
 impl PlanWithCorrespondingCoalescePartitions {
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let length = plan.children().len();
         PlanWithCorrespondingCoalescePartitions {
             plan,
@@ -266,7 +216,7 @@ impl PlanWithCorrespondingCoalescePartitions {
         }
     }
 
-    pub fn new_from_children_nodes(
+    fn new_from_children_nodes(
         children_nodes: Vec<PlanWithCorrespondingCoalescePartitions>,
         parent_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
@@ -317,7 +267,7 @@ impl PlanWithCorrespondingCoalescePartitions {
         })
     }
 
-    pub fn children(&self) -> Vec<PlanWithCorrespondingCoalescePartitions> {
+    fn children(&self) -> Vec<PlanWithCorrespondingCoalescePartitions> {
         self.plan
             .children()
             .into_iter()
@@ -980,21 +930,6 @@ fn check_alignment(
     })
 }
 
-// Get output (un)boundedness information for the given `plan`.
-pub(crate) fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let result = if plan.children().is_empty() {
-        plan.unbounded_output(&[])
-    } else {
-        let children_unbounded_output = plan
-            .children()
-            .iter()
-            .map(unbounded_output)
-            .collect::<Vec<_>>();
-        plan.unbounded_output(&children_unbounded_output)
-    };
-    result.unwrap_or(true)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1022,6 +957,7 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
+    use crate::physical_optimizer::utils::get_plan_string;
     use std::sync::Arc;
 
     fn create_test_schema() -> Result<SchemaRef> {
