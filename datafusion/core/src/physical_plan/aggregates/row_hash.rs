@@ -653,6 +653,7 @@ impl GroupedHashAggregateStream {
             && batch.num_rows() > 0
             && matches!(self.group_ordering, GroupOrdering::None)
             && !matches!(self.mode, AggregateMode::Partial)
+            && !self.spill_state.is_stream_merging
             && self.update_memory_reservation().is_err()
         {
             // Use input batch (Partial mode) schema for spilling because
