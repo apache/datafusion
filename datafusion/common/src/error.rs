@@ -16,7 +16,7 @@
 // under the License.
 
 //! DataFusion error types
-#[cfg(backtrace)]
+#[cfg(feature = "backtrace")]
 use std::backtrace::{Backtrace, BacktraceStatus};
 
 use std::error::Error;
@@ -369,6 +369,8 @@ impl From<DataFusionError> for io::Error {
 }
 
 impl DataFusionError {
+    const BACK_TRACE_SEP: &str = "\n\nbacktrace: ";
+
     /// Get deepest underlying [`DataFusionError`]
     ///
     /// [`DataFusionError`]s sometimes form a chain, such as `DataFusionError::ArrowError()` in order to conform
@@ -413,27 +415,33 @@ impl DataFusionError {
 
     pub fn strip_backtrace(&self) -> String {
         self.to_string()
-            .split("\n\nbacktrace: ")
+            .split(Self::BACK_TRACE_SEP)
             .collect::<Vec<&str>>()
             .first()
             .unwrap_or(&"")
             .to_string()
     }
 
-    #[cfg(backtrace)]
+    /// To enable optional rust backtrace in DataFusion:
+    /// - [`Setup Env Variables`]https://doc.rust-lang.org/std/backtrace/index.html#environment-variables
+    /// - Enable `backtrace` cargo feature
+    ///
+    /// Example:
+    /// cargo build --features 'backtrace'
+    /// RUST_BACKTRACE=1 ./app
     #[inline(always)]
     pub fn get_back_trace() -> String {
-        let back_trace = Backtrace::capture();
-        if back_trace.status() == BacktraceStatus::Captured {
-            return format!("\n\nbacktrace: {}", back_trace);
+        #[cfg(feature = "backtrace")]
+        {
+            let back_trace = Backtrace::capture();
+            if back_trace.status() == BacktraceStatus::Captured {
+                return format!("{}{}", Self::BACK_TRACE_SEP, back_trace);
+            }
+
+            "".to_owned()
         }
 
-        "".to_owned()
-    }
-
-    #[cfg(not(backtrace))]
-    #[inline(always)]
-    pub fn get_back_trace() -> String {
+        #[cfg(not(feature = "backtrace"))]
         "".to_owned()
     }
 }
@@ -529,6 +537,39 @@ mod test {
     fn arrow_error_to_datafusion() {
         let res = return_datafusion_error().unwrap_err();
         assert_eq!(res.strip_backtrace(), "Arrow error: Schema error: bar");
+    }
+
+    // RUST_BACKTRACE=1 cargo test --features backtrace --package datafusion-common --lib -- error::test::test_backtrace
+    #[cfg(feature = "backtrace")]
+    #[test]
+    fn test_enabled_backtrace() {
+        let res: Result<(), DataFusionError> = plan_err!("Err");
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains(DataFusionError::BACK_TRACE_SEP));
+        assert_eq!(
+            err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(0)
+                .unwrap(),
+            &"Error during planning: Err"
+        );
+        assert!(
+            err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .len()
+                > 0
+        );
+    }
+
+    #[cfg(not(feature = "backtrace"))]
+    #[test]
+    fn test_disabled_backtrace() {
+        let res: Result<(), DataFusionError> = plan_err!("Err");
+        let err = res.unwrap_err().to_string();
+        assert!(!err.contains(DataFusionError::BACK_TRACE_SEP));
+        assert_eq!(err, "Error during planning: Err");
     }
 
     #[test]

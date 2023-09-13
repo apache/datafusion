@@ -37,6 +37,7 @@ avro = ["apache-avro"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 default = ["compression", "parquet"]
 pyarrow = ["pyo3", "arrow/pyarrow"]
+backtrace = []
 
 [dependencies]
 apache-avro = { version = "0.15", default-features = false, features = ["snappy"], optional = true }
