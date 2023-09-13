@@ -147,7 +147,7 @@ impl DiskManager {
     }
 }
 
-/// A wrapper around a [`NamedTemporaryFile`] that also contains a reference
+/// A wrapper around a [`NamedTempFile`] that also contains a reference
 #[derive(Debug)]
 pub struct RefCountedTempFile {
     /// directory in which temporary files are created (Arc is held to ensure
