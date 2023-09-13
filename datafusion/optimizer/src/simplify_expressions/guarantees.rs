@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Simplifier implementation for [ExprSimplifier::simplify_with_guarantees()][crate::simplify_expressions::expr_simplifier::ExprSimplifier::simplify_with_guarantees].
+//! Simplifier implementation for [`ExprSimplifier::with_guarantees()`]
+//!
+//! [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
 use datafusion_common::{tree_node::TreeNodeRewriter, DataFusionError, Result};
 use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
 use std::collections::HashMap;
@@ -27,12 +29,14 @@ use datafusion_physical_expr::intervals::{Interval, IntervalBound, NullableInter
 /// Guarantees are a mapping from an expression (which currently is always a
 /// column reference) to a [NullableInterval]. The interval represents the known
 /// possible values of the column. Using these known values, expressions are
-/// rewritten so they can be simplified using [ConstEvaluator] and [Simplifier].
+/// rewritten so they can be simplified using `ConstEvaluator` and `Simplifier`.
 ///
 /// For example, if we know that a column is not null and has values in the
 /// range [1, 10), we can rewrite `x IS NULL` to `false` or `x < 10` to `true`.
 ///
-/// See a full example in [ExprSimplifier::with_guarantees()].
+/// See a full example in [`ExprSimplifier::with_guarantees()`].
+///
+/// [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
 pub(crate) struct GuaranteeRewriter<'a> {
     guarantees: HashMap<&'a Expr, &'a NullableInterval>,
 }
