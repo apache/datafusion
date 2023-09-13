@@ -188,10 +188,7 @@ pub fn physical_exprs_contains(
     physical_exprs: &[Arc<dyn PhysicalExpr>],
     expr: &Arc<dyn PhysicalExpr>,
 ) -> bool {
-    for physical_expr in physical_exprs {
-        if physical_expr.eq(expr) {
-            return true;
-        }
-    }
-    false
+    physical_exprs
+        .iter()
+        .any(|physical_expr| physical_expr.eq(expr))
 }
