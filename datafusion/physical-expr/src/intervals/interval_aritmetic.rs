@@ -767,7 +767,7 @@ impl From<ScalarValue> for NullableInterval {
     fn from(value: ScalarValue) -> Self {
         if value.is_null() {
             Self::Null {
-                datatype: value.get_datatype(),
+                datatype: value.data_type(),
             }
         } else {
             Self::NotNull {
