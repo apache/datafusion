@@ -18949,6 +18949,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Iszero => "Iszero",
             Self::ArrayEmpty => "ArrayEmpty",
             Self::ArrayPopBack => "ArrayPopBack",
+            Self::StringToArray => "StringToArray",
         };
         serializer.serialize_str(variant)
     }
@@ -19077,6 +19078,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Iszero",
             "ArrayEmpty",
             "ArrayPopBack",
+            "StringToArray",
         ];
 
         struct GeneratedVisitor;
@@ -19236,6 +19238,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Iszero" => Ok(ScalarFunction::Iszero),
                     "ArrayEmpty" => Ok(ScalarFunction::ArrayEmpty),
                     "ArrayPopBack" => Ok(ScalarFunction::ArrayPopBack),
+                    "StringToArray" => Ok(ScalarFunction::StringToArray),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

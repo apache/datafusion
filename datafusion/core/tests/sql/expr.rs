@@ -520,6 +520,12 @@ async fn test_string_expressions_batch2() -> Result<()> {
         "split_part('abc~@~def~@~ghi', '~@~', CAST(NULL AS INT))",
         "NULL"
     );
+    test_expression!("string_to_array(NULL, ' ')", "NULL");
+    test_expression!("string_to_array('abc def ghi', ' ')", "[abc, def, ghi]");
+    test_expression!("string_to_array('abcxxxdef', 'xxx')", "[abc, def]");
+    test_expression!("string_to_array('abc', '')", "[abc]");
+    test_expression!("string_to_array('abc', NULL)", "[a, b, c]");
+    test_expression!("string_to_array('abc def', ' ', 'def')", "[abc, ]");
     test_expression!("starts_with('alphabet', 'alph')", "true");
     test_expression!("starts_with('alphabet', 'blph')", "false");
     test_expression!("starts_with(NULL, 'blph')", "NULL");

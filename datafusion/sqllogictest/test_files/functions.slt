@@ -723,6 +723,36 @@ SELECT split_part(arrow_cast('foo_bar', 'Dictionary(Int32, Utf8)'), '_', 2)
 ----
 bar
 
+query ?
+SELECT string_to_array(NULL, ' ')
+----
+NULL
+
+query ?
+SELECT string_to_array('abc def ghi', ' ')
+----
+[abc, def, ghi]
+
+query ?
+SELECT string_to_array('abcxxxdef', 'xxx')
+----
+[abc, def]
+
+query ?
+SELECT string_to_array('abc', '')
+----
+[abc]
+
+query ?
+SELECT string_to_array('abc', NULL)
+----
+[a, b, c]
+
+query ?
+SELECT string_to_array('abc def', ' ', 'def')
+----
+[abc, ]
+
 query T
 SELECT trim('  foo  ')
 ----

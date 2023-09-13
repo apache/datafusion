@@ -599,6 +599,7 @@ enum ScalarFunction {
   Iszero = 114;
   ArrayEmpty = 115;
   ArrayPopBack = 116;
+  StringToArray = 117;
 }
 
 message ScalarFunctionNode {

@@ -796,6 +796,21 @@ pub fn create_physical_fun(
                 internal_err!("Unsupported data type {other:?} for function split_part")
             }
         }),
+        BuiltinScalarFunction::StringToArray => {
+            Arc::new(|args| match args[0].data_type() {
+                DataType::Utf8 => {
+                    make_scalar_function(string_expressions::string_to_array::<i32>)(args)
+                }
+                DataType::LargeUtf8 => {
+                    make_scalar_function(string_expressions::string_to_array::<i64>)(args)
+                }
+                other => {
+                    internal_err!(
+                        "Unsupported data type {other:?} for function string_to_array"
+                    )
+                }
+            })
+        }
         BuiltinScalarFunction::StartsWith => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::starts_with::<i32>)(args)
