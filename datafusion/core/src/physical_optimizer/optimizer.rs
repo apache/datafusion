@@ -27,8 +27,6 @@ use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
 use crate::physical_optimizer::enforce_sorting::EnforceSorting;
 use crate::physical_optimizer::join_selection::JoinSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
-use crate::physical_optimizer::repartition::Repartition;
-use crate::physical_optimizer::sort_enforcement::EnforceSorting;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
 use crate::{error::Result, physical_plan::ExecutionPlan};
 
