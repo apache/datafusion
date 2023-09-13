@@ -423,7 +423,7 @@ impl DataFusionError {
     }
 
     /// To enable optional rust backtrace in DataFusion:
-    /// - [`Setup Env Variables`]https://doc.rust-lang.org/std/backtrace/index.html#environment-variables
+    /// - [`Setup Env Variables`]<https://doc.rust-lang.org/std/backtrace/index.html#environment-variables>
     /// - Enable `backtrace` cargo feature
     ///
     /// Example:
@@ -542,6 +542,7 @@ mod test {
     // RUST_BACKTRACE=1 cargo test --features backtrace --package datafusion-common --lib -- error::test::test_backtrace
     #[cfg(feature = "backtrace")]
     #[test]
+    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let err = res.unwrap_err().to_string();
@@ -565,11 +566,12 @@ mod test {
 
     #[cfg(not(feature = "backtrace"))]
     #[test]
+    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_disabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
-        let err = res.unwrap_err().to_string();
-        assert!(!err.contains(DataFusionError::BACK_TRACE_SEP));
-        assert_eq!(err, "Error during planning: Err");
+        let res = res.unwrap_err().to_string();
+        assert!(!res.contains(DataFusionError::BACK_TRACE_SEP));
+        assert_eq!(res, "Error during planning: Err");
     }
 
     #[test]
