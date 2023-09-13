@@ -144,15 +144,13 @@ impl DiskManager {
 }
 
 /// Ensure local dirs present
-fn create_local_dirs(local_dirs: &Vec<PathBuf>) -> Result<()> {
-    Ok(local_dirs
-        .iter()
-        .try_for_each(|root| -> Result<()> {
-            if !std::path::Path::new(root).exists() {
-                std::fs::create_dir(root)?;
-            }
-            Ok(())
-        })?)
+fn create_local_dirs(local_dirs: &[PathBuf]) -> Result<()> {
+    local_dirs.iter().try_for_each(|root| -> Result<()> {
+        if !std::path::Path::new(root).exists() {
+            std::fs::create_dir(root)?;
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -268,7 +266,7 @@ mod tests {
         let local_dir1 = TempDir::new()?;
         let local_dir2 = TempDir::new()?;
         let local_dir3 = TempDir::new()?;
-        let local_dirs = vec![local_dir1.path(), local_dir2.path(), local_dir3.path()];
+        let local_dirs = [local_dir1.path(), local_dir2.path(), local_dir3.path()];
         let config = DiskManagerConfig::new_specified(
             local_dirs.iter().map(|p| p.into()).collect(),
         );
