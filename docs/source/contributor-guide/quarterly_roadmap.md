@@ -21,6 +21,12 @@
 
 A quarterly roadmap will be published to give the DataFusion community visibility into the priorities of the projects contributors. This roadmap is not binding.
 
+## 2023 Q4
+
+- Improve DataFrame write / output capability #7079
+- Implementation of `ARRAY` types #6980
+- Write an academic paper on DataFusion #6782
+
 ## 2022 Q2
 
 ### DataFusion Core
