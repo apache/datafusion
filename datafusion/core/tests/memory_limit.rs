@@ -200,7 +200,8 @@ async fn symmetric_hash_join() {
 
 #[tokio::test]
 async fn sort_preserving_merge() {
-    let partition_size = batches_byte_size(&dict_batches());
+    let scenario = Scenario::new_dictionary_strings(2);
+    let partition_size = scenario.partition_size();
 
     TestCase::new()
     // This query uses the exact same ordering as the input table
@@ -213,7 +214,7 @@ async fn sort_preserving_merge() {
         // provide insufficient memory to merge
         .with_memory_limit(partition_size / 2)
         // two partitions of data, so a merge is required
-        .with_scenario(Scenario::DictionaryStrings(2))
+        .with_scenario(scenario)
         .with_expected_plan(
             // It is important that this plan only has
             // SortPreservingMergeExec (not a Sort which would compete
@@ -238,7 +239,10 @@ async fn sort_preserving_merge() {
 
 #[tokio::test]
 async fn sort_spill_reservation() {
-    let partition_size = batches_byte_size(&maybe_split_batches(dict_batches(), true));
+    let scenario = Scenario::new_dictionary_strings(1)
+        // make the batches small enough to avoid triggering CardinalityAwareRowConverter
+        .with_single_row_batches(true);
+    let partition_size = scenario.partition_size();
 
     let base_config = SessionConfig::new()
         // do not allow the sort to use the 'concat in place' path
@@ -256,10 +260,8 @@ async fn sort_spill_reservation() {
     // enough memory to sort if we don't try to merge it all at once
         .with_memory_limit(partition_size)
     // use a single partiton so only a sort is needed
-        .with_scenario(Scenario::DictionaryStrings(1))
+        .with_scenario(scenario)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
-    // make the batches small enough to avoid triggering CardinalityAwareRowConverter
-        .with_single_row_batches(true)
         .with_expected_plan(
             // It is important that this plan only has a SortExec, not
             // also merge, so we can ensure the sort could finish
@@ -310,8 +312,6 @@ struct TestCase {
     memory_limit: usize,
     config: SessionConfig,
     scenario: Scenario,
-    /// If true, splits all input batches into 1 row each
-    single_row_batches: bool,
     /// How should the disk manager (that allows spilling) be
     /// configured? Defaults to `Disabled`
     disk_manager_config: DiskManagerConfig,
@@ -329,7 +329,6 @@ impl TestCase {
             memory_limit: 0,
             config: SessionConfig::new(),
             scenario: Scenario::AccessLog,
-            single_row_batches: false,
             disk_manager_config: DiskManagerConfig::Disabled,
             expected_plan: vec![],
             expected_success: false,
@@ -386,12 +385,6 @@ impl TestCase {
         self
     }
 
-    /// Should the input be split into 1 row batches?
-    fn with_single_row_batches(mut self, single_row_batches: bool) -> Self {
-        self.single_row_batches = single_row_batches;
-        self
-    }
-
     /// Specify an expected plan to review
     pub fn with_expected_plan(mut self, expected_plan: &[&str]) -> Self {
         self.expected_plan = expected_plan.iter().map(|s| s.to_string()).collect();
@@ -407,12 +400,11 @@ impl TestCase {
             config,
             scenario,
             disk_manager_config,
-            single_row_batches,
             expected_plan,
             expected_success,
         } = self;
 
-        let table = scenario.table(single_row_batches);
+        let table = scenario.table();
 
         let rt_config = RuntimeConfig::new()
             // do not allow spilling
@@ -483,24 +475,59 @@ enum Scenario {
     /// [`StreamingTable`]
     AccessLogStreaming,
 
-    /// N partitions of of sorted, dictionary encoded strings
-    DictionaryStrings(usize),
+    /// N partitions of of sorted, dictionary encoded strings.
+    DictionaryStrings {
+        partitions: usize,
+        /// If true, splits all input batches into 1 row each
+        single_row_batches: bool,
+    },
 }
 
 impl Scenario {
+    /// Create a new DictionaryStrings scenario with the number of partitions
+    fn new_dictionary_strings(partitions: usize) -> Self {
+        Self::DictionaryStrings {
+            partitions,
+            single_row_batches: false,
+        }
+    }
+
+    /// Should the input be split into 1 row batches?
+    fn with_single_row_batches(mut self, val: bool) -> Self {
+        if let Self::DictionaryStrings {
+            single_row_batches, ..
+        } = &mut self
+        {
+            *single_row_batches = val;
+        } else {
+            panic!("Scenario does not support single row batches");
+        }
+        self
+    }
+
+    /// return the size, in bytes, of each partition
+    fn partition_size(&self) -> usize {
+        if let Self::DictionaryStrings {
+            single_row_batches, ..
+        } = self
+        {
+            batches_byte_size(&maybe_split_batches(dict_batches(), *single_row_batches))
+        } else {
+            panic!("Scenario does not support partition size");
+        }
+    }
+
     /// return a TableProvider with data for the test
-    fn table(&self, one_row_batches: bool) -> Arc<dyn TableProvider> {
+    fn table(&self) -> Arc<dyn TableProvider> {
         match self {
             Self::AccessLog => {
                 let batches = access_log_batches();
-                let batches = maybe_split_batches(batches, one_row_batches);
                 let table =
                     MemTable::try_new(batches[0].schema(), vec![batches]).unwrap();
                 Arc::new(table)
             }
             Self::AccessLogStreaming => {
                 let batches = access_log_batches();
-                let batches = maybe_split_batches(batches, one_row_batches);
 
                 // Create a new streaming table with the generated schema and batches
                 let table = StreamingTable::try_new(
@@ -514,13 +541,16 @@ impl Scenario {
                 .with_infinite_table(true);
                 Arc::new(table)
             }
-            Self::DictionaryStrings(num_partitions) => {
+            Self::DictionaryStrings {
+                partitions,
+                single_row_batches,
+            } => {
                 use datafusion::physical_expr::expressions::col;
                 let batches: Vec<Vec<_>> = std::iter::repeat(maybe_split_batches(
                     dict_batches(),
-                    one_row_batches,
+                    *single_row_batches,
                 ))
-                .take(*num_partitions)
+                .take(*partitions)
                 .collect();
 
                 let schema = batches[0][0].schema();
@@ -561,7 +591,7 @@ impl Scenario {
                 // first
                 Some(vec![Arc::new(JoinSelection::new())])
             }
-            Self::DictionaryStrings(_) => {
+            Self::DictionaryStrings { .. } => {
                 // Use default rules
                 None
             }
