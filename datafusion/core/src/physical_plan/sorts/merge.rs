@@ -24,6 +24,8 @@ use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
+use super::builder::YieldedSortOrder;
+
 #[derive(Debug)]
 pub(crate) struct SortPreservingMergeStream<C: Cursor> {
     in_progress: SortOrderBuilder<C>,
@@ -133,7 +135,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
     fn poll_next_inner(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>>> {
+    ) -> Poll<Option<Result<YieldedSortOrder<C>>>> {
         if self.aborted {
             return Poll::Ready(None);
         }

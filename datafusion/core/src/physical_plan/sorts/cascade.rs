@@ -103,7 +103,7 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
             ));
             // in order to maintain sort-preserving streams, don't mix the merge tree levels.
             if divided_streams.is_empty() {
-                divided_streams = next_level.drain(..).collect();
+                divided_streams = std::mem::take(&mut next_level);
             }
         }
 
@@ -145,14 +145,15 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
 
         let batches_to_remove = batches
             .iter()
-            .zip(batches_needed.into_iter())
+            .zip(batches_needed)
             .filter_map(|(batch, batch_id)| {
                 if batch.num_rows() == batches_seen[&batch_id].1 {
                     Some(batch_id)
                 } else {
                     None
                 }
-            }).collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
 
         let columns = (0..self.schema.fields.len())
             .map(|column_idx| {
@@ -185,15 +186,13 @@ impl<C: Cursor + Unpin + Send + 'static> SortPreservingCascadeStream<C> {
                 self.aborted = true;
                 Poll::Ready(Some(Err(e)))
             }
-            Some(Ok((_, sort_order))) => {
-                match self.build_record_batch(sort_order) {
-                    Ok(batch) => Poll::Ready(Some(Ok(batch))),
-                    Err(e) => {
-                        self.aborted = true;
-                        Poll::Ready(Some(Err(e)))
-                    }
+            Some(Ok((_, sort_order))) => match self.build_record_batch(sort_order) {
+                Ok(batch) => Poll::Ready(Some(Ok(batch))),
+                Err(e) => {
+                    self.aborted = true;
+                    Poll::Ready(Some(Err(e)))
                 }
-            }
+            },
         }
     }
 }

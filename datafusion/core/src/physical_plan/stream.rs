@@ -110,9 +110,7 @@ impl<O: Send + Sync + 'static> ReceiverStreamBuilder<O> {
     ) {
         let output = self.tx();
 
-        self.spawn(async move {
-            input.call(output, partition, context).await
-        });
+        self.spawn(async move { input.call(output, partition, context).await });
     }
 
     /// Create a stream of all `O`es written to `tx`

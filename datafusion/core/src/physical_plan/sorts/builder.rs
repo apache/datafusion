@@ -23,6 +23,7 @@ use super::cursor::Cursor;
 use super::stream::{BatchId, BatchOffset};
 
 pub type SortOrder = (BatchId, usize, BatchOffset); // batch_id, row_idx (without offset)
+pub type YieldedSortOrder<C> = (Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>);
 
 #[derive(Debug)]
 struct BatchCursor<C: Cursor> {
@@ -171,9 +172,7 @@ impl<C: Cursor> SortOrderBuilder<C> {
     /// 4. output will be:
     ///        - SortOrder
     ///        - corresponding cursors, each up to total yielded rows [cursor_batch_0, cursor_batch_1, ..]
-    pub fn yield_sort_order(
-        &mut self,
-    ) -> Result<Option<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>> {
+    pub fn yield_sort_order(&mut self) -> Result<Option<YieldedSortOrder<C>>> {
         if self.is_empty() {
             return Ok(None);
         }

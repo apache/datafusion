@@ -348,7 +348,7 @@ impl<T: FieldValues + Send + Sync> Cursor for FieldCursor<T> {
             values: values.slice(offset, length)?,
             offset: 0,
             null_threshold: *null_threshold,
-            options: options.clone(),
+            options: *options,
         })
     }
 

@@ -33,6 +33,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
+use super::builder::YieldedSortOrder;
+
 /// A fallible [`PartitionedStream`] of record batches.
 ///
 /// Each [`Cursor`] and [`RecordBatch`] represents a single record batch.
@@ -383,10 +385,10 @@ impl<C: Cursor> FusedMergeStreams<C> {
         &mut self,
         cx: &mut Context<'_>,
         stream_idx: usize,
-    ) -> Poll<Option<Result<(Vec<(C, BatchId, BatchOffset)>, Vec<SortOrder>)>>> {
+    ) -> Poll<Option<Result<YieldedSortOrder<C>>>> {
         loop {
             match ready!(self.0[stream_idx].poll_next_unpin(cx)) {
-                Some(Ok((_, sort_order))) if sort_order.len() == 0 => continue,
+                Some(Ok((_, sort_order))) if sort_order.is_empty() => continue,
                 r => return Poll::Ready(r),
             }
         }
@@ -423,8 +425,7 @@ impl<C: Cursor + std::marker::Send> YieldedCursorStream<C> {
     ) -> Option<(C, BatchId, BatchOffset)> {
         self.cursors[stream_idx]
             .as_mut()
-            .map(|queue| queue.pop_front())
-            .flatten()
+            .and_then(|queue| queue.pop_front())
     }
 
     // The input [`SortOrder`] is across batches.
@@ -493,7 +494,7 @@ impl<C: Cursor + std::marker::Send> YieldedCursorStream<C> {
         }
 
         self.cursors[stream_idx] = Some(VecDeque::from(parsed_cursors));
-        return Ok(());
+        Ok(())
     }
 }
 
