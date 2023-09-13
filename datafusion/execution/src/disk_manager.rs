@@ -22,10 +22,9 @@ use datafusion_common::{DataFusionError, Result};
 use log::debug;
 use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
-use std::env::temp_dir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tempfile::{Builder, NamedTempFile};
+use tempfile::{Builder, NamedTempFile, TempDir};
 
 /// Configuration for temporary disk access
 #[derive(Debug, Clone)]
@@ -72,11 +71,11 @@ impl DiskManagerConfig {
 /// while processing dataset larger than available memory.
 #[derive(Debug)]
 pub struct DiskManager {
-    /// Dirs to put temporary files in.
+    /// TempDirs to put temporary files in.
     ///
-    /// If `Some(vec![])` temporary files will be created in the directories.
+    /// If `Some(vec![])` a new OS specified temporary directory will be created
     /// If `None` an error will be returned (configured not to spill)
-    local_dirs: Mutex<Option<Vec<PathBuf>>>,
+    local_dirs: Mutex<Option<Vec<Arc<TempDir>>>>,
 }
 
 impl DiskManager {
@@ -88,10 +87,9 @@ impl DiskManager {
                 local_dirs: Mutex::new(Some(vec![])),
             })),
             DiskManagerConfig::NewSpecified(conf_dirs) => {
-                create_local_dirs(&conf_dirs)?;
-                let local_dirs = conf_dirs;
+                let local_dirs = create_local_dirs(conf_dirs)?;
                 debug!(
-                    "Use local dirs {:?} as DataFusion working directory",
+                    "Created local dirs {:?} as DataFusion working directory",
                     local_dirs
                 );
                 Ok(Arc::new(Self {
@@ -115,7 +113,10 @@ impl DiskManager {
     ///
     /// If the file can not be created for some reason, returns an
     /// error message referencing the request description
-    pub fn create_tmp_file(&self, request_description: &str) -> Result<NamedTempFile> {
+    pub fn create_tmp_file(
+        &self,
+        request_description: &str,
+    ) -> Result<RefCountedTempFile> {
         let mut guard = self.local_dirs.lock();
         let local_dirs = guard.as_mut().ok_or_else(|| {
             DataFusionError::ResourcesExhausted(format!(
@@ -125,32 +126,61 @@ impl DiskManager {
 
         // Create a temporary directory if needed
         if local_dirs.is_empty() {
-            let tempdir = temp_dir();
+            let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
 
             debug!(
-                "Use directory '{:?}' as DataFusion tempfile directory for {}",
-                tempdir.to_string_lossy(),
+                "Created directory '{:?}' as DataFusion tempfile directory for {}",
+                tempdir.path().to_string_lossy(),
                 request_description,
             );
 
-            local_dirs.push(tempdir);
+            local_dirs.push(Arc::new(tempdir));
         }
 
         let dir_index = thread_rng().gen_range(0..local_dirs.len());
-        Builder::new()
-            .tempfile_in(&local_dirs[dir_index])
-            .map_err(DataFusionError::IoError)
+        Ok(RefCountedTempFile {
+            parent_temp_dir: local_dirs[dir_index].clone(),
+            tempfile: Builder::new()
+                .tempfile_in(local_dirs[dir_index].as_ref())
+                .map_err(DataFusionError::IoError)?,
+        })
     }
 }
 
-/// Ensure local dirs present
-fn create_local_dirs(local_dirs: &[PathBuf]) -> Result<()> {
-    local_dirs.iter().try_for_each(|root| -> Result<()> {
-        if !std::path::Path::new(root).exists() {
-            std::fs::create_dir(root)?;
-        }
-        Ok(())
-    })
+/// A named temporary file and the directory it lives in, which may be clean up on drop
+#[derive(Debug)]
+pub struct RefCountedTempFile {
+    /// directory in which temporary files are created
+    #[allow(dead_code)]
+    parent_temp_dir: Arc<TempDir>,
+    tempfile: NamedTempFile,
+}
+
+impl RefCountedTempFile {
+    pub fn path(&self) -> &Path {
+        self.tempfile.path()
+    }
+
+    pub fn inner(&self) -> &NamedTempFile {
+        &self.tempfile
+    }
+}
+
+/// Setup local dirs by creating one new dir in each of the given dirs
+fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<Arc<TempDir>>> {
+    local_dirs
+        .iter()
+        .map(|root| {
+            if !std::path::Path::new(root).exists() {
+                std::fs::create_dir(root)?;
+            }
+            Builder::new()
+                .prefix("datafusion-")
+                .tempdir_in(root)
+                .map_err(DataFusionError::IoError)
+        })
+        .map(|result| result.map(Arc::new))
+        .collect()
 }
 
 #[cfg(test)]
@@ -186,7 +216,7 @@ mod tests {
             .lock()
             .iter()
             .flatten()
-            .map(|p| p.as_path().into())
+            .map(|p| p.path().into())
             .collect()
     }
 
