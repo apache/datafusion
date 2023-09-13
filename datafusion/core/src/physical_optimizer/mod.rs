@@ -30,7 +30,6 @@ pub mod join_selection;
 pub mod optimizer;
 pub mod pipeline_checker;
 pub mod pruning;
-pub mod repartition;
 pub mod replace_with_order_preserving_variants;
 mod sort_pushdown;
 mod utils;
