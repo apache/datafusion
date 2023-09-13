@@ -147,7 +147,6 @@ impl CardinalityAwareRowConverter {
     /// Return a mutable reference to the inner converter, creating it if needed
     fn converter_mut(&mut self, columns: &[ArrayRef]) -> Result<&mut RowConverter> {
         if let Self::New { fields } = self {
-            // TODO clean up the code
             let mut updated_fields = fields.clone();
             let mut output_types = vec![];
             for (i, col) in columns.iter().enumerate() {
