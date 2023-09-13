@@ -21,6 +21,7 @@
 //! according to the configuration), this rule increases partition counts in
 //! the physical plan.
 
+use arrow_schema::SchemaRef;
 use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -38,26 +39,27 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortOptions;
+use crate::physical_plan::sorts::sort::{SortExec, SortOptions};
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
+use crate::physical_plan::{DisplayAs, DisplayFormatType, Partitioning};
 
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::{
-    map_columns_before_projection, ordering_satisfy_requirement_concrete,
+    map_columns_before_projection, ordering_satisfy,
+    ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
-    PhysicalSortRequirement,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
+    LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use datafusion_common::internal_err;
+use datafusion_common::{internal_err, Statistics};
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -208,15 +210,14 @@ impl PhysicalOptimizerRule for EnforceDistribution {
             })?
         };
 
+        let adjusted = require_top_ordering(adjusted)?;
         let distribution_context = DistributionContext::new(adjusted);
         // Distribution enforcement needs to be applied bottom-up.
         let distribution_context =
             distribution_context.transform_up(&|distribution_context| {
                 ensure_distribution(distribution_context, config)
             })?;
-
-        // If output ordering is not necessary, removes it
-        update_plan_to_remove_unnecessary_final_order(distribution_context)
+        remove_top_ordering_req(distribution_context.plan)
     }
 
     fn name(&self) -> &str {
@@ -993,12 +994,6 @@ fn add_roundrobin_on_top(
             RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(n_target))?
                 .with_preserve_order(should_preserve_ordering),
         ) as Arc<dyn ExecutionPlan>;
-        if let Some(exec_tree) = dist_onward {
-            return internal_err!(
-                "ExecTree should have been empty, but got:{:?}",
-                exec_tree
-            );
-        }
 
         // update distribution onward with new operator
         update_distribution_onward(new_plan.clone(), dist_onward, input_idx);
@@ -1134,21 +1129,64 @@ fn remove_unnecessary_repartition(
     } = distribution_context;
 
     // Remove any redundant RoundRobin at the start:
-    if let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        if let Partitioning::RoundRobinBatch(n_out) = repartition.partitioning() {
-            // Repartition is useless:
-            if *n_out <= repartition.input().output_partitioning().partition_count() {
-                let mut new_distribution_onwards =
-                    vec![None; repartition.input().children().len()];
-                if let Some(exec_tree) = &distribution_onwards[0] {
-                    for child in &exec_tree.children {
-                        new_distribution_onwards[child.idx] = Some(child.clone());
-                    }
-                }
-                plan = repartition.input().clone();
-                distribution_onwards = new_distribution_onwards;
+    while let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        plan = repartition.input().clone();
+        let mut new_distribution_onwards = vec![None; plan.children().len()];
+        if let Some(exec_tree) = &distribution_onwards[0] {
+            for child in &exec_tree.children {
+                new_distribution_onwards[child.idx] = Some(child.clone());
             }
         }
+        distribution_onwards = new_distribution_onwards;
+    }
+
+    while let Some(coalesce_partition) =
+        plan.as_any().downcast_ref::<CoalescePartitionsExec>()
+    {
+        plan = coalesce_partition.input().clone();
+        let mut new_distribution_onwards = vec![None; plan.children().len()];
+        if let Some(exec_tree) = &distribution_onwards[0] {
+            for child in &exec_tree.children {
+                new_distribution_onwards[child.idx] = Some(child.clone());
+            }
+        }
+        distribution_onwards = new_distribution_onwards;
+    }
+
+    while let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
+        let sort_expr = spm.expr().to_vec();
+        let fetch = spm.fetch();
+        plan = spm.input().clone();
+        let mut new_distribution_onwards = vec![None; plan.children().len()];
+        if let Some(exec_tree) = &distribution_onwards[0] {
+            for child in &exec_tree.children {
+                new_distribution_onwards[child.idx] = Some(child.clone());
+            }
+        }
+        distribution_onwards = new_distribution_onwards;
+        // If the ordering requirement is already satisfied, do not add a sort.
+        if !ordering_satisfy(
+            plan.output_ordering(),
+            Some(&sort_expr),
+            || plan.equivalence_properties(),
+            || plan.ordering_equivalence_properties(),
+        ) {
+            let new_sort = SortExec::new(sort_expr, plan.clone()).with_fetch(fetch);
+            if distribution_onwards.is_empty() {
+                let mut distribution_onward = None;
+                update_distribution_onward(plan.clone(), &mut distribution_onward, 0);
+                distribution_onwards = vec![distribution_onward];
+            } else {
+                update_distribution_onward(plan.clone(), &mut distribution_onwards[0], 0);
+            }
+            plan = Arc::new(if plan.output_partitioning().partition_count() > 1 {
+                new_sort.with_preserve_partitioning(true)
+            } else {
+                new_sort
+            }) as _;
+            // update_distribution_onward(plan.clone(), &mut distribution_onwards[0], 0);
+        }
+        //  add_sort_above(&mut plan, sort_expr, fetch)?;
     }
 
     // Create a plan with the updated children:
@@ -1225,13 +1263,15 @@ fn replace_order_preserving_variants_helper(
         .as_any()
         .downcast_ref::<SortPreservingMergeExec>()
     {
-        return Ok(Arc::new(CoalescePartitionsExec::new(spm.input().clone())));
+        return Ok(Arc::new(CoalescePartitionsExec::new(
+            updated_children[0].clone(),
+        )));
     }
     if let Some(repartition) = exec_tree.plan.as_any().downcast_ref::<RepartitionExec>() {
         if repartition.preserve_order() {
             return Ok(Arc::new(
                 RepartitionExec::try_new(
-                    repartition.input().clone(),
+                    updated_children[0].clone(),
                     repartition.partitioning().clone(),
                 )?
                 .with_preserve_order(false),
@@ -1271,13 +1311,11 @@ fn ensure_distribution(
         repartition_beneficial_stat =
             stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
     }
-
     // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
         plan,
         mut distribution_onwards,
     } = remove_unnecessary_repartition(dist_context)?;
-
     let n_children = plan.children().len();
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
@@ -1680,6 +1718,179 @@ impl TreeNode for PlanWithKeyRequirements {
     }
 }
 
+fn remove_top_ordering_req(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let new_children = plan
+        .children()
+        .into_iter()
+        .map(|child| remove_top_ordering_req(child))
+        .collect::<Result<Vec<_>>>()?;
+    if plan.as_any().is::<SortRequiringExec>() {
+        Ok(new_children[0].clone())
+    } else {
+        plan.with_new_children(new_children)
+    }
+}
+
+fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
+    if is_changed {
+        Ok(new_plan)
+    } else {
+        Ok(Arc::new(SortRequiringExec::new(
+            new_plan,
+            None,
+            Distribution::UnspecifiedDistribution,
+        )) as _)
+    }
+}
+/// Helper function that adds an ancillary `SortRequiringExec` to the given plan.
+fn require_top_ordering_helper(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
+    let mut children = plan.children();
+    // Global ordering defines desired ordering in the final result.
+    if children.len() != 1 {
+        // Ok(Arc::new(SortRequiringExec::new(plan.clone(), None, Distribution::UnspecifiedDistribution)) as _)
+        Ok((plan, false))
+    } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+        let req_ordering = sort_exec.output_ordering().unwrap_or(&[]);
+        let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
+        Ok((
+            Arc::new(SortRequiringExec::new(
+                plan.clone(),
+                Some(reqs),
+                Distribution::SinglePartition,
+            )) as _,
+            true,
+        ))
+    } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
+        let req_ordering = spm.expr();
+        let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
+        Ok((
+            Arc::new(SortRequiringExec::new(
+                plan.clone(),
+                Some(reqs),
+                Distribution::SinglePartition,
+            )) as _,
+            true,
+        ))
+    } else if plan.maintains_input_order()[0]
+        && plan.required_input_ordering()[0].is_none()
+    {
+        // Keep searching for a `SortExec` as long as ordering is maintained,
+        // and on-the-way operators do not themselves require an ordering.
+        // When an operator requires an ordering, any `SortExec` below can not
+        // be responsible for (i.e. the originator of) the global ordering.
+        let (new_child, is_changed) =
+            require_top_ordering_helper(children.swap_remove(0))?;
+        Ok((plan.with_new_children(vec![new_child])?, is_changed))
+    } else {
+        // Stop searching, there is no global ordering desired for the query.
+        // Ok(Arc::new(SortRequiringExec::new(plan.clone(), None, Distribution::UnspecifiedDistribution)) as _)
+        Ok((plan, false))
+    }
+}
+
+/// Models operators like BoundedWindowExec that require an input
+/// ordering but is easy to construct
+#[derive(Debug)]
+struct SortRequiringExec {
+    input: Arc<dyn ExecutionPlan>,
+    requirements: Option<LexOrderingReq>,
+    dist_requirement: Distribution,
+}
+
+impl SortRequiringExec {
+    fn new(
+        input: Arc<dyn ExecutionPlan>,
+        requirements: Option<LexOrderingReq>,
+        dist_requirement: Distribution,
+    ) -> Self {
+        Self {
+            input,
+            requirements,
+            dist_requirement,
+        }
+    }
+}
+
+impl DisplayAs for SortRequiringExec {
+    fn fmt_as(
+        &self,
+        _t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        if let Some(requirements) = &self.requirements {
+            let expr: Vec<String> = requirements.iter().map(|e| e.to_string()).collect();
+            write!(f, "SortRequiringExec: [{}]", expr.join(","))
+        } else {
+            write!(f, "SortRequiringExec: [None]")
+        }
+    }
+}
+
+impl ExecutionPlan for SortRequiringExec {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.input.schema()
+    }
+
+    fn output_partitioning(&self) -> crate::physical_plan::Partitioning {
+        self.input.output_partitioning()
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![self.dist_requirement.clone()]
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![self.input.clone()]
+    }
+
+    // model that it requires the output ordering of its input
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        vec![self.requirements.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        let child = children.pop().unwrap();
+        Ok(Arc::new(Self::new(
+            child,
+            self.requirements.clone(),
+            self.dist_requirement.clone(),
+        )))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<crate::execution::context::TaskContext>,
+    ) -> Result<crate::physical_plan::SendableRecordBatchStream> {
+        unreachable!();
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.input.statistics()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::Deref;
@@ -1702,7 +1913,9 @@ mod tests {
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
 
-    use crate::physical_optimizer::test_utils::repartition_exec;
+    use crate::physical_optimizer::test_utils::{
+        coalesce_partitions_exec, repartition_exec,
+    };
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::sorts::sort::SortExec;
     use arrow::compute::SortOptions;
@@ -1713,7 +1926,7 @@ mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         expressions, expressions::binary, expressions::lit, expressions::Column,
-        PhysicalExpr, PhysicalSortExpr,
+        LexOrdering, PhysicalExpr, PhysicalSortExpr,
     };
 
     /// Models operators like BoundedWindowExec that require an input
@@ -1721,11 +1934,13 @@ mod tests {
     #[derive(Debug)]
     struct SortRequiredExec {
         input: Arc<dyn ExecutionPlan>,
+        expr: LexOrdering,
     }
 
     impl SortRequiredExec {
         fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-            Self { input }
+            let expr = input.output_ordering().unwrap_or(&[]).to_vec();
+            Self { input, expr }
         }
     }
 
@@ -1735,7 +1950,8 @@ mod tests {
             _t: DisplayFormatType,
             f: &mut std::fmt::Formatter,
         ) -> std::fmt::Result {
-            write!(f, "SortRequiredExec")
+            let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
+            write!(f, "SortRequiredExec: [{}]", expr.join(","))
         }
     }
 
@@ -2982,38 +3198,38 @@ mod tests {
                     vec![
                         top_join_plan.as_str(),
                         join_plan.as_str(),
+                        "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "SortExec: expr=[a@0 ASC]",
-                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortExec: expr=[b1@1 ASC]",
-                        "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                        "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
                         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "SortExec: expr=[b1@1 ASC]",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortExec: expr=[c@2 ASC]",
-                        "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                        "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
                         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "SortExec: expr=[c@2 ASC]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                     ],
                 // Should include 7 RepartitionExecs
                 _ => vec![
                         top_join_plan.as_str(),
+                        "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
                         "SortExec: expr=[a@0 ASC]",
-                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
                         join_plan.as_str(),
+                        "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "SortExec: expr=[a@0 ASC]",
-                        "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortExec: expr=[b1@1 ASC]",
-                        "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                        "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
                         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "SortExec: expr=[b1@1 ASC]",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                        "SortExec: expr=[c@2 ASC]",
-                        "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                        "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
                         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                        "SortExec: expr=[c@2 ASC]",
                         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 ],
             };
@@ -3086,38 +3302,38 @@ mod tests {
                         JoinType::Inner | JoinType::Right => vec![
                             top_join_plan.as_str(),
                             join_plan.as_str(),
+                            "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[a@0 ASC]",
-                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortExec: expr=[b1@1 ASC]",
-                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                            "SortExec: expr=[b1@1 ASC]",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortExec: expr=[c@2 ASC]",
-                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                            "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 4 RepartitionExecs and 4 SortExecs
                         _ => vec![
                             top_join_plan.as_str(),
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
                             "SortExec: expr=[b1@6 ASC]",
-                            "RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10",
                             join_plan.as_str(),
+                            "SortPreservingRepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
+                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "SortExec: expr=[a@0 ASC]",
-                            "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
-                            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortExec: expr=[b1@1 ASC]",
-                            "RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                            "SortExec: expr=[b1@1 ASC]",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
-                            "SortExec: expr=[c@2 ASC]",
-                            "RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+                            "SortPreservingRepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
                             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+                            "SortExec: expr=[c@2 ASC]",
                             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
@@ -3300,6 +3516,12 @@ mod tests {
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, exec, true);
+        let expected = &[
+            "SortExec: expr=[a@0 ASC]",
+            "CoalescePartitionsExec",
+            "CoalesceBatchesExec: target_batch_size=4096",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        ];
         assert_optimized!(expected, exec, false);
         Ok(())
     }
@@ -3434,7 +3656,7 @@ mod tests {
             sort_required_exec(filter_exec(sort_exec(sort_key, parquet_exec(), false)));
 
         let expected = &[
-            "SortRequiredExec",
+            "SortRequiredExec: [c@2 ASC]",
             "FilterExec: c@2 = 0",
             // We can use repartition here, ordering requirement by SortRequiredExec
             // is still satisfied.
@@ -3540,6 +3762,12 @@ mod tests {
         ];
 
         assert_optimized!(expected, plan.clone(), true);
+
+        let expected = &[
+            "SortExec: expr=[c@2 ASC]",
+            "CoalescePartitionsExec",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
         assert_optimized!(expected, plan, false);
         Ok(())
     }
@@ -3564,6 +3792,14 @@ mod tests {
         ];
 
         assert_optimized!(expected, plan.clone(), true);
+
+        let expected = &[
+            "SortExec: expr=[c@2 ASC]",
+            "CoalescePartitionsExec",
+            "UnionExec",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
         assert_optimized!(expected, plan, false);
         Ok(())
     }
@@ -3582,7 +3818,7 @@ mod tests {
 
         // during repartitioning ordering is preserved
         let expected = &[
-            "SortRequiredExec",
+            "SortRequiredExec: [c@2 ASC]",
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
@@ -3618,7 +3854,7 @@ mod tests {
         let expected = &[
             "UnionExec",
             // union input 1: no repartitioning
-            "SortRequiredExec",
+            "SortRequiredExec: [c@2 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
             // union input 2: should repartition
             "FilterExec: c@2 = 0",
@@ -3686,16 +3922,13 @@ mod tests {
             ("c".to_string(), "c".to_string()),
         ];
         // sorted input
-        let plan = sort_preserving_merge_exec(
-            sort_key.clone(),
-            projection_exec_with_alias(
-                parquet_exec_multiple_sorted(vec![sort_key]),
-                alias,
-            ),
-        );
+        let plan = sort_required_exec(projection_exec_with_alias(
+            parquet_exec_multiple_sorted(vec![sort_key]),
+            alias,
+        ));
 
         let expected = &[
-            "SortPreservingMergeExec: [c@2 ASC]",
+            "SortRequiredExec: [c@2 ASC]",
             // Since this projection is trivial, increasing parallelism is not beneficial
             "ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
@@ -4185,11 +4418,11 @@ mod tests {
 
         // no parallelization, because SortRequiredExec doesn't benefit from increased parallelism
         let expected_parquet = &[
-            "SortRequiredExec",
+            "SortRequiredExec: [c@2 ASC]",
             "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
         ];
         let expected_csv = &[
-            "SortRequiredExec",
+            "SortRequiredExec: [c@2 ASC]",
             "CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], has_header=false",
         ];
 
@@ -4347,6 +4580,14 @@ mod tests {
         ];
 
         assert_optimized!(expected, physical_plan.clone(), true);
+
+        let expected = &[
+            "SortExec: expr=[c@2 ASC]",
+            "CoalescePartitionsExec",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
         assert_optimized!(expected, physical_plan, false);
 
         Ok(())
@@ -4376,6 +4617,15 @@ mod tests {
         ];
 
         assert_optimized!(expected, physical_plan.clone(), true);
+
+        let expected = &[
+            "SortExec: expr=[a@0 ASC]",
+            "CoalescePartitionsExec",
+            "SortExec: expr=[a@0 ASC]",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
         assert_optimized!(expected, physical_plan, false);
 
         Ok(())
@@ -4395,6 +4645,53 @@ mod tests {
             "FilterExec: c@2 = 0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC]",
+        ];
+
+        assert_optimized!(expected, physical_plan.clone(), true);
+        assert_optimized!(expected, physical_plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_away_unnecessary_repartition() -> Result<()> {
+        let physical_plan = coalesce_partitions_exec(repartition_exec(parquet_exec()));
+        let expected = &[
+            "CoalescePartitionsExec",
+            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        plans_matches_expected!(expected, physical_plan.clone());
+
+        let expected =
+            &["ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]"];
+
+        assert_optimized!(expected, physical_plan.clone(), true);
+        assert_optimized!(expected, physical_plan, false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn optimize_away_unnecessary_repartition2() -> Result<()> {
+        let physical_plan = filter_exec(repartition_exec(coalesce_partitions_exec(
+            filter_exec(repartition_exec(parquet_exec())),
+        )));
+        let expected = &[
+            "FilterExec: c@2 = 0",
+            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    CoalescePartitionsExec",
+            "      FilterExec: c@2 = 0",
+            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "          ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        plans_matches_expected!(expected, physical_plan.clone());
+
+        let expected = &[
+            "FilterExec: c@2 = 0",
+            "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
         assert_optimized!(expected, physical_plan.clone(), true);
