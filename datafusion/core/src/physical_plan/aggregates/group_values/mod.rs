@@ -20,7 +20,7 @@ use arrow_schema::SchemaRef;
 use datafusion_common::Result;
 use datafusion_physical_expr::EmitTo;
 
-mod primitive;
+pub(crate) mod primitive;
 use primitive::GroupValuesPrimitive;
 
 mod row;

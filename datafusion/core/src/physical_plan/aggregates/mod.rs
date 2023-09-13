@@ -50,10 +50,14 @@ mod group_values;
 mod no_grouping;
 mod order;
 mod row_hash;
+mod topk;
+mod topk_stream;
 
+use crate::physical_plan::aggregates::topk_stream::GroupedTopKAggregateStream;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::expressions::{Max, Min};
 use datafusion_physical_expr::utils::{
     get_finer_ordering, ordering_satisfy_requirement_concrete,
 };
@@ -228,14 +232,16 @@ impl PartialEq for PhysicalGroupBy {
 
 enum StreamType {
     AggregateStream(AggregateStream),
-    GroupedHashAggregateStream(GroupedHashAggregateStream),
+    GroupedHash(GroupedHashAggregateStream),
+    GroupedPriorityQueue(GroupedTopKAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
     fn from(stream: StreamType) -> Self {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
-            StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
+            StreamType::GroupedHash(stream) => Box::pin(stream),
+            StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
     }
 }
@@ -265,6 +271,8 @@ pub struct AggregateExec {
     pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// (ORDER BY clause) expression for each aggregate expression
     pub(crate) order_by_expr: Vec<Option<LexOrdering>>,
+    /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
+    pub(crate) limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -669,6 +677,7 @@ impl AggregateExec {
             metrics: ExecutionPlanMetricsSet::new(),
             aggregation_ordering,
             required_input_ordering,
+            limit: None,
         })
     }
 
@@ -717,14 +726,35 @@ impl AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
+        // no group by at all
         if self.group_by.expr.is_empty() {
-            Ok(StreamType::AggregateStream(AggregateStream::new(
+            return Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
-            )?))
+            )?));
+        }
+
+        // grouping by an expression that has a sort/limit upstream
+        if let Some(limit) = self.limit {
+            return Ok(StreamType::GroupedPriorityQueue(
+                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+            ));
+        }
+
+        // grouping by something else and we need to just materialize all results
+        Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
+            self, context, partition,
+        )?))
+    }
+
+    /// Finds the DataType and SortDirection for this Aggregate, if there is one
+    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+        let agg_expr = self.aggr_expr.as_slice().first()?;
+        if let Some(max) = agg_expr.as_any().downcast_ref::<Max>() {
+            Some((max.field().ok()?, true))
+        } else if let Some(min) = agg_expr.as_any().downcast_ref::<Min>() {
+            Some((min.field().ok()?, false))
         } else {
-            Ok(StreamType::GroupedHashAggregateStream(
-                GroupedHashAggregateStream::new(self, context, partition)?,
-            ))
+            None
         }
     }
 }
@@ -793,6 +823,9 @@ impl DisplayAs for AggregateExec {
                     .map(|agg| agg.name().to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
+                if let Some(limit) = self.limit {
+                    write!(f, ", lim=[{limit}]")?;
+                }
 
                 if let Some(aggregation_ordering) = &self.aggregation_ordering {
                     write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
@@ -900,7 +933,7 @@ impl ExecutionPlan for AggregateExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(AggregateExec::try_new(
+        let mut me = AggregateExec::try_new(
             self.mode,
             self.group_by.clone(),
             self.aggr_expr.clone(),
@@ -908,7 +941,9 @@ impl ExecutionPlan for AggregateExec {
             self.order_by_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
-        )?))
+        )?;
+        me.limit = self.limit;
+        Ok(Arc::new(me))
     }
 
     fn execute(
@@ -1115,7 +1150,7 @@ fn evaluate(
 }
 
 /// Evaluates expressions against a record batch.
-fn evaluate_many(
+pub(crate) fn evaluate_many(
     expr: &[Vec<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
@@ -1138,7 +1173,17 @@ fn evaluate_optional(
         .collect::<Result<Vec<_>>>()
 }
 
-fn evaluate_group_by(
+/// Evaluate a group by expression against a `RecordBatch`
+///
+/// Arguments:
+/// `group_by`: the expression to evaluate
+/// `batch`: the `RecordBatch` to evaluate against
+///
+/// Returns: A Vec of Vecs of Array of results
+/// The outer Vect appears to be for grouping sets
+/// The inner Vect contains the results per expression
+/// The inner-inner Array contains the results per row
+pub(crate) fn evaluate_group_by(
     group_by: &PhysicalGroupBy,
     batch: &RecordBatch,
 ) -> Result<Vec<Vec<ArrayRef>>> {
@@ -1798,10 +1843,10 @@ mod tests {
                     assert!(matches!(stream, StreamType::AggregateStream(_)));
                 }
                 1 => {
-                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
+                    assert!(matches!(stream, StreamType::GroupedHash(_)));
                 }
                 2 => {
-                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
+                    assert!(matches!(stream, StreamType::GroupedHash(_)));
                 }
                 _ => panic!("Unknown version: {version}"),
             }
