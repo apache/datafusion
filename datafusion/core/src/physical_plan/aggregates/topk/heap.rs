@@ -179,12 +179,6 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         self.heap[0].as_ref().map(|hi| hi.map_idx).unwrap_or(0)
     }
 
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    #[allow(dead_code)]
     pub fn is_full(&self) -> bool {
         self.len >= self.capacity
     }
@@ -334,7 +328,6 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         valid
     }
 
-    #[allow(dead_code)]
     #[cfg(test)]
     pub fn tree_print(&self) -> String {
         let mut builder = ptree::TreeBuilder::new("BinaryHeap".to_string());

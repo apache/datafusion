@@ -335,7 +335,6 @@ impl<ID: KeyType> HashTableItem<ID> {
     }
 }
 
-#[allow(dead_code)]
 #[cfg(test)]
 fn map_print<ID: KeyType>(map: &RawTable<HashTableItem<ID>>) {
     use itertools::Itertools;
