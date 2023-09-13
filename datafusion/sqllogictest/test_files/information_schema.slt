@@ -179,6 +179,7 @@ datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
+datafusion.explain.show_statistics false
 datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.bounded_order_preserving_variants false
 datafusion.optimizer.enable_round_robin_repartition true

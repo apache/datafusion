@@ -70,7 +70,7 @@ async fn create_external_table_with_ddl_ordered_non_cols() -> Result<()> {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
             assert_eq!(
-                e.to_string(),
+                e.strip_backtrace(),
                 "Error during planning: Column a is not in schema"
             )
         }
@@ -85,7 +85,7 @@ async fn create_external_table_with_ddl_ordered_without_schema() -> Result<()> {
     match ctx.state().create_logical_plan(sql).await {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
-            assert_eq!(e.to_string(), "Error during planning: Provide a schema before specifying the order while creating a table.")
+            assert_eq!(e.strip_backtrace(), "Error during planning: Provide a schema before specifying the order while creating a table.")
         }
     }
     Ok(())

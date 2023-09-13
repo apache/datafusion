@@ -32,12 +32,13 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarV
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
-/// This type represents a single endpoint of an [`Interval`]. An endpoint can
-/// be open or closed, denoting whether the interval includes or excludes the
-/// endpoint itself.
+/// This type represents a single endpoint of an [`Interval`]. An
+/// endpoint can be open (does not include the endpoint) or closed
+/// (includes the endpoint).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntervalBound {
     pub value: ScalarValue,
+    /// If true, interval does not include `value`
     pub open: bool,
 }
 
@@ -45,6 +46,18 @@ impl IntervalBound {
     /// Creates a new `IntervalBound` object using the given value.
     pub const fn new(value: ScalarValue, open: bool) -> IntervalBound {
         IntervalBound { value, open }
+    }
+
+    /// Creates a new "open" interval (does not include the `value`
+    /// bound)
+    pub const fn new_open(value: ScalarValue) -> IntervalBound {
+        IntervalBound::new(value, true)
+    }
+
+    /// Creates a new "closed" interval (includes the `value`
+    /// bound)
+    pub const fn new_closed(value: ScalarValue) -> IntervalBound {
+        IntervalBound::new(value, false)
     }
 
     /// This convenience function creates an unbounded interval endpoint.
@@ -55,7 +68,7 @@ impl IntervalBound {
     /// This convenience function returns the data type associated with this
     /// `IntervalBound`.
     pub fn get_datatype(&self) -> DataType {
-        self.value.get_datatype()
+        self.value.data_type()
     }
 
     /// This convenience function checks whether the `IntervalBound` represents
@@ -336,7 +349,7 @@ impl Interval {
 
     /// Decide if this interval is certainly equal to, possibly equal to,
     /// or can't be equal to `other` by returning [true, true],
-    /// [false, true] or [false, false] respectively.    
+    /// [false, true] or [false, false] respectively.
     pub(crate) fn equal<T: Borrow<Interval>>(&self, other: T) -> Interval {
         let rhs = other.borrow();
         let flags = if !self.lower.is_unbounded()
@@ -471,18 +484,18 @@ impl Interval {
     }
 
     pub const CERTAINLY_FALSE: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
     };
 
     pub const UNCERTAIN: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(false))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
     };
 
     pub const CERTAINLY_TRUE: Interval = Interval {
-        lower: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
-        upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+        lower: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
+        upper: IntervalBound::new_closed(ScalarValue::Boolean(Some(true))),
     };
 
     /// Returns the cardinality of this interval, which is the number of all
@@ -508,7 +521,7 @@ impl Interval {
                 // If the minimum value is a negative number, we need to
                 // switch sides to ensure an unsigned result.
                 let (min, max) = if self.lower.value
-                    < ScalarValue::new_zero(&self.lower.value.get_datatype())?
+                    < ScalarValue::new_zero(&self.lower.value.data_type())?
                 {
                     (self.upper.value.clone(), self.lower.value.clone())
                 } else {
@@ -648,38 +661,6 @@ pub fn cardinality_ratio(
     final_interval: &Interval,
 ) -> Result<f64> {
     Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
-}
-
-/// Indicates whether interval arithmetic is supported for the given operator.
-pub fn is_operator_supported(op: &Operator) -> bool {
-    matches!(
-        op,
-        &Operator::Plus
-            | &Operator::Minus
-            | &Operator::And
-            | &Operator::Gt
-            | &Operator::GtEq
-            | &Operator::Lt
-            | &Operator::LtEq
-            | &Operator::Eq
-    )
-}
-
-/// Indicates whether interval arithmetic is supported for the given data type.
-pub fn is_datatype_supported(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        &DataType::Int64
-            | &DataType::Int32
-            | &DataType::Int16
-            | &DataType::Int8
-            | &DataType::UInt64
-            | &DataType::UInt32
-            | &DataType::UInt16
-            | &DataType::UInt8
-            | &DataType::Float64
-            | &DataType::Float32
-    )
 }
 
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {

@@ -20,8 +20,9 @@
 //! performance or to accommodate unbounded streams by fixing the pipeline.
 
 use crate::error::Result;
-use crate::physical_optimizer::sort_enforcement::{unbounded_output, ExecTree};
-use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
+use crate::physical_optimizer::utils::{
+    is_coalesce_partitions, is_sort, unbounded_output, ExecTree,
+};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
@@ -880,7 +881,7 @@ mod tests {
 
     // creates a csv exec source for the test purposes
     // projection and has_header parameters are given static due to testing needs
-    pub fn csv_exec_sorted(
+    fn csv_exec_sorted(
         schema: &SchemaRef,
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
         infinite_source: bool,

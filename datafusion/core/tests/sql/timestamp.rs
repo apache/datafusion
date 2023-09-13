@@ -795,7 +795,7 @@ async fn test_cast_to_time_with_time_zone_should_not_work() -> Result<()> {
     let results = plan_and_collect(&ctx, sql).await.unwrap_err();
 
     assert_eq!(
-        results.to_string(),
+        results.strip_backtrace(),
         "This feature is not implemented: Unsupported SQL type Time(None, WithTimeZone)"
     );
 
@@ -828,7 +828,7 @@ async fn test_cast_to_timetz_should_not_work() -> Result<()> {
     let results = plan_and_collect(&ctx, sql).await.unwrap_err();
 
     assert_eq!(
-        results.to_string(),
+        results.strip_backtrace(),
         "This feature is not implemented: Unsupported SQL type Time(None, Tz)"
     );
     Ok(())

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{
-    not_impl_err, plan_err, Constraints, DataFusionError, Result, ScalarValue,
+    not_impl_err, plan_err, sql_err, Constraints, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
@@ -61,9 +61,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = self.normalizer.normalize(cte.alias.name.clone());
                 if planner_context.contains_cte(&cte_name) {
-                    return Err(DataFusionError::SQL(ParserError(format!(
+                    return sql_err!(ParserError(format!(
                         "WITH query name {cte_name:?} specified more than once"
-                    ))));
+                    )));
                 }
                 // create logical plan & pass backreferencing CTEs
                 // CTE expr don't need extend outer_query_schema

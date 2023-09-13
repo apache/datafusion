@@ -53,7 +53,7 @@ pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Scalar(rhs)) => {
             let val: ScalarValue = match lhs.eq(rhs) {
-                true => lhs.get_datatype().try_into()?,
+                true => lhs.data_type().try_into()?,
                 false => lhs.clone(),
             };
 

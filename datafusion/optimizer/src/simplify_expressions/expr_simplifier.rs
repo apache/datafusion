@@ -741,18 +741,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right: _,
             }) if is_null(&left) => *left,
 
-            // A * 0 --> 0 (if A is not null)
+            // A * 0 --> 0 (if A is not null and not floating, since NAN * 0 -> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => *right,
-            // 0 * A --> 0 (if A is not null)
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_zero(&right) =>
+            {
+                *right
+            }
+            // 0 * A --> 0 (if A is not null and not floating, since 0 * NAN -> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Multiply,
                 right,
-            }) if !info.nullable(&right)? && is_zero(&left) => *left,
+            }) if !info.nullable(&right)?
+                && !info.get_data_type(&right)?.is_floating()
+                && is_zero(&left) =>
+            {
+                *left
+            }
 
             //
             // Rules for Divide
@@ -776,12 +786,16 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Divide,
                 right,
             }) if is_null(&right) => *right,
-            // A / 0 -> DivideByZero Error
+            // A / 0 -> DivideByZero Error if A is not null and not floating
+            // (float / 0 -> inf | -inf | NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Divide,
                 right,
-            }) if !info.nullable(&left)? && is_zero(&right) => {
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_zero(&right) =>
+            {
                 return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
             }
 
@@ -801,19 +815,33 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Modulo,
                 right: _,
             }) if is_null(&left) => *left,
-            // A % 1 --> 0
+            // A % 1 --> 0 (if A is not nullable and not floating, since NAN % 1 --> NAN)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
-            }) if !info.nullable(&left)? && is_one(&right) => lit(0),
-            // A % 0 --> DivideByZero Error
+            }) if !info.nullable(&left)?
+                && !info.get_data_type(&left)?.is_floating()
+                && is_one(&right) =>
+            {
+                lit(0)
+            }
+            // A % 0 --> DivideByZero Error (if A is not floating and not null)
+            // A % 0 --> NAN (if A is floating and not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Modulo,
                 right,
             }) if !info.nullable(&left)? && is_zero(&right) => {
-                return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
+                match info.get_data_type(&left)? {
+                    DataType::Float32 => lit(f32::NAN),
+                    DataType::Float64 => lit(f64::NAN),
+                    _ => {
+                        return Err(DataFusionError::ArrowError(
+                            ArrowError::DivideByZero,
+                        ));
+                    }
+                }
             }
 
             //
