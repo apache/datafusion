@@ -573,26 +573,19 @@ fn group_by_contains_all_requirements(
     group_by: &PhysicalGroupBy,
     requirement: &LexOrdering,
 ) -> bool {
-    // single group by expressions
-    if group_by.groups.len() <= 1 {
-        for req in requirement {
-            let physical_exprs = group_by
-                .expr()
-                .iter()
-                .map(|(expr, _alias)| expr.clone())
-                .collect::<Vec<_>>();
-            if !physical_exprs_contains(&physical_exprs, &req.expr) {
-                return false;
-            }
-        }
-        // Contains all of the requirements
-        true
-    } else {
-        // When we have multiple groups (grouping set)
-        // since group by may be calculated on the subset of the group_by.expr()
-        // it is not guaranteed to have all of the requirements among group by expressions.
-        false
-    }
+    let physical_exprs = group_by
+        .expr()
+        .iter()
+        .map(|(expr, _alias)| expr.clone())
+        .collect::<Vec<_>>();
+    // When we have multiple groups (grouping set)
+    // since group by may be calculated on the subset of the group_by.expr()
+    // it is not guaranteed to have all of the requirements among group by expressions.
+    // Hence do the analysis: whether group by contains all requirements in the single group case.
+    group_by.groups.len() <= 1
+        && requirement
+            .iter()
+            .all(|req| physical_exprs_contains(&physical_exprs, &req.expr))
 }
 
 impl AggregateExec {
