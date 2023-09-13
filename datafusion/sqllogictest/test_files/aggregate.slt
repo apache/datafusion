@@ -2355,6 +2355,13 @@ a 1
 NULL 0
 
 query TI
+select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 3;
+----
+b 3
+c 2
+a 1
+
+query TI
 select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) asc limit 4;
 ----
 NULL 0
