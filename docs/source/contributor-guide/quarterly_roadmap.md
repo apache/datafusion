@@ -24,7 +24,7 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 ## 2023 Q4
 
 - Improve data output (`COPY`, `INSERT` and DataFrame) output capability [#7079](https://github.com/apache/arrow-datafusion/issues/7079)
-- Implementation of `ARRAY` types and related functions [#6980](https://github.com/apache/arrow-datafusion/issues/6782)
+- Implementation of `ARRAY` types and related functions [#6980](https://github.com/apache/arrow-datafusion/issues/6980)
 - Write an industrial paper about DataFusion for SIGMOD [#6782](https://github.com/apache/arrow-datafusion/issues/6782)
 
 ## 2022 Q2
