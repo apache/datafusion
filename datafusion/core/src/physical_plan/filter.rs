@@ -197,7 +197,7 @@ impl ExecutionPlan for FilterExec {
         let input_stats = self.input.statistics();
         let input_column_stats = match input_stats.column_statistics {
             Some(stats) => stats,
-            None => return Statistics::default(),
+            None => ColumnStatistics::new_with_unbounded_columns(self.schema()),
         };
 
         let starter_ctx =
