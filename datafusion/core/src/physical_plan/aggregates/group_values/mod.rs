@@ -44,7 +44,7 @@ pub trait GroupValues: Send {
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
-    /// clear the contents and shrink the capacity
+    /// clear the contents and shrink the capacity to free up memory usage
     fn clear_shrink(&mut self, batch: &RecordBatch);
 }
 
