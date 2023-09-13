@@ -143,6 +143,7 @@ struct FairSpillPoolState {
 impl FairSpillPool {
     /// Allocate up to `limit` bytes
     pub fn new(pool_size: usize) -> Self {
+        debug!("Created new FairSpillPool(pool_size={pool_size})");
         Self {
             pool_size,
             state: Mutex::new(FairSpillPoolState {
@@ -260,10 +261,10 @@ mod tests {
 
         assert_eq!(pool.reserved(), 4000);
 
-        let err = r2.try_grow(1).unwrap_err().to_string();
+        let err = r2.try_grow(1).unwrap_err().strip_backtrace();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for r2 with 2000 bytes already allocated - maximum available is 0");
 
-        let err = r2.try_grow(1).unwrap_err().to_string();
+        let err = r2.try_grow(1).unwrap_err().strip_backtrace();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for r2 with 2000 bytes already allocated - maximum available is 0");
 
         r1.shrink(1990);
@@ -288,12 +289,12 @@ mod tests {
             .with_can_spill(true)
             .register(&pool);
 
-        let err = r3.try_grow(70).unwrap_err().to_string();
+        let err = r3.try_grow(70).unwrap_err().strip_backtrace();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for r3 with 0 bytes already allocated - maximum available is 40");
 
         //Shrinking r2 to zero doesn't allow a3 to allocate more than 45
         r2.free();
-        let err = r3.try_grow(70).unwrap_err().to_string();
+        let err = r3.try_grow(70).unwrap_err().strip_backtrace();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for r3 with 0 bytes already allocated - maximum available is 40");
 
         // But dropping r2 does
@@ -306,7 +307,7 @@ mod tests {
         assert_eq!(pool.reserved(), 80);
 
         let mut r4 = MemoryConsumer::new("s4").register(&pool);
-        let err = r4.try_grow(30).unwrap_err().to_string();
+        let err = r4.try_grow(30).unwrap_err().strip_backtrace();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 30 bytes for s4 with 0 bytes already allocated - maximum available is 20");
     }
 }

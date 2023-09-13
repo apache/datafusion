@@ -1287,7 +1287,7 @@ mod tests {
         // try cast if need
         input_exprs
             .iter()
-            .zip(coerced_types.into_iter())
+            .zip(coerced_types)
             .map(|(expr, coerced_type)| try_cast(expr.clone(), schema, coerced_type))
             .collect::<Result<Vec<_>>>()
     }

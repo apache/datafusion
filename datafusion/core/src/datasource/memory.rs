@@ -435,12 +435,11 @@ mod tests {
             ],
         )?;
 
-        match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
-            }
-            _ => panic!("MemTable::new should have failed due to schema mismatch"),
-        }
+        let e = MemTable::try_new(schema2, vec![vec![batch]]).unwrap_err();
+        assert_eq!(
+            "Error during planning: Mismatch between schema and batches",
+            e.strip_backtrace()
+        );
 
         Ok(())
     }
@@ -466,12 +465,11 @@ mod tests {
             ],
         )?;
 
-        match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
-            }
-            _ => panic!("MemTable::new should have failed due to schema mismatch"),
-        }
+        let e = MemTable::try_new(schema2, vec![vec![batch]]).unwrap_err();
+        assert_eq!(
+            "Error during planning: Mismatch between schema and batches",
+            e.strip_backtrace()
+        );
 
         Ok(())
     }

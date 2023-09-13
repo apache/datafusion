@@ -194,7 +194,7 @@ mod tests {
 
         let actual = df.collect().await.unwrap();
 
-        let expected = vec![
+        let expected = [
             "+----+----------+",
             "| id | bool_col |",
             "+----+----------+",

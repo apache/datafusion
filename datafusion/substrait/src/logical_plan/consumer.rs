@@ -22,8 +22,10 @@ use datafusion::logical_expr::{
     aggregate_function, window_function::find_df_window_func, BinaryExpr,
     BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
-use datafusion::logical_expr::{expr, Cast, WindowFrameBound, WindowFrameUnits};
-use datafusion::logical_expr::{Extension, Like, LogicalPlanBuilder};
+use datafusion::logical_expr::{
+    expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, WindowFrameBound,
+    WindowFrameUnits,
+};
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
@@ -251,17 +253,34 @@ pub async fn from_substrait_rel(
                 let mut group_expr = vec![];
                 let mut aggr_expr = vec![];
 
-                let groupings = match agg.groupings.len() {
-                    1 => Ok(&agg.groupings[0]),
-                    _ => not_impl_err!(
-                        "Aggregate with multiple grouping sets is not supported"
-                    ),
+                match agg.groupings.len() {
+                    1 => {
+                        for e in &agg.groupings[0].grouping_expressions {
+                            let x =
+                                from_substrait_rex(e, input.schema(), extensions).await?;
+                            group_expr.push(x.as_ref().clone());
+                        }
+                    }
+                    _ => {
+                        let mut grouping_sets = vec![];
+                        for grouping in &agg.groupings {
+                            let mut grouping_set = vec![];
+                            for e in &grouping.grouping_expressions {
+                                let x = from_substrait_rex(e, input.schema(), extensions)
+                                    .await?;
+                                grouping_set.push(x.as_ref().clone());
+                            }
+                            grouping_sets.push(grouping_set);
+                        }
+                        // Single-element grouping expression of type Expr::GroupingSet.
+                        // Note that GroupingSet::Rollup would become GroupingSet::GroupingSets, when
+                        // parsed by the producer and consumer, since Substrait does not have a type dedicated
+                        // to ROLLUP. Only vector of Groupings (grouping sets) is available.
+                        group_expr.push(Expr::GroupingSet(GroupingSet::GroupingSets(
+                            grouping_sets,
+                        )));
+                    }
                 };
-
-                for e in &groupings?.grouping_expressions {
-                    let x = from_substrait_rex(e, input.schema(), extensions).await?;
-                    group_expr.push(x.as_ref().clone());
-                }
 
                 for m in &agg.measures {
                     let filter = match &m.filter {
@@ -542,7 +561,7 @@ pub async fn from_substrait_sorts(
                     let Some(direction) = SortDirection::from_i32(*d) else {
                         return not_impl_err!(
                             "Unsupported Substrait SortDirection value {d}"
-                        )
+                        );
                     };
 
                     match direction {
@@ -1250,27 +1269,21 @@ async fn make_datafusion_like(
     }
 
     let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
-        return not_impl_err!(
-            "Invalid arguments type for `{fn_name}` expr"
-        )
+        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
     };
     let expr = from_substrait_rex(expr_substrait, input_schema, extensions)
         .await?
         .as_ref()
         .clone();
     let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
-        return not_impl_err!(
-            "Invalid arguments type for `{fn_name}` expr"
-        )
+        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
     };
     let pattern = from_substrait_rex(pattern_substrait, input_schema, extensions)
         .await?
         .as_ref()
         .clone();
     let Some(ArgType::Value(escape_char_substrait)) = &f.arguments[2].arg_type else {
-        return not_impl_err!(
-            "Invalid arguments type for `{fn_name}` expr"
-        )
+        return not_impl_err!("Invalid arguments type for `{fn_name}` expr");
     };
     let escape_char_expr =
         from_substrait_rex(escape_char_substrait, input_schema, extensions)
@@ -1280,7 +1293,7 @@ async fn make_datafusion_like(
     let Expr::Literal(ScalarValue::Utf8(escape_char)) = escape_char_expr else {
         return Err(DataFusionError::Substrait(format!(
             "Expect Utf8 literal for escape char, but found {escape_char_expr:?}",
-        )))
+        )));
     };
 
     Ok(Arc::new(Expr::Like(Like {

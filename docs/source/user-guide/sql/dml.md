@@ -19,21 +19,22 @@
 
 # DML
 
+DML stands for "Data Manipulation Language" and relates to inserting
+and modifying data in tables.
+
 ## COPY
 
-Copy a table to file(s). Supported file formats are `parquet`, `csv`, and `json`.
-
-The `PER_THREAD_OUTPUT` option treats `file_name` as a directory and writes a file per thread within it.
+Copies the contents of a table or query to file(s). Supported file
+formats are `parquet`, `csv`, and `json` and can be inferred based on
+filename if writing to a single file.
 
 <pre>
-COPY <i><b>table_name</i></b> TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
-
-where <i><b>option</i></b> can be one of:
-    FORMAT <i><b>format_name</i></b>
-    PER_THREAD_OUTPUT <i><b>boolean</i></b>
-    ROW_GROUP_SIZE <i><b>integer</i></b>
-    ROW_GROUP_LIMIT_BYTES <i><b>integer</i></b>
+COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } TO '<i><b>file_name</i></b>' [ ( <i><b>option</i></b> [, ... ] ) ]
 </pre>
+
+For a detailed list of valid OPTIONS, see [Write Options](write_options).
+
+Copy the contents of `source_table` to `file_name.json` in JSON format:
 
 ```sql
 > COPY source_table TO 'file_name.json';
@@ -42,8 +43,26 @@ where <i><b>option</i></b> can be one of:
 +-------+
 | 2     |
 +-------+
+```
 
-> COPY source_table TO 'dir_name' (FORMAT parquet, PER_THREAD_OUTPUT true);
+Copy the contents of `source_table` to one or more Parquet formatted
+files in the `dir_name` directory:
+
+```sql
+> COPY source_table TO 'dir_name' (FORMAT parquet, SINGLE_FILE_OUTPUT false);
++-------+
+| count |
++-------+
+| 2     |
++-------+
+```
+
+Run the query `SELECT * from source ORDER BY time` and write the
+results (maintaining the order) to a parquet file named
+`output.parquet` with a maximum parquet row group size of 10MB:
+
+```sql
+> COPY (SELECT * from source ORDER BY time) TO 'output.parquet' (ROW_GROUP_LIMIT_BYTES 10000000);
 +-------+
 | count |
 +-------+

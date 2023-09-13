@@ -109,9 +109,13 @@ pub(crate) fn spawn_buffered(
             builder.spawn(async move {
                 while let Some(item) = input.next().await {
                     if sender.send(item).await.is_err() {
-                        return;
+                        // receiver dropped when query is shutdown early (e.g., limit) or error,
+                        // no need to return propagate the send error.
+                        return Ok(());
                     }
                 }
+
+                Ok(())
             });
 
             builder.build()

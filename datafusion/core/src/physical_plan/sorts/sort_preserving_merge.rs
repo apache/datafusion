@@ -158,6 +158,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
     }
@@ -865,6 +869,8 @@ mod tests {
                     // This causes the MergeStream to wait for more input
                     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 }
+
+                Ok(())
             });
 
             streams.push(builder.build());
@@ -926,7 +932,7 @@ mod tests {
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge.clone(), task_ctx).await.unwrap();
-        let expected = vec![
+        let expected = [
             "+----+---+",
             "| a  | b |",
             "+----+---+",

@@ -19,8 +19,6 @@
 
 mod arrow_file;
 mod avro;
-#[cfg(test)]
-mod chunked_store;
 mod csv;
 mod file_stream;
 mod json;
@@ -45,8 +43,7 @@ pub use json::{JsonOpener, NdJsonExec};
 mod file_scan_config;
 pub(crate) use file_scan_config::PartitionColumnProjector;
 pub use file_scan_config::{
-    get_scan_files, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
-    FileScanConfig,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
 
 use crate::error::{DataFusionError, Result};
@@ -62,7 +59,7 @@ use crate::{
     physical_plan::display::{OutputOrderingDisplay, ProjectSchemaDisplay},
 };
 
-use datafusion_common::plan_err;
+use datafusion_common::{file_options::FileTypeWriterOptions, plan_err};
 use datafusion_physical_expr::expressions::Column;
 
 use arrow::compute::cast;
@@ -79,7 +76,6 @@ use super::listing::ListingTableUrl;
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
-#[derive(Debug, Clone)]
 pub struct FileSinkConfig {
     /// Object store URL, used to get an ObjectStore instance
     pub object_store_url: ObjectStoreUrl,
@@ -94,12 +90,16 @@ pub struct FileSinkConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// A writer mode that determines how data is written to the file
     pub writer_mode: FileWriterMode,
-    /// If false, it is assumed there is a single table_path which is a file to which all data should be written
+    /// If true, it is assumed there is a single table_path which is a file to which all data should be written
     /// regardless of input partitioning. Otherwise, each table path is assumed to be a directory
     /// to which each output partition is written to its own output file.
-    pub per_thread_output: bool,
+    pub single_file_output: bool,
+    /// If input is unbounded, tokio tasks need to yield to not block execution forever
+    pub unbounded_input: bool,
     /// Controls whether existing data should be overwritten by this sink
     pub overwrite: bool,
+    /// Contains settings specific to writing a given FileType, e.g. parquet max_row_group_size
+    pub file_type_writer_options: FileTypeWriterOptions,
 }
 
 impl FileSinkConfig {
@@ -619,9 +619,9 @@ mod tests {
         let c2 = mapped_batch.column(1).as_primitive::<Float64Type>();
         let c4 = mapped_batch.column(2).as_primitive::<Float32Type>();
 
-        assert_eq!(c1.value(0), "1");
-        assert_eq!(c1.value(1), "0");
-        assert_eq!(c1.value(2), "1");
+        assert_eq!(c1.value(0), "true");
+        assert_eq!(c1.value(1), "false");
+        assert_eq!(c1.value(2), "true");
 
         assert_eq!(c2.value(0), 2.0_f64);
         assert_eq!(c2.value(1), 7.0_f64);

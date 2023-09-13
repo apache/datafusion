@@ -950,7 +950,7 @@ impl BoundedWindowAggStream {
                 .columns()
                 .iter()
                 .map(|elem| elem.slice(0, n_out))
-                .chain(window_expr_out.into_iter())
+                .chain(window_expr_out)
                 .collect::<Vec<_>>();
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;

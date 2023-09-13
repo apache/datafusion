@@ -23,7 +23,6 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use crate::datasource::physical_plan::FileScanConfig;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use datafusion_common::Result;
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
@@ -189,11 +188,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
     fn statistics(&self) -> Statistics;
-
-    /// Returns the [`FileScanConfig`] in case this is a data source scanning execution plan or `None` otherwise.
-    fn file_scan_config(&self) -> Option<&FileScanConfig> {
-        None
-    }
 }
 
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
@@ -410,81 +404,3 @@ use datafusion_execution::TaskContext;
 pub use datafusion_physical_expr::{
     expressions, functions, hash_utils, ordering_equivalence_properties_helper, udf,
 };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::datatypes::DataType;
-    use arrow::datatypes::Schema;
-
-    use crate::physical_plan::Distribution;
-    use crate::physical_plan::Partitioning;
-    use crate::physical_plan::PhysicalExpr;
-    use datafusion_physical_expr::expressions::Column;
-
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn partitioning_satisfy_distribution() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            arrow::datatypes::Field::new("column_1", DataType::Int64, false),
-            arrow::datatypes::Field::new("column_2", DataType::Utf8, false),
-        ]));
-
-        let partition_exprs1: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new_with_schema("column_1", &schema).unwrap()),
-            Arc::new(Column::new_with_schema("column_2", &schema).unwrap()),
-        ];
-
-        let partition_exprs2: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new_with_schema("column_2", &schema).unwrap()),
-            Arc::new(Column::new_with_schema("column_1", &schema).unwrap()),
-        ];
-
-        let distribution_types = vec![
-            Distribution::UnspecifiedDistribution,
-            Distribution::SinglePartition,
-            Distribution::HashPartitioned(partition_exprs1.clone()),
-        ];
-
-        let single_partition = Partitioning::UnknownPartitioning(1);
-        let unspecified_partition = Partitioning::UnknownPartitioning(10);
-        let round_robin_partition = Partitioning::RoundRobinBatch(10);
-        let hash_partition1 = Partitioning::Hash(partition_exprs1, 10);
-        let hash_partition2 = Partitioning::Hash(partition_exprs2, 10);
-
-        for distribution in distribution_types {
-            let result = (
-                single_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-                unspecified_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-                round_robin_partition.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-                hash_partition1.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-                hash_partition2.satisfy(distribution.clone(), || {
-                    EquivalenceProperties::new(schema.clone())
-                }),
-            );
-
-            match distribution {
-                Distribution::UnspecifiedDistribution => {
-                    assert_eq!(result, (true, true, true, true, true))
-                }
-                Distribution::SinglePartition => {
-                    assert_eq!(result, (true, false, false, false, false))
-                }
-                Distribution::HashPartitioned(_) => {
-                    assert_eq!(result, (false, false, false, true, false))
-                }
-            }
-        }
-
-        Ok(())
-    }
-}

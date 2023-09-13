@@ -38,8 +38,9 @@ use crate::logical_expr::{
     Repartition, Union, UserDefinedLogicalNode,
 };
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::file_options::FileTypeWriterOptions;
 use datafusion_common::FileType;
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
@@ -555,18 +556,28 @@ impl DefaultPhysicalPlanner {
                     input,
                     output_url,
                     file_format,
-                    per_thread_output,
-                    options: _,
+                    single_file_output,
+                    copy_options,
                 }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
 
                     // TODO: make this behavior configurable via options (should copy to create path/file as needed?)
                     // TODO: add additional configurable options for if existing files should be overwritten or
                     // appended to
-                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, *per_thread_output)?;
+                    let parsed_url = ListingTableUrl::parse_create_local_if_not_exists(output_url, !*single_file_output)?;
                     let object_store_url = parsed_url.object_store();
 
                     let schema: Schema = (**input.schema()).clone().into();
+
+                    let file_type_writer_options = match copy_options{
+                        CopyOptions::SQLOptions(statement_options) => {
+                            FileTypeWriterOptions::build(
+                                file_format,
+                                session_state.config_options(),
+                                statement_options)?
+                        },
+                        CopyOptions::WriterOptions(writer_options) => *writer_options.clone()
+                    };
 
                     // Set file sink related options
                     let config = FileSinkConfig {
@@ -575,13 +586,13 @@ impl DefaultPhysicalPlanner {
                         file_groups: vec![],
                         output_schema: Arc::new(schema),
                         table_partition_cols: vec![],
+                        unbounded_input: false,
                         writer_mode: FileWriterMode::PutMultipart,
-                        per_thread_output: *per_thread_output,
+                        single_file_output: *single_file_output,
                         overwrite: false,
+                        file_type_writer_options
                     };
 
-                    // TODO: implement statement level overrides for each file type
-                    // E.g. CsvFormat::from_options(options)
                     let sink_format: Arc<dyn FileFormat> = match file_format {
                         FileType::CSV => Arc::new(CsvFormat::default()),
                         FileType::PARQUET => Arc::new(ParquetFormat::default()),
@@ -779,7 +790,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter.into_iter());
+                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter);
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
@@ -1882,6 +1893,7 @@ impl DefaultPhysicalPlanner {
                     Ok(input) => {
                         stringified_plans.push(
                             displayable(input.as_ref())
+                                .set_show_statistics(config.show_statistics)
                                 .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
@@ -1893,12 +1905,14 @@ impl DefaultPhysicalPlanner {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
                                 stringified_plans.push(
                                     displayable(plan)
+                                        .set_show_statistics(config.show_statistics)
                                         .to_stringified(e.verbose, plan_type),
                                 );
                             },
                         ) {
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
+                                    .set_show_statistics(config.show_statistics)
                                     .to_stringified(e.verbose, FinalPhysicalPlan),
                             ),
                             Err(DataFusionError::Context(optimizer_name, e)) => {
@@ -1922,7 +1936,13 @@ impl DefaultPhysicalPlanner {
         } else if let LogicalPlan::Analyze(a) = logical_plan {
             let input = self.create_physical_plan(&a.input, session_state).await?;
             let schema = SchemaRef::new((*a.schema).clone().into());
-            Ok(Some(Arc::new(AnalyzeExec::new(a.verbose, input, schema))))
+            let show_statistics = session_state.config_options().explain.show_statistics;
+            Ok(Some(Arc::new(AnalyzeExec::new(
+                a.verbose,
+                show_statistics,
+                input,
+                schema,
+            ))))
         } else {
             Ok(None)
         }
@@ -2690,7 +2710,7 @@ mod tests {
 
         let plan = plan(&logical_plan).await.unwrap();
 
-        let expected_graph = r###"
+        let expected_graph = r#"
 // Begin DataFusion GraphViz Plan,
 // display it online here: https://dreampuf.github.io/GraphvizOnline
 
@@ -2700,10 +2720,33 @@ digraph {
     1 -> 2 [arrowhead=none, arrowtail=normal, dir=back]
 }
 // End DataFusion GraphViz Plan
-"###;
+"#;
 
         let generated_graph = format!("{}", displayable(&*plan).graphviz());
 
         assert_eq!(expected_graph, generated_graph);
+    }
+
+    #[tokio::test]
+    async fn test_display_graphviz_with_statistics() {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let logical_plan = scan_empty(Some("employee"), &schema, None)
+            .unwrap()
+            .project(vec![col("id") + lit(2)])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let plan = plan(&logical_plan).await.unwrap();
+
+        let expected_tooltip = ", tooltip=\"statistics=[";
+
+        let generated_graph = format!(
+            "{}",
+            displayable(&*plan).set_show_statistics(true).graphviz()
+        );
+
+        assert_contains!(generated_graph, expected_tooltip);
     }
 }

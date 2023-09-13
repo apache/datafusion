@@ -291,14 +291,14 @@ impl OrderSensitiveArrayAggAccumulator {
                 } else {
                     exec_err!(
                         "Expects to receive ScalarValue::Struct(Some(..), _) but got:{:?}",
-                        struct_vals.get_datatype()
+                        struct_vals.data_type()
                     )
                 }
             }).collect::<Result<Vec<_>>>()
         } else {
             exec_err!(
                 "Expects to receive ScalarValue::List(Some(..), _) but got:{:?}",
-                in_data.get_datatype()
+                in_data.data_type()
             )
         }
     }

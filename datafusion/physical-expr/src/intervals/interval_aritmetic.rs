@@ -55,7 +55,7 @@ impl IntervalBound {
     /// This convenience function returns the data type associated with this
     /// `IntervalBound`.
     pub fn get_datatype(&self) -> DataType {
-        self.value.get_datatype()
+        self.value.data_type()
     }
 
     /// This convenience function checks whether the `IntervalBound` represents
@@ -475,7 +475,7 @@ impl Interval {
                 // If the minimum value is a negative number, we need to
                 // switch sides to ensure an unsigned result.
                 let (min, max) = if self.lower.value
-                    < ScalarValue::new_zero(&self.lower.value.get_datatype())?
+                    < ScalarValue::new_zero(&self.lower.value.data_type())?
                 {
                     (self.upper.value.clone(), self.lower.value.clone())
                 } else {
@@ -615,38 +615,6 @@ pub fn cardinality_ratio(
     final_interval: &Interval,
 ) -> Result<f64> {
     Ok(final_interval.cardinality()? as f64 / initial_interval.cardinality()? as f64)
-}
-
-/// Indicates whether interval arithmetic is supported for the given operator.
-pub fn is_operator_supported(op: &Operator) -> bool {
-    matches!(
-        op,
-        &Operator::Plus
-            | &Operator::Minus
-            | &Operator::And
-            | &Operator::Gt
-            | &Operator::GtEq
-            | &Operator::Lt
-            | &Operator::LtEq
-            | &Operator::Eq
-    )
-}
-
-/// Indicates whether interval arithmetic is supported for the given data type.
-pub fn is_datatype_supported(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        &DataType::Int64
-            | &DataType::Int32
-            | &DataType::Int16
-            | &DataType::Int8
-            | &DataType::UInt64
-            | &DataType::UInt32
-            | &DataType::UInt16
-            | &DataType::UInt8
-            | &DataType::Float64
-            | &DataType::Float32
-    )
 }
 
 pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<Interval> {
@@ -1445,7 +1413,7 @@ mod tests {
             ScalarValue::new_one(&DataType::Int8)?,
         ];
 
-        zeros.into_iter().zip(ones.into_iter()).for_each(|(z, o)| {
+        zeros.into_iter().zip(ones).for_each(|(z, o)| {
             assert_eq!(next_value::<true>(z.clone()), o);
             assert_eq!(next_value::<false>(o), z);
         });
@@ -1461,7 +1429,7 @@ mod tests {
             ScalarValue::Float64(Some(1e-6)),
         ];
 
-        values.into_iter().zip(eps.into_iter()).for_each(|(v, e)| {
+        values.into_iter().zip(eps).for_each(|(v, e)| {
             assert!(next_value::<true>(v.clone()).sub(v.clone()).unwrap().lt(&e));
             assert!(v.clone().sub(next_value::<false>(v)).unwrap().lt(&e));
         });
@@ -1476,7 +1444,7 @@ mod tests {
             ScalarValue::Int8(Some(i8::MAX)),
         ];
 
-        min.into_iter().zip(max.into_iter()).for_each(|(min, max)| {
+        min.into_iter().zip(max).for_each(|(min, max)| {
             assert_eq!(next_value::<true>(max.clone()), max);
             assert_eq!(next_value::<false>(min.clone()), min);
         });

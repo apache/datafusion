@@ -235,9 +235,10 @@ fn spawn_buffered_merge<C: Send + Sync + 'static>(
             builder.spawn(async move {
                 while let Some(item) = input.next().await {
                     if sender.send(item).await.is_err() {
-                        return;
+                        return Ok(());
                     }
                 }
+                Ok(())
             });
 
             builder.build()

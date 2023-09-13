@@ -17,7 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::dml::CopyTo;
+use crate::dml::{CopyOptions, CopyTo};
 use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
@@ -238,15 +238,15 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         output_url: String,
         file_format: FileType,
-        per_thread_output: bool,
-        options: Vec<(String, String)>,
+        single_file_output: bool,
+        copy_options: CopyOptions,
     ) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url,
             file_format,
-            per_thread_output,
-            options,
+            single_file_output,
+            copy_options,
         })))
     }
 
@@ -665,7 +665,7 @@ impl LogicalPlanBuilder {
             join_keys
                 .0
                 .into_iter()
-                .zip(join_keys.1.into_iter())
+                .zip(join_keys.1)
                 .map(|(l, r)| {
                     let l = l.into();
                     let r = r.into();
@@ -742,7 +742,7 @@ impl LogicalPlanBuilder {
 
         let on = left_keys
             .into_iter()
-            .zip(right_keys.into_iter())
+            .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
@@ -777,7 +777,7 @@ impl LogicalPlanBuilder {
             .map(|c| Self::normalize(&right, c))
             .collect::<Result<_>>()?;
 
-        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
@@ -1521,7 +1521,7 @@ mod tests {
         let err =
             LogicalPlanBuilder::scan("", table_source(&schema), projection).unwrap_err();
         assert_eq!(
-            err.to_string(),
+            err.strip_backtrace(),
             "Error during planning: table_name cannot be empty"
         );
     }
@@ -1650,8 +1650,8 @@ mod tests {
         let err_msg1 = plan1.clone().union(plan2.clone().build()?).unwrap_err();
         let err_msg2 = plan1.union_distinct(plan2.build()?).unwrap_err();
 
-        assert_eq!(err_msg1.to_string(), expected);
-        assert_eq!(err_msg2.to_string(), expected);
+        assert_eq!(err_msg1.strip_backtrace(), expected);
+        assert_eq!(err_msg2.strip_backtrace(), expected);
 
         Ok(())
     }
@@ -1875,7 +1875,7 @@ mod tests {
             LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
                 .unwrap_err();
 
-        assert_eq!(err_msg1.to_string(), expected);
+        assert_eq!(err_msg1.strip_backtrace(), expected);
 
         Ok(())
     }

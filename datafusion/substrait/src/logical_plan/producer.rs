@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use datafusion::logical_expr::Like;
+use datafusion::logical_expr::{Like, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -33,12 +33,13 @@ use datafusion::common::{exec_err, internal_err, not_impl_err};
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    Alias, BinaryExpr, Case, Cast, InList, ScalarFunction as DFScalarFunction, Sort,
-    WindowFunction,
+    Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    ScalarFunction as DFScalarFunction, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
+use substrait::proto::expression::window_function::BoundsType;
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -221,12 +222,11 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Aggregate(agg) => {
             let input = to_substrait_rel(agg.input.as_ref(), ctx, extension_info)?;
-            // Translate aggregate expression to Substrait's groupings (repeated repeated Expression)
-            let grouping = agg
-                .group_expr
-                .iter()
-                .map(|e| to_substrait_rex(e, agg.input.schema(), 0, extension_info))
-                .collect::<Result<Vec<_>>>()?;
+            let groupings = to_substrait_groupings(
+                &agg.group_expr,
+                agg.input.schema(),
+                extension_info,
+            )?;
             let measures = agg
                 .aggr_expr
                 .iter()
@@ -237,9 +237,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
-                    groupings: vec![Grouping {
-                        grouping_expressions: grouping,
-                    }], //groupings,
+                    groupings,
                     measures,
                     advanced_extension: None,
                 }))),
@@ -488,6 +486,67 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::BitwiseXor => "bitwise_xor",
         Operator::BitwiseShiftRight => "bitwise_shift_right",
         Operator::BitwiseShiftLeft => "bitwise_shift_left",
+    }
+}
+
+pub fn parse_flat_grouping_exprs(
+    exprs: &[Expr],
+    schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Grouping> {
+    let grouping_expressions = exprs
+        .iter()
+        .map(|e| to_substrait_rex(e, schema, 0, extension_info))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Grouping {
+        grouping_expressions,
+    })
+}
+
+pub fn to_substrait_groupings(
+    exprs: &Vec<Expr>,
+    schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<Vec<Grouping>> {
+    match exprs.len() {
+        1 => match &exprs[0] {
+            Expr::GroupingSet(gs) => match gs {
+                GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
+                    "GroupingSet CUBE is not yet supported".to_string(),
+                )),
+                GroupingSet::GroupingSets(sets) => Ok(sets
+                    .iter()
+                    .map(|set| parse_flat_grouping_exprs(set, schema, extension_info))
+                    .collect::<Result<Vec<_>>>()?),
+                GroupingSet::Rollup(set) => {
+                    let mut sets: Vec<Vec<Expr>> = vec![vec![]];
+                    for i in 0..set.len() {
+                        sets.push(set[..=i].to_vec());
+                    }
+                    Ok(sets
+                        .iter()
+                        .rev()
+                        .map(|set| parse_flat_grouping_exprs(set, schema, extension_info))
+                        .collect::<Result<Vec<_>>>()?)
+                }
+            },
+            _ => Ok(vec![parse_flat_grouping_exprs(
+                exprs,
+                schema,
+                extension_info,
+            )?]),
+        },
+        _ => Ok(vec![parse_flat_grouping_exprs(
+            exprs,
+            schema,
+            extension_info,
+        )?]),
     }
 }
 
@@ -922,12 +981,14 @@ pub fn to_substrait_rex(
                 .collect::<Result<Vec<_>>>()?;
             // window frame
             let bounds = to_substrait_bounds(window_frame)?;
+            let bound_type = to_substrait_bound_type(window_frame)?;
             Ok(make_substrait_window_function(
                 function_anchor,
                 arguments,
                 partition_by,
                 order_by,
                 bounds,
+                bound_type,
             ))
         }
         Expr::Like(Like {
@@ -1139,6 +1200,7 @@ fn make_substrait_window_function(
     partitions: Vec<Expression>,
     sorts: Vec<SortField>,
     bounds: (Bound, Bound),
+    bounds_type: BoundsType,
 ) -> Expression {
     Expression {
         rex_type: Some(RexType::WindowFunction(SubstraitWindowFunction {
@@ -1153,6 +1215,7 @@ fn make_substrait_window_function(
             lower_bound: Some(bounds.0),
             upper_bound: Some(bounds.1),
             args: vec![],
+            bounds_type: bounds_type as i32,
         })),
     }
 }
@@ -1317,6 +1380,15 @@ fn to_substrait_bound(bound: &WindowFrameBound) -> Bound {
                 kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
             },
         },
+    }
+}
+
+fn to_substrait_bound_type(window_frame: &WindowFrame) -> Result<BoundsType> {
+    match window_frame.units {
+        WindowFrameUnits::Rows => Ok(BoundsType::Rows), // ROWS
+        WindowFrameUnits::Range => Ok(BoundsType::Range), // RANGE
+        // TODO: Support GROUPS
+        unit => not_impl_err!("Unsupported window frame unit: {unit:?}"),
     }
 }
 
@@ -1650,7 +1722,10 @@ mod test {
         println!("Checking round trip of {scalar:?}");
 
         let substrait = to_substrait_literal(&scalar)?;
-        let Expression { rex_type: Some(RexType::Literal(substrait_literal)) } = substrait else {
+        let Expression {
+            rex_type: Some(RexType::Literal(substrait_literal)),
+        } = substrait
+        else {
             panic!("Expected Literal expression, got {substrait:?}");
         };
 

@@ -27,7 +27,7 @@ use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use arrow_array::RecordBatch;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError};
+use datafusion_common::{exec_err, not_impl_err, DataFusionError, FileType};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -273,14 +273,13 @@ impl FileFormat for CsvFormat {
         }
 
         let sink_schema = conf.output_schema().clone();
-        let sink = Arc::new(CsvSink::new(
-            conf,
-            self.has_header,
-            self.delimiter,
-            self.file_compression_type,
-        ));
+        let sink = Arc::new(CsvSink::new(conf));
 
         Ok(Arc::new(FileSinkExec::new(input, sink, sink_schema)) as _)
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::CSV
     }
 }
 
@@ -433,24 +432,25 @@ impl BatchSerializer for CsvSerializer {
         self.header = false;
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
     }
+
+    fn duplicate(&mut self) -> Result<Box<dyn BatchSerializer>> {
+        let new_self = CsvSerializer::new()
+            .with_builder(self.builder.clone())
+            .with_header(self.header);
+        self.header = false;
+        Ok(Box::new(new_self))
+    }
 }
 
 /// Implements [`DataSink`] for writing to a CSV file.
 struct CsvSink {
     /// Config options for writing data
     config: FileSinkConfig,
-    has_header: bool,
-    delimiter: u8,
-    file_compression_type: FileCompressionType,
 }
 
 impl Debug for CsvSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CsvSink")
-            .field("has_header", &self.has_header)
-            .field("delimiter", &self.delimiter)
-            .field("file_compression_type", &self.file_compression_type)
-            .finish()
+        f.debug_struct("CsvSink").finish()
     }
 }
 
@@ -471,18 +471,8 @@ impl DisplayAs for CsvSink {
 }
 
 impl CsvSink {
-    fn new(
-        config: FileSinkConfig,
-        has_header: bool,
-        delimiter: u8,
-        file_compression_type: FileCompressionType,
-    ) -> Self {
-        Self {
-            config,
-            has_header,
-            delimiter,
-            file_compression_type,
-        }
+    fn new(config: FileSinkConfig) -> Self {
+        Self { config }
     }
 }
 
@@ -494,6 +484,11 @@ impl DataSink for CsvSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         let num_partitions = data.len();
+        let writer_options = self.config.file_type_writer_options.try_into_csv()?;
+        let (builder, compression) =
+            (&writer_options.writer_options, &writer_options.compression);
+        let mut has_header = writer_options.has_header;
+        let compression = FileCompressionType::from(*compression);
 
         let object_store = context
             .runtime_env()
@@ -503,25 +498,23 @@ impl DataSink for CsvSink {
         let mut writers = vec![];
         match self.config.writer_mode {
             FileWriterMode::Append => {
-                if !self.config.per_thread_output {
-                    return not_impl_err!("per_thread_output=false is not implemented for CsvSink in Append mode");
-                }
                 for file_group in &self.config.file_groups {
+                    let mut append_builder = builder.clone();
                     // In append mode, consider has_header flag only when file is empty (at the start).
                     // For other modes, use has_header flag as is.
-                    let header = self.has_header
-                        && (!matches!(&self.config.writer_mode, FileWriterMode::Append)
-                            || file_group.object_meta.size == 0);
-                    let builder = WriterBuilder::new().with_delimiter(self.delimiter);
+                    if file_group.object_meta.size != 0 {
+                        has_header = false;
+                        append_builder = append_builder.has_headers(false);
+                    }
                     let serializer = CsvSerializer::new()
-                        .with_builder(builder)
-                        .with_header(header);
+                        .with_builder(append_builder)
+                        .with_header(has_header);
                     serializers.push(Box::new(serializer));
 
                     let file = file_group.clone();
                     let writer = create_writer(
                         self.config.writer_mode,
-                        self.file_compression_type,
+                        compression,
                         file.object_meta.clone().into(),
                         object_store.clone(),
                     )
@@ -535,18 +528,15 @@ impl DataSink for CsvSink {
             FileWriterMode::PutMultipart => {
                 // Currently assuming only 1 partition path (i.e. not hive-style partitioning on a column)
                 let base_path = &self.config.table_paths[0];
-                match self.config.per_thread_output {
-                    true => {
+                match self.config.single_file_output {
+                    false => {
                         // Uniquely identify this batch of files with a random string, to prevent collisions overwriting files
                         let write_id =
                             Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
                         for part_idx in 0..num_partitions {
-                            let header = self.has_header;
-                            let builder =
-                                WriterBuilder::new().with_delimiter(self.delimiter);
                             let serializer = CsvSerializer::new()
-                                .with_builder(builder)
-                                .with_header(header);
+                                .with_builder(builder.clone())
+                                .with_header(has_header);
                             serializers.push(Box::new(serializer));
                             let file_path = base_path
                                 .prefix()
@@ -559,7 +549,7 @@ impl DataSink for CsvSink {
                             };
                             let writer = create_writer(
                                 self.config.writer_mode,
-                                self.file_compression_type,
+                                compression,
                                 object_meta.into(),
                                 object_store.clone(),
                             )
@@ -567,12 +557,10 @@ impl DataSink for CsvSink {
                             writers.push(writer);
                         }
                     }
-                    false => {
-                        let header = self.has_header;
-                        let builder = WriterBuilder::new().with_delimiter(self.delimiter);
+                    true => {
                         let serializer = CsvSerializer::new()
-                            .with_builder(builder)
-                            .with_header(header);
+                            .with_builder(builder.clone())
+                            .with_header(has_header);
                         serializers.push(Box::new(serializer));
                         let file_path = base_path.prefix();
                         let object_meta = ObjectMeta {
@@ -583,7 +571,7 @@ impl DataSink for CsvSink {
                         };
                         let writer = create_writer(
                             self.config.writer_mode,
-                            self.file_compression_type,
+                            compression,
                             object_meta.into(),
                             object_store.clone(),
                         )
@@ -598,7 +586,8 @@ impl DataSink for CsvSink {
             data,
             serializers,
             writers,
-            self.config.per_thread_output,
+            self.config.single_file_output,
+            self.config.unbounded_input,
         )
         .await
     }
@@ -872,15 +861,13 @@ mod tests {
             .collect()
             .await?;
         #[rustfmt::skip]
-            let expected = vec![
-            "+----+------+",
+            let expected = ["+----+------+",
             "| c2 | c3   |",
             "+----+------+",
             "| 5  | 36   |",
             "| 5  | -31  |",
             "| 5  | -101 |",
-            "+----+------+",
-        ];
+            "+----+------+"];
         assert_batches_eq!(expected, &record_batch);
         Ok(())
     }
@@ -987,13 +974,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+--------------+",
+        let expected = ["+--------------+",
             "| SUM(aggr.c2) |",
             "+--------------+",
             "| 285          |",
-            "+--------------+",
-        ];
+            "+--------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions);
 
@@ -1026,13 +1011,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+--------------+",
+        let expected = ["+--------------+",
             "| SUM(aggr.c3) |",
             "+--------------+",
             "| 781          |",
-            "+--------------+",
-        ];
+            "+--------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(1, actual_partitions); // Compressed csv won't be scanned in parallel
 
@@ -1064,10 +1047,8 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
+        let expected = ["++",
+            "++"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -1099,10 +1080,8 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
+        let expected = ["++",
+            "++"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions);
 
@@ -1145,10 +1124,8 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "++",
-            "++",
-        ];
+        let expected = ["++",
+            "++"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -1200,13 +1177,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+---------------------+",
+        let expected = ["+---------------------+",
             "| SUM(empty.column_1) |",
             "+---------------------+",
             "| 10                  |",
-            "+---------------------+",
-        ];
+            "+---------------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -1241,13 +1216,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+-----------------------+",
+        let expected = ["+-----------------------+",
             "| SUM(one_col.column_1) |",
             "+-----------------------+",
             "| 50                    |",
-            "+-----------------------+",
-        ];
+            "+-----------------------+"];
         let file_size = if cfg!(target_os = "windows") {
             30 // new line on Win is '\r\n'
         } else {
@@ -1291,13 +1264,11 @@ mod tests {
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
-        let expected = vec![
-            "+---------------+",
+        let expected = ["+---------------+",
             "| sum_of_5_cols |",
             "+---------------+",
             "| 15            |",
-            "+---------------+",
-        ];
+            "+---------------+"];
         assert_batches_eq!(expected, &query_result);
         assert_eq!(n_partitions, actual_partitions);
 

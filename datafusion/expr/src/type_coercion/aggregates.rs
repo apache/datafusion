@@ -76,6 +76,8 @@ pub static TIMESTAMPS: &[DataType] = &[
 
 pub static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 
+pub static BINARYS: &[DataType] = &[DataType::Binary, DataType::LargeBinary];
+
 pub static TIMES: &[DataType] = &[
     DataType::Time32(TimeUnit::Second),
     DataType::Time32(TimeUnit::Millisecond),
@@ -575,7 +577,7 @@ mod tests {
         let input_types = vec![DataType::Int64, DataType::Int32];
         let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
-        assert_eq!("Error during planning: The function Min expects 1 arguments, but 2 were provided", result.unwrap_err().to_string());
+        assert_eq!("Error during planning: The function Min expects 1 arguments, but 2 were provided", result.unwrap_err().strip_backtrace());
 
         // test input args is invalid data type for sum or avg
         let fun = AggregateFunction::Sum;
@@ -584,14 +586,14 @@ mod tests {
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
             "Error during planning: The function Sum does not support inputs of type Utf8.",
-            result.unwrap_err().to_string()
+            result.unwrap_err().strip_backtrace()
         );
         let fun = AggregateFunction::Avg;
         let signature = fun.signature();
         let result = coerce_types(&fun, &input_types, &signature);
         assert_eq!(
             "Error during planning: The function Avg does not support inputs of type Utf8.",
-            result.unwrap_err().to_string()
+            result.unwrap_err().strip_backtrace()
         );
 
         // test count, array_agg, approx_distinct, min, max.

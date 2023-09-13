@@ -27,6 +27,7 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
+use arrow_schema::ArrowError;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -286,8 +287,7 @@ async fn describe() -> Result<()> {
         .await?;
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
+        let expected = ["+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
         "| describe   | id                | bool_col | tinyint_col        | smallint_col       | int_col            | bigint_col         | float_col          | double_col         | date_string_col | string_col | timestamp_col           | year               | month             |",
         "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
         "| count      | 7300.0            | 7300     | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300.0             | 7300            | 7300       | 7300                    | 7300.0             | 7300.0            |",
@@ -297,8 +297,7 @@ async fn describe() -> Result<()> {
         "| min        | 0.0               | null     | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 0.0                | 01/01/09        | 0          | 2008-12-31T23:00:00     | 2009.0             | 1.0               |",
         "| max        | 7299.0            | null     | 9.0                | 9.0                | 9.0                | 90.0               | 9.899999618530273  | 90.89999999999999  | 12/31/10        | 9          | 2010-12-31T04:09:13.860 | 2010.0             | 12.0              |",
         "| median     | 3649.0            | null     | 4.0                | 4.0                | 4.0                | 45.0               | 4.949999809265137  | 45.45              | null            | null       | null                    | 2009.0             | 7.0               |",
-        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+",
-    ];
+        "+------------+-------------------+----------+--------------------+--------------------+--------------------+--------------------+--------------------+--------------------+-----------------+------------+-------------------------+--------------------+-------------------+"];
     assert_batches_eq!(expected, &describe_record_batch);
 
     //add test case for only boolean boolean/binary column
@@ -310,8 +309,7 @@ async fn describe() -> Result<()> {
         .collect()
         .await?;
     #[rustfmt::skip]
-        let expected = vec![
-        "+------------+------+------+",
+        let expected = ["+------------+------+------+",
         "| describe   | a    | b    |",
         "+------------+------+------+",
         "| count      | 1    | 1    |",
@@ -321,8 +319,7 @@ async fn describe() -> Result<()> {
         "| min        | a    | null |",
         "| max        | a    | null |",
         "| median     | null | null |",
-        "+------------+------+------+",
-    ];
+        "+------------+------+------+"];
     assert_batches_eq!(expected, &result);
 
     Ok(())
@@ -405,16 +402,14 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+-----+",
+        let expected = ["+-----+",
         "| a   |",
         "+-----+",
         "| 100 |",
         "| 10  |",
         "| 10  |",
         "| 1   |",
-        "+-----+",
-    ];
+        "+-----+"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -451,15 +446,13 @@ async fn sort_on_distinct_columns() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+-----+",
+        let expected = ["+-----+",
         "| a   |",
         "+-----+",
         "| 100 |",
         "| 10  |",
         "| 1   |",
-        "+-----+",
-    ];
+        "+-----+"];
     assert_batches_eq!(expected, &results);
     Ok(())
 }
@@ -489,7 +482,7 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
         .distinct()?
         .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
         .unwrap_err();
-    assert_eq!(err.to_string(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
+    assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
     Ok(())
 }
 
@@ -508,7 +501,7 @@ async fn sort_on_ambiguous_column() -> Result<()> {
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
     Ok(())
 }
 
@@ -527,7 +520,7 @@ async fn group_by_ambiguous_column() -> Result<()> {
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
     Ok(())
 }
 
@@ -546,7 +539,7 @@ async fn filter_on_ambiguous_column() -> Result<()> {
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
     Ok(())
 }
 
@@ -565,7 +558,7 @@ async fn select_ambiguous_column() -> Result<()> {
         .unwrap_err();
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
-    assert_eq!(err.to_string(), expected);
+    assert_eq!(err.strip_backtrace(), expected);
     Ok(())
 }
 
@@ -593,14 +586,12 @@ async fn filter_with_alias_overwrite() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+------+",
+        let expected = ["+------+",
         "| a    |",
         "+------+",
         "| true |",
         "| true |",
-        "+------+",
-    ];
+        "+------+"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -628,16 +619,14 @@ async fn select_with_alias_overwrite() -> Result<()> {
     let results = df.collect().await?;
 
     #[rustfmt::skip]
-        let expected = vec![
-        "+-------+",
+        let expected = ["+-------+",
         "| a     |",
         "+-------+",
         "| false |",
         "| true  |",
         "| true  |",
         "| false |",
-        "+-------+",
-    ];
+        "+-------+"];
     assert_batches_eq!(expected, &results);
 
     Ok(())
@@ -945,22 +934,20 @@ async fn unnest_columns() -> Result<()> {
     const NUM_ROWS: usize = 4;
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.collect().await?;
-    let expected = vec![
-        "+----------+------------------------------------------------+--------------------+",
+    let expected = ["+----------+------------------------------------------------+--------------------+",
         "| shape_id | points                                         | tags               |",
         "+----------+------------------------------------------------+--------------------+",
         "| 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | [tag1]             |",
         "| 2        |                                                | [tag1, tag2]       |",
         "| 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |                    |",
         "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |",
-        "+----------+------------------------------------------------+--------------------+",
-    ];
+        "+----------+------------------------------------------------+--------------------+"];
     assert_batches_sorted_eq!(expected, &results);
 
     // Unnest tags
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.unnest_column("tags")?.collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+------------------------------------------------+------+",
         "| shape_id | points                                         | tags |",
         "+----------+------------------------------------------------+------+",
@@ -983,7 +970,7 @@ async fn unnest_columns() -> Result<()> {
     // Unnest points
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.unnest_column("points")?.collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+-----------------+--------------------+",
         "| shape_id | points          | tags               |",
         "+----------+-----------------+--------------------+",
@@ -1045,29 +1032,10 @@ async fn unnest_columns() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unnest_column_preserve_nulls_not_supported() -> Result<()> {
-    // Unnest, preserving nulls not yet supported
-    let options = UnnestOptions::new().with_preserve_nulls(false);
-
-    let results = table_with_lists_and_nulls()
-        .await?
-        .clone()
-        .unnest_column_with_options("list", options)?
-        .collect()
-        .await;
-
-    assert_eq!(
-        results.unwrap_err().to_string(),
-        "This feature is not implemented: Unnest with preserve_nulls=false"
-    );
-    Ok(())
-}
-#[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/7087
 async fn unnest_column_nulls() -> Result<()> {
     let df = table_with_lists_and_nulls().await?;
     let results = df.clone().collect().await?;
-    let expected = vec![
+    let expected = [
         "+--------+----+",
         "| list   | id |",
         "+--------+----+",
@@ -1087,7 +1055,7 @@ async fn unnest_column_nulls() -> Result<()> {
         .unnest_column_with_options("list", options)?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         "+------+----+",
         "| list | id |",
         "+------+----+",
@@ -1099,19 +1067,17 @@ async fn unnest_column_nulls() -> Result<()> {
     ];
     assert_batches_eq!(expected, &results);
 
-    // NOTE this is incorrect,
     let options = UnnestOptions::new().with_preserve_nulls(false);
     let results = df
         .unnest_column_with_options("list", options)?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         "+------+----+",
         "| list | id |",
         "+------+----+",
         "| 1    | A  |",
         "| 2    | A  |",
-        "|      | B  |", // this row should not be here
         "| 3    | D  |",
         "+------+----+",
     ];
@@ -1122,39 +1088,14 @@ async fn unnest_column_nulls() -> Result<()> {
 
 #[tokio::test]
 async fn unnest_fixed_list() -> Result<()> {
-    let mut shape_id_builder = UInt32Builder::new();
-    let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
-
-    for idx in 0..6 {
-        // Append shape id.
-        shape_id_builder.append_value(idx as u32 + 1);
-
-        if idx % 3 != 0 {
-            tags_builder
-                .values()
-                .append_value(format!("tag{}1", idx + 1));
-            tags_builder
-                .values()
-                .append_value(format!("tag{}2", idx + 1));
-            tags_builder.append(true);
-        } else {
-            tags_builder.values().append_null();
-            tags_builder.values().append_null();
-            tags_builder.append(false);
-        }
-    }
-
-    let batch = RecordBatch::try_from_iter(vec![
-        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
-        ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
-    ])?;
+    let batch = get_fixed_list_batch()?;
 
     let ctx = SessionContext::new();
     ctx.register_batch("shapes", batch)?;
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+----------------+",
         "| shape_id | tags           |",
         "+----------+----------------+",
@@ -1168,7 +1109,12 @@ async fn unnest_fixed_list() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &results);
 
-    let results = df.unnest_column("tags")?.collect().await?;
+    let options = UnnestOptions::new().with_preserve_nulls(true);
+
+    let results = df
+        .unnest_column_with_options("tags", options)?
+        .collect()
+        .await?;
     let expected = vec![
         "+----------+-------+",
         "| shape_id | tags  |",
@@ -1191,7 +1137,54 @@ async fn unnest_fixed_list() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/7087
+async fn unnest_fixed_list_drop_nulls() -> Result<()> {
+    let batch = get_fixed_list_batch()?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df.clone().collect().await?;
+    let expected = [
+        "+----------+----------------+",
+        "| shape_id | tags           |",
+        "+----------+----------------+",
+        "| 1        |                |",
+        "| 2        | [tag21, tag22] |",
+        "| 3        | [tag31, tag32] |",
+        "| 4        |                |",
+        "| 5        | [tag51, tag52] |",
+        "| 6        | [tag61, tag62] |",
+        "+----------+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    let options = UnnestOptions::new().with_preserve_nulls(false);
+
+    let results = df
+        .unnest_column_with_options("tags", options)?
+        .collect()
+        .await?;
+    let expected = [
+        "+----------+-------+",
+        "| shape_id | tags  |",
+        "+----------+-------+",
+        "| 2        | tag21 |",
+        "| 2        | tag22 |",
+        "| 3        | tag31 |",
+        "| 3        | tag32 |",
+        "| 5        | tag51 |",
+        "| 5        | tag52 |",
+        "| 6        | tag61 |",
+        "| 6        | tag62 |",
+        "+----------+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn unnest_fixed_list_nonull() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
@@ -1219,7 +1212,7 @@ async fn unnest_fixed_list_nonull() -> Result<()> {
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
-    let expected = vec![
+    let expected = [
         "+----------+----------------+",
         "| shape_id | tags           |",
         "+----------+----------------+",
@@ -1267,7 +1260,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
 
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.select_columns(&["tags"])?.collect().await?;
-    let expected = vec![
+    let expected = [
         r#"+--------------------+"#,
         r#"| tags               |"#,
         r#"+--------------------+"#,
@@ -1286,7 +1279,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
         .aggregate(vec![], vec![count(col("tags"))])?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         r#"+--------------------+"#,
         r#"| COUNT(shapes.tags) |"#,
         r#"+--------------------+"#,
@@ -1346,7 +1339,7 @@ async fn unnest_array_agg() -> Result<()> {
         )?
         .collect()
         .await?;
-    let expected = vec![
+    let expected = [
         "+----------+--------------+",
         "| shape_id | tag_id       |",
         "+----------+--------------+",
@@ -1531,6 +1524,37 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
     ctx.table("shapes").await
 }
 
+fn get_fixed_list_batch() -> Result<RecordBatch, ArrowError> {
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
+
+    for idx in 0..6 {
+        // Append shape id.
+        shape_id_builder.append_value(idx as u32 + 1);
+
+        if idx % 3 != 0 {
+            tags_builder
+                .values()
+                .append_value(format!("tag{}1", idx + 1));
+            tags_builder
+                .values()
+                .append_value(format!("tag{}2", idx + 1));
+            tags_builder.append(true);
+        } else {
+            tags_builder.values().append_null();
+            tags_builder.values().append_null();
+            tags_builder.append(false);
+        }
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("tags", Arc::new(tags_builder.finish()) as ArrayRef),
+    ])?;
+
+    Ok(batch)
+}
+
 /// A a data frame that a list of integers and string IDs
 async fn table_with_lists_and_nulls() -> Result<DataFrame> {
     let mut list_builder = ListBuilder::new(UInt32Builder::new());
@@ -1620,7 +1644,7 @@ async fn test_array_agg() -> Result<()> {
 
     let results = df.collect().await?;
 
-    let expected = vec![
+    let expected = [
         "+-------------------------------------+",
         "| ARRAY_AGG(test.a)                   |",
         "+-------------------------------------+",

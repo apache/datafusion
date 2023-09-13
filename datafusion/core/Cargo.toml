@@ -57,17 +57,17 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
-async-trait = "0.1.41"
+async-trait = "0.1.73"
 bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
-chrono = { version = "0.4.23", default-features = false }
+chrono = { version = "0.4.27", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "30.0.0", features = ["parquet", "object_store"] }
-datafusion-execution = { path = "../execution", version = "30.0.0" }
-datafusion-expr = { path = "../expr", version = "30.0.0" }
-datafusion-optimizer = { path = "../optimizer", version = "30.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "30.0.0", default-features = false }
-datafusion-sql = { path = "../sql", version = "30.0.0" }
+datafusion-common = { path = "../common", version = "31.0.0", features = ["parquet", "object_store"] }
+datafusion-execution = { path = "../execution", version = "31.0.0" }
+datafusion-expr = { path = "../expr", version = "31.0.0" }
+datafusion-optimizer = { path = "../optimizer", version = "31.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "31.0.0", default-features = false }
+datafusion-sql = { path = "../sql", version = "31.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
@@ -75,11 +75,10 @@ half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = "2.0.0"
 itertools = "0.11"
-lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
-object_store = "0.6.1"
+object_store = "0.7.0"
 parking_lot = "0.12"
 parquet = { workspace = true }
 percent-encoding = "2.2.0"

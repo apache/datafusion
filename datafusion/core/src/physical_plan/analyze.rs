@@ -41,6 +41,8 @@ use datafusion_execution::TaskContext;
 pub struct AnalyzeExec {
     /// control how much extra to print
     verbose: bool,
+    /// if statistics should be displayed
+    show_statistics: bool,
     /// The input plan (the plan being analyzed)
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
@@ -49,9 +51,15 @@ pub struct AnalyzeExec {
 
 impl AnalyzeExec {
     /// Create a new AnalyzeExec
-    pub fn new(verbose: bool, input: Arc<dyn ExecutionPlan>, schema: SchemaRef) -> Self {
+    pub fn new(
+        verbose: bool,
+        show_statistics: bool,
+        input: Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> Self {
         AnalyzeExec {
             verbose,
+            show_statistics,
             input,
             schema,
         }
@@ -113,6 +121,7 @@ impl ExecutionPlan for AnalyzeExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             self.verbose,
+            self.show_statistics,
             children.pop().unwrap(),
             self.schema.clone(),
         )))
@@ -145,6 +154,7 @@ impl ExecutionPlan for AnalyzeExec {
         let captured_input = self.input.clone();
         let captured_schema = self.schema.clone();
         let verbose = self.verbose;
+        let show_statistics = self.show_statistics;
 
         // future that gathers the results from all the tasks in the
         // JoinSet that computes the overall row count and final
@@ -159,6 +169,7 @@ impl ExecutionPlan for AnalyzeExec {
             let duration = Instant::now() - start;
             create_output_batch(
                 verbose,
+                show_statistics,
                 total_rows,
                 duration,
                 captured_input,
@@ -181,6 +192,7 @@ impl ExecutionPlan for AnalyzeExec {
 /// Creates the ouput of AnalyzeExec as a RecordBatch
 fn create_output_batch(
     verbose: bool,
+    show_statistics: bool,
     total_rows: usize,
     duration: std::time::Duration,
     input: Arc<dyn ExecutionPlan>,
@@ -193,6 +205,7 @@ fn create_output_batch(
     type_builder.append_value("Plan with Metrics");
 
     let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
+        .set_show_statistics(show_statistics)
         .indent(verbose)
         .to_string();
     plan_builder.append_value(annotated_plan);
@@ -203,6 +216,7 @@ fn create_output_batch(
         type_builder.append_value("Plan with Full Metrics");
 
         let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref())
+            .set_show_statistics(show_statistics)
             .indent(verbose)
             .to_string();
         plan_builder.append_value(annotated_plan);
@@ -247,7 +261,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let analyze_exec = Arc::new(AnalyzeExec::new(true, blocking_exec, schema));
+        let analyze_exec = Arc::new(AnalyzeExec::new(true, false, blocking_exec, schema));
 
         let fut = collect(analyze_exec, task_ctx);
         let mut fut = fut.boxed();

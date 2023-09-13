@@ -41,7 +41,7 @@ use datafusion_expr::type_coercion::aggregates::avg_return_type;
 use datafusion_expr::Accumulator;
 
 use super::groups_accumulator::EmitTo;
-use super::utils::{adjust_output_array, Decimal128Averager};
+use super::utils::Decimal128Averager;
 
 /// AVG aggregate expression
 #[derive(Debug, Clone)]
@@ -471,7 +471,7 @@ where
 
         let array: PrimitiveArray<T> = if nulls.null_count() > 0 {
             let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len());
-            let iter = sums.into_iter().zip(counts.into_iter()).zip(nulls.iter());
+            let iter = sums.into_iter().zip(counts).zip(nulls.iter());
 
             for ((sum, count), is_valid) in iter {
                 if is_valid {
@@ -488,12 +488,10 @@ where
                 .map(|(sum, count)| (self.avg_fn)(sum, count))
                 .collect::<Result<Vec<_>>>()?;
             PrimitiveArray::new(averages.into(), Some(nulls)) // no copy
+                .with_data_type(self.return_data_type.clone())
         };
 
-        // fix up decimal precision and scale for decimals
-        let array = adjust_output_array(&self.return_data_type, Arc::new(array))?;
-
-        Ok(array)
+        Ok(Arc::new(array))
     }
 
     // return arrays for sums and counts
@@ -505,8 +503,8 @@ where
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
 
         let sums = emit_to.take_needed(&mut self.sums);
-        let sums = PrimitiveArray::<T>::new(sums.into(), nulls); // zero copy
-        let sums = adjust_output_array(&self.sum_data_type, Arc::new(sums))?;
+        let sums = PrimitiveArray::<T>::new(sums.into(), nulls) // zero copy
+            .with_data_type(self.sum_data_type.clone());
 
         Ok(vec![
             Arc::new(counts) as ArrayRef,

@@ -107,7 +107,7 @@ fn create_record_batch(
 ) -> RecordBatch {
     // the 4 here is the number of different keys.
     // a higher number increase sparseness
-    let vs = vec![0, 1, 2, 3];
+    let vs = [0, 1, 2, 3];
     let keys: Vec<String> = (0..batch_size)
         .map(
             // use random numbers to avoid spurious compiler optimizations wrt to branching

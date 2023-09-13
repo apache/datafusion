@@ -24,9 +24,9 @@ use std::task::Poll;
 
 use crate::physical_plan::displayable;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::internal_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{exec_err, internal_err};
 use datafusion_execution::TaskContext;
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
@@ -50,7 +50,7 @@ pub struct ReceiverStreamBuilder<O> {
     tx: Sender<Result<O>>,
     rx: Receiver<Result<O>>,
     schema: SchemaRef,
-    join_set: JoinSet<()>,
+    join_set: JoinSet<Result<()>>,
 }
 
 impl<O: Send + Sync + 'static> ReceiverStreamBuilder<O> {
@@ -78,7 +78,7 @@ impl<O: Send + Sync + 'static> ReceiverStreamBuilder<O> {
     /// retrieved from `Self::tx`
     pub fn spawn<F>(&mut self, task: F)
     where
-        F: Future<Output = ()>,
+        F: Future<Output = Result<()>>,
         F: Send + 'static,
     {
         self.join_set.spawn(task);
@@ -91,7 +91,7 @@ impl<O: Send + Sync + 'static> ReceiverStreamBuilder<O> {
     /// retrieved from `Self::tx`
     pub fn spawn_blocking<F>(&mut self, f: F)
     where
-        F: FnOnce(),
+        F: FnOnce() -> Result<()>,
         F: Send + 'static,
     {
         self.join_set.spawn_blocking(f);
@@ -111,7 +111,7 @@ impl<O: Send + Sync + 'static> ReceiverStreamBuilder<O> {
         let output = self.tx();
 
         self.spawn(async move {
-            input.call(output, partition, context).await;
+            input.call(output, partition, context).await
         });
     }
 
@@ -131,7 +131,16 @@ impl<O: Send + Sync + 'static> ReceiverStreamBuilder<O> {
         let check = async move {
             while let Some(result) = join_set.join_next().await {
                 match result {
-                    Ok(()) => continue, // nothing to report
+                    Ok(task_result) => {
+                        match task_result {
+                            // nothing to report
+                            Ok(_) => continue,
+                            // This means a blocking task error
+                            Err(e) => {
+                                return Some(exec_err!("Spawned Task error: {e}"));
+                            }
+                        }
+                    }
                     // This means a tokio task error, likely a panic
                     Err(e) => {
                         if e.is_panic() {
@@ -223,7 +232,7 @@ pub(crate) trait StreamAdaptor: Send + Sync {
         output: Sender<Self::Item>,
         partition: usize,
         context: Arc<TaskContext>,
-    );
+    ) -> Result<()>;
 }
 
 pub(crate) struct RecordBatchReceiverStreamAdaptor {
@@ -245,7 +254,7 @@ impl StreamAdaptor for RecordBatchReceiverStreamAdaptor {
         output: Sender<Self::Item>,
         partition: usize,
         context: Arc<TaskContext>,
-    ) {
+    ) -> Result<()> {
         let mut stream = match self.input.execute(partition, context) {
             Err(e) => {
                 // If send fails, the plan being torn down, there
@@ -255,7 +264,7 @@ impl StreamAdaptor for RecordBatchReceiverStreamAdaptor {
                     "Stopping execution: error executing input: {}",
                     displayable(self.input.as_ref()).one_line()
                 );
-                return;
+                return Ok(());
             }
             Ok(stream) => stream,
         };
@@ -272,7 +281,7 @@ impl StreamAdaptor for RecordBatchReceiverStreamAdaptor {
                     "Stopping execution: output is gone, plan cancelling: {}",
                     displayable(self.input.as_ref()).one_line()
                 );
-                return;
+                return Ok(());
             }
 
             // stop after the first error is encontered (don't
@@ -282,9 +291,11 @@ impl StreamAdaptor for RecordBatchReceiverStreamAdaptor {
                     "Stopping execution: plan returned error: {}",
                     displayable(self.input.as_ref()).one_line()
                 );
-                return;
+                return Ok(());
             }
         }
+
+        Ok(())
     }
 }
 
@@ -496,7 +507,7 @@ mod test {
         // get the first result, which should be an error
         let first_batch = stream.next().await.unwrap();
         let first_err = first_batch.unwrap_err();
-        assert_eq!(first_err.to_string(), "Execution error: Test1");
+        assert_eq!(first_err.strip_backtrace(), "Execution error: Test1");
 
         // There should be no more batches produced (should not get the second error)
         assert!(stream.next().await.is_none());

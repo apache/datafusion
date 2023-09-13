@@ -34,7 +34,7 @@ async fn arrow_query() {
     register_arrow(&mut ctx).await;
     let sql = "SELECT * FROM arrow_simple";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
+    let expected = [
         "+----+-----+-------+",
         "| f0 | f1  | f2    |",
         "+----+-----+-------+",

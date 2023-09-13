@@ -25,13 +25,14 @@ use crate::planner::{
 use crate::utils::normalize_ident;
 
 use arrow_schema::DataType;
+use datafusion_common::file_options::StatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, unqualified_field_not_found, Column, Constraints, DFField, DFSchema,
-    DFSchemaRef, DataFusionError, ExprSchema, FileType, OwnedTableReference, Result,
+    DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference, Result,
     SchemaReference, TableReference, ToDFSchema,
 };
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyOptions, CopyTo};
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -56,8 +57,6 @@ use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::plan_err;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 fn ident_to_string(ident: &Ident) -> String {
@@ -533,10 +532,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if !table_factor.joins.is_empty() {
             return not_impl_err!("DELETE FROM only supports single table, got: joins");
         }
-        let TableFactor::Table{name, ..} = table_factor.relation else {
+        let TableFactor::Table { name, .. } = table_factor.relation else {
             return not_impl_err!(
                 "DELETE FROM only supports single table, got: {table_factor:?}"
-            )
+            );
         };
 
         Ok(name)
@@ -603,50 +602,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        // convert options to lowercase strings, check for explicitly set "format" option
-        let mut options = vec![];
-        let mut explicit_format = None;
-        // default behavior is to assume the user is specifying a single file to which
-        // we should output all data regardless of input partitioning.
-        let mut per_thread_output: bool = false;
-        for (key, value) in statement.options {
-            let (k, v) = (key.to_lowercase(), value.to_string().to_lowercase());
-            // check for options important to planning
-            if k == "format" {
-                explicit_format = Some(FileType::from_str(&v)?);
-            }
-            if k == "per_thread_output" {
-                per_thread_output = match v.as_str(){
-                    "true" => true,
-                    "false" => false,
-                    _ => return Err(DataFusionError::Plan(
-                        format!("Copy to option 'per_thread_output' must be true or false, got {value}")
-                    ))
-                }
-            }
-            options.push((k, v));
-        }
-        let format = match explicit_format {
-            Some(file_format) => file_format,
-            None => {
-                // try to infer file format from file extension
-                let extension: &str = &Path::new(&statement.target)
-                    .extension()
-                    .ok_or(
-                        DataFusionError::Plan("Copy To format not explicitly set and unable to get file extension!".to_string()))?
-                    .to_str()
-                    .ok_or(DataFusionError::Plan("Copy to format not explicitly set and failed to parse file extension!".to_string()))?
-                    .to_lowercase();
+        // TODO, parse options as Vec<(String, String)> to avoid this conversion
+        let options = statement
+            .options
+            .iter()
+            .map(|(s, v)| (s.to_owned(), v.to_string()))
+            .collect::<Vec<(String, String)>>();
 
-                FileType::from_str(extension)?
-            }
-        };
+        let mut statement_options = StatementOptions::new(options);
+        let file_format = statement_options.try_infer_file_type(&statement.target)?;
+        let single_file_output =
+            statement_options.take_bool_option("single_file_output")?;
+
+        // COPY defaults to outputting a single file if not otherwise specified
+        let single_file_output = single_file_output.unwrap_or(true);
+
+        let copy_options = CopyOptions::SQLOptions(statement_options);
+
         Ok(LogicalPlan::Copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
-            file_format: format,
-            per_thread_output,
-            options,
+            file_format,
+            single_file_output,
+            copy_options,
         }))
     }
 
@@ -703,11 +681,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options,
         } = statement;
 
-        if file_type != "CSV"
-            && file_type != "JSON"
+        if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
         {
-            plan_err!("File compression type can be specified for CSV/JSON files.")?;
+            plan_err!(
+                "File compression type cannot be set for PARQUET, AVRO, or ARROW files."
+            )?;
         }
 
         let schema = self.build_schema(columns)?;
