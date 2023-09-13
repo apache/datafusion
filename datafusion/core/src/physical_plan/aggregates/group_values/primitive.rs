@@ -31,20 +31,20 @@ use hashbrown::raw::RawTable;
 use std::sync::Arc;
 
 /// A trait to allow hashing of floating point numbers
-trait HashValue {
-    fn hash(self, state: &RandomState) -> u64;
+pub(crate) trait HashValue {
+    fn hash(&self, state: &RandomState) -> u64;
 }
 
 macro_rules! hash_integer {
     ($($t:ty),+) => {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
-            fn hash(self, state: &RandomState) -> u64 {
+            fn hash(&self, state: &RandomState) -> u64 {
                 state.hash_one(self)
             }
 
             #[cfg(feature = "force_hash_collisions")]
-            fn hash(self, _state: &RandomState) -> u64 {
+            fn hash(&self, _state: &RandomState) -> u64 {
                 0
             }
         })+
@@ -57,12 +57,12 @@ macro_rules! hash_float {
     ($($t:ty),+) => {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
-            fn hash(self, state: &RandomState) -> u64 {
+            fn hash(&self, state: &RandomState) -> u64 {
                 state.hash_one(self.to_bits())
             }
 
             #[cfg(feature = "force_hash_collisions")]
-            fn hash(self, _state: &RandomState) -> u64 {
+            fn hash(&self, _state: &RandomState) -> u64 {
                 0
             }
         })+
