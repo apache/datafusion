@@ -36,6 +36,7 @@ path = "src/lib.rs"
 [features]
 # Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
+backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
 default = ["crypto_expressions", "encoding__expressions", "regex_expressions", "unicode_expressions", "compression"]
