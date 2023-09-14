@@ -100,6 +100,40 @@ select * from foo where ts != '2000-02-01T00:00:00';
 statement ok
 drop table foo;
 
+
+##########
+## Timezone Handling Tests
+##########
+
+statement ok
+SET TIME ZONE = '+08'
+
+# should use execution timezone
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
+----
+2000-01-01T01:01:01+08:00
+
+# casts return timezone to use execution timezone (same as postgresql)
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01+07:00'
+----
+2000-01-01T02:01:01+08:00
+
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01Z'
+----
+2000-01-01T09:01:01+08:00
+
+statement ok
+SET TIME ZONE = '+00'
+
+query P
+SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
+----
+2000-01-01T01:01:01Z
+
+
 ##########
 ## to_timestamp tests
 ##########
