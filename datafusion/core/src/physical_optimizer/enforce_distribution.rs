@@ -509,7 +509,9 @@ fn reorder_aggregate_keys(
         match new_positions {
             None => Ok(PlanWithKeyRequirements::new(agg_plan)),
             Some(positions) => {
-                let new_partial_agg = if let Some(AggregateExec {
+                let new_partial_agg = if let Some(agg_exec) =
+                    agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+                /*AggregateExec {
                     mode,
                     group_by,
                     aggr_expr,
@@ -519,12 +521,13 @@ fn reorder_aggregate_keys(
                     input_schema,
                     ..
                 }) =
-                    agg_exec.input().as_any().downcast_ref::<AggregateExec>()
+                */
                 {
-                    if matches!(mode, AggregateMode::Partial) {
+                    if matches!(agg_exec.mode(), &AggregateMode::Partial) {
                         let mut new_group_exprs = vec![];
                         for idx in positions.iter() {
-                            new_group_exprs.push(group_by.expr()[*idx].clone());
+                            new_group_exprs
+                                .push(agg_exec.group_by().expr()[*idx].clone());
                         }
                         let new_partial_group_by =
                             PhysicalGroupBy::new_single(new_group_exprs);
@@ -532,11 +535,11 @@ fn reorder_aggregate_keys(
                         Some(Arc::new(AggregateExec::try_new(
                             AggregateMode::Partial,
                             new_partial_group_by,
-                            aggr_expr.clone(),
-                            filter_expr.clone(),
-                            order_by_expr.clone(),
-                            input.clone(),
-                            input_schema.clone(),
+                            agg_exec.aggr_expr().to_vec(),
+                            agg_exec.filter_expr().to_vec(),
+                            agg_exec.order_by_expr().to_vec(),
+                            agg_exec.input().clone(),
+                            agg_exec.input_schema.clone(),
                         )?))
                     } else {
                         None

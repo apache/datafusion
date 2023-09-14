@@ -713,6 +713,12 @@ impl AggregateExec {
         &self.mode
     }
 
+    /// Set the mode of this AggregateExec to `mode`
+    pub fn with_mode(mut self, mode: AggregateMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
     /// Grouping expressions
     pub fn group_expr(&self) -> &PhysicalGroupBy {
         &self.group_by

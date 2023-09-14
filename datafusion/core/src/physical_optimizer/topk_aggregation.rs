@@ -68,7 +68,7 @@ impl TopKAggregation {
 
         // We found what we want: clone, copy the limit down, and return modified node
         let mut new_aggr = AggregateExec::try_new(
-            aggr.mode,
+            aggr.mode().clone(),
             aggr.group_by.clone(),
             aggr.aggr_expr.clone(),
             aggr.filter_expr.clone(),
