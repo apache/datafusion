@@ -56,7 +56,7 @@ impl TopKAggregation {
         if !kt.is_primitive() && kt != DataType::Utf8 {
             return None;
         }
-        if aggr.filter_expr.iter().any(|e| e.is_some()) {
+        if aggr.filter_expr().iter().any(|e| e.is_some()) {
             return None;
         }
 
@@ -67,17 +67,17 @@ impl TopKAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let mut new_aggr = AggregateExec::try_new(
+        let new_aggr = AggregateExec::try_new(
             aggr.mode().clone(),
-            aggr.group_by.clone(),
-            aggr.aggr_expr.clone(),
-            aggr.filter_expr.clone(),
-            aggr.order_by_expr.clone(),
-            aggr.input.clone(),
-            aggr.input_schema.clone(),
+            aggr.group_by().clone(),
+            aggr.aggr_expr().to_vec(),
+            aggr.filter_expr().to_vec(),
+            aggr.order_by_expr().to_vec(),
+            aggr.input().clone(),
+            aggr.input_schema().clone(),
         )
-        .expect("Unable to copy Aggregate!");
-        new_aggr.limit = Some(limit);
+        .expect("Unable to copy Aggregate!")
+        .with_limit(Some(limit));
         Some(Arc::new(new_aggr))
     }
 

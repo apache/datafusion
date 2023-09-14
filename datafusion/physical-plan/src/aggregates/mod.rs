@@ -264,15 +264,15 @@ pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
     /// Group by expressions
-    pub group_by: PhysicalGroupBy,
+    group_by: PhysicalGroupBy,
     /// Aggregate expressions
-    pub aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
-    pub filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// (ORDER BY clause) expression for each aggregate expression
-    pub order_by_expr: Vec<Option<LexOrdering>>,
+    order_by_expr: Vec<Option<LexOrdering>>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
-    pub limit: Option<usize>,
+    limit: Option<usize>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -713,12 +713,11 @@ impl AggregateExec {
         &self.mode
     }
 
-    /// Set the mode of this AggregateExec to `mode`
-    pub fn with_mode(mut self, mode: AggregateMode) -> Self {
-        self.mode = mode;
+    /// Set the `limit` of this AggExec
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
         self
     }
-
     /// Grouping expressions
     pub fn group_expr(&self) -> &PhysicalGroupBy {
         &self.group_by
