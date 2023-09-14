@@ -28,9 +28,12 @@ use std::sync::Arc;
 
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::physical_optimizer::enforce_sorting::{unbounded_output, ExecTree};
-use crate::physical_optimizer::utils::{add_sort_above, get_plan_string};
+use crate::physical_optimizer::utils::{
+    add_sort_above, get_plan_string, is_coalesce_partitions, is_repartition,
+    is_sort_preserving_merge,
+};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -51,15 +54,14 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::{
-    map_columns_before_projection, ordering_satisfy,
-    ordering_satisfy_requirement_concrete,
+    map_columns_before_projection, ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
     LexOrderingReq, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use datafusion_common::{internal_err, Statistics};
+use datafusion_common::Statistics;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -958,6 +960,19 @@ fn update_distribution_onward(
     }
 }
 
+fn delete_top_from_distribution_onward(
+    child_plan: &Arc<dyn ExecutionPlan>,
+    dist_onward: &Option<ExecTree>,
+) -> Vec<Option<ExecTree>> {
+    let mut new_distribution_onwards = vec![None; child_plan.children().len()];
+    if let Some(exec_tree) = &dist_onward {
+        for child in &exec_tree.children {
+            new_distribution_onwards[child.idx] = Some(child.clone());
+        }
+    }
+    new_distribution_onwards
+}
+
 /// Adds RoundRobin repartition operator to the plan increase parallelism.
 ///
 /// # Arguments
@@ -1120,7 +1135,7 @@ fn add_spm_on_top(
 /// "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
 /// "  ParquetExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
 /// ```
-fn remove_unnecessary_repartition(
+fn remove_dist_changing_operators(
     distribution_context: DistributionContext,
 ) -> Result<DistributionContext> {
     let DistributionContext {
@@ -1128,65 +1143,16 @@ fn remove_unnecessary_repartition(
         mut distribution_onwards,
     } = distribution_context;
 
-    // Remove any redundant RoundRobin at the start:
-    while let Some(repartition) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        plan = repartition.input().clone();
-        let mut new_distribution_onwards = vec![None; plan.children().len()];
-        if let Some(exec_tree) = &distribution_onwards[0] {
-            for child in &exec_tree.children {
-                new_distribution_onwards[child.idx] = Some(child.clone());
-            }
-        }
-        distribution_onwards = new_distribution_onwards;
-    }
-
-    while let Some(coalesce_partition) =
-        plan.as_any().downcast_ref::<CoalescePartitionsExec>()
+    // Remove any distribution changing operators at the beginning
+    // They will be re-inserted, according to requirements if absolutely necessary or helpful.
+    while is_repartition(&plan)
+        || is_coalesce_partitions(&plan)
+        || is_sort_preserving_merge(&plan)
     {
-        plan = coalesce_partition.input().clone();
-        let mut new_distribution_onwards = vec![None; plan.children().len()];
-        if let Some(exec_tree) = &distribution_onwards[0] {
-            for child in &exec_tree.children {
-                new_distribution_onwards[child.idx] = Some(child.clone());
-            }
-        }
-        distribution_onwards = new_distribution_onwards;
-    }
-
-    while let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
-        let sort_expr = spm.expr().to_vec();
-        let fetch = spm.fetch();
-        plan = spm.input().clone();
-        let mut new_distribution_onwards = vec![None; plan.children().len()];
-        if let Some(exec_tree) = &distribution_onwards[0] {
-            for child in &exec_tree.children {
-                new_distribution_onwards[child.idx] = Some(child.clone());
-            }
-        }
-        distribution_onwards = new_distribution_onwards;
-        // If the ordering requirement is already satisfied, do not add a sort.
-        if !ordering_satisfy(
-            plan.output_ordering(),
-            Some(&sort_expr),
-            || plan.equivalence_properties(),
-            || plan.ordering_equivalence_properties(),
-        ) {
-            let new_sort = SortExec::new(sort_expr, plan.clone()).with_fetch(fetch);
-            if distribution_onwards.is_empty() {
-                let mut distribution_onward = None;
-                update_distribution_onward(plan.clone(), &mut distribution_onward, 0);
-                distribution_onwards = vec![distribution_onward];
-            } else {
-                update_distribution_onward(plan.clone(), &mut distribution_onwards[0], 0);
-            }
-            plan = Arc::new(if plan.output_partitioning().partition_count() > 1 {
-                new_sort.with_preserve_partitioning(true)
-            } else {
-                new_sort
-            }) as _;
-            // update_distribution_onward(plan.clone(), &mut distribution_onwards[0], 0);
-        }
-        //  add_sort_above(&mut plan, sort_expr, fetch)?;
+        // All of above operators have single child. when we remove top operator, we take first child.
+        plan = plan.children()[0].clone();
+        distribution_onwards =
+            delete_top_from_distribution_onward(&plan, &distribution_onwards[0]);
     }
 
     // Create a plan with the updated children:
@@ -1194,29 +1160,6 @@ fn remove_unnecessary_repartition(
         plan,
         distribution_onwards,
     })
-}
-
-/// Changes each child of the `dist_context.plan` such that they no longer
-/// use order preserving variants, if no ordering is required at the output
-/// of the physical plan (there is no global ordering requirement by the query).
-fn update_plan_to_remove_unnecessary_final_order(
-    dist_context: DistributionContext,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let DistributionContext {
-        plan,
-        distribution_onwards,
-    } = dist_context;
-    let new_children = izip!(plan.children(), distribution_onwards)
-        .map(|(mut child, mut dist_onward)| {
-            replace_order_preserving_variants(&mut child, &mut dist_onward)?;
-            Ok(child)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if !new_children.is_empty() {
-        plan.with_new_children(new_children)
-    } else {
-        Ok(plan)
-    }
 }
 
 /// Updates the physical plan `input` by using `dist_onward` replace order preserving operator variants
@@ -1258,11 +1201,7 @@ fn replace_order_preserving_variants_helper(
     for child in &exec_tree.children {
         updated_children[child.idx] = replace_order_preserving_variants_helper(child)?;
     }
-    if let Some(spm) = exec_tree
-        .plan
-        .as_any()
-        .downcast_ref::<SortPreservingMergeExec>()
-    {
+    if exec_tree.plan.as_any().is::<SortPreservingMergeExec>() {
         return Ok(Arc::new(CoalescePartitionsExec::new(
             updated_children[0].clone(),
         )));
@@ -1315,7 +1254,7 @@ fn ensure_distribution(
     let DistributionContext {
         plan,
         mut distribution_onwards,
-    } = remove_unnecessary_repartition(dist_context)?;
+    } = remove_dist_changing_operators(dist_context)?;
     let n_children = plan.children().len();
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
