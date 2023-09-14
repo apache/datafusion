@@ -332,7 +332,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
                     format!("val={:?} idx={}, bucket={}", hi.val, idx, hi.map_idx);
                 let left = self._tree_print(idx * 2 + 1);
                 let right = self._tree_print(idx * 2 + 2);
-                let children = left.into_iter().chain(right.into_iter());
+                let children = left.into_iter().chain(right);
                 let me = termtree::Tree::new(label).with_leaves(children);
                 Some(me)
             }
