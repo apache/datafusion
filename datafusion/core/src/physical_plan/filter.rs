@@ -202,7 +202,7 @@ impl ExecutionPlan for FilterExec {
                         input_stats.num_rows,
                         input_stats.total_byte_size,
                         &column_stats,
-                        input_stats.is_exact,
+                        false,
                         analysis_ctx,
                     );
                 }

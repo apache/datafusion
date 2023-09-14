@@ -43,7 +43,7 @@ pub struct Statistics {
 impl Statistics {
     /// Returns a [`Statistics`] instance corresponding to the given schema by assigning infinite
     /// bounds to each column in the schema. This is useful when the input statistics are not
-    /// known to given an opportunity to the current executor to shrink the bounds of some columns.
+    /// known to give an opportunity to the current executor to shrink the bounds of some columns.
     pub fn new_with_unbounded_columns(schema: SchemaRef) -> Self {
         let data_types = schema
             .fields()
