@@ -54,7 +54,7 @@ parking_lot = "0.12"
 pin-project-lite = "^0.2.7"
 
 #[dev-dependencies]
-ptree = "0.4.0"
+termtree = "0.4.1"
 rand = "0.8"
 rstest = "0.18.0"
 tempfile = "3"

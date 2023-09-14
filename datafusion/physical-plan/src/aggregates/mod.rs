@@ -262,7 +262,7 @@ pub(crate) struct AggregationOrdering {
 #[derive(Debug)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
-    pub mode: AggregateMode,
+    mode: AggregateMode,
     /// Group by expressions
     pub group_by: PhysicalGroupBy,
     /// Aggregate expressions

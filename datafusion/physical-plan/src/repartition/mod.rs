@@ -1402,11 +1402,7 @@ mod tests {
     /// Create vector batches
     fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
         let batch = create_batch(schema);
-        let mut vec = Vec::with_capacity(n);
-        for _ in 0..n {
-            vec.push(batch.clone());
-        }
-        vec
+        (0..n).map(|_| batch.clone()).collect()
     }
 
     /// Create batch
