@@ -323,44 +323,28 @@ impl<VAL: ValueType> TopKHeap<VAL> {
     }
 
     #[cfg(test)]
-    fn _tree_print(&self, idx: usize, builder: &mut ptree::TreeBuilder) -> bool {
-        let hi = self.heap.get(idx);
-        let hi = match hi {
-            None => return true,
-            Some(hi) => hi,
-        };
-        let mut valid = true;
-        if let Some(hi) = hi {
-            let label = format!("val={:?} idx={}, bucket={}", hi.val, idx, hi.map_idx);
-            builder.begin_child(label);
-            valid &= self._tree_print(idx * 2 + 1, builder); // left
-            valid &= self._tree_print(idx * 2 + 2, builder); // right
-            builder.end_child();
-            if idx != 0 {
-                let parent_idx = (idx - 1) / 2;
-                let parent = self.heap[parent_idx].as_ref().expect("Missing parent");
-                if (!self.desc && hi.val.comp(&parent.val) == Ordering::Greater)
-                    || (self.desc && hi.val.comp(&parent.val) == Ordering::Less)
-                {
-                    return false;
-                }
+    fn _tree_print(&self, idx: usize) -> Option<termtree::Tree<String>> {
+        let hi = self.heap.get(idx)?;
+        match hi {
+            None => None,
+            Some(hi) => {
+                let label =
+                    format!("val={:?} idx={}, bucket={}", hi.val, idx, hi.map_idx);
+                let left = self._tree_print(idx * 2 + 1);
+                let right = self._tree_print(idx * 2 + 2);
+                let children = left.into_iter().chain(right);
+                let me = termtree::Tree::new(label).with_leaves(children);
+                Some(me)
             }
         }
-        valid
     }
 
     #[cfg(test)]
-    pub fn tree_print(&self) -> String {
-        let mut builder = ptree::TreeBuilder::new("BinaryHeap".to_string());
-        let valid = self._tree_print(0, &mut builder);
-        let mut actual = Vec::new();
-        ptree::write_tree(&builder.build(), &mut actual).unwrap();
-        let res = String::from_utf8(actual).unwrap();
-        if !valid {
-            println!("{res}");
-            panic!("Heap invariant violated");
+    fn tree_print(&self) -> String {
+        match self._tree_print(0) {
+            None => "".to_string(),
+            Some(root) => format!("{}", root),
         }
-        res
     }
 }
 
@@ -479,8 +463,7 @@ mod tests {
 
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=1 idx=0, bucket=1
+val=1 idx=0, bucket=1
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
@@ -500,9 +483,8 @@ BinaryHeap
 
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=2 idx=0, bucket=2
-   └─ val=1 idx=1, bucket=1
+val=2 idx=0, bucket=2
+└── val=1 idx=1, bucket=1
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
@@ -519,10 +501,9 @@ BinaryHeap
         heap.append_or_replace(3, 3, &mut map);
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=3 idx=0, bucket=3
-   ├─ val=1 idx=1, bucket=1
-   └─ val=2 idx=2, bucket=2
+val=3 idx=0, bucket=3
+├── val=1 idx=1, bucket=1
+└── val=2 idx=2, bucket=2
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
@@ -530,10 +511,9 @@ BinaryHeap
         heap.append_or_replace(0, 0, &mut map);
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=2 idx=0, bucket=2
-   ├─ val=1 idx=1, bucket=1
-   └─ val=0 idx=2, bucket=0
+val=2 idx=0, bucket=2
+├── val=1 idx=1, bucket=1
+└── val=0 idx=2, bucket=0
         "#;
         assert_eq!(actual.trim(), expected.trim());
         assert_eq!(map, vec![(2, 0), (0, 2)]);
@@ -552,11 +532,10 @@ BinaryHeap
         heap.append_or_replace(4, 4, &mut map);
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=4 idx=0, bucket=4
-   ├─ val=3 idx=1, bucket=3
-   │  └─ val=1 idx=3, bucket=1
-   └─ val=2 idx=2, bucket=2
+val=4 idx=0, bucket=4
+├── val=3 idx=1, bucket=3
+│   └── val=1 idx=3, bucket=1
+└── val=2 idx=2, bucket=2
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
@@ -564,11 +543,10 @@ BinaryHeap
         heap.replace_if_better(1, 0, &mut map);
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=4 idx=0, bucket=4
-   ├─ val=1 idx=1, bucket=1
-   │  └─ val=0 idx=3, bucket=3
-   └─ val=2 idx=2, bucket=2
+val=4 idx=0, bucket=4
+├── val=1 idx=1, bucket=1
+│   └── val=0 idx=3, bucket=3
+└── val=2 idx=2, bucket=2
         "#;
         assert_eq!(actual.trim(), expected.trim());
         assert_eq!(map, vec![(1, 1), (3, 3)]);
@@ -586,9 +564,8 @@ BinaryHeap
 
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=2 idx=0, bucket=2
-   └─ val=1 idx=1, bucket=1
+val=2 idx=0, bucket=2
+└── val=1 idx=1, bucket=1
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
@@ -608,9 +585,8 @@ BinaryHeap
 
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=2 idx=0, bucket=2
-   └─ val=1 idx=1, bucket=1
+val=2 idx=0, bucket=2
+└── val=1 idx=1, bucket=1
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
@@ -632,9 +608,8 @@ BinaryHeap
 
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=2 idx=0, bucket=2
-   └─ val=1 idx=1, bucket=1
+val=2 idx=0, bucket=2
+└── val=1 idx=1, bucket=1
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
@@ -642,9 +617,8 @@ BinaryHeap
         heap.renumber(numbers.as_slice());
         let actual = heap.tree_print();
         let expected = r#"
-BinaryHeap
-└─ val=2 idx=0, bucket=1
-   └─ val=1 idx=1, bucket=2
+val=2 idx=0, bucket=1
+└── val=1 idx=1, bucket=2
         "#;
         assert_eq!(actual.trim(), expected.trim());
 
