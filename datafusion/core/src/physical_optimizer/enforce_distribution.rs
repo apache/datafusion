@@ -29,10 +29,9 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{CsvExec, ParquetExec};
 use crate::error::Result;
-use crate::physical_optimizer::enforce_sorting::{unbounded_output, ExecTree};
 use crate::physical_optimizer::utils::{
     add_sort_above, get_plan_string, is_coalesce_partitions, is_repartition,
-    is_sort_preserving_merge,
+    is_sort_preserving_merge, unbounded_output, ExecTree,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -1423,7 +1422,7 @@ fn ensure_distribution(
 /// we can optimize distribution of the plan if/when necessary.
 #[derive(Debug, Clone)]
 struct DistributionContext {
-    pub(crate) plan: Arc<dyn ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     /// Keep track of associations for each child of the plan. If `None`,
     /// there is no distribution changing operator in its descendants.
     distribution_onwards: Vec<Option<ExecTree>>,
@@ -1579,7 +1578,7 @@ struct JoinKeyPairs {
 
 #[derive(Debug, Clone)]
 struct PlanWithKeyRequirements {
-    pub plan: Arc<dyn ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     /// Parent required key ordering
     required_key_ordering: Vec<Arc<dyn PhysicalExpr>>,
     /// The request key ordering to children
@@ -1587,7 +1586,7 @@ struct PlanWithKeyRequirements {
 }
 
 impl PlanWithKeyRequirements {
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
+    fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
         let children_len = plan.children().len();
         PlanWithKeyRequirements {
             plan,
@@ -1596,7 +1595,7 @@ impl PlanWithKeyRequirements {
         }
     }
 
-    pub fn children(&self) -> Vec<PlanWithKeyRequirements> {
+    fn children(&self) -> Vec<PlanWithKeyRequirements> {
         let plan_children = self.plan.children();
         assert_eq!(plan_children.len(), self.request_key_ordering.len());
         plan_children
