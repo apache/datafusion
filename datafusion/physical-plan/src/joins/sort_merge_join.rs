@@ -1404,16 +1404,16 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
 
-    use crate::assert_contains;
     use crate::expressions::Column;
     use crate::joins::utils::JoinOn;
     use crate::joins::SortMergeJoinExec;
     use crate::memory::MemoryExec;
     use crate::test::build_table_i32;
-    use crate::{assert_batches_eq, assert_batches_sorted_eq};
     use crate::{common, ExecutionPlan};
-    use datafusion_common::JoinType;
     use datafusion_common::Result;
+    use datafusion_common::{
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains, JoinType,
+    };
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     fn build_table(

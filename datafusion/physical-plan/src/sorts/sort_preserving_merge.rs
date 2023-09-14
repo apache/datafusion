@@ -277,7 +277,6 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use futures::{FutureExt, StreamExt};
 
-    use crate::assert_batches_eq;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
@@ -288,6 +287,7 @@ mod tests {
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
     use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
+    use datafusion_common::assert_batches_eq;
 
     use super::*;
 

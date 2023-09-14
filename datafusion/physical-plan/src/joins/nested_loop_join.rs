@@ -741,8 +741,8 @@ impl RecordBatchStream for NestedLoopJoinStream {
 mod tests {
     use super::*;
     use crate::{
-        assert_batches_sorted_eq, assert_contains, common, expressions::Column,
-        memory::MemoryExec, repartition::RepartitionExec, test::build_table_i32,
+        common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
+        test::build_table_i32,
     };
     use arrow::datatypes::{DataType, Field};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -750,7 +750,7 @@ mod tests {
     use datafusion_physical_expr::expressions::BinaryExpr;
 
     use crate::joins::utils::JoinSide;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;

@@ -895,7 +895,6 @@ impl RecordBatchStream for PerPartitionStream {
 mod tests {
     use super::*;
     use crate::{
-        assert_batches_sorted_eq,
         test::{
             assert_is_pending,
             exec::{
@@ -910,7 +909,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_array::UInt32Array;
     use datafusion_common::cast::as_string_array;
-    use datafusion_common::exec_err;
+    use datafusion_common::{assert_batches_sorted_eq, exec_err};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use futures::FutureExt;
     use std::collections::HashSet;

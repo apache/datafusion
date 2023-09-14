@@ -1275,11 +1275,11 @@ mod tests {
     };
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::common;
     use crate::expressions::{col, Avg};
     use crate::memory::MemoryExec;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{assert_is_pending, mem_exec};
-    use crate::{assert_batches_eq, assert_batches_sorted_eq, common};
     use crate::{
         DisplayAs, ExecutionPlan, Partitioning, RecordBatchStream,
         SendableRecordBatchStream, Statistics,
@@ -1289,7 +1289,10 @@ mod tests {
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+    use datafusion_common::{
+        assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
+        Result, ScalarValue,
+    };
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Column, Count, FirstValue, LastValue, Median,

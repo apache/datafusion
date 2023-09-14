@@ -1062,13 +1062,13 @@ mod tests {
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
 
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::Literal;
     use hashbrown::raw::RawTable;
 
     use crate::{
-        assert_batches_sorted_eq, assert_contains, common,
+        common,
         expressions::Column,
         hash_utils::create_hashes,
         joins::{hash_join::build_equal_condition_join_indices, utils::JoinSide},

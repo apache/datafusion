@@ -457,10 +457,9 @@ impl CrossJoinStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_batches_sorted_eq;
-    use crate::assert_contains;
     use crate::common;
     use crate::test::build_table_scan_i32;
+    use datafusion_common::{assert_batches_sorted_eq, assert_contains};
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     async fn join_collect(
