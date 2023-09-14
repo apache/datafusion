@@ -45,12 +45,12 @@ use arrow::array::*;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use arrow_schema::SortOptions;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::col;
-use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -69,7 +69,7 @@ use super::AggregateExec;
 struct SpillState {
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
-    spills: Vec<NamedTempFile>,
+    spills: Vec<RefCountedTempFile>,
 
     /// Sorting expression for spilling batches
     spill_expr: Vec<PhysicalSortExpr>,

@@ -55,11 +55,11 @@ postgres-protocol = {version = "0.6.4", optional = true}
 
 [features]
 postgres = ["bytes", "chrono", "tokio-postgres", "postgres-types", "postgres-protocol"]
+avro = ["datafusion/avro"]
 
 [dev-dependencies]
 env_logger = "0.10"
 num_cpus = "1.13.0"
-
 
 [[test]]
 harness = false
