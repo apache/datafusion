@@ -17,19 +17,18 @@
 
 //! Interval and selectivity in [`AnalysisContext`]
 
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use arrow::datatypes::Schema;
+
+use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
+
 use crate::expressions::Column;
 use crate::intervals::cp_solver::PropagationResult;
 use crate::intervals::{cardinality_ratio, ExprIntervalGraph, Interval, IntervalBound};
 use crate::utils::collect_columns;
 use crate::PhysicalExpr;
-
-use arrow::datatypes::Schema;
-use datafusion_common::{
-    internal_err, ColumnStatistics, DataFusionError, Result, ScalarValue,
-};
-
-use std::fmt::Debug;
-use std::sync::Arc;
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
@@ -150,9 +149,12 @@ pub fn analyze(
             .collect();
 
     match graph.update_ranges(&mut target_indices_and_boundaries)? {
-        PropagationResult::Success => {
-            shrink_boundaries(expr, graph, target_boundaries, target_expr_and_indices)
-        }
+        PropagationResult::Success => Ok(shrink_boundaries(
+            expr,
+            graph,
+            target_boundaries,
+            target_expr_and_indices,
+        )),
         PropagationResult::Infeasible => {
             Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
         }
@@ -171,7 +173,7 @@ fn shrink_boundaries(
     mut graph: ExprIntervalGraph,
     mut target_boundaries: Vec<ExprBoundaries>,
     target_expr_and_indices: Vec<(Arc<dyn PhysicalExpr>, usize)>,
-) -> Result<AnalysisContext> {
+) -> AnalysisContext {
     let initial_boundaries = target_boundaries.clone();
     target_expr_and_indices.iter().for_each(|(expr, i)| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
@@ -184,23 +186,19 @@ fn shrink_boundaries(
         }
     });
     let graph_nodes = graph.gather_node_indices(&[expr.clone()]);
-    let (_, root_index) = graph_nodes.first().ok_or_else(|| {
-        DataFusionError::Internal("Error in constructing predicate graph".to_string())
-    })?;
-    let final_result = graph.get_interval(*root_index);
+    // Since the propagation result success, the graph has at least one element, and
+    // empty check is also done at the outer scope.
+    let (_, root_index) = graph_nodes[0];
+    let final_result = graph.get_interval(root_index);
 
     let selectivity = calculate_selectivity(
         &final_result.lower.value,
         &final_result.upper.value,
         &target_boundaries,
         &initial_boundaries,
-    )?;
+    );
 
-    if !(0.0..=1.0).contains(&selectivity) {
-        return internal_err!("Selectivity is out of limit: {}", selectivity);
-    }
-
-    Ok(AnalysisContext::new(target_boundaries).with_selectivity(selectivity))
+    AnalysisContext::new(target_boundaries).with_selectivity(selectivity)
 }
 
 /// This function calculates the filter predicate's selectivity by comparing
@@ -217,20 +215,20 @@ fn calculate_selectivity(
     upper_value: &ScalarValue,
     target_boundaries: &[ExprBoundaries],
     initial_boundaries: &[ExprBoundaries],
-) -> Result<f64> {
+) -> f64 {
     match (lower_value, upper_value) {
-        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Ok(1.0),
-        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => Ok(0.0),
+        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => 1.0,
+        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => 0.0,
         _ => {
             // Since the intervals are assumed uniform and the values
             // are not correlated, we need to multiply the selectivities
             // of multiple columns to get the overall selectivity.
-            target_boundaries.iter().enumerate().try_fold(
+            target_boundaries.iter().enumerate().fold(
                 1.0,
                 |acc, (i, ExprBoundaries { interval, .. })| {
                     let temp =
-                        cardinality_ratio(&initial_boundaries[i].interval, interval)?;
-                    Ok(acc * temp)
+                        cardinality_ratio(&initial_boundaries[i].interval, interval);
+                    acc * temp
                 },
             )
         }

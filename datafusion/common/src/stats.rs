@@ -17,6 +17,7 @@
 
 //! This module provides data structures to represent statistics
 
+use arrow::datatypes::{DataType, SchemaRef};
 use std::fmt::Display;
 
 use crate::ScalarValue;
@@ -37,6 +38,38 @@ pub struct Statistics {
     /// an estimate). Any or all other fields might still be None, in which case no information is known.
     /// if false, any field that is `Some(..)` may contain an inexact estimate and may not be the actual value.
     pub is_exact: bool,
+}
+
+impl Statistics {
+    /// Returns a [`Statistics`] instance corresponding to the given schema by assigning infinite
+    /// bounds to each column in the schema. This is useful when the input statistics are not
+    /// known to given an opportunity to the current executor to shrink the bounds of some columns.
+    pub fn new_with_unbounded_columns(schema: SchemaRef) -> Self {
+        let data_types = schema
+            .fields()
+            .iter()
+            .map(|field| field.data_type())
+            .collect::<Vec<_>>();
+        Self {
+            num_rows: None,
+            total_byte_size: None,
+            column_statistics: Some(
+                data_types
+                    .into_iter()
+                    .map(|data_type| {
+                        let dt = ScalarValue::try_from(data_type.clone()).ok();
+                        ColumnStatistics {
+                            null_count: None,
+                            max_value: dt.clone(),
+                            min_value: dt,
+                            distinct_count: None,
+                        }
+                    })
+                    .collect(),
+            ),
+            is_exact: false,
+        }
+    }
 }
 
 impl Display for Statistics {
@@ -69,4 +102,17 @@ pub struct ColumnStatistics {
     pub min_value: Option<ScalarValue>,
     /// Number of distinct values
     pub distinct_count: Option<usize>,
+}
+
+impl ColumnStatistics {
+    /// Returns the [`ColumnStatistics`] corresponding to the given datatype by assigning infinite bounds.
+    pub fn new_with_unbounded_column(dt: &DataType) -> ColumnStatistics {
+        let null = ScalarValue::try_from(dt.clone()).ok();
+        ColumnStatistics {
+            null_count: None,
+            max_value: null.clone(),
+            min_value: null,
+            distinct_count: None,
+        }
+    }
 }

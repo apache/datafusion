@@ -36,6 +36,7 @@ use crate::physical_plan::{
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::Schema;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -190,46 +191,64 @@ impl ExecutionPlan for FilterExec {
     fn statistics(&self) -> Statistics {
         let predicate = self.predicate();
 
-        if !check_support(predicate) {
-            return Statistics::default();
+        if check_support(predicate) {
+            let input_stats = self.input.statistics();
+
+            if let Some(column_stats) = input_stats.column_statistics {
+                if let Ok(analysis_ctx) =
+                    analyze_with_context(&self.input.schema(), &column_stats, predicate)
+                {
+                    return calculate_statistics(
+                        input_stats.num_rows,
+                        input_stats.total_byte_size,
+                        &column_stats,
+                        input_stats.is_exact,
+                        analysis_ctx,
+                    );
+                }
+            }
         }
 
-        let input_stats = self.input.statistics();
-        let input_column_stats = match input_stats.column_statistics {
-            Some(stats) => stats,
-            None => return Statistics::default(),
-        };
+        Statistics::new_with_unbounded_columns(self.schema())
+    }
+}
 
-        let starter_ctx =
-            AnalysisContext::from_statistics(&self.input.schema(), &input_column_stats);
+fn analyze_with_context(
+    input_schema: &Schema,
+    column_stats: &[ColumnStatistics],
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Result<AnalysisContext> {
+    let starter_ctx = AnalysisContext::from_statistics(input_schema, column_stats);
+    analyze(predicate, starter_ctx)
+}
 
-        let analysis_ctx = match analyze(predicate, starter_ctx) {
-            Ok(ctx) => ctx,
-            Err(_) => return Statistics::default(),
-        };
+fn calculate_statistics(
+    num_rows: Option<usize>,
+    total_byte_size: Option<usize>,
+    input_stats: &[ColumnStatistics],
+    is_exact: bool,
+    analysis_ctx: AnalysisContext,
+) -> Statistics {
+    let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+    let num_rows = num_rows.map(|num| (num as f64 * selectivity).ceil() as usize);
+    let total_byte_size =
+        total_byte_size.map(|size| (size as f64 * selectivity).ceil() as usize);
 
-        let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-
-        let num_rows = input_stats
-            .num_rows
-            .map(|num| (num as f64 * selectivity).ceil() as usize);
-        let total_byte_size = input_stats
-            .total_byte_size
-            .map(|size| (size as f64 * selectivity).ceil() as usize);
-
-        let column_statistics = if let Some(analysis_boundaries) = analysis_ctx.boundaries
-        {
-            collect_new_statistics(input_column_stats, selectivity, analysis_boundaries)
-        } else {
-            input_column_stats
-        };
-
-        Statistics {
+    if let Some(analysis_boundaries) = analysis_ctx.boundaries {
+        let column_statistics = collect_new_statistics(input_stats, analysis_boundaries);
+        return Statistics {
             num_rows,
             total_byte_size,
             column_statistics: Some(column_statistics),
-            is_exact: Default::default(),
-        }
+            is_exact,
+        };
+    }
+
+    Statistics {
+        num_rows,
+        total_byte_size,
+        column_statistics: Some(input_stats.to_vec()),
+        is_exact,
     }
 }
 
@@ -238,11 +257,9 @@ impl ExecutionPlan for FilterExec {
 /// is adjusted by using the next/previous value for its data type to convert
 /// it into a closed bound.
 fn collect_new_statistics(
-    input_column_stats: Vec<ColumnStatistics>,
-    selectivity: f64,
+    input_column_stats: &[ColumnStatistics],
     analysis_boundaries: Vec<ExprBoundaries>,
 ) -> Vec<ColumnStatistics> {
-    let nonempty_columns = selectivity > 0.0;
     analysis_boundaries
         .into_iter()
         .enumerate()
@@ -258,8 +275,8 @@ fn collect_new_statistics(
                 let closed_interval = interval.close_bounds();
                 ColumnStatistics {
                     null_count: input_column_stats[idx].null_count,
-                    max_value: nonempty_columns.then_some(closed_interval.upper.value),
-                    min_value: nonempty_columns.then_some(closed_interval.lower.value),
+                    max_value: Some(closed_interval.upper.value),
+                    min_value: Some(closed_interval.lower.value),
                     distinct_count,
                 }
             },
@@ -906,13 +923,13 @@ mod tests {
             statistics.column_statistics,
             Some(vec![
                 ColumnStatistics {
-                    min_value: None,
-                    max_value: None,
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 },
                 ColumnStatistics {
-                    min_value: None,
-                    max_value: None,
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(3))),
                     ..Default::default()
                 },
             ])
@@ -974,6 +991,52 @@ mod tests {
                 },
             ])
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_input_statistics() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_with_unbounded_columns(Arc::new(schema.clone())),
+            schema,
+        ));
+        // WHERE a <= 10 AND 0 <= a - 5
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::LtEq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+                Operator::LtEq,
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Minus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+                )),
+            )),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let filter_statistics = filter.statistics();
+
+        let expected_filter_statistics = Statistics {
+            num_rows: None,
+            total_byte_size: None,
+            column_statistics: Some(vec![ColumnStatistics {
+                null_count: None,
+                min_value: Some(ScalarValue::Int32(Some(5))),
+                max_value: Some(ScalarValue::Int32(Some(10))),
+                distinct_count: None,
+            }]),
+            is_exact: false,
+        };
+
+        assert_eq!(filter_statistics, expected_filter_statistics);
 
         Ok(())
     }
