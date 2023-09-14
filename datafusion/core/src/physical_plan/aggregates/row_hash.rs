@@ -160,7 +160,8 @@ struct SpillState {
 /// manager checks whether the new input size meets the memory configuration. If not, outputting or
 /// spilling happens. For outputting, the final aggregation takes care of re-grouping. For spilling,
 /// later stream-merge sort on reading back the spilled data does re-grouping. Note the rows cannot
-/// be grouped once spilled onto disk, the read back data needs to be re-grouped again.
+/// be grouped once spilled onto disk, the read back data needs to be re-grouped again. In addition,
+/// re-grouping may cause out of memory again. Thus, re-grouping has to be a sort based aggregation.
 ///
 /// ```text
 /// Partial Aggregation [batch_size = 2] (max memory = 3 rows)
