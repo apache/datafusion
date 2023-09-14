@@ -618,7 +618,12 @@ select a / b from foo;
 statement ok
 create table t as values (arrow_cast(123, 'Decimal256(5,2)'));
 
-query error DataFusion error: This feature is not implemented: AvgAccumulator for \(Decimal256\(5, 2\) \-\-> Decimal256\(9, 6\)\)
+# make sure query below runs in single partition
+# otherwise error message may not be deterministic
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query error DataFusion error: This feature is not implemented: AvgAccumulator for \(Decimal256\(5, 2\) --> Decimal256\(9, 6\)\)
 select AVG(column1) from t;
 
 statement ok

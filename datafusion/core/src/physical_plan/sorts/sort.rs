@@ -616,9 +616,11 @@ fn read_spill_as_stream(
     let sender = builder.tx();
 
     builder.spawn_blocking(move || {
-        if let Err(e) = read_spill(sender, path.path()) {
+        let result = read_spill(sender, path.path());
+        if let Err(e) = &result {
             error!("Failure while reading spill file: {:?}. Error: {}", path, e);
         }
+        result
     });
 
     Ok(builder.build())
@@ -1101,7 +1103,7 @@ mod tests {
                 .with_fetch(fetch),
             );
 
-            let result = collect(sort_exec.clone(), task_ctx).await?;
+            let result = collect(sort_exec.clone(), task_ctx.clone()).await?;
             assert_eq!(result.len(), 1);
 
             let metrics = sort_exec.metrics().unwrap();

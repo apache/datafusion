@@ -380,6 +380,10 @@ config_namespace! {
         /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
 
+        /// When set to true, the optimizer will attempt to perform limit operations
+        /// during aggregations, if possible
+        pub enable_topk_aggregation: bool, default = true
+
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
         /// filter can add additional overhead when the file format does not fully support
@@ -473,6 +477,10 @@ config_namespace! {
 
         /// When set to true, the explain statement will only print physical plans
         pub physical_plan_only: bool, default = false
+
+        /// When set to true, the explain statement will print operator statistics
+        /// for physical plans
+        pub show_statistics: bool, default = false
     }
 }
 

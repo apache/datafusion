@@ -1455,8 +1455,8 @@ mod roundtrip_tests {
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{
-        internal_err, not_impl_err, plan_err, DFSchemaRef, DataFusionError, Result,
-        ScalarValue,
+        internal_err, not_impl_err, plan_err, DFField, DFSchema, DFSchemaRef,
+        DataFusionError, Result, ScalarValue,
     };
     use datafusion_expr::expr::{
         self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
@@ -2365,6 +2365,35 @@ mod roundtrip_tests {
         let proto_schema: super::protobuf::Schema = (&schema).try_into().unwrap();
         let returned_schema: Schema = (&proto_schema).try_into().unwrap();
         assert_eq!(schema, returned_schema);
+    }
+
+    #[test]
+    fn roundtrip_dfschema() {
+        let dfschema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int64, false),
+                DFField::new(Some("t"), "b", DataType::Decimal128(15, 2), true)
+                    .with_metadata(HashMap::from([(
+                        String::from("k1"),
+                        String::from("v1"),
+                    )])),
+            ],
+            HashMap::from([
+                (String::from("k2"), String::from("v2")),
+                (String::from("k3"), String::from("v3")),
+            ]),
+        )
+        .unwrap();
+        let proto_dfschema: super::protobuf::DfSchema = (&dfschema).try_into().unwrap();
+        let returned_dfschema: DFSchema = (&proto_dfschema).try_into().unwrap();
+        assert_eq!(dfschema, returned_dfschema);
+
+        let arc_dfschema = Arc::new(dfschema.clone());
+        let proto_dfschema: super::protobuf::DfSchema =
+            (&arc_dfschema).try_into().unwrap();
+        let returned_arc_dfschema: DFSchemaRef = proto_dfschema.try_into().unwrap();
+        assert_eq!(arc_dfschema, returned_arc_dfschema);
+        assert_eq!(dfschema, *returned_arc_dfschema);
     }
 
     #[test]

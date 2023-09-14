@@ -66,6 +66,7 @@ impl Debug for InListExpr {
 /// A type-erased container of array elements
 pub trait Set: Send + Sync {
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
+    fn has_nulls(&self) -> bool;
 }
 
 struct ArrayHashSet {
@@ -133,6 +134,10 @@ where
                 })
             })
             .collect())
+    }
+
+    fn has_nulls(&self) -> bool {
+        self.array.null_count() != 0
     }
 }
 
@@ -325,7 +330,20 @@ impl PhysicalExpr for InListExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        self.expr.nullable(input_schema)
+        if self.expr.nullable(input_schema)? {
+            return Ok(true);
+        }
+
+        if let Some(static_filter) = &self.static_filter {
+            Ok(static_filter.has_nulls())
+        } else {
+            for expr in &self.list {
+                if expr.nullable(input_schema)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -1200,6 +1218,47 @@ mod tests {
             col_a.clone(),
             &schema
         );
+
+        Ok(())
+    }
+
+    macro_rules! test_nullable {
+        ($COL:expr, $LIST:expr, $SCHEMA:expr, $EXPECTED:expr) => {{
+            let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
+            let expr = in_list(cast_expr, cast_list_exprs, &false, $SCHEMA).unwrap();
+            let result = expr.nullable($SCHEMA)?;
+            assert_eq!($EXPECTED, result);
+        }};
+    }
+
+    #[test]
+    fn in_list_nullable() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1_nullable", DataType::Int64, true),
+            Field::new("c2_non_nullable", DataType::Int64, false),
+        ]);
+
+        let c1_nullable = col("c1_nullable", &schema)?;
+        let c2_non_nullable = col("c2_non_nullable", &schema)?;
+
+        // static_filter has no nulls
+        let list = vec![lit(1_i64), lit(2_i64)];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, false);
+
+        // static_filter has nulls
+        let list = vec![lit(1_i64), lit(2_i64), lit(ScalarValue::Null)];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c1_nullable.clone()];
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c2_non_nullable.clone()];
+        test_nullable!(c1_nullable.clone(), list.clone(), &schema, true);
+
+        let list = vec![c2_non_nullable.clone(), c2_non_nullable.clone()];
+        test_nullable!(c2_non_nullable.clone(), list.clone(), &schema, false);
 
         Ok(())
     }
