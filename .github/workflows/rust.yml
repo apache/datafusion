@@ -308,6 +308,7 @@ jobs:
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
+          RUST_BACKTRACE: "1"
 
   macos:
     name: cargo test (mac)
@@ -343,6 +344,7 @@ jobs:
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
+          RUST_BACKTRACE: "1"
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
