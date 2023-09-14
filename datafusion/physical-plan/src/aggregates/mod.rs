@@ -94,7 +94,7 @@ impl AggregateMode {
     /// Checks whether this aggregation step describes a "first stage" calculation.
     /// In other words, its input is not another aggregation result and the
     /// `merge_batch` method will not be called for these modes.
-    fn is_first_stage(&self) -> bool {
+    pub fn is_first_stage(&self) -> bool {
         match self {
             AggregateMode::Partial
             | AggregateMode::Single
@@ -210,6 +210,11 @@ impl PhysicalGroupBy {
     pub fn is_empty(&self) -> bool {
         self.expr.is_empty()
     }
+
+    /// Check whether grouping set is single group
+    pub fn is_single(&self) -> bool {
+        self.null_expr.is_empty()
+    }
 }
 
 impl PartialEq for PhysicalGroupBy {
@@ -299,7 +304,7 @@ fn get_working_mode(
     input: &Arc<dyn ExecutionPlan>,
     group_by: &PhysicalGroupBy,
 ) -> Option<(GroupByOrderMode, Vec<usize>)> {
-    if group_by.groups.len() > 1 {
+    if !group_by.is_single() {
         // We do not currently support streaming execution if we have more
         // than one group (e.g. we have grouping sets).
         return None;
@@ -590,7 +595,7 @@ fn group_by_contains_all_requirements(
     // since group by may be calculated on the subset of the group_by.expr()
     // it is not guaranteed to have all of the requirements among group by expressions.
     // Hence do the analysis: whether group by contains all requirements in the single group case.
-    group_by.groups.len() <= 1
+    group_by.is_single()
         && requirement
             .iter()
             .all(|req| physical_exprs_contains(&physical_exprs, &req.expr))
@@ -804,7 +809,7 @@ impl DisplayAs for AggregateExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
-                let g: Vec<String> = if self.group_by.groups.len() == 1 {
+                let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
                         .expr
                         .iter()
