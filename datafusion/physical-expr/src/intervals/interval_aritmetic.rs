@@ -1801,11 +1801,22 @@ mod tests {
         );
         assert_eq!(format!("{}", interval), "(0.25, 0.5]");
 
-        // left is infinite
         let interval = Interval::new(
-            IntervalBound::new(ScalarValue::from(f32::NEG_INFINITY), true),
+            IntervalBound::new(ScalarValue::from(0.25_f32), false),
+            IntervalBound::new(ScalarValue::from(0.50_f32), true),
+        );
+        assert_eq!(format!("{}", interval), "[0.25, 0.5)");
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), true),
+            IntervalBound::new(ScalarValue::from(0.50_f32), true),
+        );
+        assert_eq!(format!("{}", interval), "(0.25, 0.5)");
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(0.25_f32), false),
             IntervalBound::new(ScalarValue::from(0.50_f32), false),
         );
-        assert_eq!(format!("{}", interval), "(-inf, 0.5]");
+        assert_eq!(format!("{}", interval), "[0.25, 0.5]");
     }
 }
