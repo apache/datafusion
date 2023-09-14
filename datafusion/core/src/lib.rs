@@ -471,6 +471,10 @@ pub mod physical_plan {
     pub use datafusion_physical_plan::*;
 }
 
+// Reexport testing macros for compatibility
+pub use datafusion_common::assert_batches_eq;
+pub use datafusion_common::assert_batches_sorted_eq;
+
 /// re-export of [`datafusion_sql`] crate
 pub mod sql {
     pub use datafusion_sql::*;
