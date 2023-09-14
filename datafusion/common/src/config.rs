@@ -353,6 +353,13 @@ config_namespace! {
         /// Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
+
+        /// Controls whether DataFusion will attempt to speed up writing
+        /// large parquet files by first writing multiple smaller files
+        /// and then stitching them together into a single large file.
+        /// This will result in faster write speeds, but higher memory usage.
+        pub allow_single_file_parallelism: bool, default = true
+
     }
 }
 
