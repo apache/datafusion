@@ -155,8 +155,8 @@ struct SpillState {
 /// # Spilling
 ///
 /// The sizes of group values and accumulators can become large. Before that causes out of memory,
-/// this hash aggregator outputs those data early for partial aggregation or spills to local disk
-/// using Arrow IPC format for final aggregation. For every input [`RecordBatch`], the memory
+/// this hash aggregator outputs partial states early for partial aggregation or spills to local
+/// disk using Arrow IPC format for final aggregation. For every input [`RecordBatch`], the memory
 /// manager checks whether the new input size meets the memory configuration. If not, outputting or
 /// spilling happens. For outputting, the final aggregation takes care of re-grouping. For spilling,
 /// later stream-merge sort on reading back the spilled data does re-grouping. Note the rows cannot
@@ -180,7 +180,7 @@ struct SpillState {
 /// │ 1 │ 1.0 │ ─▶ │ 1 │ 1     │ 1.0 │ ─▶ early emit ─▶ ┌─────────────────┐
 /// │ 3 │ 2.0 │    │ 3 │ 1     │ 2.0 │                  │ 3 │ 1     │ 2.0 │
 /// └─────────┘    └─────────────────┘                  └─────────────────┘
-///   
+///
 ///
 /// Final Aggregation [batch_size = 2] (max memory = 3 rows)
 ///
@@ -692,8 +692,8 @@ impl GroupedHashAggregateStream {
     }
 
     /// Emit if the used memory exceeds the target for partial aggregation.
-    /// Currently only [`GroupOrdering::None`] is supported for spilling.
-    /// TODO: support group_ordering for spilling
+    /// Currently only [`GroupOrdering::None`] is supported for early emitting.
+    /// TODO: support group_ordering for early emitting
     fn emit_early_if_necessary(&mut self) -> Result<()> {
         if self.group_values.len() >= self.batch_size
             && matches!(self.group_ordering, GroupOrdering::None)
