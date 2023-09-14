@@ -208,7 +208,7 @@ impl ExecutionPlan for FilterExec {
             Err(_) => return Statistics::default(),
         };
 
-        let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
+        let selectivity = analysis_ctx.selectivity.unwrap();
 
         let num_rows = input_stats
             .num_rows
@@ -981,15 +981,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_input_statistics() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let input = Arc::new(StatisticsExec::new(
-            Statistics {
-                num_rows: None,
-                total_byte_size: None,
-                column_statistics: None,
-                ..Default::default()
-            },
-            schema,
-        ));
+        let input = Arc::new(StatisticsExec::new(Statistics::default(), schema));
         // WHERE a <= 10 AND 0 <= a - 5
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
@@ -1010,18 +1002,20 @@ mod tests {
         ));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics();
+        let filter_statistics = filter.statistics();
 
-        assert_eq!(statistics.num_rows, None);
-        assert_eq!(statistics.total_byte_size, None);
-        assert_eq!(
-            statistics.column_statistics,
-            Some(vec![ColumnStatistics {
+        let expected_filter_statistics = Statistics {
+            num_rows: None,
+            total_byte_size: None,
+            column_statistics: Some(vec![ColumnStatistics {
+                null_count: None,
                 min_value: Some(ScalarValue::Int32(Some(5))),
                 max_value: Some(ScalarValue::Int32(Some(10))),
-                ..Default::default()
-            },])
-        );
+                distinct_count: None,
+            }]),
+            is_exact: false,
+        };
+        assert_eq!(filter_statistics, expected_filter_statistics);
 
         Ok(())
     }
