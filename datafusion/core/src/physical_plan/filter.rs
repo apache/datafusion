@@ -977,4 +977,52 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_empty_input_statistics() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: None,
+                total_byte_size: None,
+                column_statistics: None,
+                ..Default::default()
+            },
+            schema,
+        ));
+        // WHERE a <= 10 AND 0 <= a - 5
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::LtEq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+                Operator::LtEq,
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Minus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+                )),
+            )),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics = filter.statistics();
+
+        assert_eq!(statistics.num_rows, None);
+        assert_eq!(statistics.total_byte_size, None);
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(5))),
+                max_value: Some(ScalarValue::Int32(Some(10))),
+                ..Default::default()
+            },])
+        );
+
+        Ok(())
+    }
 }

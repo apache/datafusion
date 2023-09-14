@@ -196,7 +196,8 @@ fn shrink_boundaries(
         &final_result.upper.value,
         &target_boundaries,
         &initial_boundaries,
-    )?;
+    )
+    .unwrap_or(1.0);
 
     if !(0.0..=1.0).contains(&selectivity) {
         return internal_err!("Selectivity is out of limit: {}", selectivity);
